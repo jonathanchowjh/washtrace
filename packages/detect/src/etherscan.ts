@@ -1,0 +1,115 @@
+import { WRAPPED } from './marketplaces.js';
+import type { Flow, FlowKind } from './types.js';
+
+export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
+/** Etherscan's own ceiling: page × offset may not exceed 10,000. */
+const PAGE = 1_000;
+const PAGES = 10;
+const RETRIES = 4;
+
+interface Row {
+  hash: string;
+  from: string;
+  to: string;
+  value: string;
+  blockNumber: string;
+  timeStamp: string;
+  isError?: string;
+  contractAddress?: string;
+}
+
+/**
+ * Who paid whom, per wallet: the user transaction graph the paper built from
+ * ETH transfers (its dataset 3), now read from Etherscan API V2. V1 was shut
+ * off on 15 August 2025; V2 is one base URL and one key for every chain,
+ * selected by `chainid`.
+ *
+ * Money is native transfers, internal transfers (contract payouts, such as a
+ * marketplace paying a seller) and the chain's wrapped native tokens: WETH,
+ * and on Ethereum Blur Pool, where Blur bids are held. In 2023 only ETH was
+ * read; a wash trader funding a second wallet in WETH was invisible.
+ *
+ * A class because the key and its pacing are shared by every call. Etherscan
+ * limits a key, not a chain, so one instance serves every chain.
+ */
+export class Etherscan {
+  private last = 0;
+
+  constructor(
+    private readonly key: string,
+    /** Calls per second. The free plan allows 5; 4 leaves room for a second consumer of the key. */
+    private readonly perSecond = 4,
+    /** Any API that answers Etherscan's account actions: Blockscout and Routescan do, per chain. */
+    private readonly base = ETHERSCAN_V2,
+  ) {}
+
+  /** Every flow in or out of `wallet`, and whether any list was longer than Etherscan pages through. */
+  async flows(chainId: number, wallet: string): Promise<{ flows: Flow[]; truncated: boolean }> {
+    const lists: [FlowKind, Record<string, string>][] = [
+      ['native', { action: 'txlist' }],
+      ['internal', { action: 'txlistinternal' }],
+      ...(WRAPPED[chainId] ?? []).map((token): [FlowKind, Record<string, string>] =>
+        ['token', { action: 'tokentx', contractaddress: token }]),
+    ];
+    const flows: Flow[] = [];
+    let truncated = false;
+    for (const [kind, params] of lists) {
+      for (let page = 1; page <= PAGES; page++) {
+        const rows = await this.call(chainId, { module: 'account', address: wallet, page: String(page), offset: String(PAGE), sort: 'asc', ...params });
+        for (const r of rows) {
+          if (r.isError === '1' || r.value === '0' || !r.to) continue;
+          flows.push({
+            txHash: r.hash.toLowerCase(),
+            kind,
+            from: r.from.toLowerCase(),
+            to: r.to.toLowerCase(),
+            valueWei: r.value,
+            token: kind === 'token' ? (r.contractAddress ?? '').toLowerCase() : '',
+            blockNumber: Number(r.blockNumber),
+            blockTime: Number(r.timeStamp),
+          });
+        }
+        if (rows.length < PAGE) break;
+        if (page === PAGES) truncated = true;
+      }
+    }
+    return { flows, truncated };
+  }
+
+  /** One request, paced, with rate-limit refusals retried. "No transactions found" is an empty list, not an error. */
+  async call(chainId: number, params: Record<string, string>): Promise<Row[]> {
+    const url = new URL(this.base);
+    url.search = new URLSearchParams({ chainid: String(chainId), ...params, apikey: this.key }).toString();
+    for (let attempt = 0; ; attempt++) {
+      await this.pace();
+      const res = await this.fetch(url);
+      if (!res.ok) throw new Error(`Etherscan answered HTTP ${res.status}`);
+      const body = await res.json() as { status: string; message: string; result: unknown };
+      if (body.status === '1' && Array.isArray(body.result)) return body.result as Row[];
+      if (Array.isArray(body.result) && body.result.length === 0) return [];
+      const reason = typeof body.result === 'string' ? body.result : body.message;
+      if (/rate limit/i.test(reason) && attempt < RETRIES) {
+        await sleep(1_000 * (attempt + 1));
+        continue;
+      }
+      // The key is never in the message: it is in the URL, and this reaches logs and pages.
+      throw new Error(`Etherscan refused ${params.action ?? 'the call'}: ${reason}`);
+    }
+  }
+
+  /** The network seam; tests override it on the instance. */
+  fetch(url: URL): Promise<Response> {
+    return fetch(url, { signal: AbortSignal.timeout(30_000) });
+  }
+
+  private async pace(): Promise<void> {
+    const gap = 1_000 / this.perSecond;
+    const wait = this.last + gap - Date.now();
+    if (wait > 0) await sleep(wait);
+    this.last = Date.now();
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

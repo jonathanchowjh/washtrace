@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+coverage/
+*.tsbuildinfo
+# Next.js build output and its generated ambient-types file (apps/web).
+.next/
+next-env.d.ts
+.playwright-mcp/
+# The 2023 paper, its drafts and the reference library are kept locally and
+# not published: several of the references are other authors' PDFs.
+docs/
+.remember/

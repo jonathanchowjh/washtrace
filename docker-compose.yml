@@ -1,0 +1,39 @@
+# The whole service: Postgres, and one container that is both the polling
+# worker and the API. `docker compose up --build`, then http://localhost:8080.
+#
+# Settings come from .env beside this file (copy .env.example). To scale the
+# API without more chain traffic, run more `washtrace` replicas with
+# WASHTRACE_WORKER=off; or run them all with the worker on, and the advisory
+# locks still give each pass to one replica at a time.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: washtrace
+      POSTGRES_PASSWORD: washtrace
+      POSTGRES_DB: washtrace
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U washtrace -d washtrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  washtrace:
+    build: .
+    image: washtrace
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  db:

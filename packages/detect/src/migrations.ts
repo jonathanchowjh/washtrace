@@ -1,0 +1,128 @@
+/**
+ * Forward-only, numbered, idempotent. Index 0 is migration 001. A TypeScript
+ * module rather than .sql files: the package builds with plain `tsc`, which
+ * would not copy a .sql file into dist/. The only place in the product with DDL.
+ */
+export const MIGRATIONS: readonly string[] = [
+  `
+CREATE SCHEMA IF NOT EXISTS washtrace;
+
+CREATE TABLE IF NOT EXISTS washtrace.schema_version (
+  version   int NOT NULL,
+  singleton bool NOT NULL DEFAULT true UNIQUE CHECK (singleton)
+);
+
+CREATE TABLE IF NOT EXISTS washtrace.collections (
+  id               serial PRIMARY KEY,
+  chain_id         int NOT NULL,
+  address          text NOT NULL,
+  name             text,
+  -- Null until the worker has found the deployment block.
+  start_block      bigint,
+  -- The last block fully ingested. Transfers and this move in one transaction.
+  cursor_block     bigint,
+  -- The finalized block when the worker last looked.
+  head_block       bigint,
+  added_at         timestamptz NOT NULL DEFAULT now(),
+  ingested_at      timestamptz,
+  error            text,
+  error_at         timestamptz,
+  -- Bumped by every write the analysis reads. The analysis records the
+  -- version it read, so a write that lands mid-analysis is not lost.
+  version          bigint NOT NULL DEFAULT 1,
+  analyzed_version bigint NOT NULL DEFAULT 0,
+  UNIQUE (chain_id, address)
+);
+
+CREATE TABLE IF NOT EXISTS washtrace.transfers (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  tx_hash       text NOT NULL,
+  log_index     int NOT NULL,
+  block_number  bigint NOT NULL,
+  block_time    timestamptz,
+  -- uint256: numeric so token ids sort as numbers.
+  token_id      numeric(78, 0) NOT NULL,
+  from_address  text NOT NULL,
+  to_address    text NOT NULL,
+  marketplace   text,
+  price_wei     numeric(78, 0),
+  currency      text,
+  PRIMARY KEY (collection_id, tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS transfers_token_idx ON washtrace.transfers (collection_id, token_id);
+CREATE INDEX IF NOT EXISTS transfers_from_idx ON washtrace.transfers (from_address);
+CREATE INDEX IF NOT EXISTS transfers_to_idx ON washtrace.transfers (to_address);
+CREATE INDEX IF NOT EXISTS transfers_tx_idx ON washtrace.transfers (tx_hash);
+
+-- A wallet is per chain, not per collection: its funding is read once.
+CREATE TABLE IF NOT EXISTS washtrace.wallets (
+  chain_id   int NOT NULL,
+  address    text NOT NULL,
+  -- Transfers it took part in. The funding queue reads busiest first.
+  transfers  int NOT NULL DEFAULT 0,
+  status     text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'failed')),
+  truncated  bool NOT NULL DEFAULT false,
+  fetched_at timestamptz,
+  error      text,
+  PRIMARY KEY (chain_id, address)
+);
+CREATE INDEX IF NOT EXISTS wallets_queue_idx ON washtrace.wallets (chain_id, status, transfers DESC);
+
+CREATE TABLE IF NOT EXISTS washtrace.flows (
+  chain_id     int NOT NULL,
+  tx_hash      text NOT NULL,
+  kind         text NOT NULL,
+  from_address text NOT NULL,
+  to_address   text NOT NULL,
+  value_wei    numeric(78, 0) NOT NULL,
+  token        text NOT NULL,
+  block_number bigint NOT NULL,
+  block_time   timestamptz NOT NULL,
+  -- A flow between two watched wallets is read from both sides; it is one edge.
+  PRIMARY KEY (chain_id, kind, tx_hash, from_address, to_address, token, value_wei)
+);
+CREATE INDEX IF NOT EXISTS flows_from_idx ON washtrace.flows (chain_id, from_address);
+CREATE INDEX IF NOT EXISTS flows_to_idx ON washtrace.flows (chain_id, to_address);
+
+CREATE TABLE IF NOT EXISTS washtrace.analyses (
+  id                 bigserial PRIMARY KEY,
+  collection_id      int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  ran_at             timestamptz NOT NULL DEFAULT now(),
+  took_ms            int NOT NULL,
+  through_block      bigint,
+  totals             jsonb NOT NULL,
+  missing_data       double precision NOT NULL,
+  funded_wallets     int NOT NULL,
+  wallets            int NOT NULL,
+  truncated_searches int NOT NULL
+);
+CREATE INDEX IF NOT EXISTS analyses_collection_idx ON washtrace.analyses (collection_id, ran_at DESC);
+
+-- The latest analysis's flags only; each analysis replaces them.
+CREATE TABLE IF NOT EXISTS washtrace.flags (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  method        text NOT NULL CHECK (method IN ('A', 'AU', 'AC')),
+  tx_hash       text NOT NULL,
+  log_index     int NOT NULL,
+  witness       jsonb NOT NULL,
+  PRIMARY KEY (collection_id, method, tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS flags_tx_idx ON washtrace.flags (tx_hash);
+
+-- One row per worker job: what the worker page shows.
+CREATE TABLE IF NOT EXISTS washtrace.passes (
+  job         text PRIMARY KEY,
+  started_at  timestamptz NOT NULL,
+  finished_at timestamptz,
+  took_ms     int,
+  outcome     text,
+  detail      text
+);
+`,
+  `
+-- A collection's overrides of the methods' RULES. Only the keys set here;
+-- the rest follow the defaults, so a changed default reaches every
+-- collection that never chose otherwise.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules jsonb NOT NULL DEFAULT '{}';
+`,
+];

@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+
+body { margin: 0; }
+
+/* pg-ops' palette: neutral grey surfaces, and hue reserved for verdicts so
+   that grey can mean "no verdict" (a method that could not run) and never
+   be mistaken for clean. */
+@theme inline {
+  --font-sans: var(--font-sans); --font-mono: var(--font-mono);
+  --color-background: var(--background); --color-foreground: var(--foreground); --color-body: var(--body);
+  --color-card: var(--card); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border); --color-ring: var(--ring); --color-sidebar: var(--sidebar); --color-focus: var(--focus);
+  --color-cycle: var(--cycle); --color-cycle-surface: var(--cycle-surface);
+  --color-money: var(--money); --color-money-surface: var(--money-surface);
+  --color-flow: var(--flow); --color-clean: var(--clean); --color-ok: var(--ok);
+  --radius-md: 0.5rem;
+}
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --background: oklch(0.975 0.004 250); --foreground: oklch(0.2 0.012 250); --body: oklch(0.36 0.012 250);
+  --card: oklch(1 0 0); --muted: oklch(0.945 0.006 250); --muted-foreground: oklch(0.52 0.012 250);
+  --border: oklch(0.9 0.006 250); --ring: oklch(0.708 0 0); --sidebar: oklch(0.955 0.006 250); --focus: oklch(0.5 0.16 255);
+  /* A cycle in the token's own history (SCC A). */
+  --cycle: oklch(0.52 0.21 27.3); --cycle-surface: oklch(0.955 0.016 27);
+  /* A link through money only (AU or AC beyond A). */
+  --money: oklch(0.5 0.105 70); --money-surface: oklch(0.955 0.025 80);
+  /* A money edge, drawn dashed: the paper's red ETH arrows, in a hue that is not a verdict. */
+  --flow: oklch(0.52 0.16 290);
+  --clean: oklch(0.62 0.01 250); --ok: oklch(0.48 0.13 150);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.165 0.008 250); --foreground: oklch(0.96 0.005 250); --body: oklch(0.84 0.008 250);
+    --card: oklch(0.205 0.009 250); --muted: oklch(0.245 0.01 250); --muted-foreground: oklch(0.68 0.01 250);
+    --border: oklch(0.3 0.01 250); --ring: oklch(0.556 0 0); --sidebar: oklch(0.14 0.008 250); --focus: oklch(0.76 0.125 255);
+    --cycle: oklch(0.704 0.185 22.2); --cycle-surface: oklch(0.25 0.05 27);
+    --money: oklch(0.82 0.15 80); --money-surface: oklch(0.24 0.04 80);
+    --flow: oklch(0.72 0.14 290);
+    --clean: oklch(0.58 0.01 250); --ok: oklch(0.77 0.16 152);
+  }
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  body { @apply bg-background text-body; }
+  h1, h2, h3 { @apply text-foreground; }
+  html { @apply font-sans; }
+  i { font-style: normal; }
+}

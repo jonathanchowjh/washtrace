@@ -1,0 +1,39 @@
+{
+  "name": "washtrace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NFT wash trading detector. A polling worker and an API, in one container.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run --project unit",
+    "test:int": "vitest run --project integration",
+    "test:web": "npm run --workspace @washtrace/detect build && vitest run --project web",
+    "test:watch": "vitest",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "dev": "npm run --workspace @washtrace/web dev",
+    "db:up": "./scripts/dev-db.sh up",
+    "db:down": "./scripts/dev-db.sh down",
+    "db:psql": "./scripts/dev-db.sh psql"
+  },
+  "keywords": [
+    "nft",
+    "wash-trading",
+    "ethereum",
+    "seaport",
+    "blur",
+    "fraud",
+    "graph"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.8"
+  }
+}
