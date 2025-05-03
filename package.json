@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "dev": "npm run --workspace @washtrace/web dev",
+    "worker": "npm run --workspace @washtrace/worker dev",
     "db:up": "./scripts/dev-db.sh up",
     "db:down": "./scripts/dev-db.sh down",
     "db:psql": "./scripts/dev-db.sh psql"

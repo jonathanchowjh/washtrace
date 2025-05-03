@@ -15,7 +15,8 @@ npm run db:up                                # Postgres 17 on localhost:55433
 export WASHTRACE_STORE_URL='postgres://postgres:secret@localhost:55433/washtrace'
 export WASHTRACE_RPC_1='https://…'           # optional: any Ethereum JSON-RPC
 export WASHTRACE_ETHERSCAN_KEY='…'           # optional: turns SCC AU and AC on
-npm run dev                                  # http://localhost:3000
+npm run dev                                  # the api: http://localhost:3000
+npm run worker                               # the worker, in a second terminal
 ```
 
 For a chain with a scripted market and no keys, run the Docker demo (see the
@@ -49,16 +50,20 @@ packages/detect/          Everything that knows chains, money and graphs. No Rea
   src/store.ts            Store: every read and write of the washtrace schema
   src/migrations.ts       The only DDL in the product
   src/worker.ts           Worker: the ingest, fund and analyze passes
+  src/env.ts              Every environment variable, read the same way by both services
   test/                   *.test.ts is pure; *.int.test.ts starts Postgres
 
-apps/web/                 The Next.js console and the JSON API over the same store.
-  instrumentation.ts      Starts the worker inside the server process
+apps/worker/              The worker service: a plain Node process, no Next.
+  src/main.ts             Migrates, starts Worker's timers, serves /health, drains on SIGTERM
+
+apps/web/                 The api service: the JSON API and the console, over the store.
+  instrumentation.ts      Migrates the schema on boot; never reads a chain
   proxy.ts                Basic auth over every route but /api/health
   app/api/                The API; see the README for the routes
   app/                    One folder per page
   lib/views.ts            Reads that a page and its API route share
   lib/layout.ts           The token graph's layout, as a pure function
-  lib/config.ts           Every environment variable, read per request
+  lib/config.ts           Re-exports packages/detect's env.ts
 
 scripts/demo/             The local market: contracts, seeder, Etherscan stand-in
 ```
@@ -76,10 +81,11 @@ back.
    event is a sale, and a Seaport sale is priced from `OrderFulfilled`. The
    transfers and the new cursor are written in one transaction, and the
    wallets join the funding queue weighted by how often they traded.
-2. **Fund** (`Worker.fund`, back to back) takes the busiest wallets not yet
-   read and asks Etherscan for their native, internal and wrapped-native flows.
-   Each wallet's flows are written, and every collection it traded is marked
-   for analysis.
+2. **Fund** (`Worker.fund`, every 5 seconds) takes the nearest, busiest wallets
+   not yet read and asks Etherscan for their native, internal and
+   wrapped-native flows. Each wallet's flows are written, the wallets it paid
+   are queued one hop further out, and every collection it or a counterparty
+   traded is marked for analysis.
 3. **Analyze** (`Worker.analyze`, every minute) reruns `analyze()` over each
    collection written to since its last analysis. It replaces the flags and
    records the totals. The collection's version is read before the analysis
@@ -120,12 +126,22 @@ A method that needs funding and has none reports `available: false`, never 0%.
 A price that cannot be read is `null`, never 0. A transaction washtrace has not
 read is 404 from the API, never `washTrade: false`.
 
-### One container, N replicas
+### Two services, one store
 
-The worker runs in the API's own process (`instrumentation.ts`), as pg-ops runs
-its scheduler. Each pass takes its job's advisory lock without waiting, so any
-number of replicas do one worker's work. A pass that is due while the last is
-still running is skipped, not queued.
+pg-ops runs its scheduler inside the Next server. washtrace does not: the
+worker is its own process ([apps/worker](apps/worker)), and the api never
+calls a chain. They share nothing but Postgres, so a slow backfill cannot slow
+a page, and either can be restarted, scaled or redeployed alone. Each pass
+takes its job's advisory lock without waiting, so N workers do one worker's
+work. A pass that is due while the last one is still running is skipped, not
+queued.
+
+### Following money
+
+`Store.fund` queues the wallets a trader sent money to, one hop further out,
+up to `WASHTRACE_FOLLOW_HOPS`. It never follows a wallet that paid more than
+`FOLLOW_FANOUT` (25) others, nor a known contract. Traders are read before
+followed wallets, so following never delays a collection's own funding.
 
 ## Conventions
 

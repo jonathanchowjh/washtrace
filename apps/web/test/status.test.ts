@@ -17,7 +17,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   };
 }
 
-const CONFIG: WorkerConfig = { rpc: new Map([[1, 'https://secret.example/key']]), etherscanKey: 'secret', etherscanPerSecond: 4, etherscanUrl: 'https://api.etherscan.io/v2/api' };
+const CONFIG: WorkerConfig = { rpc: new Map([[1, 'https://secret.example/key']]), etherscanKey: 'secret', etherscanPerSecond: 4, etherscanUrl: 'https://api.etherscan.io/v2/api', followHops: 3 };
 
 function snapshot(more: Partial<Snapshot> = {}): Snapshot {
   return {
@@ -25,7 +25,6 @@ function snapshot(more: Partial<Snapshot> = {}): Snapshot {
     collections: [collection()],
     funding: [{ chainId: 1, pending: 3, done: 4, failed: 0, truncated: 0 }],
     config: CONFIG,
-    worker: true,
     ...more,
   };
 }
@@ -83,7 +82,7 @@ describe('status', () => {
 
   it('shows which chains are configured, never their URLs or the key', () => {
     const report = status(snapshot(), NOW);
-    expect(report.config).toEqual({ chains: [1], funding: true, worker: true });
+    expect(report.config).toEqual({ chains: [1], funding: true });
     expect(JSON.stringify(report)).not.toContain('secret');
   });
 });

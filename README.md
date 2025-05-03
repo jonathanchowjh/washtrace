@@ -3,8 +3,8 @@
 A wash trading detector for NFT collections on any EVM chain. It reads every
 transfer of the collections you watch and who paid whom among the wallets that
 traded them. It flags wash trades by three graph methods and says why each one
-was flagged. A polling worker and a JSON API run in one container, with a
-console over both.
+was flagged. It runs as two services over one Postgres: a polling **worker**
+and a JSON **API** with a console.
 
 washtrace is the 2023 paper *Detecting and quantifying wash trading of
 non-fungible tokens* (Chow, SMU CS470) rebuilt on the systems that exist in
@@ -16,6 +16,7 @@ three corrections are new: see [From the paper to now](#from-the-paper-to-now).
 
 ## Contents
 
+- [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
 - [Configuration](#configuration)
@@ -26,6 +27,46 @@ three corrections are new: see [From the paper to now](#from-the-paper-to-now).
 
 How it is built and why, and how to work on it, is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Architecture
+
+```
+            ┌──────────────────────────┐        ┌──────────────────────────┐
+ JSON-RPC ─▶│  worker   (apps/worker)  │        │  api   (apps/web)        │◀─ HTTP :8080
+Etherscan ─▶│  plain Node, no HTTP     │        │  JSON API + console      │   /api/…  and pages
+            │  but /health on :8081    │        │  reads only; never calls │
+            │                          │        │  a chain                 │
+            │  ingest   every 60 s     │        │                          │
+            │  fund     every 5 s      │        │                          │
+            │  analyze  every 60 s     │        │                          │
+            └────────────┬─────────────┘        └────────────┬─────────────┘
+                         │  writes                     reads  │
+                         ▼                                    ▼
+                    ┌────────────────────────────────────────────┐
+                    │  Postgres: schema washtrace                │
+                    │  collections · transfers · wallets · flows │
+                    │  analyses · flags · passes                 │
+                    └────────────────────────────────────────────┘
+```
+
+- **worker** ([apps/worker/src/main.ts](apps/worker/src/main.ts)) runs the
+  three jobs of [`Worker`](packages/detect/src/worker.ts) on timers. **ingest**
+  reads finalized ERC-721 transfers and their receipts for every watched
+  collection. **fund** reads who paid whom for each wallet that traded, then
+  follows money out of them. **analyze** reruns the three methods over every
+  collection that changed. A pass that comes due while the last one is still
+  running is skipped, not queued.
+- **api** ([apps/web](apps/web)) is Next.js: the JSON API under `/api` and the
+  console pages, both reading the store. Adding a collection writes one row;
+  the worker picks it up on its next ingest pass.
+- **They share nothing but the store.** Each scales or restarts on its own.
+  Each worker pass takes its job's advisory lock without waiting, so two
+  worker replicas still do one worker's work, and one carries on when the
+  other dies.
+
+Both are built from one [Dockerfile](Dockerfile) as `--target worker` and
+`--target api`. The domain code (chains, Etherscan, the graph methods, the
+store) lives in [packages/detect](packages/detect), which both import.
 
 ## Quick start
 
@@ -39,8 +80,11 @@ over it:
 docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 ```
 
-Open http://localhost:8080. The worker reads the collection on its next ingest
-pass and analyzes it on the pass after that, which takes about two minutes. The
+`docker compose ps` shows the services: `worker`, `api`, `db`, and the demo's
+`anvil`, `explorer` and `seed`. Open http://localhost:8080. The worker reads
+the collection on its next ingest pass and analyzes it on the pass after that,
+which takes about two minutes. `docker compose logs -f worker` shows the
+passes as they run. The
 seeder's log says which tokens should be flagged and by which method.
 
 **Against a real chain**, give it an RPC endpoint and an Etherscan key:
@@ -82,7 +126,7 @@ A method that needs funding and has none reports itself **not run**, never
 
 ## Configuration
 
-Read at request and pass time. The same image serves any chain.
+Both services read the same variables. In Compose they share one `.env`.
 
 | Variable | Purpose |
 |---|---|
@@ -92,13 +136,13 @@ Read at request and pass time. The same image serves any chain.
 | `WASHTRACE_ETHERSCAN_RPS` | Calls per second. Default 4; the free plan allows 5. |
 | `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. |
 | `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. |
-| `WASHTRACE_WORKER` | `off` serves the API without running worker passes in this process. |
-| `PORT` | Listen port. `8080` in the image. |
+| `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
+| `PORT` | The api's listen port. `8080` in the image. |
+| `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
 
-**Scaling.** Every worker pass takes a Postgres advisory lock without waiting.
-With N replicas of the image, each pass runs in exactly one of them. Use
-`WASHTRACE_WORKER=off` only to keep chain traffic out of the replicas that
-serve requests.
+**Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
+are stateless. Worker replicas share each job through an advisory lock, so a
+second worker gives failover, not double reads.
 
 ## API
 
@@ -143,6 +187,7 @@ system.
 | Seaport 1.4 and 1.5 | Seaport 1.1 to 1.6, Blur v1 and v2, LooksRare v2, X2Y2 | OpenSea moved to Seaport 1.6. Blur took most of Ethereum's NFT volume, much of it wash trading for points. |
 | ETH only, as the user transaction graph | Native ETH, internal transfers, WETH and Blur Pool | Bids are paid in WETH, and Blur bids are held in Blur Pool. A wash trader funding a second wallet in WETH was invisible in 2023. |
 | Head of chain | Finalized blocks only | Since the Merge, a finalized block cannot be reorganized away, so a stored transfer is never retracted. |
+| Funding read for traders only | Funding followed out of traders, through low fan-out wallets | So SCC AU's depth 30 reaches outside the collection, as the method intends. |
 | Ethereum | Any EVM chain, one RPC variable each | NFT trading spread to Base, ApeChain and others. Seaport has the same address on every chain. |
 | One shape for every source, backfilled with dummy fields | Each source keeps its own shape, and an unread field is `null` | A placeholder cannot be told apart from a reading. |
 
@@ -164,12 +209,14 @@ Three corrections, each with a test:
 
 ## Known limits
 
-- **SCC AU's reach mostly stays inside the collection.** Like the paper's
-  dataset 3, funding is read only for wallets that traded the collection. A
-  payment routed back through two or more outside wallets is never read, so
-  AU's 30 hops can travel only through other collection wallets. Demo token
-  #113 is this case and goes unflagged. This also plausibly explains why the
-  paper found AC catching more than AU.
+- **SCC AU sees as far as the worker follows money.** The paper read funding
+  only for wallets that traded the collection (its dataset 3), so AU's 30 hops
+  could only travel through other traders. That plausibly explains why the
+  paper found AC catching more than AU. The worker now follows money out of
+  each trader, `WASHTRACE_FOLLOW_HOPS` deep, but only through wallets that
+  paid at most 25 others; an exchange or a busy trader is not followed. A
+  path back through a busy wallet stays unseen. Demo token #113 is the case
+  this exists for: AU flags it, AC cannot.
 - **Blur sales are marked as sales but not priced.** Blur v2 packs the price
   into bit fields of its own events, which washtrace does not decode yet. A
   guessed price would be counted in volume as though it had been read.

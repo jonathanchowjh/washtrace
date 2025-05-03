@@ -1,0 +1,16 @@
+{
+  "name": "@washtrace/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The polling half of washtrace: ingest, fund and analyze, on timers, as its own process.",
+  "type": "module",
+  "scripts": {
+    "build": "npm run --workspace @washtrace/detect build && rm -rf dist && tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "dev": "npm run build && node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@washtrace/detect": "*"
+  }
+}

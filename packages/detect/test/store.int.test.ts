@@ -22,10 +22,10 @@ afterAll(async () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(2);
-    expect(await store.migrate()).toBe(2);
+    expect(await store.migrate()).toBe(3);
+    expect(await store.migrate()).toBe(3);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 2 }]);
+    expect(rows).toEqual([{ version: 3 }]);
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -125,7 +125,7 @@ describe('Store', () => {
   });
 
   it('analyzes a collection with its own rules', async () => {
-    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '' }));
+    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
     await worker.analyze();
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(3);
@@ -133,5 +133,44 @@ describe('Store', () => {
     await store.configure(1, collection, { rules: { minCycles: 99 } });
     await worker.analyze();
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(0);
+  });
+
+  describe('following money for SCC AU', () => {
+    const follow = { hops: 2, fanout: 3, exclude: [w('5ea')] };
+    const depthOf = async (a: string) => (await store.pool.query('SELECT depth FROM washtrace.wallets WHERE chain_id = 1 AND address = $1', [a])).rows[0]?.depth ?? null;
+
+    it('queues the wallets a trader paid, one hop out, behind every trader', async () => {
+      await store.fund(1, a, [flow(a, w('m1')), flow(w('in'), a), flow(a, w('5ea'))], false, follow);
+      // Paid by a: followed. Paid a: not, since AU follows money onward. A contract: never.
+      expect(await depthOf(w('m1'))).toBe(1);
+      expect(await depthOf(w('in'))).toBeNull();
+      expect(await depthOf(w('5ea'))).toBeNull();
+      const queue = await store.fundingQueue(1, 10);
+      expect(queue.indexOf(w('m1'))).toBeGreaterThan(queue.indexOf(b));
+    });
+
+    it('stops at the hop limit', async () => {
+      await store.fund(1, w('m1'), [flow(w('m1'), w('m2'))], false, follow);
+      expect(await depthOf(w('m2'))).toBe(2);
+      await store.fund(1, w('m2'), [flow(w('m2'), w('m3'))], false, follow);
+      expect(await depthOf(w('m3'))).toBeNull();
+    });
+
+    it('does not follow a wallet that paid more wallets than the fanout', async () => {
+      await store.fund(1, b, [1, 2, 3, 4].map((i) => flow(b, w(`f${i}`))), false, follow);
+      expect(await depthOf(w('f1'))).toBeNull();
+    });
+
+    it('reads a followed wallet\'s payments onward into the analysis', async () => {
+      const [c] = await store.collections();
+      const read = await store.analysisInput(c!.id, 1);
+      expect(read.flows.some((f) => f.from === w('m1') && f.to === w('m2'))).toBe(true);
+    });
+
+    it('takes a followed wallet back to depth 0 when it trades', async () => {
+      const [c] = await store.collections();
+      await store.ingest(c!.id, 1, [], c!.cursorBlock!, [w('m1')]);
+      expect(await depthOf(w('m1'))).toBe(0);
+    });
   });
 });

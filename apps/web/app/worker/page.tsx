@@ -29,14 +29,14 @@ export default async function WorkerPage() {
   const pass = new Map(v.passes.map((p) => [p.job, p]));
   return (
     <>
-      <Head title="Worker" sub={v.enabled ? 'Running in this process. Each pass runs in one replica at a time.' : 'Off in this process (WASHTRACE_WORKER=off). Another replica may be running it.'}>
+      <Head title="Worker" sub="The worker service's passes, as it recorded them in the store. It runs as its own process; this page only reads.">
         <Refresh everyMs={5_000} />
       </Head>
 
       <Section title="Sources">
         <ul className="space-y-1">
           <li>RPC: {v.rpcChains.length === 0 ? <span className="text-cycle">none. Set WASHTRACE_RPC_1 to an Ethereum JSON-RPC URL.</span> : v.rpcChains.map(chainName).join(', ')}</li>
-          <li>Funding: {v.funding === null ? <span className="text-money">none, so SCC AU and AC do not run. Set WASHTRACE_ETHERSCAN_KEY.</span> : `Etherscan API V2, ${v.funding.perSecond} calls a second`}</li>
+          <li>Funding: {v.funding === null ? <span className="text-money">none, so SCC AU and AC do not run. Set WASHTRACE_ETHERSCAN_KEY.</span> : `Etherscan API V2, ${v.funding.perSecond} calls a second, following money ${v.followHops} ${v.followHops === 1 ? 'hop' : 'hops'} out of traders`}</li>
         </ul>
       </Section>
 
@@ -75,7 +75,7 @@ export default async function WorkerPage() {
         {v.backlog.length === 0 ? <p className="text-muted-foreground">No wallets queued yet.</p> : (
           <ul className="space-y-1 font-mono text-xs">
             {v.backlog.map((b) => (
-              <li key={b.chainId}>{chainName(b.chainId)}: {b.done.toLocaleString()} read · {b.pending.toLocaleString()} waiting · {b.failed} failed · {plural(b.truncated, 'truncated wallet')}</li>
+              <li key={b.chainId}>{chainName(b.chainId)}: {b.done.toLocaleString()} read · {b.pending.toLocaleString()} waiting · {b.failed} failed · {plural(b.truncated, 'truncated wallet')} · {b.followed.toLocaleString()} followed from traders</li>
             ))}
           </ul>
         )}

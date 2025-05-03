@@ -12,7 +12,16 @@ export interface WorkerConfig {
   etherscanKey: string | null;
   etherscanPerSecond: number;
   etherscanUrl: string;
+  /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
+  followHops: number;
 }
+
+/**
+ * A wallet that sent money to more wallets than this is not followed. Mule
+ * wallets in a wash ring pay a handful; a wallet paying dozens is a business,
+ * a bot or a person with a life, and following it reads half the chain.
+ */
+export const FOLLOW_FANOUT = 25;
 
 export type Job = 'ingest' | 'fund' | 'analyze';
 
@@ -67,6 +76,21 @@ export class Worker {
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
+  }
+
+  /** The jobs with a pass in flight in this process. */
+  get busy(): Job[] {
+    return [...this.running];
+  }
+
+  /**
+   * Resolves once no pass is in flight, or after `ms`. For shutdown: a pass
+   * stopped mid-span would roll its transaction back and redo the span, which
+   * is safe but wasted, so it is given the time to commit.
+   */
+  async drain(ms = 30_000): Promise<void> {
+    const until = Date.now() + ms;
+    while (this.running.size > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   }
 
   /** One pass of `job`, unless one is in flight here or in another replica. Never rejects: a timer has no caller. */
@@ -137,7 +161,7 @@ export class Worker {
 
   /** Read the funding of the busiest wallets not yet read, within the budget. */
   async fund(): Promise<string> {
-    const { etherscanKey, etherscanPerSecond, etherscanUrl } = this.config();
+    const { etherscanKey, etherscanPerSecond, etherscanUrl, followHops } = this.config();
     if (etherscanKey === null) return 'no funding source configured';
     const settings = `${etherscanKey} ${etherscanPerSecond} ${etherscanUrl}`;
     if (this.etherscan === null || this.etherscanSettings !== settings) {
@@ -153,7 +177,8 @@ export class Worker {
         if (Date.now() > deadline) return `${done} wallets read, ${failed} failed`;
         try {
           const { flows, truncated } = await this.etherscan.flows(chainId, wallet);
-          await this.store.fund(chainId, wallet, flows, truncated);
+          const follow = followHops > 0 ? { hops: followHops, fanout: FOLLOW_FANOUT, exclude: [...contractsFor(chainId), ZERO] } : undefined;
+          await this.store.fund(chainId, wallet, flows, truncated, follow);
           done += 1;
         } catch (err) {
           await this.store.fundingFailed(chainId, wallet, messageOf(err));

@@ -52,6 +52,20 @@ export interface FlaggedTransfer extends Transfer {
   collection?: { chainId: number; address: string; name: string | null };
 }
 
+/**
+ * Following money out of a wallet, for SCC AU. Funding is otherwise read only
+ * for wallets that traded a collection, as the paper's dataset 3 was, so a
+ * payment routed back through two outside wallets was never seen.
+ */
+export interface Follow {
+  /** How many hops out from a trader to read. */
+  hops: number;
+  /** A wallet that paid more than this many wallets is a business or a bot; it is not followed. */
+  fanout: number;
+  /** Contracts never followed into: marketplaces, wrapped native tokens, the zero address. */
+  exclude: readonly string[];
+}
+
 export interface PassRow {
   job: string;
   startedAt: number;
@@ -214,7 +228,7 @@ export class Store {
         await c.query(
           `INSERT INTO washtrace.wallets (chain_id, address, transfers)
            SELECT $1, a, count(*) FROM unnest($2::text[]) AS a GROUP BY a
-           ON CONFLICT (chain_id, address) DO UPDATE SET transfers = washtrace.wallets.transfers + EXCLUDED.transfers`,
+           ON CONFLICT (chain_id, address) DO UPDATE SET transfers = washtrace.wallets.transfers + EXCLUDED.transfers, depth = 0`,
           [chainId, queue],
         );
       }
@@ -239,13 +253,17 @@ export class Store {
     const { rows } = await this.pool.query<{ address: string }>(
       `SELECT address FROM washtrace.wallets
        WHERE chain_id = $1 AND (status = 'pending' OR (status = 'failed' AND fetched_at < now() - interval '1 hour'))
-       ORDER BY status = 'failed', transfers DESC LIMIT $2`,
+       ORDER BY status = 'failed', depth, transfers DESC LIMIT $2`,
       [chainId, limit],
     );
     return rows.map((r) => r.address);
   }
 
-  async fund(chainId: number, wallet: string, flows: readonly Flow[], truncated: boolean): Promise<void> {
+  /**
+   * Store a wallet's flows and take it off the queue. With `follow`, queue
+   * the wallets it sent money to, one hop further out: see Follow.
+   */
+  async fund(chainId: number, wallet: string, flows: readonly Flow[], truncated: boolean, follow?: Follow): Promise<void> {
     const c = await this.pool.connect();
     try {
       await c.query('BEGIN');
@@ -266,12 +284,27 @@ export class Store {
         `UPDATE washtrace.wallets SET status = 'done', truncated = $3, fetched_at = now(), error = NULL WHERE chain_id = $1 AND address = $2`,
         [chainId, wallet, truncated],
       );
-      // Every collection this wallet traded in reads its funding.
+      if (follow && !truncated) {
+        const skip = new Set(follow.exclude);
+        const sent = [...new Set(flows.filter((f) => f.from === wallet && f.to !== wallet && !skip.has(f.to)).map((f) => f.to))];
+        if (sent.length > 0 && sent.length <= follow.fanout) {
+          await c.query(
+            `INSERT INTO washtrace.wallets (chain_id, address, depth)
+             SELECT $1, a, w.depth + 1 FROM unnest($2::text[]) AS a, washtrace.wallets w
+             WHERE w.chain_id = $1 AND w.address = $3 AND w.depth < $4
+             ON CONFLICT (chain_id, address) DO NOTHING`,
+            [chainId, sent, wallet, follow.hops],
+          );
+        }
+      }
+      // Every collection this wallet or any counterparty traded in reads it
+      // again: a followed wallet's flows can close a path to a trader.
+      const touched = [...new Set([wallet, ...flows.flatMap((f) => [f.from, f.to])])];
       await c.query(
         `UPDATE washtrace.collections SET version = version + 1
-         WHERE id IN (SELECT DISTINCT collection_id FROM washtrace.transfers WHERE from_address = $2 OR to_address = $2)
+         WHERE id IN (SELECT DISTINCT collection_id FROM washtrace.transfers WHERE from_address = ANY($2) OR to_address = ANY($2))
            AND chain_id = $1`,
-        [chainId, wallet],
+        [chainId, touched],
       );
       await c.query('COMMIT');
     } catch (err) {
@@ -289,13 +322,13 @@ export class Store {
     );
   }
 
-  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; truncated: number }[]> {
+  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; truncated: number; followed: number }[]> {
     const { rows } = await this.pool.query(
       `SELECT chain_id, count(*) FILTER (WHERE status = 'pending')::int AS pending, count(*) FILTER (WHERE status = 'done')::int AS done,
-              count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE truncated)::int AS truncated
+              count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE truncated)::int AS truncated, count(*) FILTER (WHERE depth > 0)::int AS followed
        FROM washtrace.wallets GROUP BY chain_id ORDER BY chain_id`,
     );
-    return rows.map((r) => ({ chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, truncated: r.truncated }));
+    return rows.map((r) => ({ chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, truncated: r.truncated, followed: r.followed }));
   }
 
   // ---- analysis ------------------------------------------------------------
@@ -321,11 +354,13 @@ export class Store {
                       UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1)`;
     const flows = (await this.pool.query(
       `SELECT f.* , extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-       WHERE f.chain_id = $2 AND (f.from_address IN ${wallets} OR f.to_address IN ${wallets})`,
+       WHERE f.chain_id = $2 AND (f.from_address IN ${wallets} OR f.to_address IN ${wallets}
+         -- Followed wallets' payments onward: the middle of a path SCC AU follows back.
+         OR f.from_address IN (SELECT address FROM washtrace.wallets WHERE chain_id = $2 AND depth > 0 AND status = 'done'))`,
       [id, chainId],
     )).rows.map(toFlow);
     const state = (await this.pool.query<{ address: string; truncated: boolean }>(
-      `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $2 AND status = 'done' AND address IN ${wallets}`,
+      `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $2 AND status = 'done' AND (address IN ${wallets} OR depth > 0)`,
       [id, chainId],
     )).rows;
     const { rows } = await this.pool.query<{ cursor_block: string | null }>('SELECT cursor_block FROM washtrace.collections WHERE id = $1', [id]);

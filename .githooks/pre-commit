@@ -11,3 +11,4 @@ npm run --workspace @washtrace/detect typecheck
 npm test
 npm run test:web
 npm run --workspace @washtrace/web typecheck
+npm run --workspace @washtrace/worker typecheck

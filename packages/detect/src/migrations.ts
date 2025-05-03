@@ -125,4 +125,12 @@ CREATE TABLE IF NOT EXISTS washtrace.passes (
 -- collection that never chose otherwise.
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules jsonb NOT NULL DEFAULT '{}';
 `,
+  `
+-- How far a wallet is from the collections. 0: it traded a watched
+-- collection. n: a wallet at n - 1 sent it money, and it is read so SCC AU
+-- can follow a payment back through wallets that never traded. The queue
+-- reads nearer wallets first, so following costs a collection nothing.
+ALTER TABLE washtrace.wallets ADD COLUMN IF NOT EXISTS depth int NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS wallets_depth_queue_idx ON washtrace.wallets (chain_id, status, depth, transfers DESC);
+`,
 ];

@@ -84,11 +84,9 @@ await sell(112, w('f8-2-seller'), w('f8-2-buyer'), '7');
 await pay(w('f8-2-buyer'), w('f8-2-mule'), '7');
 await pay(w('f8-2-mule'), w('f8-2-seller'), '6.9');
 
-// Money back through four wallets, past AC's two hops. AU would find it with
-// the middles' history, but washtrace reads the money of the collection's own
-// wallets only, as the paper's dataset 3 did: buyer → hop 1 and hop 3 →
-// seller are read, hop 1 → hop 2 → hop 3 is not. So nothing flags it. This
-// is the scope limit that keeps AU's thirty hops mostly inside the collection.
+// SCC AU only: the money comes back through three wallets that never traded,
+// past AC's two hops. The worker reads the buyer's payments, then follows
+// them out (WASHTRACE_FOLLOW_HOPS, default 3) to find the way back.
 await mint(113, w('chain-seller'));
 await sell(113, w('chain-seller'), w('chain-buyer'), '4');
 await pay(w('chain-buyer'), w('chain-hop-1'), '4');
@@ -130,8 +128,8 @@ const res = await fetch(`${API}/api/collections`, {
   body: JSON.stringify({ chainId: 31337, address: nft, name: 'Demo Apes' }),
 });
 console.log(`[seed] POST /api/collections: ${res.status} ${await res.text()}`);
-console.log(`[seed] Expect flagged: #101 #102 by every method; #111 #112 by AU and AC; #114 #116 by AC only.`);
-console.log(`[seed] Expect clean: #1–#40 (one exchange funds every buyer), #120 (loans through Blend), #130 (one buy-back), and #113, whose money path runs outside the collection.`);
+console.log(`[seed] Expect flagged: #101 #102 by every method; #111 #112 by AU and AC; #113 by AU only; #114 #116 by AC only.`);
+console.log(`[seed] Expect clean: #1–#40 (one exchange funds every buyer), #120 (loans through Blend), #130 (one buy-back).`);
 
 async function waitFor(probe, what) {
   for (let i = 0; ; i++) {

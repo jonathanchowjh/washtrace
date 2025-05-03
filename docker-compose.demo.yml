@@ -24,13 +24,17 @@ services:
     command: ["node", "scripts/demo/seed.mjs"]
     environment:
       RPC: http://anvil:8545
-      API: http://washtrace:8080
-    depends_on: [anvil, explorer, washtrace]
+      API: http://api:8080
+    depends_on: [anvil, explorer, api]
     restart: "no"
 
-  washtrace:
-    environment:
+  # Both services read the same settings, as in production.
+  worker:
+    environment: &demo
       WASHTRACE_RPC_31337: http://anvil:8545
       WASHTRACE_ETHERSCAN_URL: http://explorer:8081/api
       WASHTRACE_ETHERSCAN_KEY: demo
       WASHTRACE_ETHERSCAN_RPS: "50"
+
+  api:
+    environment: *demo

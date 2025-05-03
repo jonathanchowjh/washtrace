@@ -7,8 +7,6 @@ export interface Snapshot {
   collections: readonly CollectionRow[];
   funding: readonly { chainId: number; pending: number; done: number; failed: number; truncated: number }[];
   config: WorkerConfig;
-  /** Whether this process runs the worker. Another replica may run it instead. */
-  worker: boolean;
 }
 
 export type JobState = 'never' | 'running' | 'ok' | 'failed' | 'stalled';
@@ -79,7 +77,7 @@ export function status(s: Snapshot, now: number) {
     collections,
     funding: s.funding,
     // Chain ids only: a provider URL usually carries its key.
-    config: { chains: [...s.config.rpc.keys()].sort((a, b) => a - b), funding: s.config.etherscanKey !== null, worker: s.worker },
+    config: { chains: [...s.config.rpc.keys()].sort((a, b) => a - b), funding: s.config.etherscanKey !== null },
     problems,
   };
 }

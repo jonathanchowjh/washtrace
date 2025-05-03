@@ -1,5 +1,5 @@
 import { EVERY, ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
-import { rpcUrls, workerConfig, workerEnabled } from './config';
+import { rpcUrls, workerConfig } from './config';
 import { store } from './store';
 
 /**
@@ -35,10 +35,10 @@ export async function workerView() {
   const [passes, backlog, collections] = await Promise.all([s.passes(), s.fundingBacklog(), s.collections()]);
   const config = workerConfig(process.env);
   return {
-    enabled: workerEnabled(process.env),
     every: EVERY,
     rpcChains: [...rpcUrls(process.env).keys()].sort((a, b) => a - b),
     funding: config.etherscanKey === null ? null : { source: 'etherscan-v2', perSecond: config.etherscanPerSecond },
+    followHops: config.followHops,
     passes,
     backlog,
     collections: collections.map((c) => ({
