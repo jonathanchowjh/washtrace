@@ -22,7 +22,7 @@ const STUCK_MS = 10 * 60_000;
  * minute, so a collection that is keeping up trails by a few blocks. A
  * hundred is twenty minutes: a backfill, or ingest falling behind.
  */
-const BEHIND_BLOCKS = 100;
+export const BEHIND_BLOCKS = 100;
 
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 
@@ -67,7 +67,7 @@ export function status(s: Snapshot, now: number) {
     };
   });
 
-  if (s.config.etherscanKey === null) problems.push('Funding is off: set WASHTRACE_ETHERSCAN_KEY. SCC AU and AC are unavailable.');
+  if (s.config.etherscanKey === null) problems.push('Funding is off: set WASHTRACE_ETHERSCAN_KEY. Money loops back and Linked wallets are unavailable.');
   for (const f of s.funding) {
     if (f.failed > 0) problems.push(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`);
   }

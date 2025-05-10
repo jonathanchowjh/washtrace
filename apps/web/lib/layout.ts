@@ -2,6 +2,12 @@ import { ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
 
 export type Verdict = 'cycle' | 'money' | 'clean';
 
+/** Unordered: A→B and B→A are one pair, and share one fan. */
+const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+/** Past this many transfers between one pair, the fan's arcs leave the drawing and stop being countable. */
+const FAN_MAX = 6;
+
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it. */
 export interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
 export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; verdict: Verdict; title: string; ref: number | null; lx: number; ly: number; label: string }
@@ -52,15 +58,35 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   // Edges grouped by unordered pair, so A→B and B→A share one fan.
   const fans = new Map<string, number>();
   const nextIn = (a: string, b: string) => {
-    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    const key = pairKey(a, b);
     const k = fans.get(key) ?? 0;
     fans.set(key, k + 1);
     return k;
   };
 
+  // A pair traded more often than a fan can show, as a wash pair often is,
+  // is drawn as one arrow per direction carrying its count; the table keeps
+  // every row. The arrow points at the first of them.
+  const pairCount = new Map<string, number>();
+  for (const t of transfers) {
+    if (t.from === ZERO || t.to === ZERO) continue;
+    const key = pairKey(t.from, t.to);
+    pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+  }
+  const bundles = new Map<string, { first: number; rows: number[]; verdict: Verdict }>();
+  const RANK: Record<Verdict, number> = { clean: 0, money: 1, cycle: 2 };
+
   const edges: DrawnEdge[] = [];
   transfers.forEach((t, i) => {
     if (t.from === ZERO || t.to === ZERO) return;
+    if (pairCount.get(pairKey(t.from, t.to))! > FAN_MAX) {
+      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], verdict: 'clean' as Verdict };
+      b.rows.push(i + 1);
+      const v = verdictOf(t);
+      if (RANK[v] > RANK[b.verdict]) b.verdict = v;
+      bundles.set(`${t.from}>${t.to}`, b);
+      return;
+    }
     const k = nextIn(t.from, t.to);
     const verdict = verdictOf(t);
     edges.push({
@@ -69,6 +95,19 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
   });
+
+  for (const [key, b] of bundles) {
+    const [from, to] = key.split('>') as [string, string];
+    // A bundled pair has only its two arrows, so each takes the same wide
+    // bow, which curve() puts on opposite sides for opposite directions.
+    // Money between the pair keeps the fan, and starts in the middle.
+    const k = from < to ? 1 : 2;
+    edges.push({
+      key: `b${key}`, kind: 'asset', verdict: b.verdict, ref: b.first, label: `×${b.rows.length}`,
+      title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${b.verdict === 'clean' ? '' : ' · flagged'}`,
+      ...curve(at.get(from)!, at.get(to)!, k, c),
+    });
+  }
 
   const seen = new Map<string, number>();
   for (const f of flows) {

@@ -2,21 +2,26 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
 import { messageOf, type CollectionRow } from '@washtrace/detect';
-import { Head, Problem } from '@/components/head';
+import { ReadingPill } from '@/components/coverage';
+import { Empty, Head, Problem } from '@/components/head';
+import { HowWeLook, RangeBar } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
-import { AddCollection } from '@/components/watch';
+import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
 import { chainName } from '@/lib/chains';
 import { ConfigError } from '@/lib/config';
-import { METHOD_NAMES, clock, pct, plural, short } from '@/lib/format';
+import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
+import { coverage, range, rangeText, type Range } from '@/lib/metrics';
 import { store } from '@/lib/store';
-import { cn } from '@/lib/utils';
+import { Time } from '@/components/time';
 
 export const metadata: Metadata = { title: 'Collections' };
 
+const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
+
 /**
- * Every watched collection on one row: how far the worker has read it, how
- * much of its money it has read, and the wash trade share each method finds.
- * The paper's Table 3, one row per collection, kept current.
+ * Every watched collection with its answer: how much of its trading looks
+ * like wash trading, from the strictest lens to the widest, and how far the
+ * reading under that answer has got. The paper's Table 3, kept current.
  */
 export default async function Collections() {
   await connection();
@@ -33,77 +38,90 @@ export default async function Collections() {
   }
   return (
     <>
-      <Head title="Collections" sub="Wash trade share: the transfers each method flags, over every change of owner it read.">
+      <Head title="Collections" sub="Each NFT collection being watched, and how much of its trading looks like wash trading.">
         <Refresh />
       </Head>
-      <div className="my-4 rounded-md border bg-card p-3"><AddCollection /></div>
-      {rows.length === 0 ? (
-        <div className="max-w-xl space-y-2 rounded-md border bg-card p-5">
-          <p className="font-medium text-foreground">No collection is watched yet.</p>
-          <p>Add one above, or <code className="font-mono text-xs">POST /api/collections</code>. The worker finds its deployment block, reads every transfer since, then reads who funded the wallets that traded it.</p>
+
+      <HowWeLook open={rows.length === 0} />
+
+      <WatchPanel startOpen={rows.length === 0}>
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="text-muted-foreground group-open:rotate-45 transition-transform">+</span> Watch a collection
+        </summary>
+        <div className="mt-2 space-y-5 rounded-lg border bg-card p-4">
+          <Suggested watched={rows.map((c) => `${c.chainId}/${c.address}`)} />
+          <div>
+            <p className="mb-2 text-xs text-muted-foreground">Or any collection, by its contract address.</p>
+            <AddCollection />
+          </div>
         </div>
+      </WatchPanel>
+
+      {rows.length === 0 ? (
+        <div className="mt-4"><Empty>No collection is watched yet. Add one above, or <code className="font-mono text-xs">POST /api/collections</code>. The worker reads every transfer since it was deployed, then checks who funded the wallets that traded it.</Empty></div>
       ) : (
-        <div className="overflow-x-auto rounded-md border bg-card">
-          <table className="w-full min-w-[60rem] text-left">
-            <thead className="text-xs text-muted-foreground">
-              <tr className="border-b">
-                <th className="px-3 py-2 font-medium">Collection</th>
-                <th className="px-3 py-2 font-medium">Read through</th>
-                <th className="px-3 py-2 font-medium">Funding read</th>
-                {(['A', 'AU', 'AC'] as const).map((m) => <th key={m} className="px-3 py-2 text-right font-medium">{METHOD_NAMES[m]}</th>)}
-                <th className="px-3 py-2 text-right font-medium">Missing data</th>
-                <th className="px-3 py-2 font-medium">Analyzed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c) => <Row key={c.id} c={c} />)}
-            </tbody>
-          </table>
+        <div className="mt-4 rounded-lg border bg-card">
+          <div className={`hidden gap-6 border-b px-4 py-2 text-xs text-muted-foreground md:grid ${COLS}`}>
+            <span>Collection</span>
+            <span>Sales that look washed</span>
+            <span>Volume that looks washed</span>
+            <span>How complete</span>
+          </div>
+          <ul className="divide-y">{rows.map((c) => <Row key={c.id} c={c} />)}</ul>
         </div>
       )}
     </>
   );
 }
 
-function Row({ c }: { c: CollectionRow }) {
-  const behind = c.headBlock !== null && c.cursorBlock !== null ? c.headBlock - c.cursorBlock : null;
-  const span = c.headBlock !== null && c.startBlock !== null ? c.headBlock - c.startBlock : null;
-  const a = c.latest;
+function Share({ r, label, detail }: { r: Range | null; label: string; detail: string }) {
+  if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
   return (
-    <tr className="border-b last:border-b-0 align-top">
-      <td className="px-3 py-2.5">
-        <Link href={`/c/${c.chainId}/${c.address}`} className="font-medium text-foreground hover:underline">{c.name ?? short(c.address)}</Link>
-        <p className="font-mono text-xs text-muted-foreground">{chainName(c.chainId)} · {short(c.address)} · {plural(c.transfers, 'transfer')}</p>
+    <div className="min-w-0">
+      <p className="flex items-baseline gap-1.5">
+        <span className="text-xl font-semibold text-foreground tabular-nums">{rangeText(r)}</span>
+        <span className="text-xs text-muted-foreground md:hidden">{label}</span>
+      </p>
+      <RangeBar range={r} className="mt-1.5 max-w-56" />
+      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+function Row({ c }: { c: CollectionRow }) {
+  const a = c.latest;
+  const cov = coverage(c);
+  const sales = a && range(a.totals, 'sales');
+  const volume = a && range(a.totals, 'volume');
+  const href = `/c/${c.chainId}/${c.address}`;
+  return (
+    <li className={`relative grid gap-x-6 gap-y-3 px-4 py-4 hover:bg-muted/40 ${COLS}`}>
+      <div className="min-w-0">
+        {/* The whole row opens the collection; the name is the link a screen reader announces. */}
+        <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
+        <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
+        <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
         {c.error ? <p className="mt-1 max-w-sm text-xs text-cycle">{c.error}</p> : null}
-      </td>
-      <td className="px-3 py-2.5 font-mono text-xs tabular-nums">
-        {c.cursorBlock === null || c.startBlock === null ? <span className="text-muted-foreground">finding deployment…</span> : (
-          <>
-            {c.cursorBlock.toLocaleString()}
-            <p className={cn('text-muted-foreground', behind !== null && behind > 1_000 && 'text-money')}>
-              {behind === null ? '' : behind <= 0 ? 'at finalized head' : `${plural(behind, 'block')} behind${span ? ` · ${pct(c.cursorBlock - c.startBlock, span)}` : ''}`}
-            </p>
-          </>
-        )}
-      </td>
-      <td className="px-3 py-2.5 font-mono text-xs tabular-nums">
-        {a === null ? '—' : <>{pct(a.fundedWallets, a.wallets)}<p className="text-muted-foreground">{a.fundedWallets.toLocaleString()} of {a.wallets.toLocaleString()} wallets</p></>}
-      </td>
-      {(['A', 'AU', 'AC'] as const).map((m) => {
-        const t = a?.totals[m];
-        return (
-          <td key={m} className="px-3 py-2.5 text-right font-mono tabular-nums">
-            {!t ? '—' : !t.available ? <span className="text-muted-foreground">not run</span> : (
-              <span className={cn(t.flagged > 0 && (m === 'A' ? 'text-cycle' : 'text-money'))}>{pct(t.flagged, t.transfers)}</span>
-            )}
-          </td>
-        );
-      })}
-      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{a === null ? '—' : `${(a.missingData * 100).toFixed(1)}%`}</td>
-      <td className="px-3 py-2.5 text-xs whitespace-nowrap">
-        {a === null ? <span className="text-muted-foreground">not yet</span> : clock(a.ranAt)}
-        {c.stale && a !== null ? <p className="text-muted-foreground">new data waiting</p> : null}
-      </td>
-    </tr>
+      </div>
+      {a === null ? (
+        <p className="text-sm text-muted-foreground md:col-span-2">Not analyzed yet. It runs once the first transfers are read.</p>
+      ) : (
+        <>
+          <Share
+            r={sales} label="of sales"
+            detail={sales ? `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
+          />
+          <Share
+            r={volume} label="of volume"
+            detail={volume ? `${ethRange(a.totals[volume.low].flaggedVolumeWei, a.totals[volume.high].flaggedVolumeWei)} of ${eth(a.totals.A.volumeWei)}` : 'No priced sale read yet'}
+          />
+        </>
+      )}
+      <div className="flex flex-col items-start gap-1">
+        <ReadingPill cov={cov} />
+        <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
+        {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses can still rise</p> : null}
+      </div>
+    </li>
   );
 }

@@ -133,4 +133,14 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules jsonb NOT NULL 
 ALTER TABLE washtrace.wallets ADD COLUMN IF NOT EXISTS depth int NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS wallets_depth_queue_idx ON washtrace.wallets (chain_id, status, depth, transfers DESC);
 `,
+  `
+-- What the contract says of itself, read once by the worker: its own name
+-- and symbol, and who deployed it (from Etherscan, when a key is set).
+-- described_at is null until then.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS contract_name text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS symbol text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creator text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creation_tx text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS described_at timestamptz;
+`,
 ];

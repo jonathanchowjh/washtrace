@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { ZERO } from './graph.js';
 import { MIGRATIONS } from './migrations.js';
 import type { Rules } from './methods.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
@@ -27,12 +28,38 @@ export interface CollectionRow {
   latest: AnalysisRow | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
+  /** What the contract says of itself. Null until the worker has read it. */
+  contract: { name: string | null; symbol: string | null; creator: string | null; creationTx: string | null } | null;
+}
+
+/** A collection as its transfers so far describe it: what exists, who holds it, and when and where it traded. */
+export interface CollectionProfile {
+  /** Tokens minted and not burned. */
+  supply: number;
+  /** Wallets holding at least one of them. */
+  holders: number;
+  firstMint: number | null;
+  firstSale: number | null;
+  lastSale: number | null;
+  /** Sales per marketplace, busiest first. */
+  marketplaces: { name: string; sales: number }[];
 }
 
 /** A change to a collection's settings. An absent key is left alone; a null rule goes back to its default. */
 export interface Configure {
   name?: string | null;
   rules?: { [K in keyof Rules]?: number | null };
+}
+
+export type Bucket = 'hour' | 'day' | 'week' | 'month';
+
+/** One bucket of a collection's history. `at` is the bucket's start, in ms. */
+export interface TimelinePoint {
+  at: number;
+  transfers: number;
+  sales: number;
+  /** Sales each method flags. A method that did not run flags none, so read it with the analysis's `available`. */
+  flaggedSales: Record<Method, number>;
 }
 
 export interface AnalysisRow {
@@ -185,6 +212,41 @@ export class Store {
 
   async setStart(id: number, block: number): Promise<void> {
     await this.pool.query('UPDATE washtrace.collections SET start_block = $2::bigint, cursor_block = $2::bigint - 1 WHERE id = $1 AND start_block IS NULL', [id, block]);
+  }
+
+  /**
+   * Keep what the contract says of itself. Read once: a contract's name,
+   * symbol and deployer do not change. A collection watched without a name
+   * takes the contract's; one given later replaces it.
+   */
+  async describe(id: number, facts: { name: string | null; symbol: string | null; creator: string | null; creationTx: string | null }): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.collections SET name = coalesce(name, $2), contract_name = $2, symbol = $3, creator = $4, creation_tx = $5, described_at = now()
+       WHERE id = $1`,
+      [id, facts.name, facts.symbol, facts.creator, facts.creationTx],
+    );
+  }
+
+  /** The collection as its transfers so far describe it. A token's holder is the receiver of its latest transfer. */
+  async profile(id: number): Promise<CollectionProfile> {
+    const [{ rows: [r] }, { rows: markets }] = await Promise.all([
+      this.pool.query(`
+        WITH latest AS (
+          SELECT DISTINCT ON (token_id) to_address FROM washtrace.transfers
+          WHERE collection_id = $1 ORDER BY token_id, block_number DESC, log_index DESC
+        )
+        SELECT (SELECT count(*)::int FROM latest WHERE to_address <> $2) AS supply,
+               (SELECT count(DISTINCT to_address)::int FROM latest WHERE to_address <> $2) AS holders,
+               extract(epoch FROM min(block_time) FILTER (WHERE from_address = $2))::float8 AS first_mint,
+               extract(epoch FROM min(block_time) FILTER (WHERE marketplace IS NOT NULL))::float8 AS first_sale,
+               extract(epoch FROM max(block_time) FILTER (WHERE marketplace IS NOT NULL))::float8 AS last_sale
+        FROM washtrace.transfers WHERE collection_id = $1`, [id, ZERO]),
+      this.pool.query(`
+        SELECT marketplace AS name, count(*)::int AS sales FROM washtrace.transfers
+        WHERE collection_id = $1 AND marketplace IS NOT NULL GROUP BY marketplace ORDER BY sales DESC, marketplace`, [id]),
+    ]);
+    const ms = (v: number | null) => (v === null ? null : v * 1000);
+    return { supply: r.supply, holders: r.holders, firstMint: ms(r.first_mint), firstSale: ms(r.first_sale), lastSale: ms(r.last_sale), marketplaces: markets };
   }
 
   async setHead(id: number, head: number): Promise<void> {
@@ -412,21 +474,21 @@ export class Store {
 
   // ---- reads for the console and the API ----------------------------------
 
-  /** Tokens ranked by flagged transfers under `method`. */
-  async topTokens(id: number, method: Method, limit = 50): Promise<{ tokenId: string; transfers: number; flagged: number }[]> {
+  /** Tokens ranked by flagged transfers under `method`, a page at a time. */
+  async topTokens(id: number, method: Method, limit = 50, offset = 0): Promise<{ tokenId: string; transfers: number; flagged: number }[]> {
     const { rows } = await this.pool.query(
       `SELECT t.token_id::text AS token_id, count(*)::int AS transfers, count(f.tx_hash)::int AS flagged
        FROM washtrace.transfers t
        LEFT JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.method = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index
        WHERE t.collection_id = $1 GROUP BY t.token_id HAVING count(f.tx_hash) > 0
-       ORDER BY flagged DESC, transfers DESC LIMIT $3`,
-      [id, method, limit],
+       ORDER BY flagged DESC, transfers DESC, t.token_id LIMIT $3 OFFSET $4`,
+      [id, method, limit, offset],
     );
     return rows.map((r) => ({ tokenId: r.token_id, transfers: r.transfers, flagged: r.flagged }));
   }
 
-  /** Wallets ranked by flagged transfers they sent or received under `method`. */
-  async topWallets(id: number, method: Method, limit = 50): Promise<{ address: string; flagged: number; transfers: number }[]> {
+  /** Wallets ranked by flagged transfers they sent or received under `method`, a page at a time. */
+  async topWallets(id: number, method: Method, limit = 50, offset = 0): Promise<{ address: string; flagged: number; transfers: number }[]> {
     const { rows } = await this.pool.query(
       `WITH sides AS (
          SELECT t.from_address AS a, f.tx_hash IS NOT NULL AS hit FROM washtrace.transfers t
@@ -437,10 +499,55 @@ export class Store {
          LEFT JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.method = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index
          WHERE t.collection_id = $1)
        SELECT a, count(*) FILTER (WHERE hit)::int AS flagged, count(*)::int AS transfers FROM sides
-       GROUP BY a HAVING count(*) FILTER (WHERE hit) > 0 ORDER BY flagged DESC, transfers DESC LIMIT $3`,
-      [id, method, limit],
+       GROUP BY a HAVING count(*) FILTER (WHERE hit) > 0 ORDER BY flagged DESC, transfers DESC, a LIMIT $3 OFFSET $4`,
+      [id, method, limit, offset],
     );
     return rows.map((r) => ({ address: r.a, flagged: r.flagged, transfers: r.transfers }));
+  }
+
+  /**
+   * The collection's own history: its sales bucketed by when they happened,
+   * with how many each method flags. The bucket fits the span read so far,
+   * so a young collection is drawn by the day and an old one by the month.
+   * Buckets are calendar periods in `zone`, the reader's, whatever the
+   * server's own TimeZone: a day is the reader's day, and a month the
+   * reader's month. A sale here is any transfer
+   * with a marketplace fill; the analysis also drops custody round trips,
+   * so a period's share can sit a little under the headline's. A transfer
+   * whose block time the RPC did not return is left out, and counted in
+   * `untimed` so the gap is said rather than hidden.
+   */
+  async timeline(id: number, zone = 'UTC'): Promise<{ bucket: Bucket; untimed: number; readThrough: number | null; points: TimelinePoint[] }> {
+    const span = await this.pool.query(
+      `SELECT extract(epoch FROM max(block_time) - min(block_time))::float8 AS seconds, extract(epoch FROM max(block_time))::float8 * 1000 AS last,
+              count(*) FILTER (WHERE block_time IS NULL)::int AS untimed
+       FROM washtrace.transfers WHERE collection_id = $1`,
+      [id],
+    );
+    const seconds: number = span.rows[0]?.seconds ?? 0;
+    const day = 86_400;
+    const bucket: Bucket = seconds > 730 * day ? 'month' : seconds > 120 * day ? 'week' : seconds > 4 * day ? 'day' : 'hour';
+    const { rows } = await this.pool.query(
+      `WITH f AS (
+         SELECT tx_hash, log_index, bool_or(method = 'A') AS a, bool_or(method = 'AU') AS au, bool_or(method = 'AC') AS ac
+         FROM washtrace.flags WHERE collection_id = $1 GROUP BY tx_hash, log_index)
+       SELECT extract(epoch FROM date_trunc($2, t.block_time, $3))::float8 * 1000 AS at, count(*)::int AS transfers,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac
+       FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index
+       WHERE t.collection_id = $1 AND t.block_time IS NOT NULL
+       GROUP BY 1 ORDER BY 1`,
+      [id, bucket, zone],
+    );
+    return {
+      bucket,
+      untimed: span.rows[0]?.untimed ?? 0,
+      // The newest trade read. Past it the chain may be unread or merely quiet; the caller knows which.
+      readThrough: span.rows[0]?.last ?? null,
+      points: rows.map((r) => ({ at: r.at, transfers: r.transfers, sales: r.sales, flaggedSales: { A: r.a, AU: r.au, AC: r.ac } })),
+    };
   }
 
   /** One token's transfers in chain order, each with the methods that flagged it. */
@@ -590,5 +697,6 @@ function toCollection(r: any): CollectionRow {
     stale: Number(r.version) > Number(r.analyzed_version),
     latest: r.analysis_id === null ? null : toAnalysis(r),
     rules: r.rules ?? {},
+    contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };
 }

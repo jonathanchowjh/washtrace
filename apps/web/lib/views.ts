@@ -1,5 +1,6 @@
 import { EVERY, ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
 import { rpcUrls, workerConfig } from './config';
+import { status } from './status';
 import { store } from './store';
 
 /**
@@ -34,12 +35,16 @@ export async function workerView() {
   const s = store();
   const [passes, backlog, collections] = await Promise.all([s.passes(), s.fundingBacklog(), s.collections()]);
   const config = workerConfig(process.env);
+  // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
+  const report = status({ passes, collections, funding: backlog, config }, Date.now());
   return {
     every: EVERY,
     rpcChains: [...rpcUrls(process.env).keys()].sort((a, b) => a - b),
     funding: config.etherscanKey === null ? null : { source: 'etherscan-v2', perSecond: config.etherscanPerSecond },
     followHops: config.followHops,
     passes,
+    jobs: report.jobs,
+    problems: report.problems,
     backlog,
     collections: collections.map((c) => ({
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock,

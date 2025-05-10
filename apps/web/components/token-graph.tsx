@@ -18,7 +18,7 @@ export function TokenGraph({ drawing, chainId }: { drawing: Drawing; chainId: nu
   const { size, nodes, edges } = drawing;
   const labels = nodes.length <= 24;
   return (
-    <figure className="rounded-md border bg-card p-3">
+    <figure className="rounded-lg border bg-card p-3">
       <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block h-auto w-full max-w-[560px]" role="img" aria-label="Transfer graph of this token">
         <defs>
           {(['cycle', 'money', 'clean', 'flow'] as const).map((k) => (
@@ -39,7 +39,7 @@ export function TokenGraph({ drawing, chainId }: { drawing: Drawing; chainId: nu
             />
             {labels && e.label ? (
               <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn('font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : 'fill-muted-foreground')}>
-                {e.ref !== null ? <a href={`#t${e.label}`}>{e.label}</a> : e.label}
+                {e.ref !== null ? <a href={`#t${e.ref + 1}`}>{e.label}</a> : e.label}
               </text>
             ) : null}
           </g>
@@ -55,8 +55,8 @@ export function TokenGraph({ drawing, chainId }: { drawing: Drawing; chainId: nu
         ))}
       </svg>
       <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />transfer in a cycle (A)</span>
-        <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />transfer linked by money (AU, AC)</span>
+        <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />round trip</span>
+        <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />linked by money</span>
         <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-clean" />not flagged</span>
         <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />money</span>
         <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span>

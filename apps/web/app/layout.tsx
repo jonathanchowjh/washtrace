@@ -22,9 +22,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <div className="grid min-h-screen grid-cols-[minmax(0,1fr)] max-md:grid-rows-[auto_1fr] md:grid-cols-[224px_minmax(0,1fr)]">
+        <div className="grid min-h-screen grid-cols-[minmax(0,1fr)] max-md:grid-rows-[auto_1fr] md:grid-cols-[232px_minmax(0,1fr)]">
           <Sidebar watched={watched} />
-          <main className="min-w-0 px-4 pb-16 text-[13px]/5 md:px-6">{children}</main>
+          <main className="min-w-0 px-4 pb-20 text-sm md:px-8"><div className="mx-auto max-w-6xl">{children}</div></main>
         </div>
       </body>
     </html>

@@ -29,6 +29,22 @@ describe('Etherscan', () => {
     expect(truncated).toBe(false);
   });
 
+  it('reads who deployed a contract, lowercased, and null where Etherscan does not know', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [{ contractAddress: '0xc', contractCreator: '0xABC', txHash: '0xDEF' }] }));
+    expect(await e.creation(1, '0xc')).toEqual({ creator: '0xabc', txHash: '0xdef' });
+    expect([urls[0]!.searchParams.get('action'), urls[0]!.searchParams.get('contractaddresses')]).toEqual(['getcontractcreation', '0xc']);
+    expect(await fake(() => ({ status: '0', message: 'No data found', result: [] })).e.creation(1, '0xc')).toBeNull();
+  });
+
+  it('paces calls made at once a gap apart, as it does calls made one after another', async () => {
+    const e = new Etherscan('KEY', 10);
+    const sent: number[] = [];
+    e.fetch = async () => { sent.push(Date.now()); return new Response(JSON.stringify({ status: '1', message: 'OK', result: [] })); };
+    await Promise.all([e.creation(1, '0xa'), e.creation(1, '0xb'), e.creation(1, '0xc')]);
+    expect(sent[1]! - sent[0]!).toBeGreaterThanOrEqual(95);
+    expect(sent[2]! - sent[1]!).toBeGreaterThanOrEqual(95);
+  });
+
   it('reads "No transactions found" as an empty list', async () => {
     const { e } = fake(() => ({ status: '0', message: 'No transactions found', result: [] }));
     expect((await e.flows(8453, '0xa')).flows).toEqual([]);

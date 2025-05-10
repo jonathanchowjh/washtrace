@@ -168,16 +168,21 @@ without it, which closes the CSRF path basic auth would otherwise open.
 
 | Route | Content | Refresh |
 |---|---|---|
-| `/` | One row per watched collection: how far ingest has read, funding coverage, each method's share, missing data and the time of the last analysis. A form to watch another. | 15 s |
-| `/c/{chain}/{address}` | One collection: its four headline facts, each method's share of transfers, sales and volume, the share across analyses, and the most-flagged tokens and wallets under a chosen method. | 15 s |
-| `/c/{chain}/{address}/t/{tokenId}` | One token as a graph, as in the paper's Figure 8: transfers drawn solid and coloured by verdict, money dashed. Below it, every transfer with its flags and the reason for each. | On open |
-| `/w/{chain}/{address}` | One wallet: whether its money has been read, its transfers in every watched collection, and who it moved money with. | On open |
+| `/` | One row per watched collection: the share of its sales and of its volume that looks washed, as a range from the strictest method to the widest, and how complete the reading under it is. A form to watch another. | 15 s |
+| `/c/{chain}/{address}` | One collection, top down: how far it has been read, in one line; the answer as that range; the three methods as cards, each a tab over the ten tokens and wallets it flags most; each method's share of sales month by month (or week or day) across the collection's life, with history not yet read shaded; then the reading step by step, with how the answer settled at each analysis. | 15 s |
+| `/c/{chain}/{address}/flagged` | Every token or wallet one method flags, most flagged first, 50 a page. `?method=AU&kind=wallets&page=2`. | On open |
+| `/c/{chain}/{address}/t/{tokenId}` | One token: whether its trades look washed and by which methods, the reason for each pattern once with the transfers it covers, the graph as in the paper's Figure 8 (transfers solid and coloured by verdict, money dashed, a pair traded more than six times drawn as one counted arrow each way), and every transfer. | On open |
+| `/w/{chain}/{address}` | One wallet: how many of its trades are flagged and whether its money has been read, its transfers in every watched collection, and who it moved money with. | On open |
 | `/tx/{chain}/{hash}` | One transaction's verdict: the console form of `/api/transfers`. | On open |
-| `/worker` | The sources configured, each job's last pass, the funding queue and how far behind each collection is. | 5 s |
+| `/worker` | What needs a person, from the same reading as `/api/status`; the three jobs as the pipeline they form, each with what it feeds; the sources configured; how far behind each collection is. | 5 s |
 
-The sidebar search takes a wallet, a collection or a transaction hash. Times
-are clock times in UTC, never "ago". Light or dark follows the operating
-system.
+The console names the methods by what they catch, with the paper's name
+beside each: **Round trips** (SCC A), **Money loops back** (SCC AU) and
+**Linked wallets** (SCC AC). The sidebar search takes a wallet, a collection or
+a transaction hash. Times are clock times, never "ago", in the reader's time zone: detected in the
+browser and changeable at the foot of the sidebar. The server buckets a
+collection's history by that zone's calendar, so a month is the reader's month. Light or dark
+follows the operating system.
 
 ## From the paper to now
 

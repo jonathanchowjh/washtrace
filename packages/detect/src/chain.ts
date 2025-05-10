@@ -1,9 +1,16 @@
-import { createPublicClient, http, toEventSelector, parseAbiItem, type Log, type PublicClient } from 'viem';
+import {
+  AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
+  createPublicClient, http, toEventSelector, parseAbi, parseAbiItem, type Log, type PublicClient,
+} from 'viem';
 import { tagSales } from './marketplaces.js';
 import type { Transfer } from './types.js';
 
 /** ERC-721 and ERC-20 share this selector; ERC-721 indexes the token id, so its log has four topics. */
 export const TRANSFER = toEventSelector(parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)'));
+
+const METADATA = parseAbi(['function name() view returns (string)', 'function symbol() view returns (string)']);
+/** The contract's own answer that it has no such string: a revert, no return data, or data that is not a string. */
+const NO_ANSWER = [ContractFunctionRevertedError, ContractFunctionZeroDataError, AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, SliceOffsetOutOfBoundsError];
 
 /**
  * The block span a log query starts at. Providers cap a query by blocks or by
@@ -51,6 +58,25 @@ export class Chain {
       else lo = mid + 1;
     }
     return lo;
+  }
+
+  /**
+   * The contract's own name() and symbol(). Either is null where the contract
+   * answers that it has none, both being optional in ERC-721: it reverts,
+   * returns nothing, or returns something other than a string. Anything else,
+   * such as a node that cannot be reached, throws, so it is retried and not
+   * kept as an answer.
+   */
+  async describe(address: `0x${string}`): Promise<{ name: string | null; symbol: string | null }> {
+    const read = (functionName: 'name' | 'symbol') => this.client.readContract({ address, abi: METADATA, functionName }).then(
+      (v) => (v.trim() === '' ? null : v.trim().slice(0, 120)),
+      (err: unknown) => {
+        if (err instanceof BaseError && err.walk((e) => NO_ANSWER.some((E) => e instanceof E))) return null;
+        throw err;
+      },
+    );
+    const [name, symbol] = await Promise.all([read('name'), read('symbol')]);
+    return { name, symbol };
   }
 
   /**

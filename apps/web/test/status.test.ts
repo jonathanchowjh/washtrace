@@ -13,7 +13,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, rules: {}, ...more,
+    stale: false, latest: null, rules: {}, contract: null, ...more,
   };
 }
 
@@ -75,7 +75,7 @@ describe('status', () => {
   it('reports funding off, and wallets whose funding failed', () => {
     const s = snapshot({ config: { ...CONFIG, etherscanKey: null }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0 }] });
     expect(status(s, NOW).problems).toEqual([
-      'Funding is off: set WASHTRACE_ETHERSCAN_KEY. SCC AU and AC are unavailable.',
+      'Funding is off: set WASHTRACE_ETHERSCAN_KEY. Money loops back and Linked wallets are unavailable.',
       'Ethereum: 2 wallets could not be funded.',
     ]);
   });

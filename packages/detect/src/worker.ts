@@ -143,6 +143,10 @@ export class Worker {
           await this.store.setStart(c.id, start);
           cursor = start - 1;
         }
+        if (c.contract === null) {
+          await this.describe(c.id, c.chainId, c.address, chain)
+            .catch((err) => console.warn('[washtrace] %d/%s not described yet: %s', c.chainId, c.address, messageOf(err)));
+        }
         while (cursor! < head && Date.now() < deadline) {
           const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
           const queue = transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
@@ -159,15 +163,35 @@ export class Worker {
     return `${read} transfers in ${spans} spans across ${collections.length} collections`;
   }
 
-  /** Read the funding of the busiest wallets not yet read, within the budget. */
-  async fund(): Promise<string> {
-    const { etherscanKey, etherscanPerSecond, etherscanUrl, followHops } = this.config();
-    if (etherscanKey === null) return 'no funding source configured';
+  /**
+   * Read what the contract says of itself, once. Its deployer is from
+   * Etherscan: unknown where Etherscan does not know or no key is set. A
+   * lookup that fails throws, so nothing is kept and the next pass tries again.
+   */
+  async describe(id: number, chainId: number, address: string, chain: Chain): Promise<void> {
+    const { name, symbol } = await chain.describe(address as `0x${string}`);
+    const etherscan = this.etherscanClient();
+    const created = etherscan === null ? null : await etherscan.creation(chainId, address);
+    await this.store.describe(id, { name, symbol, creator: created?.creator ?? null, creationTx: created?.txHash ?? null });
+  }
+
+  /** The Etherscan client for the current settings, or null when no key is set. */
+  etherscanClient(): Etherscan | null {
+    const { etherscanKey, etherscanPerSecond, etherscanUrl } = this.config();
+    if (etherscanKey === null) return null;
     const settings = `${etherscanKey} ${etherscanPerSecond} ${etherscanUrl}`;
     if (this.etherscan === null || this.etherscanSettings !== settings) {
       this.etherscan = new Etherscan(etherscanKey, etherscanPerSecond, etherscanUrl);
       this.etherscanSettings = settings;
     }
+    return this.etherscan;
+  }
+
+  /** Read the funding of the busiest wallets not yet read, within the budget. */
+  async fund(): Promise<string> {
+    const { followHops } = this.config();
+    const etherscan = this.etherscanClient();
+    if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
     const chains = [...new Set((await this.store.collections()).map((c) => c.chainId))];
     let done = 0;
@@ -176,7 +200,7 @@ export class Worker {
       for (const wallet of await this.store.fundingQueue(chainId, 20)) {
         if (Date.now() > deadline) return `${done} wallets read, ${failed} failed`;
         try {
-          const { flows, truncated } = await this.etherscan.flows(chainId, wallet);
+          const { flows, truncated } = await etherscan.flows(chainId, wallet);
           const follow = followHops > 0 ? { hops: followHops, fanout: FOLLOW_FANOUT, exclude: [...contractsFor(chainId), ZERO] } : undefined;
           await this.store.fund(chainId, wallet, flows, truncated, follow);
           done += 1;

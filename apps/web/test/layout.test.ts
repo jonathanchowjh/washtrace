@@ -39,6 +39,16 @@ describe('layout', () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
+  it('bundles a pair traded more often than a fan can show into one arrow per direction', () => {
+    const ping = Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? t(a, b) : t(b, a)));
+    const d = layout([t(ZERO, a), ...ping], [], []);
+    const asset = d.edges.filter((e) => e.kind === 'asset');
+    expect(asset).toHaveLength(2);
+    expect(asset.map((e) => e.label).sort()).toEqual(['×10', '×10']);
+    // Each bundle points at its first transfer's row, so the label still leads to the table.
+    expect(asset.map((e) => e.ref).sort()).toEqual([1, 2]);
+  });
+
   it('draws money only between wallets on the drawing, counting repeats on one arrow', () => {
     const flow = (from: string, to: string) => ({ txHash: '0xf', kind: 'native' as const, from, to, valueWei: '1', token: '', blockNumber: 1, blockTime: 1 });
     const d = layout([t(ZERO, a), t(a, b)], [flow(b, a), flow(b, a), flow(b, '0x' + 'd'.repeat(40))], []);

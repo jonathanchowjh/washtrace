@@ -19,6 +19,12 @@ export const MARKETPLACES: Readonly<Record<string, string>> = {
   '0xb2ecfe4e4d61f8790bbb9de2d1259b9e2410cea5': 'blur-v2',
   '0x0000000000e655fae4d56241588680f86e3b2377': 'looksrare-v2',
   '0x74312363e45dcaba76c59ec49a7aa8a65a67eed3': 'x2y2',
+  // 2022, the paper's year. LooksRare paid its token for volume, which is
+  // most of the wash trading the paper measured; OpenSea ran on Wyvern until
+  // Seaport replaced it in June.
+  '0x59728544b08ab483533076417fbbb2fd0b17ce3a': 'looksrare',
+  '0x7be8076f4ea4a4ad08075c2508e481d6c946d12b': 'wyvern-1',
+  '0x7f268357a8c2552623316e2562d90e642bb538e5': 'wyvern-2',
 };
 
 /** Escrows that hold a token without owning it. See tokenGraph. */
@@ -55,6 +61,17 @@ const SEAPORT = parseAbi([
 ]);
 export const ORDER_FULFILLED = toEventSelector(SEAPORT[0]);
 
+const LOOKSRARE = parseAbi([
+  'event TakerAsk(bytes32 orderHash, uint256 orderNonce, address indexed taker, address indexed maker, address indexed strategy, address currency, address collection, uint256 tokenId, uint256 amount, uint256 price)',
+  'event TakerBid(bytes32 orderHash, uint256 orderNonce, address indexed taker, address indexed maker, address indexed strategy, address currency, address collection, uint256 tokenId, uint256 amount, uint256 price)',
+]);
+const TAKER = new Set(LOOKSRARE.map((e) => toEventSelector(e)));
+
+const WYVERN = parseAbi(['event OrdersMatched(bytes32 buyHash, bytes32 sellHash, address indexed maker, address indexed taker, uint256 price, bytes32 indexed metadata)']);
+const ORDERS_MATCHED = toEventSelector(WYVERN[0]);
+/** ERC-20 and ERC-721 Transfer share it; ERC-721 indexes the token id, so its log has four topics. */
+const TRANSFER = toEventSelector('event Transfer(address indexed from, address indexed to, uint256 value)');
+
 // Seaport's ItemType enum.
 const NATIVE = 0;
 const ERC20 = 1;
@@ -68,7 +85,8 @@ interface Item { itemType: number; token: string; identifier: bigint; amount: bi
  * logs of the transactions they were in.
  *
  * A transfer is a sale when a known marketplace emitted any log in its
- * transaction. Seaport fills are priced from OrderFulfilled. Other venues'
+ * transaction. Seaport fills are priced from OrderFulfilled, LooksRare v1
+ * from TakerAsk and TakerBid, and Wyvern from OrdersMatched. Other venues'
  * sales are marked and left unpriced: Blur v2 packs price into bit fields of
  * its own events, not decoded here yet, and a guessed price would be summed
  * into volume as though it were read.
@@ -81,8 +99,11 @@ export function tagSales(transfers: Transfer[], logsByTx: ReadonlyMap<string, re
       const venue = MARKETPLACES[log.address.toLowerCase()];
       if (venue === undefined) continue;
       t.marketplace ??= venue;
-      if (!venue.startsWith('seaport') || log.topics[0] !== ORDER_FULFILLED) continue;
-      const priced = seaportPrice(log, collection, BigInt(t.tokenId));
+      const topic = log.topics[0];
+      const priced = venue.startsWith('seaport') && topic === ORDER_FULFILLED ? seaportPrice(log, collection, BigInt(t.tokenId))
+        : venue === 'looksrare' && topic !== undefined && TAKER.has(topic) ? looksRarePrice(log, collection, BigInt(t.tokenId))
+        : venue.startsWith('wyvern') && topic === ORDERS_MATCHED ? wyvernPrice(logs, log, t.logIndex)
+        : null;
       if (priced) {
         t.marketplace = venue;
         t.priceWei = priced.priceWei;
@@ -122,4 +143,40 @@ export function seaportPrice(log: Log, collection: string, tokenId: bigint): { p
   const count = BigInt(tokenSide.filter(isToken).length);
   const total = paid.reduce((s, i) => s + i.amount, 0n);
   return { priceWei: (total / count).toString(), currency };
+}
+
+/** What one LooksRare v1 fill paid. The event names the collection, the token and the currency, so nothing is inferred. */
+export function looksRarePrice(log: Log, collection: string, tokenId: bigint): { priceWei: string; currency: string } | null {
+  let args: { currency: string; collection: string; tokenId: bigint; amount: bigint; price: bigint };
+  try {
+    ({ args } = decodeEventLog({ abi: LOOKSRARE, data: log.data, topics: log.topics as [`0x${string}`] }) as unknown as { args: typeof args });
+  } catch {
+    return null;
+  }
+  if (args.collection.toLowerCase() !== collection || args.tokenId !== tokenId || args.amount === 0n) return null;
+  return { priceWei: (args.price / args.amount).toString(), currency: args.currency.toLowerCase() };
+}
+
+/**
+ * What one Wyvern match paid for the token transferred at `logIndex`. The
+ * event has the price and nothing else: the tokens it sold are the ERC-721
+ * transfers logged since the previous match in the transaction, and it was
+ * paid in whatever ERC-20 moved in that stretch, or in ETH where none did.
+ * A bundle is split evenly; mixed currencies are unpriced.
+ */
+export function wyvernPrice(logs: readonly Log[], match: Log, logIndex: number): { priceWei: string; currency: string } | null {
+  const end = match.logIndex ?? -1;
+  const start = Math.max(-1, ...logs.filter((l) => l.topics[0] === ORDERS_MATCHED && (l.logIndex ?? -1) < end).map((l) => l.logIndex ?? -1));
+  if (logIndex <= start || logIndex >= end) return null;
+  const stretch = logs.filter((l) => (l.logIndex ?? -1) > start && (l.logIndex ?? -1) < end && l.topics[0] === TRANSFER);
+  const tokens = stretch.filter((l) => l.topics.length === 4).length;
+  const paidIn = new Set(stretch.filter((l) => l.topics.length === 3).map((l) => l.address.toLowerCase()));
+  if (tokens === 0 || paidIn.size > 1) return null;
+  let price: bigint;
+  try {
+    price = (decodeEventLog({ abi: WYVERN, data: match.data, topics: match.topics as [`0x${string}`] }).args as { price: bigint }).price;
+  } catch {
+    return null;
+  }
+  return { priceWei: (price / BigInt(tokens)).toString(), currency: [...paidIn][0] ?? '' };
 }

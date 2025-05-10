@@ -14,4 +14,7 @@ next-env.d.ts
 # The 2023 paper, its drafts and the reference library are kept locally and
 # not published: several of the references are other authors' PDFs.
 docs/
+# The CS470 coursework by name, so it stays out even if docs/ is ever tracked.
+docs/CS470/
+**/CS470/
 .remember/

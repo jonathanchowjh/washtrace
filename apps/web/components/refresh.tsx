@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { localTime } from '@/lib/format';
+import { useZone } from './zone';
 
 /**
  * Re-renders the page from the server on an interval. The worker writes on
@@ -17,6 +19,7 @@ export function Refresh({ everyMs = 15_000 }: { everyMs?: number }) {
   const busy = useRef(false);
   busy.current = pending;
   const [at, setAt] = useState<number | null>(null);
+  const zone = useZone();
 
   useEffect(() => {
     const tick = () => {
@@ -30,7 +33,7 @@ export function Refresh({ everyMs = 15_000 }: { everyMs?: number }) {
 
   return (
     <span className="text-xs text-muted-foreground" suppressHydrationWarning>
-      {pending ? 'refreshing…' : at === null ? `live · every ${everyMs / 1000}s` : `updated ${new Date(at).toLocaleTimeString()}`}
+      {pending ? 'refreshing…' : at === null ? `live · every ${everyMs / 1000}s` : `updated ${localTime(at, 'time', zone ?? undefined)}`}
     </span>
   );
 }

@@ -22,10 +22,10 @@ afterAll(async () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(3);
-    expect(await store.migrate()).toBe(3);
+    expect(await store.migrate()).toBe(4);
+    expect(await store.migrate()).toBe(4);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 3 }]);
+    expect(rows).toEqual([{ version: 4 }]);
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -55,6 +55,25 @@ describe('Store', () => {
     expect(await store.fundingQueue(1, 10)).toEqual([a, b, x]);
   });
 
+  it('profiles a collection from its transfers: the latest receiver holds the token', async () => {
+    const c = (await store.collection(1, collection))!;
+    expect(await store.profile(c.id)).toEqual({
+      supply: 1, holders: 1,
+      firstMint: 1_700_000_000_000, firstSale: 1_700_000_001_000, lastSale: 1_700_000_003_000,
+      marketplaces: [{ name: 'seaport-1.6', sales: 3 }],
+    });
+  });
+
+  it('keeps what the contract says of itself, its own name filling a missing one', async () => {
+    const { id } = await store.addCollection(1, w('de5c'), null, 1);
+    expect((await store.collection(1, w('de5c')))!.contract).toBeNull();
+    await store.describe(id, { name: 'Terraforms', symbol: 'TERRAFORMS', creator: a, creationTx: '0xtx' });
+    expect(await store.collection(1, w('de5c'))).toMatchObject({
+      name: 'Terraforms', contract: { name: 'Terraforms', symbol: 'TERRAFORMS', creator: a, creationTx: '0xtx' },
+    });
+    await store.removeCollection(1, w('de5c'));
+  });
+
   it('stores funding and takes the wallet off the queue', async () => {
     await store.fund(1, x, [flow(x, a), flow(x, b)], false);
     expect(await store.fundingQueue(1, 10)).toEqual([a, b]);
@@ -80,6 +99,29 @@ describe('Store', () => {
     expect(token.map((t) => Object.keys(t.flags).sort())).toEqual([[], ['A', 'AC', 'AU'], ['A', 'AC', 'AU'], ['A', 'AC', 'AU']]);
     expect(await store.transaction(1, token[1]!.txHash)).toEqual([expect.objectContaining({ collection: { chainId: 1, address: collection, name: 'Test' } })]);
     expect(await store.history(c.id)).toHaveLength(1);
+  });
+
+  it('pages the ranked reads', async () => {
+    const c = (await store.collection(1, collection))!;
+    const all = await store.topWallets(c.id, 'A');
+    expect(await store.topWallets(c.id, 'A', 1, 1)).toEqual([all[1]]);
+    expect(await store.topTokens(c.id, 'A', 10, 1)).toEqual([]);
+  });
+
+  it('buckets the collection\'s own history by when its sales happened, with what each method flags', async () => {
+    const c = (await store.collection(1, collection))!;
+    // Four transfers a second apart: one bucket, the mint not a sale.
+    expect(await store.timeline(c.id)).toEqual({
+      bucket: 'hour', untimed: 0, readThrough: (1_700_000_000 + 3) * 1000,
+      points: [{ at: Math.floor(1_700_000_000 / 3600) * 3600 * 1000, transfers: 4, sales: 3, flaggedSales: { A: 3, AU: 3, AC: 3 } }],
+    });
+  });
+
+  it('buckets by the reader\'s calendar: an hour in Kolkata starts on the half hour UTC', async () => {
+    const c = (await store.collection(1, collection))!;
+    const [p] = (await store.timeline(c.id, 'Asia/Kolkata')).points;
+    const halfHour = 1800;
+    expect(p!.at).toBe((Math.floor((1_700_000_000 + halfHour) / 3600) * 3600 - halfHour) * 1000);
   });
 
   it('keeps a write that lands mid-analysis stale', async () => {

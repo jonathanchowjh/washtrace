@@ -76,6 +76,13 @@ export class Etherscan {
     return { flows, truncated };
   }
 
+  /** Who deployed `contract`, and in which transaction. Null where Etherscan does not know. */
+  async creation(chainId: number, contract: string): Promise<{ creator: string; txHash: string } | null> {
+    const rows = await this.call(chainId, { module: 'contract', action: 'getcontractcreation', contractaddresses: contract }) as unknown as { contractCreator?: string; txHash?: string }[];
+    const row = rows[0];
+    return row?.contractCreator && row.txHash ? { creator: row.contractCreator.toLowerCase(), txHash: row.txHash.toLowerCase() } : null;
+  }
+
   /** One request, paced, with rate-limit refusals retried. "No transactions found" is an empty list, not an error. */
   async call(chainId: number, params: Record<string, string>): Promise<Row[]> {
     const url = new URL(this.base);
@@ -102,11 +109,11 @@ export class Etherscan {
     return fetch(url, { signal: AbortSignal.timeout(30_000) });
   }
 
+  /** Waits for this call's slot. The slot is taken before the wait, so callers at once (the ingest and fund jobs) queue a gap apart. */
   private async pace(): Promise<void> {
-    const gap = 1_000 / this.perSecond;
-    const wait = this.last + gap - Date.now();
-    if (wait > 0) await sleep(wait);
-    this.last = Date.now();
+    const at = Math.max(Date.now(), this.last + 1_000 / this.perSecond);
+    this.last = at;
+    if (at > Date.now()) await sleep(at - Date.now());
   }
 }
 
