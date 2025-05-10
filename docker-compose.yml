@@ -1,0 +1,57 @@
+# washtrace as two services over one Postgres:
+#
+#   worker  polls chains and Etherscan on timers, writes the store. No HTTP
+#           but its health check.
+#   api     the JSON API and the console, on :8080. Reads the store; never
+#           calls a chain.
+#
+# `docker compose up --build`, then http://localhost:8080. Settings come from
+# .env beside this file (copy .env.example); both services read the same
+# file, so they describe the same deployment.
+#
+# Scale either on its own: `docker compose up --scale worker=2`. Each pass
+# takes its job's advisory lock, so two workers still do one worker's work,
+# and one takes over when the other dies.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: washtrace
+      POSTGRES_PASSWORD: washtrace
+      POSTGRES_DB: washtrace
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U washtrace -d washtrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: { context: ., target: worker }
+    image: washtrace-worker
+    depends_on:
+      db: { condition: service_healthy }
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
+    restart: unless-stopped
+
+  api:
+    build: { context: ., target: api }
+    image: washtrace-api
+    depends_on:
+      db: { condition: service_healthy }
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  db:
