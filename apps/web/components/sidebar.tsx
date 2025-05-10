@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { short } from '@/lib/format';
+import { ThemeToggle } from './theme';
 import { ZonePicker } from './zone';
 
 const ITEM = 'flex items-center gap-2 rounded-[5px] px-2 py-1 whitespace-nowrap hover:bg-muted hover:text-foreground '
@@ -40,9 +41,10 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
           );
         })}
       </nav>
-            <nav aria-label="Service" className="flex md:mt-auto md:flex-col">
+      <nav aria-label="Service" className="flex items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
         <span className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase max-md:hidden">Behind the numbers</span>
         <Link href="/worker" aria-current={current('/worker')} className={ITEM}>Worker</Link>
+        <ThemeToggle />
       </nav>
       <div className="max-md:hidden"><ZonePicker /></div>
     </aside>

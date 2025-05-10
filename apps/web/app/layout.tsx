@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   description: 'NFT wash trading detection: cycles in transfer graphs, and the money that closes them.',
 };
 
+const THEME_SCRIPT = `try{var t=localStorage.getItem('washtrace.theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}`;
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // Reads process.env and the store: never prerendered.
   await connection();
@@ -20,7 +22,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     // The page under this layout says what is wrong; the sidebar just lists nothing.
   }
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Before first paint: a saved choice wins over the OS. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body>
         <div className="grid min-h-screen grid-cols-[minmax(0,1fr)] max-md:grid-rows-[auto_1fr] md:grid-cols-[232px_minmax(0,1fr)]">
           <Sidebar watched={watched} />
