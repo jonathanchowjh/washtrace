@@ -26,6 +26,12 @@ export interface CollectionRow {
   /** True when something was written since the latest analysis. */
   stale: boolean;
   latest: AnalysisRow | null;
+  /** When the worker last gave this collection a turn. Null until it has. */
+  servedAt: number | null;
+  /** Blocks a second the worker read here, smoothed. Null until it has read any. */
+  readRate: number | null;
+  /** Someone asked for this collection to be served first. */
+  priority: boolean;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -48,6 +54,8 @@ export interface CollectionProfile {
 /** A change to a collection's settings. An absent key is left alone; a null rule goes back to its default. */
 export interface Configure {
   name?: string | null;
+  /** Serve this collection first. Changes no flag, so it queues no analysis. */
+  priority?: boolean;
   rules?: { [K in keyof Rules]?: number | null };
 }
 
@@ -100,6 +108,12 @@ export interface PassRow {
   tookMs: number | null;
   outcome: string | null;
   detail: string | null;
+  /** When the pass last proved it was alive. Null until its first heartbeat. */
+  heartbeatAt: number | null;
+  /** What it is doing right now, in words. Null between turns. */
+  doing: string | null;
+  /** The collection it is on, or null. */
+  subjectId: number | null;
 }
 
 /**
@@ -196,18 +210,32 @@ export class Store {
   /**
    * Apply `change` in one statement, so two edits at once both land. `||`
    * merges the rules and `jsonb_strip_nulls` drops the ones set to null. The
-   * version moves only when the rules did: a rename changes no flag.
+   * version moves only when the rules did: a rename or a priority changes no flag.
    */
   async configure(chainId: number, address: string, change: Configure): Promise<CollectionRow | null> {
     const { rowCount } = await this.pool.query(
       `UPDATE washtrace.collections
        SET name = CASE WHEN $3 THEN $4 ELSE name END,
+           priority = CASE WHEN $6::boolean IS NULL THEN priority ELSE $6 END,
            rules = jsonb_strip_nulls(rules || $5::jsonb),
            version = version + CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN 0 ELSE 1 END
        WHERE chain_id = $1 AND address = $2`,
-      [chainId, address, change.name !== undefined, change.name ?? null, JSON.stringify(change.rules ?? {})],
+      [chainId, address, change.name !== undefined, change.name ?? null, JSON.stringify(change.rules ?? {}), change.priority ?? null],
     );
     return rowCount === 0 ? null : this.collection(chainId, address);
+  }
+
+  /**
+   * The worker gave this collection a turn that read `blocks` in `ms`. The
+   * rate is smoothed (0.3 new, 0.7 old) so one slow turn does not resize the
+   * next; the first reading stands alone.
+   */
+  async served(id: number, blocks: number, ms: number): Promise<void> {
+    const rate = blocks / (ms / 1000);
+    await this.pool.query(
+      'UPDATE washtrace.collections SET served_at = now(), read_rate = 0.3 * $2::float8 + 0.7 * coalesce(read_rate, $2::float8) WHERE id = $1',
+      [id, rate],
+    );
   }
 
   async setStart(id: number, block: number): Promise<void> {
@@ -617,8 +645,8 @@ export class Store {
 
   async passStarted(job: string): Promise<void> {
     await this.pool.query(
-      `INSERT INTO washtrace.passes (job, started_at) VALUES ($1, now())
-       ON CONFLICT (job) DO UPDATE SET started_at = now()`,
+      `INSERT INTO washtrace.passes (job, started_at, heartbeat_at) VALUES ($1, now(), now())
+       ON CONFLICT (job) DO UPDATE SET started_at = now(), heartbeat_at = now(), doing = NULL, subject_id = NULL`,
       [job],
     );
   }
@@ -630,18 +658,24 @@ export class Store {
     );
   }
 
+  /** A pass says it is alive, what it is doing, and which collection that is. */
+  async heartbeat(job: string, doing: string | null, subjectId: number | null): Promise<void> {
+    await this.pool.query('UPDATE washtrace.passes SET heartbeat_at = now(), doing = $2, subject_id = $3 WHERE job = $1', [job, doing, subjectId]);
+  }
+
   async passes(): Promise<PassRow[]> {
     const { rows } = await this.pool.query(
-      `SELECT job, extract(epoch FROM started_at)::float8 AS s, extract(epoch FROM finished_at)::float8 AS f, took_ms, outcome, detail
+      `SELECT job, extract(epoch FROM started_at)::float8 AS s, extract(epoch FROM finished_at)::float8 AS f, took_ms, outcome, detail,
+              extract(epoch FROM heartbeat_at)::float8 AS h, doing, subject_id
        FROM washtrace.passes ORDER BY job`,
     );
-    return rows.map((r) => ({ job: r.job, startedAt: r.s * 1000, finishedAt: r.f === null ? null : r.f * 1000, tookMs: r.took_ms, outcome: r.outcome, detail: r.detail }));
+    return rows.map((r) => ({ job: r.job, startedAt: r.s * 1000, finishedAt: r.f === null ? null : r.f * 1000, tookMs: r.took_ms, outcome: r.outcome, detail: r.detail, heartbeatAt: r.h === null ? null : r.h * 1000, doing: r.doing, subjectId: r.subject_id }));
   }
 }
 
 const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
-       extract(epoch FROM c.error_at)::float8 AS errored,
+       extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -696,6 +730,7 @@ function toCollection(r: any): CollectionRow {
     wallets: r.wallets ?? 0, fundedWallets: r.funded_wallets ?? 0,
     stale: Number(r.version) > Number(r.analyzed_version),
     latest: r.analysis_id === null ? null : toAnalysis(r),
+    servedAt: r.served === null ? null : r.served * 1000, readRate: num(r.read_rate), priority: r.priority,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };

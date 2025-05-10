@@ -143,4 +143,18 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creator text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creation_tx text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS described_at timestamptz;
 `,
+  `
+-- The worker takes turns across collections. served_at is when a collection
+-- last had the worker's attention and read_rate how fast its chain was read
+-- (blocks a second, smoothed), so the next turn goes to whoever waited
+-- longest and a turn is sized to the time it should take. priority moves a
+-- collection to the front. A pass says when it last proved it was alive,
+-- what it is doing, and which collection that is.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS served_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS read_rate double precision;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS priority boolean NOT NULL DEFAULT false;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS doing text;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS subject_id int;
+`,
 ];

@@ -6,14 +6,14 @@ const NOW = 1_800_000_000_000;
 const MIN = 60_000;
 
 function pass(job: string, startedAgo: number, more: Partial<PassRow> = {}): PassRow {
-  return { job, startedAt: NOW - startedAgo, finishedAt: NOW - startedAgo + 1_000, tookMs: 1_000, outcome: 'ok', detail: 'fine', ...more };
+  return { job, startedAt: NOW - startedAgo, finishedAt: NOW - startedAgo + 1_000, tookMs: 1_000, outcome: 'ok', detail: 'fine', heartbeatAt: null, doing: null, subjectId: null, ...more };
 }
 
 function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, rules: {}, contract: null, ...more,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, rules: {}, contract: null, ...more,
   };
 }
 

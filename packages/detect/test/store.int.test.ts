@@ -22,10 +22,10 @@ afterAll(async () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(4);
-    expect(await store.migrate()).toBe(4);
+    expect(await store.migrate()).toBe(5);
+    expect(await store.migrate()).toBe(5);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 4 }]);
+    expect(rows).toEqual([{ version: 5 }]);
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -164,6 +164,31 @@ describe('Store', () => {
 
   it('configures nothing for a collection it does not watch', async () => {
     expect(await store.configure(1, w('dead'), { name: 'x' })).toBeNull();
+  });
+
+  it('smooths a collection\'s read rate and remembers when it was served', async () => {
+    const c = (await store.collection(1, collection))!;
+    await store.served(c.id, 1000, 10_000);   // 100 blocks/s
+    await store.served(c.id, 1000, 5_000);    // 200 blocks/s
+    const after = (await store.collection(1, collection))!;
+    expect(after.readRate).toBeCloseTo(130);
+    expect(after.servedAt).not.toBeNull();
+  });
+
+  it('keeps a heartbeat and what a pass is doing', async () => {
+    await store.passStarted('analyze');
+    await store.heartbeat('analyze', 'Analyzing Test', 7);
+    const p = (await store.passes()).find((r) => r.job === 'analyze')!;
+    expect(p).toMatchObject({ doing: 'Analyzing Test', subjectId: 7 });
+    expect(p.heartbeatAt).not.toBeNull();
+  });
+
+  it('prioritises a collection without queueing an analysis', async () => {
+    const before = (await store.collection(1, collection))!;
+    await store.configure(1, collection, { priority: true });
+    const after = (await store.collection(1, collection))!;
+    expect(after.priority).toBe(true);
+    expect(after.stale).toBe(before.stale);
   });
 
   it('analyzes a collection with its own rules', async () => {
