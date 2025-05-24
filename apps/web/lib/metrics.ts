@@ -1,5 +1,4 @@
-import { METHODS, type CollectionRow, type Method, type MethodTotals } from '@washtrace/detect';
-import { BEHIND_BLOCKS } from './status';
+import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals } from '@washtrace/detect';
 import { pct } from './format';
 
 /**

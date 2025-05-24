@@ -173,6 +173,8 @@ describe('Store', () => {
     const after = (await store.collection(1, collection))!;
     expect(after.readRate).toBeCloseTo(130);
     expect(after.servedAt).not.toBeNull();
+    await store.served(c.id, 1000, 0);        // no duration: served, rate untouched
+    expect((await store.collection(1, collection))!.readRate).toBeCloseTo(130);
   });
 
   it('keeps a heartbeat and what a pass is doing', async () => {

@@ -3,7 +3,7 @@ import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
 import { analyze } from './methods.js';
-import type { Store } from './store.js';
+import type { CollectionRow, Store } from './store.js';
 
 /** What the worker reads from the environment on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -35,6 +35,34 @@ export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_00
 
 /** A pass stops starting new work after this long, so one collection's backfill cannot starve the rest. */
 export const BUDGET_MS = 45_000;
+
+/**
+ * Finalized blocks advance about five a minute and ingest reads every
+ * minute, so a collection that is keeping up trails by a few blocks. A
+ * hundred is twenty minutes: a backfill, or ingest falling behind.
+ */
+export const BEHIND_BLOCKS = 100;
+
+/** A backfill is never given less than this, so a turn is long enough to read a span and not only to start one. */
+export const MIN_SLICE_MS = 10_000;
+
+/**
+ * Who ingest serves this pass, and for how long. Collections at the head go
+ * first and read to it: they cost a few spans and go stale if they wait. The
+ * rest share the budget in equal slices, those never served first and then
+ * the longest waiting, so a big backfill cannot take every pass. With more
+ * backfills than slices of MIN_SLICE_MS, the last wait for the next pass.
+ */
+export function ingestTurns(
+  cs: readonly CollectionRow[],
+  budgetMs: number,
+): { keepUp: CollectionRow[]; backfill: { c: CollectionRow; sliceMs: number }[] } {
+  const atHead = (c: CollectionRow) => c.startBlock !== null && c.cursorBlock !== null && c.headBlock !== null && c.headBlock - c.cursorBlock <= BEHIND_BLOCKS;
+  const keepUp = cs.filter(atHead);
+  const rest = cs.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
+  const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
+  return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
+}
 
 /** Each job's advisory lock key. Only one replica runs a job at a time. */
 const LOCK: Readonly<Record<Job, number>> = { ingest: 1, fund: 2, analyze: 3 };
@@ -118,49 +146,70 @@ export class Worker {
     }
   }
 
-  /** Read every collection's next spans of finalized transfers, oldest cursor first, within the budget. */
+  /**
+   * Read each collection's next spans of finalized transfers. Collections at
+   * the head first, then each backfill within its own slice of the budget.
+   */
   async ingest(): Promise<string> {
-    const deadline = Date.now() + BUDGET_MS;
     const { rpc } = this.config();
-    const collections = (await this.store.collections()).sort((a, b) => (a.cursorBlock ?? -1) - (b.cursorBlock ?? -1));
-    let spans = 0;
-    let read = 0;
-    for (const c of collections) {
-      if (Date.now() > deadline) break;
+    const passEnd = Date.now() + BUDGET_MS;
+    const collections = await this.store.collections();
+    const total = { spans: 0, read: 0, blocks: 0 };
+    const serve = async (c: CollectionRow, deadline: number) => {
+      if (Date.now() >= deadline) return;
+      const started = Date.now();
       const url = rpc.get(c.chainId);
       if (url === undefined) {
         await this.fail(c.id, `No RPC is configured for chain ${c.chainId}. Set WASHTRACE_RPC_${c.chainId}.`);
-        continue;
+        return;
       }
-      const chain = this.chain(c.chainId, url);
-      const contracts = contractsFor(c.chainId);
+      const got = { spans: 0, read: 0, blocks: 0 };
       try {
-        const head = await chain.finalized();
-        await this.store.setHead(c.id, head);
-        let cursor = c.cursorBlock;
-        if (c.startBlock === null) {
-          const start = await chain.deployBlock(c.address as `0x${string}`, head);
-          await this.store.setStart(c.id, start);
-          cursor = start - 1;
-        }
-        if (c.contract === null) {
-          await this.describe(c.id, c.chainId, c.address, chain)
-            .catch((err) => console.warn('[washtrace] %d/%s not described yet: %s', c.chainId, c.address, messageOf(err)));
-        }
-        while (cursor! < head && Date.now() < deadline) {
-          const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
-          const queue = transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
-          await this.store.ingest(c.id, c.chainId, transfers, through, queue);
-          cursor = through;
-          spans += 1;
-          read += transfers.length;
-        }
+        await this.readSpans(c, this.chain(c.chainId, url), deadline, got);
         this.logged.delete(c.id);
       } catch (err) {
         await this.fail(c.id, messageOf(err));
+      } finally {
+        // Even a collection that failed was given a turn: it must not stay the oldest served.
+        total.spans += got.spans;
+        total.read += got.read;
+        await this.store.served(c.id, got.blocks, Date.now() - started);
       }
+    };
+    const { keepUp, backfill } = ingestTurns(collections, BUDGET_MS);
+    for (const c of keepUp) await serve(c, passEnd);
+    // Slices come from what keep-up left, and no turn runs past the pass.
+    const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;
+    for (const { c, sliceMs } of rest) await serve(c, Math.min(Date.now() + sliceMs, passEnd));
+    return `${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
+  }
+
+  /** Read one collection's spans until it reaches the head or `deadline`, counting into `got` so a throw keeps what was read. `blocks` is how far the cursor moved. */
+  private async readSpans(c: CollectionRow, chain: Chain, deadline: number, got: { spans: number; read: number; blocks: number }): Promise<void> {
+    const contracts = contractsFor(c.chainId);
+    const head = await chain.finalized();
+    await this.store.setHead(c.id, head);
+    let cursor = c.cursorBlock;
+    if (c.startBlock === null) {
+      const start = await chain.deployBlock(c.address as `0x${string}`, head);
+      await this.store.setStart(c.id, start);
+      cursor = start - 1;
     }
-    return `${read} transfers in ${spans} spans across ${collections.length} collections`;
+    if (c.contract === null) {
+      await this.describe(c.id, c.chainId, c.address, chain)
+        .catch((err) => console.warn('[washtrace] %d/%s not described yet: %s', c.chainId, c.address, messageOf(err)));
+    }
+    const from = cursor!;
+    while (cursor! < head && Date.now() < deadline) {
+      await this.store.heartbeat('ingest', `Reading ${c.name ?? c.address}, blocks ${cursor! + 1}–${head}`, c.id);
+      const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
+      const queue = transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
+      await this.store.ingest(c.id, c.chainId, transfers, through, queue);
+      cursor = through;
+      got.spans += 1;
+      got.read += transfers.length;
+      got.blocks = cursor! - from;
+    }
   }
 
   /**

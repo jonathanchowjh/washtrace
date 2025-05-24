@@ -1,4 +1,4 @@
-import { BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow, type WorkerConfig } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow, type WorkerConfig } from '@washtrace/detect';
 import { chainName } from './chains';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -16,13 +16,6 @@ export type JobState = 'never' | 'running' | 'ok' | 'failed' | 'stalled';
  * starts a new one every interval, and a budgeted pass ends in under one.
  */
 const STUCK_MS = 10 * 60_000;
-
-/**
- * Finalized blocks advance about five a minute and ingest reads every
- * minute, so a collection that is keeping up trails by a few blocks. A
- * hundred is twenty minutes: a backfill, or ingest falling behind.
- */
-export const BEHIND_BLOCKS = 100;
 
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 

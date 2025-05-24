@@ -228,9 +228,14 @@ export class Store {
   /**
    * The worker gave this collection a turn that read `blocks` in `ms`. The
    * rate is smoothed (0.3 new, 0.7 old) so one slow turn does not resize the
-   * next; the first reading stands alone.
+   * next; the first reading stands alone. A turn with no usable duration or
+   * a count of zero or less only marks the collection served.
    */
   async served(id: number, blocks: number, ms: number): Promise<void> {
+    if (ms <= 0 || blocks <= 0) {
+      await this.pool.query('UPDATE washtrace.collections SET served_at = now() WHERE id = $1', [id]);
+      return;
+    }
     const rate = blocks / (ms / 1000);
     await this.pool.query(
       'UPDATE washtrace.collections SET served_at = now(), read_rate = 0.3 * $2::float8 + 0.7 * coalesce(read_rate, $2::float8) WHERE id = $1',

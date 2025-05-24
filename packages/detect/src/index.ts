@@ -6,5 +6,5 @@ export { Chain, TRANSFER, topicAddress } from './chain.js';
 export { Etherscan, ETHERSCAN_V2 } from './etherscan.js';
 export { Store, type CollectionRow, type CollectionProfile, type Configure, type Follow, type AnalysisRow, type FlaggedTransfer, type PassRow, type Bucket, type TimelinePoint } from './store.js';
 export { MIGRATIONS } from './migrations.js';
-export { Worker, EVERY, BUDGET_MS, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
+export { Worker, EVERY, BUDGET_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
 export { ConfigError, storeUrl, rpcUrls, workerConfig } from './env.js';
