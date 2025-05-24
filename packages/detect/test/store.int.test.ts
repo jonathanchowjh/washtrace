@@ -22,10 +22,10 @@ afterAll(async () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(5);
-    expect(await store.migrate()).toBe(5);
+    expect(await store.migrate()).toBe(6);
+    expect(await store.migrate()).toBe(6);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 5 }]);
+    expect(rows).toEqual([{ version: 6 }]);
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -52,7 +52,17 @@ describe('Store', () => {
     await store.ingest(c.id, 1, ts, 200, []);
     const after = (await store.collection(1, collection))!;
     expect(after).toMatchObject({ cursorBlock: 200, transfers: 4 });
-    expect(await store.fundingQueue(1, 10)).toEqual([a, b, x]);
+    expect(await store.fundingLanes(1, 10)).toEqual({ lanes: [{ collectionId: c.id, wallets: [a, b] }] });
+  });
+
+  it('gives each collection its own lane of unchecked traders, a shared one in both', async () => {
+    const other = (await store.addCollection(1, w('0be'), 'Other', 1)).id;
+    const c = (await store.collection(1, collection))!;
+    await store.ingest(other, 1, chain('2', b, w('o1')), 10, [b, w('o1')]);
+    const { lanes } = await store.fundingLanes(1, 10);
+    expect(lanes).toEqual([{ collectionId: c.id, wallets: [b, a] }, { collectionId: other, wallets: [b, w('o1')] }]);
+    expect((await store.fundingLanes(1, 1)).lanes.map((l) => l.wallets.length)).toEqual([1, 1]);
+    await store.removeCollection(1, w('0be'));
   });
 
   it('profiles a collection from its transfers: the latest receiver holds the token', async () => {
@@ -76,7 +86,6 @@ describe('Store', () => {
 
   it('stores funding and takes the wallet off the queue', async () => {
     await store.fund(1, x, [flow(x, a), flow(x, b)], false);
-    expect(await store.fundingQueue(1, 10)).toEqual([a, b]);
     expect(await store.counterparties(1, x)).toHaveLength(2);
   });
 
@@ -214,8 +223,9 @@ describe('Store', () => {
       expect(await depthOf(w('m1'))).toBe(1);
       expect(await depthOf(w('in'))).toBeNull();
       expect(await depthOf(w('5ea'))).toBeNull();
-      const queue = await store.fundingQueue(1, 10);
-      expect(queue.indexOf(w('m1'))).toBeGreaterThan(queue.indexOf(b));
+      const { lanes } = await store.fundingLanes(1, 10);
+      expect(lanes.at(-1)).toEqual({ collectionId: null, wallets: [w('m1')] });
+      expect(lanes.slice(0, -1).some((l) => l.wallets.includes(w('m1')))).toBe(false);
     });
 
     it('stops at the hop limit', async () => {

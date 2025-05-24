@@ -87,6 +87,12 @@ export interface FlaggedTransfer extends Transfer {
   collection?: { chainId: number; address: string; name: string | null };
 }
 
+/** The wallets one collection (or, with a null id, the followed wallets) wants checked, best first. */
+export interface FundingLane {
+  collectionId: number | null;
+  wallets: string[];
+}
+
 /**
  * Following money out of a wallet, for SCC AU. Funding is otherwise read only
  * for wallets that traded a collection, as the paper's dataset 3 was, so a
@@ -343,15 +349,48 @@ export class Store {
 
   // ---- funding -------------------------------------------------------------
 
-  /** The next wallets to read funding for, busiest first. Failed wallets retry after an hour. */
-  async fundingQueue(chainId: number, limit: number): Promise<string[]> {
-    const { rows } = await this.pool.query<{ address: string }>(
-      `SELECT address FROM washtrace.wallets
-       WHERE chain_id = $1 AND (status = 'pending' OR (status = 'failed' AND fetched_at < now() - interval '1 hour'))
-       ORDER BY status = 'failed', depth, transfers DESC LIMIT $2`,
-      [chainId, limit],
+  /**
+   * The wallets to read funding for next, in lanes so one big collection cannot
+   * crowd out the rest: one lane per collection on the chain (its traders), and
+   * a last lane for followed wallets (depth > 0), which trade in no collection.
+   * Each lane is at most `perLane` long: failed wallets last (they retry after
+   * an hour), then the shallowest, then the busiest. A trader of two
+   * collections is in both lanes; `interleave` checks it once.
+   */
+  async fundingLanes(chainId: number, perLane: number): Promise<{ lanes: FundingLane[] }> {
+    const unchecked = `w.chain_id = $1 AND (w.status = 'pending' OR (w.status = 'failed' AND w.fetched_at < now() - interval '1 hour'))`;
+    const order = `ORDER BY w.status = 'failed', w.depth, w.transfers DESC`; // followed lane only
+    // Start from the unchecked wallets (few, and none in steady state), then probe
+    // each collection's transfers by index for whether it names them.
+    const { rows } = await this.pool.query<{ id: number; address: string | null }>(
+      `WITH todo AS MATERIALIZED (
+         SELECT w.address, w.status, w.depth, w.transfers FROM washtrace.wallets w WHERE ${unchecked}
+       )
+       SELECT c.id, l.address FROM washtrace.collections c
+       LEFT JOIN LATERAL (
+         SELECT address, rn FROM (
+           SELECT t.address, row_number() OVER (ORDER BY t.status = 'failed', t.depth, t.transfers DESC) AS rn FROM todo t
+           WHERE EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.from_address = t.address)
+              OR EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.to_address = t.address)
+         ) ranked WHERE rn <= $2
+       ) l ON true
+       WHERE c.chain_id = $1 ORDER BY c.id, l.rn`,
+      [chainId, perLane],
     );
-    return rows.map((r) => r.address);
+    const lanes: FundingLane[] = [];
+    for (const r of rows) {
+      let lane = lanes.at(-1);
+      if (lane?.collectionId !== r.id) lanes.push((lane = { collectionId: r.id, wallets: [] }));
+      if (r.address !== null) lane.wallets.push(r.address);
+    }
+    if (lanes.length > 0) {
+      const followed = await this.pool.query<{ address: string }>(
+        `SELECT w.address FROM washtrace.wallets w WHERE ${unchecked} AND w.depth > 0 ${order} LIMIT $2`,
+        [chainId, perLane],
+      );
+      if (followed.rows.length > 0) lanes.push({ collectionId: null, wallets: followed.rows.map((r) => r.address) });
+    }
+    return { lanes };
   }
 
   /**

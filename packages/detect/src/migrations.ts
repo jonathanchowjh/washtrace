@@ -156,5 +156,10 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS priority boolean NOT 
 ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
 ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS doing text;
 ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS subject_id int;
+`,  `
+-- Funding lanes ask, for each unchecked wallet, whether a collection's
+-- transfers name it. These make that two index probes, not a scan.
+CREATE INDEX IF NOT EXISTS transfers_coll_from_idx ON washtrace.transfers (collection_id, from_address);
+CREATE INDEX IF NOT EXISTS transfers_coll_to_idx ON washtrace.transfers (collection_id, to_address);
 `,
 ];

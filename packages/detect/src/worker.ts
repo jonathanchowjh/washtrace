@@ -3,7 +3,7 @@ import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
 import { analyze } from './methods.js';
-import type { CollectionRow, Store } from './store.js';
+import type { CollectionRow, FundingLane, Store } from './store.js';
 
 /** What the worker reads from the environment on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -62,6 +62,40 @@ export function ingestTurns(
   const rest = cs.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
   const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
   return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
+}
+
+/**
+ * The order to check wallets in: one from each lane in turn, so no collection
+ * waits behind another's backlog. A wallet in two lanes is taken once; a lane
+ * that meets one already taken moves on to its next. The prioritised
+ * collection takes every other turn, and when it runs dry the rest go on.
+ */
+export function interleave(lanes: readonly FundingLane[], priorityId: number | null): string[] {
+  const priority = lanes.find((l) => priorityId !== null && l.collectionId === priorityId);
+  const others = lanes.filter((l) => l !== priority);
+  const next = new Map<FundingLane, number>(lanes.map((l) => [l, 0]));
+  const taken = new Set<string>();
+  const order: string[] = [];
+  const take = (lane: FundingLane): boolean => {
+    let i = next.get(lane)!;
+    while (i < lane.wallets.length && taken.has(lane.wallets[i]!)) i += 1;
+    next.set(lane, i + 1);
+    if (i >= lane.wallets.length) return false;
+    taken.add(lane.wallets[i]!);
+    order.push(lane.wallets[i]!);
+    return true;
+  };
+  let first = priority;
+  const live = [...others];
+  for (let turn = 0; first !== undefined || live.length > 0; turn++) {
+    if (first !== undefined && (turn % 2 === 0 || live.length === 0)) {
+      if (!take(first)) first = undefined;
+    } else {
+      const lane = live.shift()!;
+      if (take(lane)) live.push(lane);
+    }
+  }
+  return order;
 }
 
 /** Each job's advisory lock key. Only one replica runs a job at a time. */
@@ -236,18 +270,26 @@ export class Worker {
     return this.etherscan;
   }
 
-  /** Read the funding of the busiest wallets not yet read, within the budget. */
+  /** Read the funding of wallets not yet read, collections taking turns, within the budget. */
   async fund(): Promise<string> {
     const { followHops } = this.config();
     const etherscan = this.etherscanClient();
     if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
-    const chains = [...new Set((await this.store.collections()).map((c) => c.chainId))];
+    const collections = await this.store.collections();
+    const priority = collections.find((c) => c.priority)?.id ?? null;
     let done = 0;
     let failed = 0;
-    for (const chainId of chains) {
-      for (const wallet of await this.store.fundingQueue(chainId, 20)) {
+    for (const chainId of new Set(collections.map((c) => c.chainId))) {
+      const { lanes } = await this.store.fundingLanes(chainId, 20);
+      const whose = (wallet: string) => {
+        const lane = lanes.find((l) => l.wallets.includes(wallet))!;
+        const c = collections.find((c) => c.id === lane.collectionId);
+        return c === undefined ? 'followed wallets' : c.name ?? c.address;
+      };
+      for (const wallet of interleave(lanes, priority)) {
         if (Date.now() > deadline) return `${done} wallets read, ${failed} failed`;
+        await this.store.heartbeat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
           const { flows, truncated } = await etherscan.flows(chainId, wallet);
           const follow = followHops > 0 ? { hops: followHops, fanout: FOLLOW_FANOUT, exclude: [...contractsFor(chainId), ZERO] } : undefined;

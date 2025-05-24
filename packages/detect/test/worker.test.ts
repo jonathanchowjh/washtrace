@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUDGET_MS, ingestTurns, MIN_SLICE_MS, Worker, type WorkerConfig } from '../src/worker.js';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, Worker, type WorkerConfig } from '../src/worker.js';
 import type { CollectionRow } from '../src/store.js';
 
 function row(more: Partial<CollectionRow> = {}): CollectionRow {
@@ -81,5 +81,43 @@ describe('Worker.ingest', () => {
     (w as any).chain = () => ({ ...real, transfers: async (a: string, f: number) => { if (++calls === 2) throw new Error('rpc down'); return real.transfers(a, f); } });
     await w.ingest();
     expect(served).toEqual([{ id: 1, blocks: 10 }]);
+  });
+});
+
+describe('interleave', () => {
+  it('takes one wallet from each lane in turn and checks a shared one once', () => {
+    expect(interleave([{ collectionId: 1, wallets: ['a', 'b', 'c'] }, { collectionId: 2, wallets: ['b', 'd'] }, { collectionId: null, wallets: ['f'] }], null))
+      .toEqual(['a', 'b', 'f', 'c', 'd']);
+  });
+
+  it('gives the prioritised collection every other turn', () => {
+    expect(interleave([{ collectionId: 1, wallets: ['a1', 'a2', 'a3'] }, { collectionId: 2, wallets: ['b1', 'b2'] }], 2))
+      .toEqual(['b1', 'a1', 'b2', 'a2', 'a3']);
+  });
+
+  it('alternates the priority lane with each other lane in turn', () => {
+    expect(interleave([{ collectionId: 1, wallets: ['p1', 'p2', 'p3'] }, { collectionId: 2, wallets: ['x1', 'x2'] }, { collectionId: 3, wallets: ['y1'] }], 1))
+      .toEqual(['p1', 'x1', 'p2', 'y1', 'p3', 'x2']);
+  });
+});
+
+describe('Worker.fund', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('checks wallets in turn across collections and says whose it is checking', async () => {
+    const beats: (string | null)[] = [];
+    const funded: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1, name: 'BAYC' }), row({ id: 2, name: 'Doodles', priority: true })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }, { collectionId: 2, wallets: ['c'] }, { collectionId: null, wallets: ['f'] }] }),
+      heartbeat: async (_job: string, doing: string | null) => { beats.push(doing); },
+      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      fundingFailed: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    expect(await w.fund()).toBe('4 wallets read, 0 failed');
+    expect(funded).toEqual(['c', 'a', 'f', 'b']);
+    expect(beats).toEqual(['Checking wallets for Doodles', 'Checking wallets for BAYC', 'Checking wallets for followed wallets', 'Checking wallets for BAYC']);
   });
 });
