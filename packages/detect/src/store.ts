@@ -229,7 +229,8 @@ export class Store {
        SET name = CASE WHEN $3 THEN $4 ELSE name END,
            priority = CASE WHEN $6::boolean IS NULL THEN priority ELSE $6 END,
            rules = jsonb_strip_nulls(rules || $5::jsonb),
-           version = version + CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN 0 ELSE 1 END
+           version = version + CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN 0 ELSE 1 END,
+           rules_at = CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN rules_at ELSE now() END
        WHERE chain_id = $1 AND address = $2`,
       [chainId, address, change.name !== undefined, change.name ?? null, JSON.stringify(change.rules ?? {}), change.priority ?? null],
     );
@@ -477,20 +478,23 @@ export class Store {
    * analysis will record and the rules it runs under, read together: a rule
    * changed mid-analysis moves the version, so the collection runs again.
    * When the latest analysis ran and how long it took come along, so the
-   * worker can space out the reruns of a collection that is always changing.
+   * worker can space out the reruns of a collection that is always changing,
+   * and when its rules last changed, so a rule edit is not made to wait.
    */
   async stale(): Promise<{
-    id: number; chainId: number; version: number; rules: Partial<Rules>; name: string | null; ranAt: number | null; tookMs: number | null;
+    id: number; chainId: number; version: number; rules: Partial<Rules>; name: string | null;
+    ranAt: number | null; tookMs: number | null; rulesAt: number | null;
   }[]> {
     const { rows } = await this.pool.query(
-      `SELECT c.id, c.chain_id, c.version, c.rules, c.name, a.took_ms, extract(epoch FROM a.ran_at)::float8 AS ran
+      `SELECT c.id, c.chain_id, c.version, c.rules, c.name, a.took_ms, extract(epoch FROM a.ran_at)::float8 AS ran,
+              extract(epoch FROM c.rules_at)::float8 AS rules_changed
        FROM washtrace.collections c
        LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
        WHERE c.version > c.analyzed_version ORDER BY c.id`,
     );
     return rows.map((r) => ({
       id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules, name: r.name,
-      ranAt: r.ran === null ? null : r.ran * 1000, tookMs: r.took_ms,
+      ranAt: r.ran === null ? null : r.ran * 1000, tookMs: r.took_ms, rulesAt: r.rules_changed === null ? null : r.rules_changed * 1000,
     }));
   }
 

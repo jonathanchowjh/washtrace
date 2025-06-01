@@ -125,7 +125,7 @@ describe('Worker.fund', () => {
 
 describe('nextAnalysis', () => {
   const MIN = 60_000;
-  const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, ...more });
+  const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, rulesAt: null, ...more });
 
   it('analyses a never-analysed collection first', () => {
     expect(nextAnalysis([s({ id: 2, ranAt: 0, tookMs: 1 }), s({ id: 9, ranAt: null, tookMs: null })], 10 * MIN)!.id).toBe(9);
@@ -135,6 +135,28 @@ describe('nextAnalysis', () => {
     expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000 })], 4 * MIN)).toBeNull();
     expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000 })], 5 * MIN)).not.toBeNull();
     expect(nextAnalysis([s({ ranAt: 0, tookMs: 17 * MIN })], 30 * MIN)).toBeNull();
+  });
+
+  it('analyses a rule edit at once, without waiting out the gap', () => {
+    expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000, rulesAt: MIN })], 2 * MIN)).not.toBeNull();
+    // A rule edit older than the last run was already analysed: the gap applies.
+    expect(nextAnalysis([s({ ranAt: MIN, tookMs: 1_000, rulesAt: 0 })], 2 * MIN)).toBeNull();
+  });
+
+  it('orders never analysed, then rule edits by oldest edit, then due by oldest run', () => {
+    const rows = [
+      s({ id: 1, ranAt: 0, tookMs: 1 }),
+      s({ id: 2, ranAt: 9 * MIN, tookMs: 1, rulesAt: 9.5 * MIN }),
+      s({ id: 3, ranAt: 8 * MIN, tookMs: 1, rulesAt: 8.5 * MIN }),
+      s({ id: 4, ranAt: null }),
+    ];
+    const order: number[] = [];
+    let left = rows;
+    for (let pick = nextAnalysis(left, 10 * MIN); pick !== null; pick = nextAnalysis(left, 10 * MIN)) {
+      order.push(pick.id);
+      left = left.filter((r) => r !== pick);
+    }
+    expect(order).toEqual([4, 3, 2, 1]);
   });
 
   it('takes the longest waiting among those due', () => {
@@ -148,8 +170,8 @@ describe('Worker.analyze', () => {
     const saved: number[] = [];
     const store: any = {
       stale: async () => [
-        { id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10 },
-        { id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null },
+        { id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10, rulesAt: null },
+        { id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null },
       ],
       analysisInput: async () => ({ transfers: [], flows: [], funded: new Set(), truncated: new Set(), through: 7 }),
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
@@ -163,7 +185,7 @@ describe('Worker.analyze', () => {
     expect(saved).toEqual([2]);
     expect(beats).toEqual([['Analyzing Doodles', 2]]);
 
-    store.stale = async () => [{ id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10 }];
+    store.stale = async () => [{ id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10, rulesAt: null }];
     expect(await w.analyze()).toBe('nothing due');
   });
 });

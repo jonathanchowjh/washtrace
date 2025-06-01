@@ -105,15 +105,18 @@ export const ANALYZE_GAP_MS = 5 * 60_000;
 
 /**
  * Which stale collection to analyse next, or null when none is due. Never
- * analysed comes first, by id. After that a collection waits five minutes
- * from its last analysis, or twice that analysis's length if longer: one
- * that changes every minute and takes seventeen to analyse would otherwise
- * keep the analysis thread busy for it alone. Of those due, the one waiting
- * longest goes.
+ * analysed comes first, by id. Then one whose rules were edited since its
+ * last analysis, oldest edit first: someone is waiting to see the flags the
+ * new rules give. Otherwise a collection waits five minutes from its last
+ * analysis, or twice that analysis's length if longer: one that changes
+ * every minute and takes seventeen to analyse would otherwise keep the
+ * analysis thread busy for it alone. Of those due, the one waiting longest goes.
  */
 export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow | null {
   const fresh = stale.filter((s) => s.ranAt === null).sort((a, b) => a.id - b.id);
   if (fresh.length > 0) return fresh[0]!;
+  const edited = stale.filter((s) => s.rulesAt !== null && s.rulesAt > s.ranAt!).sort((a, b) => a.rulesAt! - b.rulesAt!);
+  if (edited.length > 0) return edited[0]!;
   const due = stale.filter((s) => now - s.ranAt! >= Math.max(ANALYZE_GAP_MS, 2 * (s.tookMs ?? 0)));
   return due.sort((a, b) => a.ranAt! - b.ranAt!)[0] ?? null;
 }

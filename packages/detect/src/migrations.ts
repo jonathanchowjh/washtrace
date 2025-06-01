@@ -162,4 +162,10 @@ ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS subject_id int;
 CREATE INDEX IF NOT EXISTS transfers_coll_from_idx ON washtrace.transfers (collection_id, from_address);
 CREATE INDEX IF NOT EXISTS transfers_coll_to_idx ON washtrace.transfers (collection_id, to_address);
 `,
+  `
+-- When a collection's rules last changed. Analyses are spaced out, but a
+-- rule edited since the last one is analysed on the next pass: whoever
+-- edited it is waiting to see the flags it gives.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules_at timestamptz;
+`,
 ];
