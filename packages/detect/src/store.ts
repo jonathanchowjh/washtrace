@@ -7,6 +7,8 @@ import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } fr
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
 const LOCK_NS = 0x77617368; // "wash"
 const MIGRATE_JOB = 0;
+/** Postgres's code for a row whose parent is gone. */
+const FOREIGN_KEY_VIOLATION = '23503';
 
 export interface CollectionRow {
   id: number;
@@ -121,6 +123,9 @@ export interface PassRow {
   /** The collection it is on, or null. */
   subjectId: number | null;
 }
+
+/** A collection waiting for analysis, as `Store.stale` reads it. */
+export type StaleRow = Awaited<ReturnType<Store['stale']>>[number];
 
 /**
  * Every read and write of the `washtrace` schema. A class because every one
@@ -471,12 +476,22 @@ export class Store {
    * Collections written to since their latest analysis, with the version each
    * analysis will record and the rules it runs under, read together: a rule
    * changed mid-analysis moves the version, so the collection runs again.
+   * When the latest analysis ran and how long it took come along, so the
+   * worker can space out the reruns of a collection that is always changing.
    */
-  async stale(): Promise<{ id: number; chainId: number; version: number; rules: Partial<Rules> }[]> {
+  async stale(): Promise<{
+    id: number; chainId: number; version: number; rules: Partial<Rules>; name: string | null; ranAt: number | null; tookMs: number | null;
+  }[]> {
     const { rows } = await this.pool.query(
-      'SELECT id, chain_id, version, rules FROM washtrace.collections WHERE version > analyzed_version ORDER BY id',
+      `SELECT c.id, c.chain_id, c.version, c.rules, c.name, a.took_ms, extract(epoch FROM a.ran_at)::float8 AS ran
+       FROM washtrace.collections c
+       LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
+       WHERE c.version > c.analyzed_version ORDER BY c.id`,
     );
-    return rows.map((r) => ({ id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules }));
+    return rows.map((r) => ({
+      id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules, name: r.name,
+      ranAt: r.ran === null ? null : r.ran * 1000, tookMs: r.took_ms,
+    }));
   }
 
   /** What `analyze` reads for one collection: its transfers, and the flows and funding state of its wallets. */
@@ -507,7 +522,11 @@ export class Store {
     };
   }
 
-  /** Record an analysis and replace the collection's flags with its own. */
+  /**
+   * Record an analysis and replace the collection's flags with its own. A
+   * collection removed while its analysis ran has nowhere to keep it, so the
+   * analysis is dropped quietly: the removal was asked for, not a failure.
+   */
   async saveAnalysis(id: number, version: number, analysis: Analysis, tookMs: number, through: number | null): Promise<void> {
     const c = await this.pool.connect();
     try {
@@ -530,6 +549,7 @@ export class Store {
       await c.query('COMMIT');
     } catch (err) {
       await c.query('ROLLBACK').catch(() => {});
+      if ((err as { code?: string }).code === FOREIGN_KEY_VIOLATION) return;
       throw err;
     } finally {
       c.release();

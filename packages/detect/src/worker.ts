@@ -1,9 +1,11 @@
+import { analyzeInThread } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
-import { analyze } from './methods.js';
-import type { CollectionRow, FundingLane, Store } from './store.js';
+import type { Input } from './methods.js';
+import type { CollectionRow, FundingLane, StaleRow, Store } from './store.js';
+import type { Analysis } from './types.js';
 
 /** What the worker reads from the environment on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -96,6 +98,24 @@ export function interleave(lanes: readonly FundingLane[], priorityId: number | n
     }
   }
   return order;
+}
+
+/** A collection is not analysed again sooner than this after its last analysis. */
+export const ANALYZE_GAP_MS = 5 * 60_000;
+
+/**
+ * Which stale collection to analyse next, or null when none is due. Never
+ * analysed comes first, by id. After that a collection waits five minutes
+ * from its last analysis, or twice that analysis's length if longer: one
+ * that changes every minute and takes seventeen to analyse would otherwise
+ * keep the analysis thread busy for it alone. Of those due, the one waiting
+ * longest goes.
+ */
+export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow | null {
+  const fresh = stale.filter((s) => s.ranAt === null).sort((a, b) => a.id - b.id);
+  if (fresh.length > 0) return fresh[0]!;
+  const due = stale.filter((s) => now - s.ranAt! >= Math.max(ANALYZE_GAP_MS, 2 * (s.tookMs ?? 0)));
+  return due.sort((a, b) => a.ranAt! - b.ranAt!)[0] ?? null;
 }
 
 /** Each job's advisory lock key. Only one replica runs a job at a time. */
@@ -304,24 +324,34 @@ export class Worker {
     return `${done} wallets read, ${failed} failed`;
   }
 
-  /** Rerun the three methods over every collection written to since its last analysis. */
+  /**
+   * Rerun the three methods over one collection written to since its last
+   * analysis, the one `nextAnalysis` picks. One a pass, so a pass is never
+   * longer than one analysis, and the next pass sees what changed meanwhile.
+   */
   async analyze(): Promise<string> {
     const { etherscanKey } = this.config();
-    const stale = await this.store.stale();
-    for (const c of stale) {
-      const started = Date.now();
-      const input = await this.store.analysisInput(c.id, c.chainId);
-      const result = analyze({
-        ...input,
-        fundingAvailable: etherscanKey !== null,
-        custodians: new Set(CUSTODIANS),
-        contracts: contractsFor(c.chainId),
-        money: moneyFor(c.chainId),
-        rules: c.rules,
-      });
-      await this.store.saveAnalysis(c.id, c.version, result, Date.now() - started, input.through);
-    }
-    return `${stale.length} collections analyzed`;
+    const c = nextAnalysis(await this.store.stale(), Date.now());
+    if (c === null) return 'nothing due';
+    const name = c.name ?? `collection ${c.id}`;
+    await this.store.heartbeat('analyze', `Analyzing ${name}`, c.id);
+    const started = Date.now();
+    const input = await this.store.analysisInput(c.id, c.chainId);
+    const result = await this.analyzeOff({
+      ...input,
+      fundingAvailable: etherscanKey !== null,
+      custodians: new Set(CUSTODIANS),
+      contracts: contractsFor(c.chainId),
+      money: moneyFor(c.chainId),
+      rules: c.rules,
+    });
+    await this.store.saveAnalysis(c.id, c.version, result, Date.now() - started, input.through);
+    return `${name} analyzed`;
+  }
+
+  /** Run `analyze` off the main thread, so ingest, funding and /health go on meanwhile. Tests override it on the instance. */
+  analyzeOff(input: Input): Promise<Analysis> {
+    return analyzeInThread(input);
   }
 
   private chain(chainId: number, url: string): Chain {

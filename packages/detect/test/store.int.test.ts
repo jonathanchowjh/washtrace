@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Store } from '../src/store.js';
 import { analyze } from '../src/methods.js';
@@ -142,6 +142,15 @@ describe('Store', () => {
     expect(await store.stale()).toHaveLength(1);
   });
 
+  it('drops an analysis of a collection removed while it ran', async () => {
+    const { id } = await store.addCollection(1, w('90e'), 'Gone', 1);
+    const due = (await store.stale()).find((s) => s.id === id)!;
+    expect(due).toMatchObject({ name: 'Gone', ranAt: null, tookMs: null });
+    await store.removeCollection(1, w('90e'));
+    await expect(store.saveAnalysis(id, due.version, analyze(input([])), 1, null)).resolves.toBeUndefined();
+    expect(await store.history(id)).toEqual([]);
+  });
+
   it('runs a job in one session only: a second is skipped, not queued', async () => {
     let release!: () => void;
     const held = store.locked(7, false, () => new Promise<void>((r) => { release = r; }));
@@ -204,13 +213,20 @@ describe('Store', () => {
 
   it('analyzes a collection with its own rules', async () => {
     const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
+    worker.analyzeOff = async (i) => analyze(i);
+    // Analyses are five minutes apart at least: run each as if they had passed.
+    const realNow = Date.now.bind(Date);
+    let later = 10 * 60_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + later);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
     await worker.analyze();
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(3);
     // Two cycles is the paper's floor; at 99 the same trades are not a pattern.
     await store.configure(1, collection, { rules: { minCycles: 99 } });
+    later += 10 * 60_000;
     await worker.analyze();
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(0);
+    clock.mockRestore();
   });
 
   describe('following money for SCC AU', () => {

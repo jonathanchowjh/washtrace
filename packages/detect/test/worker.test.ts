@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, Worker, type WorkerConfig } from '../src/worker.js';
-import type { CollectionRow } from '../src/store.js';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import type { CollectionRow, StaleRow } from '../src/store.js';
+import type { Analysis } from '../src/types.js';
 
 function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
@@ -119,5 +120,50 @@ describe('Worker.fund', () => {
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
     expect(funded).toEqual(['c', 'a', 'f', 'b']);
     expect(beats).toEqual(['Checking wallets for Doodles', 'Checking wallets for BAYC', 'Checking wallets for followed wallets', 'Checking wallets for BAYC']);
+  });
+});
+
+describe('nextAnalysis', () => {
+  const MIN = 60_000;
+  const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, ...more });
+
+  it('analyses a never-analysed collection first', () => {
+    expect(nextAnalysis([s({ id: 2, ranAt: 0, tookMs: 1 }), s({ id: 9, ranAt: null, tookMs: null })], 10 * MIN)!.id).toBe(9);
+  });
+
+  it('waits five minutes, or twice the last run if longer', () => {
+    expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000 })], 4 * MIN)).toBeNull();
+    expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000 })], 5 * MIN)).not.toBeNull();
+    expect(nextAnalysis([s({ ranAt: 0, tookMs: 17 * MIN })], 30 * MIN)).toBeNull();
+  });
+
+  it('takes the longest waiting among those due', () => {
+    expect(nextAnalysis([s({ id: 1, ranAt: 2 * MIN, tookMs: 1 }), s({ id: 2, ranAt: MIN, tookMs: 1 }), s({ id: 3, ranAt: 0, tookMs: 60 * MIN })], 10 * MIN)!.id).toBe(2);
+  });
+});
+
+describe('Worker.analyze', () => {
+  it('analyses one collection a pass, off the main thread, and says which', async () => {
+    const beats: [string | null, number | null][] = [];
+    const saved: number[] = [];
+    const store: any = {
+      stale: async () => [
+        { id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10 },
+        { id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null },
+      ],
+      analysisInput: async () => ({ transfers: [], flows: [], funded: new Set(), truncated: new Set(), through: 7 }),
+      heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
+      saveAnalysis: async (id: number) => { saved.push(id); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
+    const off: number[] = [];
+    w.analyzeOff = async (input) => { off.push(input.transfers.length); return {} as Analysis; };
+    expect(await w.analyze()).toBe('Doodles analyzed');
+    expect(off).toEqual([0]);
+    expect(saved).toEqual([2]);
+    expect(beats).toEqual([['Analyzing Doodles', 2]]);
+
+    store.stale = async () => [{ id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10 }];
+    expect(await w.analyze()).toBe('nothing due');
   });
 });
