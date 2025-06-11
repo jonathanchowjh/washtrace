@@ -123,6 +123,51 @@ describe('Worker.fund', () => {
   });
 });
 
+describe('Worker heartbeat', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 });
+
+  it('does not fail a funding pass when the heartbeat write throws, and says so once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const funded: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1, name: 'BAYC' })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      heartbeat: async () => { throw new Error('db down'); },
+      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      fundingFailed: async () => {},
+    };
+    const w = new Worker(store, config);
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    expect(await w.fund()).toBe('2 wallets read, 0 failed');
+    expect(funded).toEqual(['a', 'b']);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-beats the current doing every 30 seconds while a pass runs, and stops after it', async () => {
+    vi.useFakeTimers();
+    const beats: [string, string | null, number | null][] = [];
+    const store: any = {
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<void>) => { await fn(); return 'ran'; },
+      passStarted: async () => {}, passFinished: async () => {},
+      heartbeat: async (job: string, doing: string | null, id: number | null) => { beats.push([job, doing, id]); },
+    };
+    const w = new Worker(store, config);
+    (w as any).analyze = async () => {
+      await (w as any).beat('analyze', 'Analyzing Terraforms', 7);
+      await new Promise((r) => setTimeout(r, 95_000));
+      return 'done';
+    };
+    const pass = w.run('analyze');
+    await vi.advanceTimersByTimeAsync(95_000);
+    await pass;
+    expect(beats).toEqual(Array(4).fill(['analyze', 'Analyzing Terraforms', 7]));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(beats).toHaveLength(4);
+  });
+});
+
 describe('nextAnalysis', () => {
   const MIN = 60_000;
   const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, rulesAt: null, ...more });

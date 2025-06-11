@@ -11,11 +11,8 @@ export interface Snapshot {
 
 export type JobState = 'never' | 'running' | 'ok' | 'failed' | 'stalled';
 
-/**
- * A pass running this long is a pass that died with its process: a timer
- * starts a new one every interval, and a budgeted pass ends in under one.
- */
-const STUCK_MS = 10 * 60_000;
+/** A running pass that has said nothing for this long is stalled. The worker beats every 30 seconds. */
+const SILENT_MS = 2 * 60_000;
 
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 
@@ -35,8 +32,9 @@ export function status(s: Snapshot, now: number) {
       state = 'never';
       problems.push(`${job} has never run.`);
     } else if (p.finishedAt === null || p.finishedAt < p.startedAt) {
-      state = now - p.startedAt > STUCK_MS ? 'stalled' : 'running';
-      if (state === 'stalled') problems.push(`${job} has been running for ${minutes(now - p.startedAt)}.`);
+      const lastSign = p.heartbeatAt ?? p.startedAt;
+      state = now - lastSign > SILENT_MS ? 'stalled' : 'running';
+      if (state === 'stalled') problems.push(`${job} has been silent for ${minutes(now - lastSign)}.`);
     } else if (now - p.startedAt > 3 * EVERY[job] + BUDGET_MS) {
       state = 'stalled';
       problems.push(`${job} has not run for ${minutes(now - p.startedAt)}.`);

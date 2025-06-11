@@ -35,6 +35,9 @@ export type Job = 'ingest' | 'fund' | 'analyze';
  */
 export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_000, analyze: 60_000 };
 
+/** How often a running pass says it is alive, so a step that takes minutes is not mistaken for a stall. */
+export const HEARTBEAT_MS = 30_000;
+
 /** A pass stops starting new work after this long, so one collection's backfill cannot starve the rest. */
 export const BUDGET_MS = 45_000;
 
@@ -145,6 +148,10 @@ export class Worker {
   private etherscanSettings = '';
   /** The last error logged per collection, so an outage is one line and not one a minute. */
   private readonly logged = new Map<number, string>();
+  /** What each running job is doing now, so the keep-alive can say it again while a long step goes on. */
+  /** The last heartbeat error logged, so an outage is one line and not one every 30 seconds. */
+  private beatFailed = '';
+  private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
 
   constructor(private readonly store: Store, private readonly config: () => WorkerConfig) {}
 
@@ -183,6 +190,11 @@ export class Worker {
     if (this.running.has(job)) return 'skipped';
     this.running.add(job);
     const started = Date.now();
+    const alive = setInterval(() => {
+      const now = this.current.get(job);
+      if (now !== undefined) void this.beat(job, now.doing, now.subjectId);
+    }, HEARTBEAT_MS);
+    alive.unref?.();
     try {
       const outcome = await this.store.locked(LOCK[job], false, async () => {
         await this.store.passStarted(job);
@@ -199,6 +211,8 @@ export class Worker {
       console.error('[washtrace] %s pass failed: %s', job, messageOf(err));
       return 'ran';
     } finally {
+      clearInterval(alive);
+      this.current.delete(job);
       this.running.delete(job);
     }
   }
@@ -258,7 +272,7 @@ export class Worker {
     }
     const from = cursor!;
     while (cursor! < head && Date.now() < deadline) {
-      await this.store.heartbeat('ingest', `Reading ${c.name ?? c.address}, blocks ${cursor! + 1}–${head}`, c.id);
+      await this.beat('ingest', `Reading ${c.name ?? c.address}, blocks ${cursor! + 1}–${head}`, c.id);
       const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
       const queue = transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
       await this.store.ingest(c.id, c.chainId, transfers, through, queue);
@@ -312,7 +326,7 @@ export class Worker {
       };
       for (const wallet of interleave(lanes, priority)) {
         if (Date.now() > deadline) return `${done} wallets read, ${failed} failed`;
-        await this.store.heartbeat('fund', `Checking wallets for ${whose(wallet)}`, null);
+        await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
           const { flows, truncated } = await etherscan.flows(chainId, wallet);
           const follow = followHops > 0 ? { hops: followHops, fanout: FOLLOW_FANOUT, exclude: [...contractsFor(chainId), ZERO] } : undefined;
@@ -337,7 +351,7 @@ export class Worker {
     const c = nextAnalysis(await this.store.stale(), Date.now());
     if (c === null) return 'nothing due';
     const name = c.name ?? `collection ${c.id}`;
-    await this.store.heartbeat('analyze', `Analyzing ${name}`, c.id);
+    await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();
     const input = await this.store.analysisInput(c.id, c.chainId);
     const result = await this.analyzeOff({
@@ -355,6 +369,17 @@ export class Worker {
   /** Run `analyze` off the main thread, so ingest, funding and /health go on meanwhile. Tests override it on the instance. */
   analyzeOff(input: Input): Promise<Analysis> {
     return analyzeInThread(input);
+  }
+
+  /** Record what `job` is doing and tell the store. Fail-soft: a heartbeat must never fail a pass. */
+  private async beat(job: Job, doing: string | null, subjectId: number | null): Promise<void> {
+    this.current.set(job, { doing, subjectId });
+    try {
+      await this.store.heartbeat(job, doing, subjectId);
+    } catch (err) {
+      if (this.beatFailed !== messageOf(err)) console.warn('[washtrace] %s heartbeat not written: %s', job, messageOf(err));
+      this.beatFailed = messageOf(err);
+    }
   }
 
   private chain(chainId: number, url: string): Chain {

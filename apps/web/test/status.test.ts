@@ -55,10 +55,11 @@ describe('status', () => {
     expect(status(s, NOW).problems).toContain('ingest has not run for 4 min.');
   });
 
-  it('calls a pass running for ten minutes stalled', () => {
-    const s = snapshot({ passes: [pass('analyze', 11 * MIN, { finishedAt: null })] });
-    expect(stateOf(s, 'analyze')).toBe('stalled');
-    expect(status(s, NOW).problems).toContain('analyze has been running for 11 min.');
+  it('calls a long pass with a fresh heartbeat running', () => {
+    expect(stateOf(snapshot({ passes: [pass('analyze', 14 * MIN, { finishedAt: null, heartbeatAt: NOW - 20_000 })] }), 'analyze')).toBe('running');
+  });
+  it('calls a pass stalled when its heartbeat is two minutes old', () => {
+    expect(stateOf(snapshot({ passes: [pass('analyze', 14 * MIN, { finishedAt: null, heartbeatAt: NOW - 3 * MIN })] }), 'analyze')).toBe('stalled');
   });
 
   it('reports a failed pass with its message', () => {
