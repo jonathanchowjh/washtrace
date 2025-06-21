@@ -9,6 +9,9 @@ const LOCK_NS = 0x77617368; // "wash"
 const MIGRATE_JOB = 0;
 /** Postgres's code for a row whose parent is gone. */
 const FOREIGN_KEY_VIOLATION = '23503';
+/** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
+const FLAG_BATCH_ROWS = 10_000;
+const FLAG_BATCH_CHARS = 16 * 2 ** 20;
 
 export interface CollectionRow {
   id: number;
@@ -503,18 +506,27 @@ export class Store {
     transfers: Transfer[]; flows: Flow[]; funded: Set<string>; truncated: Set<string>; through: number | null;
   }> {
     const transfers = (await this.pool.query(`${TRANSFER_SELECT} WHERE t.collection_id = $1`, [id])).rows.map(toTransfer);
-    const wallets = `(SELECT from_address AS a FROM washtrace.transfers WHERE collection_id = $1
-                      UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1)`;
+    // The collection's wallets go in as an array, not as a subquery. As an
+    // IN subquery, thousands of them were too many to hash in work_mem, and
+    // Postgres walked the whole list once per flow on the chain: 56 minutes
+    // for Terraforms. An array it hashes, or probes the flows indexes with.
+    const wallets = [...new Set(transfers.flatMap((t) => [t.from, t.to]))];
+    const followed = (await this.pool.query<{ address: string }>(
+      `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
+      [chainId],
+    )).rows.map((r) => r.address);
     const flows = (await this.pool.query(
-      `SELECT f.* , extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-       WHERE f.chain_id = $2 AND (f.from_address IN ${wallets} OR f.to_address IN ${wallets}
+      // The columns toFlow reads and no more: millions of rows, and a timestamptz parsed into a Date for each was seconds.
+      `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
+              extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+       WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
          -- Followed wallets' payments onward: the middle of a path SCC AU follows back.
-         OR f.from_address IN (SELECT address FROM washtrace.wallets WHERE chain_id = $2 AND depth > 0 AND status = 'done'))`,
-      [id, chainId],
+         OR f.from_address = ANY($3::text[]))`,
+      [chainId, wallets, followed],
     )).rows.map(toFlow);
     const state = (await this.pool.query<{ address: string; truncated: boolean }>(
-      `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $2 AND status = 'done' AND (address IN ${wallets} OR depth > 0)`,
-      [id, chainId],
+      `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND (address = ANY($2::text[]) OR depth > 0)`,
+      [chainId, wallets],
     )).rows;
     const { rows } = await this.pool.query<{ cursor_block: string | null }>('SELECT cursor_block FROM washtrace.collections WHERE id = $1', [id]);
     return {
@@ -541,12 +553,29 @@ export class Store {
         [id, tookMs, through, JSON.stringify(analysis.totals), analysis.missingData, analysis.fundedWallets, analysis.wallets, analysis.truncatedSearches],
       );
       await c.query('DELETE FROM washtrace.flags WHERE collection_id = $1', [id]);
+      // A component's flags share one witness, and the three methods share
+      // an SCC's: each is written out once. The flags go in batches, so no
+      // one parameter holds every witness: at two million flags that one
+      // string was past what the heap would hold.
+      const json = new Map<Witness, string>();
+      const witness = (w: Witness) => {
+        let s = json.get(w);
+        if (s === undefined) json.set(w, (s = JSON.stringify(w)));
+        return s;
+      };
       const f: readonly Flag[] = analysis.flags;
-      if (f.length > 0) {
+      for (let at = 0; at < f.length;) {
+        const batch: Flag[] = [];
+        const ws: string[] = [];
+        for (let size = 0; at < f.length && batch.length < FLAG_BATCH_ROWS && size < FLAG_BATCH_CHARS; at++) {
+          batch.push(f[at]!);
+          ws.push(witness(f[at]!.witness));
+          size += ws.at(-1)!.length;
+        }
         await c.query(
           `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness)
            SELECT $1, m, tx, li, w FROM unnest($2::text[], $3::text[], $4::int[], $5::jsonb[]) AS u(m, tx, li, w)`,
-          [id, f.map((x) => x.method), f.map((x) => x.txHash), f.map((x) => x.logIndex), f.map((x) => JSON.stringify(x.witness))],
+          [id, batch.map((x) => x.method), batch.map((x) => x.txHash), batch.map((x) => x.logIndex), ws],
         );
       }
       await c.query('UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2) WHERE id = $1', [id, version]);

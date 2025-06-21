@@ -152,20 +152,34 @@ function sccFlags(hops: readonly Hop[], via: readonly [string, string][], minCyc
 
 /**
  * The user transaction graph, built once per analysis and read per token.
- * A class because every question it answers needs the same four indexes.
+ * A class because every question it answers needs the same indexes.
  */
 class MoneyGraph {
   /** Undirected: wallet → neighbour → one transaction that joins them. */
   private readonly near = new Map<string, Map<string, string>>();
-  /** Directed: wallet → the wallets it sent money to. */
-  private readonly out = new Map<string, Set<string>>();
+  /**
+   * Every wallet in a directed flow, numbered, so SCC AU searches arrays by
+   * number. Terraforms' 11,072 wallets are each searched up to 20,000
+   * wallets deep; by address, with a Set per search, that was 29 s of the
+   * analysis's 39.
+   */
+  private readonly ids = new Map<string, number>();
+  private readonly names: string[] = [];
+  /** Directed, by number: the wallets each sent money to, in the order first paid. */
+  private readonly out: number[][] = [];
   private readonly hubs = new Set<string>();
+  /** By number: 1 for a hub, and 1 for one of the collection's wallets. */
+  private readonly hub: Uint8Array;
+  private readonly member: Uint8Array;
+  /** By number: the search that last saw it, so a search starts without clearing anything. */
+  private readonly seen: Int32Array;
+  private searches = 0;
   private readonly reached = new Map<string, Set<string>>();
   truncatedSearches = 0;
 
   constructor(
     input: Input,
-    private readonly wallets: ReadonlySet<string>,
+    wallets: ReadonlySet<string>,
     private readonly rules: Rules,
   ) {
     // The payment leg of a sale is a flow from buyer to seller in the same
@@ -175,15 +189,16 @@ class MoneyGraph {
     // Seaport routes ETH through itself; WETH, Blur Pool and every ERC-20
     // payment do not.
     const sales = new Set(input.transfers.map((t) => t.txHash));
+    const sent: Set<number>[] = [];
     for (const f of input.flows) {
       if (sales.has(f.txHash) || f.from === f.to || f.valueWei === '0') continue;
       if (f.from === ZERO || f.to === ZERO) continue;
       this.join(f.from, f.to, f.txHash);
       this.join(f.to, f.from, f.txHash);
-      let sent = this.out.get(f.from);
-      if (!sent) this.out.set(f.from, (sent = new Set()));
-      sent.add(f.to);
+      const from = this.id(f.from);
+      (sent[from] ??= new Set()).add(this.id(f.to));
     }
+    for (let v = 0; v < this.names.length; v++) this.out.push(sent[v] ? [...sent[v]!] : []);
     for (const c of input.contracts) this.hubs.add(c);
     for (const t of input.truncated) this.hubs.add(t);
     for (const [x, around] of this.near) {
@@ -191,6 +206,19 @@ class MoneyGraph {
       for (const y of around.keys()) if (wallets.has(y)) degree += 1;
       if (degree > rules.hubDegree) this.hubs.add(x);
     }
+    this.hub = Uint8Array.from(this.names, (n) => (this.hubs.has(n) ? 1 : 0));
+    this.member = Uint8Array.from(this.names, (n) => (wallets.has(n) ? 1 : 0));
+    this.seen = new Int32Array(this.names.length);
+  }
+
+  private id(address: string): number {
+    let id = this.ids.get(address);
+    if (id === undefined) {
+      id = this.names.length;
+      this.ids.set(address, id);
+      this.names.push(address);
+    }
+    return id;
   }
 
   private join(a: string, b: string, tx: string): void {
@@ -229,18 +257,24 @@ class MoneyGraph {
     if (known) return known;
     const found = new Set<string>();
     this.reached.set(from, found);
-    if (this.hubs.has(from)) return found;
-    const seen = new Set([from]);
-    let frontier = [from];
+    const start = this.ids.get(from);
+    // A wallet in no flow sends nowhere.
+    if (this.hubs.has(from) || start === undefined) return found;
+    const search = ++this.searches;
+    const { seen, out, hub, member, names } = this;
+    seen[start] = search;
+    let visited = 1;
+    let frontier = [start];
     for (let depth = 0; depth < this.rules.reachDepth && frontier.length > 0; depth++) {
-      const next: string[] = [];
+      const next: number[] = [];
       for (const v of frontier) {
-        for (const w of this.out.get(v) ?? []) {
-          if (seen.has(w)) continue;
-          if (seen.size >= this.rules.visitCap) { this.truncatedSearches += 1; return found; }
-          seen.add(w);
-          if (this.wallets.has(w)) found.add(w);
-          if (!this.hubs.has(w)) next.push(w);
+        for (const w of out[v]!) {
+          if (seen[w] === search) continue;
+          if (visited >= this.rules.visitCap) { this.truncatedSearches += 1; return found; }
+          seen[w] = search;
+          visited += 1;
+          if (member[w]) found.add(names[w]!);
+          if (!hub[w]) next.push(w);
         }
       }
       frontier = next;
