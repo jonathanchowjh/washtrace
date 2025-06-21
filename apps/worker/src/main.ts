@@ -14,7 +14,8 @@ import { EVERY, Store, Worker, messageOf, storeUrl, workerConfig } from '@washtr
 
 const PORT = Number(process.env.WASHTRACE_WORKER_PORT ?? 8081);
 
-const store = Store.connect(storeUrl(process.env));
+const url = storeUrl(process.env);
+const store = Store.connect(url);
 
 // The store may still be starting (an ordinary compose or k8s ordering):
 // keep trying rather than crash-looping.
@@ -28,7 +29,7 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-const worker = new Worker(store, () => workerConfig(process.env));
+const worker = new Worker(store, () => workerConfig(process.env), url);
 worker.start();
 
 const config = workerConfig(process.env);

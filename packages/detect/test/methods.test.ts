@@ -118,3 +118,56 @@ describe('totals', () => {
     expect(analyze(input(ts)).missingData).toBe(0.5);
   });
 });
+
+/**
+ * The store returns rows in no particular order: with no ORDER BY, a seq
+ * scan's order moves between runs. The same rows must give the same answer,
+ * witnesses included.
+ */
+describe('the same data, the same answer', () => {
+  /** A seeded shuffle (mulberry32), so a failure names the order that broke it. */
+  function shuffled<T>(xs: readonly T[], seed: number): T[] {
+    const out = [...xs];
+    let s = seed;
+    const next = () => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(next() * (i + 1));
+      [out[i], out[j]] = [out[j]!, out[i]!];
+    }
+    return out;
+  }
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 8];
+
+  it('reaches the same wallets when a search is cut short at visitCap, whatever the flows\' order', () => {
+    // B paid eight wallets and A. A search stopped after three finds A or not by which it meets first.
+    const ts = [...chain('1', a, b), ...chain('2', c, x)];
+    const fs = [...Array.from({ length: 8 }, (_, i) => flow(b, w(`p${i}`))), flow(b, a), flow(x, w('q')), flow(x, c)];
+    const run = (flows: typeof fs) => analyze(input(ts, flows, { rules: { visitCap: 3 } }));
+    const want = run(fs);
+    expect(want.truncatedSearches).toBeGreaterThan(0);
+    for (const seed of seeds) expect(JSON.stringify(run(shuffled(fs, seed))), `seed ${seed}`).toBe(JSON.stringify(want));
+  });
+
+  it('names the same transaction and middle when two join a pair, whatever the flows\' order', () => {
+    // B paid A back twice; X and Y each funded both C and D, X twice.
+    const d = w('d'), y = w('y');
+    const ts = [...chain('1', a, b), ...chain('2', c, d)];
+    const fs = [flow(b, a), flow(b, a), flow(x, c), flow(x, c), flow(x, d), flow(y, c), flow(y, d)];
+    const want = analyze(input(ts, fs));
+    expect(want.totals.AC.flagged).toBe(2);
+    for (const seed of seeds) expect(JSON.stringify(analyze(input(ts, shuffled(fs, seed)))), `seed ${seed}`).toBe(JSON.stringify(want));
+  });
+
+  it('gives the same flags in the same order, whatever the transfers\' order', () => {
+    const ts = [...chain('1', a, b, a, b), ...chain('2', c, x, c, x), ...chain('3', a, c)];
+    const fs = [flow(c, a)];
+    const want = analyze(input(ts, fs));
+    expect(want.totals.A.flagged).toBe(6);
+    for (const seed of seeds) expect(JSON.stringify(analyze(input(shuffled(ts, seed), fs))), `seed ${seed}`).toBe(JSON.stringify(want));
+  });
+});

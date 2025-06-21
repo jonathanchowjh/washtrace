@@ -1,11 +1,9 @@
-import { analyzeInThread } from './analysis-thread.js';
+import { analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
-import type { Input } from './methods.js';
 import type { CollectionRow, FundingLane, StaleRow, Store } from './store.js';
-import type { Analysis } from './types.js';
 
 /** What the worker reads from the environment on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -153,7 +151,11 @@ export class Worker {
   private beatFailed = '';
   private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
 
-  constructor(private readonly store: Store, private readonly config: () => WorkerConfig) {}
+  /**
+   * `storeUrl` is the store's own, for the analysis thread to open a
+   * connection of its own with. It carries the password: never logged.
+   */
+  constructor(private readonly store: Store, private readonly config: () => WorkerConfig, private readonly storeUrl: string) {}
 
   start(): void {
     if (this.timers.length > 0) return;
@@ -353,22 +355,27 @@ export class Worker {
     const name = c.name ?? `collection ${c.id}`;
     await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();
-    const input = await this.store.analysisInput(c.id, c.chainId);
-    const result = await this.analyzeOff({
-      ...input,
+    const { analysis, through } = await this.analyzeOff({
+      storeUrl: this.storeUrl,
+      id: c.id,
+      chainId: c.chainId,
+      rules: c.rules,
       fundingAvailable: etherscanKey !== null,
       custodians: new Set(CUSTODIANS),
       contracts: contractsFor(c.chainId),
       money: moneyFor(c.chainId),
-      rules: c.rules,
     });
-    await this.store.saveAnalysis(c.id, c.version, result, Date.now() - started, input.through);
+    await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through);
     return `${name} analyzed`;
   }
 
-  /** Run `analyze` off the main thread, so ingest, funding and /health go on meanwhile. Tests override it on the instance. */
-  analyzeOff(input: Input): Promise<Analysis> {
-    return analyzeInThread(input);
+  /**
+   * Read the input and run `analyze` off the main thread, so ingest, funding
+   * and /health go on meanwhile, and the flows are never held here. Tests
+   * override it on the instance.
+   */
+  analyzeOff(request: AnalysisRequest): Promise<Analysed> {
+    return analyzeInThread(request);
   }
 
   /** Record what `job` is doing and tell the store. Fail-soft: a heartbeat must never fail a pass. */

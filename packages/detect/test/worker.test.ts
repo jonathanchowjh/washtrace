@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
+import type { AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
 
 function row(more: Partial<CollectionRow> = {}): CollectionRow {
@@ -50,7 +51,7 @@ describe('Worker.ingest', () => {
       ingest: async () => {},
       served: async (id: number, blocks: number) => { served.push({ id, blocks }); },
     };
-    const w = new Worker(store, () => config);
+    const w = new Worker(store, () => config, '');
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       transfers: async (address: string, from: number) => {
@@ -115,7 +116,7 @@ describe('Worker.fund', () => {
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
       fundingFailed: async () => {},
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
     expect(funded).toEqual(['c', 'a', 'f', 'b']);
@@ -138,7 +139,7 @@ describe('Worker heartbeat', () => {
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
       fundingFailed: async () => {},
     };
-    const w = new Worker(store, config);
+    const w = new Worker(store, config, '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('2 wallets read, 0 failed');
     expect(funded).toEqual(['a', 'b']);
@@ -153,7 +154,7 @@ describe('Worker heartbeat', () => {
       passStarted: async () => {}, passFinished: async () => {},
       heartbeat: async (job: string, doing: string | null, id: number | null) => { beats.push([job, doing, id]); },
     };
-    const w = new Worker(store, config);
+    const w = new Worker(store, config, '');
     (w as any).analyze = async () => {
       await (w as any).beat('analyze', 'Analyzing Terraforms', 7);
       await new Promise((r) => setTimeout(r, 95_000));
@@ -218,19 +219,40 @@ describe('Worker.analyze', () => {
         { id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10, rulesAt: null },
         { id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null },
       ],
-      analysisInput: async () => ({ transfers: [], flows: [], funded: new Set(), truncated: new Set(), through: 7 }),
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
       saveAnalysis: async (id: number) => { saved.push(id); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), '');
     const off: number[] = [];
-    w.analyzeOff = async (input) => { off.push(input.transfers.length); return {} as Analysis; };
+    w.analyzeOff = async (request) => { off.push(request.id); return { analysis: {} as Analysis, through: 7 }; };
     expect(await w.analyze()).toBe('Doodles analyzed');
-    expect(off).toEqual([0]);
+    expect(off).toEqual([2]);
     expect(saved).toEqual([2]);
     expect(beats).toEqual([['Analyzing Doodles', 2]]);
 
     store.stale = async () => [{ id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10, rulesAt: null }];
     expect(await w.analyze()).toBe('nothing due');
+  });
+
+  it('gives the thread where the store is and which collection, never the flows', async () => {
+    // No analysisInput here: the main thread must not read the input, only the thread.
+    const saved: [number, number | null][] = [];
+    const store: any = {
+      stale: async () => [{ id: 2, chainId: 1, version: 5, rules: { minCycles: 3 }, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
+      heartbeat: async () => {},
+      saveAnalysis: async (id: number, _version: number, _a: Analysis, _ms: number, through: number | null) => { saved.push([id, through]); },
+    };
+    const url = 'postgres://washtrace:secret@db:5432/washtrace';
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), url);
+    const sent: AnalysisRequest[] = [];
+    w.analyzeOff = async (request) => { sent.push(request); return { analysis: {} as Analysis, through: 7 }; };
+    await w.analyze();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toHaveProperty('flows');
+    expect(sent[0]).not.toHaveProperty('transfers');
+    expect(Object.keys(sent[0]!).sort()).toEqual(['chainId', 'contracts', 'custodians', 'fundingAvailable', 'id', 'money', 'rules', 'storeUrl']);
+    expect(sent[0]).toMatchObject({ storeUrl: url, id: 2, chainId: 1, rules: { minCycles: 3 }, fundingAvailable: true });
+    // The block the analysis ran through comes back from the thread, which read it with the input.
+    expect(saved).toEqual([[2, 7]]);
   });
 });

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Store } from '../src/store.js';
 import { analyze } from '../src/methods.js';
+import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
 import { chain, flow, input, w } from './fixtures.js';
 
@@ -212,8 +213,9 @@ describe('Store', () => {
   });
 
   it('analyzes a collection with its own rules', async () => {
-    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }));
-    worker.analyzeOff = async (i) => analyze(i);
+    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), pg.getConnectionUri());
+    // The thread's own body, in-process: the TS sources cannot start the thread.
+    worker.analyzeOff = (request) => analyzeStored(store, request);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
     await worker.analyze();
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(3);
