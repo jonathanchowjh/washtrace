@@ -90,6 +90,14 @@ describe('Store', () => {
     expect(await store.counterparties(1, x)).toHaveLength(2);
   });
 
+  it('counts the wallets finished in the last hour, for the funding wait', async () => {
+    const lastHour = async () => (await store.fundingBacklog()).find((r) => r.chainId === 1)!.doneLastHour;
+    const before = await lastHour();
+    expect(before).toBeGreaterThan(0);
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '2 hours' WHERE chain_id = 1 AND address = $1`, [x]);
+    expect(await lastHour()).toBe(before - 1);
+  });
+
   it('round-trips an analysis, its flags and its reads', async () => {
     const [stale] = await store.stale();
     const read = await store.analysisInput(stale!.id, 1);

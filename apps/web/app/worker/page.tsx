@@ -37,15 +37,16 @@ export default async function WorkerPage() {
   } catch (err) {
     return <><Head title="Worker" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
   }
+  const faults = v.notices.filter((n) => n.severity === 'needs-you');
   return (
     <>
       <Head title="Worker" sub="The service that reads the chain and fills the store. It runs as its own process; this page reads what it recorded.">
         <Refresh everyMs={5_000} />
       </Head>
 
-      <Answer tone={v.problems.length === 0 ? 'clean' : 'cycle'} title={v.problems.length === 0 ? 'Nothing needs attention' : `${plural(v.problems.length, 'thing')} need${v.problems.length === 1 ? 's' : ''} attention`}>
-        {v.problems.length === 0 ? 'Every job ran on time and every collection is keeping up.' : (
-          <ul className="list-disc space-y-0.5 pl-4">{v.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>
+      <Answer tone={faults.length === 0 ? 'clean' : 'cycle'} title={faults.length === 0 ? 'Nothing needs attention' : `${plural(faults.length, 'thing')} need${faults.length === 1 ? 's' : ''} attention`}>
+        {v.notices.length === 0 ? 'Every job ran on time and every collection is keeping up.' : (
+          <ul className="list-disc space-y-0.5 pl-4">{v.notices.map((n, i) => <li key={i}>{n.text}{n.action ? <> <Link className="underline" href={n.action.href}>{n.action.label}</Link></> : null}</li>)}</ul>
         )}
       </Answer>
 
@@ -88,7 +89,7 @@ export default async function WorkerPage() {
         </ol>
       </Section>
 
-      <Section title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%.">
+      <Section id="sources" title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%.">
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ step 1</span></span>

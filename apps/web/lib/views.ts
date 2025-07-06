@@ -44,7 +44,7 @@ export async function workerView() {
     followHops: config.followHops,
     passes,
     jobs: report.jobs,
-    problems: report.problems,
+    notices: report.notices,
     backlog,
     collections: collections.map((c) => ({
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock,

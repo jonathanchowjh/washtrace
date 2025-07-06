@@ -28,6 +28,14 @@ export function plural(n: number, word: string): string {
   return `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** How long a wait will take, roughly: a guess is never shown to the minute. "about 40 min left". */
+export function eta(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  if (min < 60) return `about ${min} min left`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `about ${h} h left` : `about ${plural(Math.round(h / 24), 'day')} left`;
+}
+
 export type TimeStyle = 'datetime' | 'date' | 'time' | 'month';
 
 const STYLES: Record<TimeStyle, Intl.DateTimeFormatOptions> = {

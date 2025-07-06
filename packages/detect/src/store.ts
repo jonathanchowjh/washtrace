@@ -465,13 +465,14 @@ export class Store {
     );
   }
 
-  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; truncated: number; followed: number }[]> {
+  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; truncated: number; followed: number; doneLastHour: number }[]> {
     const { rows } = await this.pool.query(
       `SELECT chain_id, count(*) FILTER (WHERE status = 'pending')::int AS pending, count(*) FILTER (WHERE status = 'done')::int AS done,
+              count(*) FILTER (WHERE status = 'done' AND fetched_at > now() - interval '1 hour')::int AS done_last_hour,
               count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE truncated)::int AS truncated, count(*) FILTER (WHERE depth > 0)::int AS followed
        FROM washtrace.wallets GROUP BY chain_id ORDER BY chain_id`,
     );
-    return rows.map((r) => ({ chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, truncated: r.truncated, followed: r.followed }));
+    return rows.map((r) => ({ chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour }));
   }
 
   // ---- analysis ------------------------------------------------------------
