@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { CollectionRow } from '@washtrace/detect';
 import { LENSES, lensList, plural } from '@/lib/format';
 import { progress, type Coverage } from '@/lib/metrics';
+import { Warn } from '@/components/head';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 
@@ -104,7 +105,7 @@ export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
           : `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, ${plural(cov.behind ?? 0, 'block')} to go`}
         affects="all three lenses. Unread history can move any share either way."
       >
-        {c.error ? <p className="text-xs text-cycle">Last read failed: {c.error}</p> : null}
+        {c.error ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
       </Step>
       <Step
         n={2} title="Wallets checked for money"

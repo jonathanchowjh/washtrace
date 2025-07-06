@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 import { messageOf, type CollectionRow } from '@washtrace/detect';
 import { ReadingPill } from '@/components/coverage';
-import { Empty, Head, Problem } from '@/components/head';
+import { Empty, Head, Problem, Warn } from '@/components/head';
 import { HowWeLook, RangeBar } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
@@ -101,7 +101,7 @@ function Row({ c }: { c: CollectionRow }) {
         <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
-        {c.error ? <p className="mt-1 max-w-sm text-xs text-cycle">{c.error}</p> : null}
+        {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
       </div>
       {a === null ? (
         <p className="text-sm text-muted-foreground md:col-span-2">Not analyzed yet. It runs once the first transfers are read.</p>

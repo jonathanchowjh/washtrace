@@ -45,11 +45,13 @@ export async function workerView() {
     passes,
     jobs: report.jobs,
     notices: report.notices,
-    backlog,
+    backlog: backlog.map((b) => ({ ...b, etaMs: report.funding.find((f) => f.chainId === b.chainId)?.etaMs ?? null })),
     collections: collections.map((c) => ({
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock,
       headBlock: c.headBlock, ingestedAt: c.ingestedAt, error: c.error, errorAt: c.errorAt, stale: c.stale,
       analyzedAt: c.latest?.ranAt ?? null, analysisMs: c.latest?.tookMs ?? null,
+      turn: report.collections.find((r) => r.chainId === c.chainId && r.address === c.address)?.turn ?? 'keeping-up',
+      backfillEtaMs: c.readRate && c.headBlock !== null && c.cursorBlock !== null ? (Math.max(0, c.headBlock - c.cursorBlock) / c.readRate) * 1000 : null,
     })),
   };
 }

@@ -2,10 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
-import { Answer, Head, Problem, Section } from '@/components/head';
+import { Head, Notices, Problem, Section, Warn } from '@/components/head';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
-import { LENSES, plural, short } from '@/lib/format';
+import { LENSES, eta, plural, short } from '@/lib/format';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
@@ -23,8 +23,8 @@ const STEPS = {
 const STATE: Record<JobState, { label: string; className: string }> = {
   ok: { label: 'OK', className: 'bg-ok/12 text-ok' },
   running: { label: 'Running', className: 'bg-focus/12 text-focus' },
-  failed: { label: 'Failed', className: 'bg-cycle/12 text-cycle' },
-  stalled: { label: 'Stalled', className: 'bg-cycle/12 text-cycle' },
+  failed: { label: 'Failed', className: 'bg-fault/12 text-fault' },
+  stalled: { label: 'Stalled', className: 'bg-fault/12 text-fault' },
   never: { label: 'Never run', className: 'bg-muted text-muted-foreground' },
 };
 
@@ -37,18 +37,19 @@ export default async function WorkerPage() {
   } catch (err) {
     return <><Head title="Worker" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
   }
-  const faults = v.notices.filter((n) => n.severity === 'needs-you');
+  // A pass that started and has not finished is running; its `doing` says what, and for which collection.
+  const now = v.passes.filter((p) => (p.finishedAt === null || p.finishedAt < p.startedAt) && p.doing);
   return (
     <>
       <Head title="Worker" sub="The service that reads the chain and fills the store. It runs as its own process; this page reads what it recorded.">
         <Refresh everyMs={5_000} />
       </Head>
 
-      <Answer tone={faults.length === 0 ? 'clean' : 'cycle'} title={faults.length === 0 ? 'Nothing needs attention' : `${plural(faults.length, 'thing')} need${faults.length === 1 ? 's' : ''} attention`}>
-        {v.notices.length === 0 ? 'Every job ran on time and every collection is keeping up.' : (
-          <ul className="list-disc space-y-0.5 pl-4">{v.notices.map((n, i) => <li key={i}>{n.text}{n.action ? <> <Link className="underline" href={n.action.href}>{n.action.label}</Link></> : null}</li>)}</ul>
-        )}
-      </Answer>
+      <Notices notices={v.notices} />
+      <p className="mt-3 text-sm text-muted-foreground">
+        <b className="font-medium text-foreground">Now</b>{' '}
+        {now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')}
+      </p>
 
       <Section title="What it does" lead="Three jobs, in the order data flows through them. Each feeds the next, and the last feeds the console.">
         <ol className="grid gap-3 lg:grid-cols-3">
@@ -66,7 +67,7 @@ export default async function WorkerPage() {
                 <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                   <dt className="text-muted-foreground">Every</dt><dd>{v.every[j.job] / 1000}s</dd>
                   <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && j.state !== 'running' ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
-                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-cycle')}>{j.state === 'running' ? '…' : j.detail ?? '—'}</dd>
+                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-fault')}>{j.state === 'running' ? '…' : j.detail ?? '—'}</dd>
                   <dt className="text-muted-foreground">Feeds</dt><dd>{step.feeds}</dd>
                 </dl>
                 {j.job === 'fund' && v.backlog.length > 0 ? (
@@ -77,7 +78,7 @@ export default async function WorkerPage() {
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{b.done.toLocaleString()} of {all.toLocaleString()} checked</span></p>
                           <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-money" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
-                          <p className="mt-0.5 text-muted-foreground">{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
                         </div>
                       );
                     })}
@@ -93,7 +94,7 @@ export default async function WorkerPage() {
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ step 1</span></span>
-            {v.rpcChains.length === 0 ? <span className="text-cycle">None. Set WASHTRACE_RPC_1 to an Ethereum JSON-RPC URL.</span> : <span>{v.rpcChains.map(chainName).join(', ')}</span>}
+            {v.rpcChains.length === 0 ? <span className="text-fault">None. Set WASHTRACE_RPC_1 to an Ethereum JSON-RPC URL.</span> : <span>{v.rpcChains.map(chainName).join(', ')}</span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
@@ -111,9 +112,10 @@ export default async function WorkerPage() {
               <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
               <span className="text-xs text-muted-foreground">
                 {c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
+                {' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}
                 {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale ? ' · new data waiting' : ''}
               </span>
-              {c.error ? <p className="basis-full text-xs text-cycle">{c.error}</p> : null}
+              {c.error ? <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
             </li>
           ))}
         </ul>

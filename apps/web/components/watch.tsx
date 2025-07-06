@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { Warn } from '@/components/head';
 import { CHAINS } from '@/lib/chains';
 
 const FIELD = 'rounded-[5px] border bg-card px-2 py-1 text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none';
@@ -85,7 +86,7 @@ export function Suggested({ watched }: { watched: string[] }) {
           );
         })}
       </ul>
-      {said ? <p role="status" className={said.ok ? 'mt-1 text-xs text-ok' : 'mt-1 text-xs text-cycle'}>{said.text}</p> : null}
+      {said ? <p role="status" className={said.ok ? 'mt-1 text-xs text-ok' : 'mt-1 text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
     </div>
   );
 }
@@ -128,7 +129,7 @@ export function AddCollection() {
         <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className={`${FIELD} w-28 font-mono text-xs`} />
       </label>
       <button type="submit" disabled={busy} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
-      {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-cycle'}>{said.text}</p> : null}
+      {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
     </form>
   );
 }
@@ -148,9 +149,9 @@ export function StopWatching({ chainId, address }: { chainId: number; address: s
   return (
     <span className="flex items-center gap-2 text-xs">
       <span>Drops its transfers and analyses.</span>
-      <button type="button" onClick={stop} className={`${BUTTON} border-cycle text-cycle`}>Stop watching</button>
+      <button type="button" onClick={stop} className={`${BUTTON} border-fault text-fault`}>Stop watching</button>
       <button type="button" onClick={() => setArmed(false)} className={BUTTON}>Keep</button>
-      {error ? <span className="text-cycle">{error}</span> : null}
+      {error ? <span className="text-fault"><Warn className="mr-1 size-3.5 align-text-bottom" />{error}</span> : null}
     </span>
   );
 }

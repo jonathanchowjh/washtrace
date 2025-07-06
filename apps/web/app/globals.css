@@ -11,6 +11,7 @@ body { margin: 0; }
   --color-card: var(--card); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border); --color-ring: var(--ring); --color-sidebar: var(--sidebar); --color-focus: var(--focus);
   --color-cycle: var(--cycle); --color-cycle-surface: var(--cycle-surface);
+  --color-fault: var(--fault); --color-fault-surface: var(--fault-surface);
   --color-money: var(--money); --color-money-surface: var(--money-surface);
   --color-flow: var(--flow); --color-clean: var(--clean); --color-ok: var(--ok);
   --radius-md: 0.5rem;
@@ -29,6 +30,10 @@ body { margin: 0; }
   --money: oklch(0.5 0.105 70); --money-surface: oklch(0.955 0.025 80);
   /* A money edge, drawn dashed: the paper's red ETH arrows, in a hue that is not a verdict. */
   --flow: oklch(0.52 0.16 290);
+  /* A fault: something broken that a person can fix. Never a finding, and always drawn with an icon and a "Do this:" line.
+     Hue 340 (magenta) is 47 deg from cycle (27), 90+ from money (70-80) and 50 from flow (290), so no lens colour reads as an error.
+     Contrast: text 6.73:1 on --card and 5.86:1 on --fault-surface (light); 7.47:1 and 6.80:1 (dark, below). */
+  --fault: oklch(0.5 0.2 340); --fault-surface: oklch(0.955 0.02 340);
   --clean: oklch(0.62 0.01 250); --ok: oklch(0.48 0.13 150);
 }
 
@@ -41,6 +46,7 @@ body { margin: 0; }
   --cycle: oklch(0.704 0.185 22.2); --cycle-surface: oklch(0.25 0.05 27);
   --money: oklch(0.82 0.15 80); --money-surface: oklch(0.24 0.04 80);
   --flow: oklch(0.72 0.14 290);
+  --fault: oklch(0.75 0.16 340); --fault-surface: oklch(0.25 0.05 340);
   --clean: oklch(0.58 0.01 250); --ok: oklch(0.77 0.16 152);
 }
 
@@ -53,6 +59,7 @@ body { margin: 0; }
     --cycle: oklch(0.704 0.185 22.2); --cycle-surface: oklch(0.25 0.05 27);
     --money: oklch(0.82 0.15 80); --money-surface: oklch(0.24 0.04 80);
     --flow: oklch(0.72 0.14 290);
+    --fault: oklch(0.75 0.16 340); --fault-surface: oklch(0.25 0.05 340);
     --clean: oklch(0.58 0.01 250); --ok: oklch(0.77 0.16 152);
   }
 }
