@@ -122,6 +122,21 @@ describe('status', () => {
     expect(status(s, NOW).notices.map((n) => n.severity)).toEqual(['needs-you', 'working', 'info']);
   });
 
+  it('gives every needs-you notice a sentence saying what to do', () => {
+    const s = snapshot({
+      passes: [pass('ingest', 10_000, { outcome: 'failed' }), pass('fund', 10_000, { outcome: 'failed' }), pass('analyze', 10_000, { outcome: 'failed' })],
+      collections: [collection({ error: 'boom' })],
+      funding: [{ chainId: 1, pending: 3, done: 4, failed: 2, truncated: 0, doneLastHour: 0 }],
+    });
+    const needs = status(s, NOW).notices.filter((n) => n.severity === 'needs-you');
+    expect(needs).toHaveLength(5);
+    for (const n of needs) expect(n.severity === 'needs-you' && n.doThis.length > 10).toBe(true);
+    expect(needs).toContainEqual(expect.objectContaining({ doThis: expect.stringContaining('Etherscan key'), href: '/worker#sources' }));
+    expect(needs).toContainEqual(expect.objectContaining({ href: '/c/1/0xbc4c' }));
+    const never = status(snapshot({ passes: [] }), NOW).notices.filter((n) => n.severity === 'needs-you');
+    expect(never.every((n) => n.severity === 'needs-you' && n.doThis.includes('docker compose ps worker'))).toBe(true);
+  });
+
   it('estimates the funding wait from the last hour of work', () => {
     const f = (doneLastHour: number, pending = 50) => status(snapshot({ funding: [{ chainId: 1, pending, done: 4, failed: 0, truncated: 0, doneLastHour }] }), NOW).funding[0]!.etaMs;
     expect(f(100)).toBe(30 * MIN);

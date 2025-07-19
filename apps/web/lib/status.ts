@@ -13,7 +13,10 @@ export interface Snapshot {
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
 export type Severity = 'needs-you' | 'working' | 'info';
 
-export interface Notice { severity: Severity; text: string; action?: { label: string; href: string } }
+/** A needs-you notice always says what to do (`doThis`, with an optional place to do it); the others may offer a link. */
+export type Notice =
+  | { severity: 'needs-you'; text: string; doThis: string; href?: string }
+  | { severity: 'working' | 'info'; text: string; action?: { label: string; href: string } };
 
 const SEVERITIES: readonly Severity[] = ['needs-you', 'working', 'info'];
 
@@ -21,6 +24,15 @@ export type JobState = 'never' | 'running' | 'ok' | 'failed' | 'stalled';
 
 /** A running pass that has said nothing for this long is stalled. The worker beats every 30 seconds. */
 const SILENT_MS = 2 * 60_000;
+
+const WORKER_DOWN = 'Check the worker process is running: docker compose ps worker';
+
+/** What to do when a job reports a failure, and where to do it. */
+const FAILED: Record<Job, [string, string?]> = {
+  ingest: ['Check the chain RPC under What it reads from.', '/worker#sources'],
+  fund: ['Check the Etherscan key under What it reads from.', '/worker#sources'],
+  analyze: ['Open the collection and check its rules.'],
+};
 
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 
@@ -32,7 +44,8 @@ const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
  */
 export function status(s: Snapshot, now: number) {
   const notices: Notice[] = [];
-  const notice = (severity: Severity, text: string, action?: Notice['action']) => notices.push({ severity, text, ...(action ? { action } : {}) });
+  const notice = (severity: 'working' | 'info', text: string, action?: { label: string; href: string }) => notices.push({ severity, text, ...(action ? { action } : {}) });
+  const needsYou = (text: string, doThis: string, href?: string) => notices.push({ severity: 'needs-you', text, doThis, ...(href ? { href } : {}) });
   const minutes = (ms: number) => `${Math.floor(ms / 60_000)} min`;
 
   const jobs = JOBS.map((job) => {
@@ -40,17 +53,17 @@ export function status(s: Snapshot, now: number) {
     let state: JobState;
     if (!p) {
       state = 'never';
-      notice('needs-you', `${job} has never run.`);
+      needsYou(`${job} has never run.`, WORKER_DOWN);
     } else if (p.finishedAt === null || p.finishedAt < p.startedAt) {
       const lastSign = p.heartbeatAt ?? p.startedAt;
       state = now - lastSign > SILENT_MS ? 'stalled' : 'running';
-      if (state === 'stalled') notice('needs-you', `${job} has been silent for ${minutes(now - lastSign)}.`);
+      if (state === 'stalled') needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
     } else if (now - p.startedAt > 3 * EVERY[job] + BUDGET_MS) {
       state = 'stalled';
-      notice('needs-you', `${job} has not run for ${minutes(now - p.startedAt)}.`);
+      needsYou(`${job} has not run for ${minutes(now - p.startedAt)}.`, WORKER_DOWN);
     } else if (p.outcome === 'failed') {
       state = 'failed';
-      notice('needs-you', `${job} failed: ${p.detail}`);
+      needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
     } else {
       state = 'ok';
     }
@@ -65,7 +78,7 @@ export function status(s: Snapshot, now: number) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
       notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
     }
-    if (c.error) notice('needs-you', `${label}: ${c.error}`);
+    if (c.error) needsYou(`${label}: ${c.error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
       behind, turn: backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
@@ -85,7 +98,7 @@ export function status(s: Snapshot, now: number) {
     notice('info', 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'How to turn it on', href: '/worker#sources' });
   }
   for (const f of s.funding) {
-    if (f.failed > 0) notice('needs-you', `${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`);
+    if (f.failed > 0) needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`, 'They retry on their own after an hour; if they keep failing, check the Etherscan key under What it reads from.', '/worker#sources');
   }
   notices.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
 

@@ -77,7 +77,7 @@ export default async function WorkerPage() {
                       return (
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{b.done.toLocaleString()} of {all.toLocaleString()} checked</span></p>
-                          <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-money" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
+                          <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-muted-foreground" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
                           <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
                         </div>
                       );
@@ -99,7 +99,7 @@ export default async function WorkerPage() {
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
             {v.funding === null
-              ? <span className="text-money">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. Set WASHTRACE_ETHERSCAN_KEY.</span>
+              ? <span className="text-muted-foreground">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. Set WASHTRACE_ETHERSCAN_KEY.</span>
               : <span>Etherscan API V2, {v.funding.perSecond} calls a second, following money {plural(v.followHops, 'hop')} out of traders</span>}
           </li>
         </ul>

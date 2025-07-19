@@ -8,8 +8,8 @@ import { Time } from '@/components/time';
 
 const PILL = {
   complete: 'bg-ok/12 text-ok',
-  checking: 'bg-money/12 text-money',
-  'catching-up': 'bg-money/12 text-money',
+  checking: 'bg-focus/12 text-focus',
+  'catching-up': 'bg-focus/12 text-focus',
   starting: 'bg-muted text-muted-foreground',
 } as const;
 
@@ -66,7 +66,7 @@ export function ReadingSummary({ cov, href }: { cov: Coverage; href: string }) {
 function Bar({ share }: { share: number }) {
   return (
     <span aria-hidden className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
-      <i className={cn('block h-full rounded-full', share >= 1 ? 'bg-ok' : 'bg-money')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
+      <i className={cn('block h-full rounded-full', share >= 1 ? 'bg-ok' : 'bg-muted-foreground')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
     </span>
   );
 }
@@ -114,12 +114,12 @@ export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
         value={cov.money ? `${cov.wallets.checked.toLocaleString()} of ${cov.wallets.of.toLocaleString()} trading wallets, busiest first` : 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'}
         affects={<>{LENSES.AU.name} and {LENSES.AC.name}. An unchecked wallet hides its links, so their shares can only rise.</>}
       >
-        {a && a.truncatedSearches > 0 ? <p className="text-xs text-money">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
+        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
       </Step>
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? 'It runs once the first transfers are read.' : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-money"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
+        value={a === null ? 'It runs once the first transfers are read.' : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
         {a ? <p className="text-xs text-muted-foreground">Gaps in history: {(a.missingData * 100).toFixed(1)}% of changes of owner (skipped, never guessed).</p> : null}

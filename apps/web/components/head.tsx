@@ -58,8 +58,8 @@ export function Problem({ title, children, doThis = 'check that the store is run
  * "Nothing needs you" is the normal state even while hours of work remain.
  */
 export function Notices({ notices }: { notices: Notice[] }) {
-  const needs = notices.filter((n) => n.severity === 'needs-you');
-  const rest = notices.filter((n) => n.severity !== 'needs-you');
+  const needs = notices.filter((n): n is Extract<Notice, { severity: 'needs-you' }> => n.severity === 'needs-you');
+  const rest = notices.filter((n): n is Exclude<Notice, { severity: 'needs-you' }> => n.severity !== 'needs-you');
   return (
     <div className="space-y-2">
       <h2 className="text-lg font-semibold text-foreground">{needs.length === 0 ? 'Nothing needs you' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}</h2>
@@ -68,7 +68,7 @@ export function Notices({ notices }: { notices: Notice[] }) {
           <Warn className="mt-0.5 size-5 text-fault" />
           <div>
             <p className="font-semibold text-foreground">{n.text}</p>
-            {n.action ? <p className="mt-0.5"><b className="text-fault">Do this:</b> <Link className="underline" href={n.action.href}>{n.action.label}</Link></p> : null}
+            <p className="mt-0.5"><b className="text-fault">Do this:</b> {n.href ? <Link className="underline" href={n.href}>{n.doThis}</Link> : n.doThis}</p>
           </div>
         </div>
       ))}

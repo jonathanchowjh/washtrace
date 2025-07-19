@@ -5,7 +5,7 @@ import type { Notice } from '@/lib/status';
 
 afterEach(cleanup);
 
-const needs: Notice = { severity: 'needs-you', text: 'Etherscan rejected the key.', action: { label: 'Open Settings', href: '/settings' } };
+const needs: Notice = { severity: 'needs-you', text: 'Etherscan rejected the key.', doThis: 'Open Settings', href: '/settings' };
 const working: Notice = { severity: 'working', text: 'Checking wallets for Terraforms: 1,612 of 11,259' };
 const info: Notice = { severity: 'info', text: 'No Etherscan key.', action: { label: 'How to turn it on', href: '/worker#sources' } };
 
@@ -15,6 +15,12 @@ describe('Notices', () => {
     expect(screen.getByText('Do this:')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('/settings');
     expect(screen.getByText('Etherscan rejected the key.')).toBeTruthy();
+  });
+
+  it('says a needs-you item with no place to go as plain text', () => {
+    render(<Notices notices={[{ severity: 'needs-you', text: 'fund has never run.', doThis: 'Check the worker is running' }]} />);
+    expect(screen.getByText(/Check the worker is running/)).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 
   it('renders working and info items without a Do this line', () => {
