@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
-import { messageOf, type CollectionRow } from '@washtrace/detect';
+import { messageOf, type CollectionRow, type PassRow } from '@washtrace/detect';
 import { ReadingPill } from '@/components/coverage';
 import { Empty, Head, Problem, Warn } from '@/components/head';
 import { HowWeLook, RangeBar } from '@/components/methods';
@@ -10,7 +10,7 @@ import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
 import { chainName } from '@/lib/chains';
 import { ConfigError } from '@/lib/config';
 import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
-import { coverage, range, rangeText, type Range } from '@/lib/metrics';
+import { coverage, range, rangeText, waiting, type Range } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { Time } from '@/components/time';
 
@@ -26,8 +26,12 @@ const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(
 export default async function Collections() {
   await connection();
   let rows: CollectionRow[];
+  let analyze: PassRow | undefined;
   try {
-    rows = await store().collections();
+    const s = store();
+    let passes: PassRow[];
+    [rows, passes] = await Promise.all([s.collections(), s.passes()]);
+    analyze = passes.find((p) => p.job === 'analyze');
   } catch (err) {
     return (
       <>
@@ -36,6 +40,8 @@ export default async function Collections() {
       </>
     );
   }
+  const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
+  const now = Date.now();
   return (
     <>
       <Head title="Collections" sub="Each NFT collection being watched, and how much of its trading looks like wash trading.">
@@ -67,7 +73,7 @@ export default async function Collections() {
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{rows.map((c) => <Row key={c.id} c={c} />)}</ul>
+          <ul className="divide-y">{rows.map((c) => <Row key={c.id} c={c} why={waiting(c, analyze, names, now)} />)}</ul>
         </div>
       )}
     </>
@@ -88,7 +94,7 @@ function Share({ r, label, detail }: { r: Range | null; label: string; detail: s
   );
 }
 
-function Row({ c }: { c: CollectionRow }) {
+function Row({ c, why }: { c: CollectionRow; why: string }) {
   const a = c.latest;
   const cov = coverage(c);
   const sales = a && range(a.totals, 'sales');
@@ -104,7 +110,7 @@ function Row({ c }: { c: CollectionRow }) {
         {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
       </div>
       {a === null ? (
-        <p className="text-sm text-muted-foreground md:col-span-2">Not analyzed yet. It runs once the first transfers are read.</p>
+        <p className="text-sm text-muted-foreground md:col-span-2">{why}</p>
       ) : (
         <>
           <Share

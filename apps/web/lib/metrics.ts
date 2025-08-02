@@ -1,4 +1,4 @@
-import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals } from '@washtrace/detect';
+import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals, type PassRow } from '@washtrace/detect';
 import { pct } from './format';
 
 /**
@@ -93,4 +93,23 @@ export function coverage(c: Pick<CollectionRow, 'startBlock' | 'cursorBlock' | '
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
   if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
+}
+
+/** A pass is running from when it starts until it finishes. The status route and the pages both decide it here. */
+export function isRunning(p: PassRow): boolean {
+  return p.finishedAt === null || p.finishedAt < p.startedAt;
+}
+
+/**
+ * Why a collection has no analysis yet, from what the worker is doing now.
+ * Analysis runs one collection per pass, so a new one may be queued behind
+ * another that takes a while.
+ */
+export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number): string {
+  if (c.transfers === 0) return 'Waiting for its first transfers.';
+  const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
+  if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
+  const min = `${Math.floor((now - running.startedAt) / 60_000)} min`;
+  if (running.subjectId === c.id) return `First analysis running · started ${min} ago.`;
+  return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
 }

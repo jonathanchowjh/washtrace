@@ -16,7 +16,7 @@ import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { coverage, range, rangeText, summary, type Range } from '@/lib/metrics';
+import { coverage, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -48,7 +48,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const method = methodOf((await searchParams).method);
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
-  const [history, timeline, tokens, wallets, profile] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id)]);
+  const [history, timeline, tokens, wallets, profile, passes, all] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections()]);
+  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now());
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
   const cov = coverage(c);
@@ -68,10 +69,10 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       <About c={c} profile={profile} />
 
-      <div className="mb-4"><ReadingSummary cov={cov} href="#reading" /></div>
+      <div className="mb-4"><ReadingSummary c={c} cov={cov} href="#reading" /></div>
 
       {a === null ? (
-        <Empty>The worker has not analyzed this collection yet. It does once its first transfers are read.</Empty>
+        <Empty>{why}</Empty>
       ) : (
         <section aria-label="The answer" className="rounded-lg border bg-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -123,7 +124,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} />
+        <ReadingPanel c={c} cov={cov} why={why} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

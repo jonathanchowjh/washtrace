@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionRow, Method, MethodTotals } from '@washtrace/detect';
-import { coverage, progress, range, rangeText, summary } from '@/lib/metrics';
+import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
+import { coverage, isRunning, progress, range, rangeText, summary, waiting } from '@/lib/metrics';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -97,5 +97,38 @@ describe('coverage', () => {
 
   it('is starting before the deployment block is known', () => {
     expect(coverage(row({ startBlock: null, cursorBlock: null })).reading).toBe('starting');
+  });
+});
+
+describe('waiting', () => {
+  const NOW = 100 * 60_000;
+  const pass = (more: Partial<PassRow> = {}): PassRow => ({
+    job: 'analyze', startedAt: NOW - 2 * 60_000, finishedAt: null, tookMs: null, outcome: null, detail: null, heartbeatAt: NOW, doing: 'Analyzing', subjectId: 1, ...more,
+  });
+  const names = new Map([[7, 'Terraforms']]);
+  const fresh = row({ latest: null });
+
+  it('waits for transfers when none are read', () => {
+    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, NOW)).toBe('Waiting for its first transfers.');
+  });
+
+  it('says its own first analysis is running', () => {
+    expect(waiting(fresh, pass(), names, NOW)).toBe('First analysis running · started 2 min ago.');
+  });
+
+  it('names the collection it is queued behind', () => {
+    expect(waiting(fresh, pass({ subjectId: 7, startedAt: NOW - 14 * 60_000 }), names, NOW))
+      .toBe('Waiting for its first analysis · queued behind Terraforms (running 14 min).');
+  });
+
+  it('says the next pass is near when none is running', () => {
+    expect(waiting(fresh, undefined, names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(waiting(fresh, pass({ finishedAt: NOW - 1_000 }), names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+  });
+
+  it('knows a pass is running only until it finishes', () => {
+    expect(isRunning(pass())).toBe(true);
+    expect(isRunning(pass({ finishedAt: NOW }))).toBe(false);
+    expect(isRunning(pass({ finishedAt: NOW - 10 * 60_000 }))).toBe(true);
   });
 });

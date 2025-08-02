@@ -1,6 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow, type WorkerConfig } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta } from './format';
+import { isRunning } from './metrics';
 
 /** Everything the status report is made from, read by the route in one go. */
 export interface Snapshot {
@@ -54,7 +55,7 @@ export function status(s: Snapshot, now: number) {
     if (!p) {
       state = 'never';
       needsYou(`${job} has never run.`, WORKER_DOWN);
-    } else if (p.finishedAt === null || p.finishedAt < p.startedAt) {
+    } else if (isRunning(p)) {
       const lastSign = p.heartbeatAt ?? p.startedAt;
       state = now - lastSign > SILENT_MS ? 'stalled' : 'running';
       if (state === 'stalled') needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);

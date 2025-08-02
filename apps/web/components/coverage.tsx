@@ -24,7 +24,9 @@ export function ReadingPill({ cov }: { cov: Coverage }) {
 }
 
 /** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
-export function trust(cov: Coverage): string {
+export function trust(c: CollectionRow, cov: Coverage): string | null {
+  // No analysis yet means no shares on screen; the empty state says why instead.
+  if (c.latest === null) return null;
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
   if (cov.floor.length > 0) return `${progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
@@ -39,7 +41,7 @@ export function trust(cov: Coverage): string {
  * wallets are only checked once the transfers are read. The steps
  * themselves are further down the page.
  */
-export function ReadingSummary({ cov, href }: { cov: Coverage; href: string }) {
+export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Coverage; href: string }) {
   const stage = cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
     : cov.reading === 'complete' ? { share: 1, of: 'read: every transfer, and every wallet the lenses need' }
@@ -58,7 +60,7 @@ export function ReadingSummary({ cov, href }: { cov: Coverage; href: string }) {
           <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} /></div>
         </div>
       </div>
-      <p className="max-w-xl text-xs text-muted-foreground">{trust(cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The three steps ↓</a></p>
+      <p className="max-w-xl text-xs text-muted-foreground">{trust(c, cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The three steps ↓</a></p>
     </div>
   );
 }
@@ -92,7 +94,7 @@ function Step({ n, title, figure, value, bar, affects, children }: { n: number; 
  * seen from the collection. It leads the page, because it says how far to
  * trust everything after it.
  */
-export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
+export function ReadingPanel({ c, cov, why }: { c: CollectionRow; cov: Coverage; why: string }) {
   const a = c.latest;
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
@@ -119,7 +121,7 @@ export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? 'It runs once the first transfers are read.' : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
+        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
         {a ? <p className="text-xs text-muted-foreground">Gaps in history: {(a.missingData * 100).toFixed(1)}% of changes of owner (skipped, never guessed).</p> : null}

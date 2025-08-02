@@ -2,6 +2,9 @@ import { fileURLToPath } from 'node:url';
 import type { NextConfig } from 'next';
 
 const config: NextConfig = {
+  // The generated AGENTS.md was removed on purpose; without this `next dev` writes it back.
+  agentRules: false,
+
   // The Dockerfile builds from this. Standalone traces only the files actually
   // reached, so the runtime layer carries no build toolchain.
   output: 'standalone',
