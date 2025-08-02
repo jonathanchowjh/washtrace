@@ -61,8 +61,9 @@ export function ingestTurns(
   budgetMs: number,
 ): { keepUp: CollectionRow[]; backfill: { c: CollectionRow; sliceMs: number }[] } {
   const atHead = (c: CollectionRow) => c.startBlock !== null && c.cursorBlock !== null && c.headBlock !== null && c.headBlock - c.cursorBlock <= BEHIND_BLOCKS;
-  const keepUp = cs.filter(atHead);
-  const rest = cs.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
+  const live = cs.filter((c) => c.pausedAt === null);
+  const keepUp = live.filter(atHead);
+  const rest = live.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
   const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
   return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
 }

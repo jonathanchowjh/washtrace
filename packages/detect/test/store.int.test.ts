@@ -23,10 +23,10 @@ afterAll(async () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(7);
-    expect(await store.migrate()).toBe(7);
+    expect(await store.migrate()).toBe(8);
+    expect(await store.migrate()).toBe(8);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 7 }]);
+    expect(rows).toEqual([{ version: 8 }]);
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -64,6 +64,40 @@ describe('Store', () => {
     expect(lanes).toEqual([{ collectionId: c.id, wallets: [b, a] }, { collectionId: other, wallets: [b, w('o1')] }]);
     expect((await store.fundingLanes(1, 1)).lanes.map((l) => l.wallets.length)).toEqual([1, 1]);
     await store.removeCollection(1, w('0be'));
+  });
+
+  it('pausing stops a collection\'s lane but not a wallet another collection shares', async () => {
+    const s = w('5ba'), p1 = w('9a1'), p2 = w('9a2');
+    const c1 = (await store.addCollection(1, w('9c1'), 'P1', 1)).id;
+    const c2 = (await store.addCollection(1, w('9c2'), 'P2', 1)).id;
+    await store.ingest(c1, 1, chain('11', p1, s), 10, [p1, s]);
+    await store.ingest(c2, 1, chain('12', p2, s), 10, [p2, s]);
+    expect(await store.pause(1, w('9c1'))).toBe(true);
+    expect(await store.pause(1, w('9c1'))).toBe(false);
+    expect((await store.collection(1, w('9c1')))!.pausedAt).not.toBeNull();
+    const { lanes } = await store.fundingLanes(1, 10);
+    expect(lanes.map((l) => l.collectionId)).not.toContain(c1);
+    expect(lanes.find((l) => l.collectionId === c2)!.wallets).toContain(s);
+    expect((await store.stale()).map((r) => r.id)).not.toContain(c1);
+    // With nothing in sync on the chain there are no lanes, the followed one included.
+    await store.pool.query('UPDATE washtrace.collections SET paused_at = now()');
+    expect((await store.fundingLanes(1, 10)).lanes).toEqual([]);
+    expect(await store.resume(1, w('9c2'))).toBe(true);
+    expect(await store.resume(1, w('9c2'))).toBe(false);
+    await store.pool.query('UPDATE washtrace.collections SET paused_at = NULL');
+    expect((await store.collection(1, w('9c2')))!.pausedAt).toBeNull();
+    await store.removeCollection(1, w('9c1'));
+    await store.removeCollection(1, w('9c2'));
+  });
+
+  it('watching a paused collection again resumes it, data intact', async () => {
+    const id = (await store.addCollection(1, w('9c3'), 'P3', 1)).id;
+    await store.ingest(id, 1, chain('13', w('9a3'), w('9a4')), 10, []);
+    await store.pause(1, w('9c3'));
+    const again = await store.addCollection(1, w('9c3'), null, 1);
+    expect(again).toEqual({ id, created: false });
+    expect(await store.collection(1, w('9c3'))).toMatchObject({ pausedAt: null, transfers: 2 });
+    await store.removeCollection(1, w('9c3'));
   });
 
   it('profiles a collection from its transfers: the latest receiver holds the token', async () => {

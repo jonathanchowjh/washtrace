@@ -61,7 +61,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 1_000, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
     latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
-    servedAt: null, readRate: null, priority: false, rules: {}, contract: null, ...more,
+    servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
   };
 }
 

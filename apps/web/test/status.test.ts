@@ -14,7 +14,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, servedAt: null, readRate: null, priority: false, rules: {}, contract: null, ...more,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
   };
 }
 
@@ -69,6 +69,14 @@ describe('status', () => {
     const s = snapshot({ passes: [pass('fund', 1_000, { outcome: 'failed', detail: 'Etherscan answered HTTP 502' })] });
     expect(stateOf(s, 'fund')).toBe('failed');
     expect(texts(s, 'needs-you')).toContain('fund failed: Etherscan answered HTTP 502');
+  });
+
+  it('says a paused collection is paused, and does not call it behind or check its wallets', () => {
+    const s = snapshot({
+      collections: [collection({ cursorBlock: 0, wallets: 10, fundedWallets: 2, pausedAt: NOW })],
+    });
+    expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'paused' });
+    expect(texts(s, 'working')).toEqual([]);
   });
 
   it('reports a collection with an error as needing a person, and one far behind as work in progress', () => {

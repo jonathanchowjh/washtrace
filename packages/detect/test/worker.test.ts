@@ -8,7 +8,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, servedAt: null, readRate: null, priority: false, rules: {}, contract: null, ...more,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
   };
 }
 
@@ -27,6 +27,12 @@ describe('ingestTurns', () => {
     const slices = ingestTurns(many, 45_000).backfill.map((b) => b.sliceMs);
     expect(slices).toEqual([11_250, 11_250, 11_250, 11_250]);
     expect(Math.min(...slices)).toBeGreaterThanOrEqual(MIN_SLICE_MS);
+  });
+
+  it('leaves out a paused collection, at the head or behind', () => {
+    const t = ingestTurns([row({ id: 1, pausedAt: 5 }), row({ id: 2, cursorBlock: 10, pausedAt: 5 }), row({ id: 3 })], 45_000);
+    expect(t.keepUp.map((c) => c.id)).toEqual([3]);
+    expect(t.backfill).toEqual([]);
   });
 
   it('treats a collection with no start block as a backfill', () => {

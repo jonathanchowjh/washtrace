@@ -168,4 +168,9 @@ CREATE INDEX IF NOT EXISTS transfers_coll_to_idx ON washtrace.transfers (collect
 -- edited it is waiting to see the flags it gives.
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules_at timestamptz;
 `,
+  `
+-- A paused collection keeps its data and is left alone: the worker neither
+-- reads it, analyses it nor checks its wallets until it is watched again.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS paused_at timestamptz;
+`,
 ];

@@ -37,6 +37,8 @@ export interface CollectionRow {
   readRate: number | null;
   /** Someone asked for this collection to be served first. */
   priority: boolean;
+  /** When it was paused: the worker leaves it alone, its data kept. Null while it is watched. */
+  pausedAt: number | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -199,7 +201,7 @@ export class Store {
     const { rows } = await this.pool.query<{ id: number; created: boolean }>(
       `INSERT INTO washtrace.collections (chain_id, address, name, start_block, cursor_block)
        VALUES ($1, $2, $3, $4::bigint, $4::bigint - 1)
-       ON CONFLICT (chain_id, address) DO UPDATE SET name = COALESCE(EXCLUDED.name, washtrace.collections.name)
+       ON CONFLICT (chain_id, address) DO UPDATE SET name = COALESCE(EXCLUDED.name, washtrace.collections.name), paused_at = NULL
        RETURNING id, (xmax = 0) AS created`,
       [chainId, address, name, startBlock],
     );
@@ -208,6 +210,20 @@ export class Store {
 
   async removeCollection(chainId: number, address: string): Promise<boolean> {
     const { rowCount } = await this.pool.query('DELETE FROM washtrace.collections WHERE chain_id = $1 AND address = $2', [chainId, address]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  /** Stop the worker serving a collection, keeping its data. False when it is not there or already paused. */
+  async pause(chainId: number, address: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      'UPDATE washtrace.collections SET paused_at = now() WHERE chain_id = $1 AND address = $2 AND paused_at IS NULL', [chainId, address]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  /** Let the worker serve a paused collection again. False when it is not there or not paused. */
+  async resume(chainId: number, address: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      'UPDATE washtrace.collections SET paused_at = NULL WHERE chain_id = $1 AND address = $2 AND paused_at IS NOT NULL', [chainId, address]);
     return (rowCount ?? 0) > 0;
   }
 
@@ -360,8 +376,9 @@ export class Store {
 
   /**
    * The wallets to read funding for next, in lanes so one big collection cannot
-   * crowd out the rest: one lane per collection on the chain (its traders), and
-   * a last lane for followed wallets (depth > 0), which trade in no collection.
+   * crowd out the rest: one lane per collection on the chain that is not paused (its traders),
+   * and a last lane for followed wallets (depth > 0), which trade in no collection,
+   * there only while some collection is in sync to read them for.
    * Each lane is at most `perLane` long: failed wallets last (they retry after
    * an hour), then the shallowest, then the busiest. A trader of two
    * collections is in both lanes; `interleave` checks it once.
@@ -383,7 +400,7 @@ export class Store {
               OR EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.to_address = t.address)
          ) ranked WHERE rn <= $2
        ) l ON true
-       WHERE c.chain_id = $1 ORDER BY c.id, l.rn`,
+       WHERE c.chain_id = $1 AND c.paused_at IS NULL ORDER BY c.id, l.rn`,
       [chainId, perLane],
     );
     const lanes: FundingLane[] = [];
@@ -494,7 +511,7 @@ export class Store {
               extract(epoch FROM c.rules_at)::float8 AS rules_changed
        FROM washtrace.collections c
        LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
-       WHERE c.version > c.analyzed_version ORDER BY c.id`,
+       WHERE c.version > c.analyzed_version AND c.paused_at IS NULL ORDER BY c.id`,
     );
     return rows.map((r) => ({
       id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules, name: r.name,
@@ -773,7 +790,7 @@ export class Store {
 
 const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
-       extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served,
+       extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served, extract(epoch FROM c.paused_at)::float8 AS paused,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -829,6 +846,7 @@ function toCollection(r: any): CollectionRow {
     stale: Number(r.version) > Number(r.analyzed_version),
     latest: r.analysis_id === null ? null : toAnalysis(r),
     servedAt: r.served === null ? null : r.served * 1000, readRate: num(r.read_rate), priority: r.priority,
+    pausedAt: r.paused === null ? null : r.paused * 1000,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };

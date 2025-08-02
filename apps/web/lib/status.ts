@@ -74,7 +74,8 @@ export function status(s: Snapshot, now: number) {
   const collections = s.collections.map((c) => {
     const label = c.name ?? `${c.chainId}:${c.address}`;
     const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
-    const backfilling = behind !== null && behind > BEHIND_BLOCKS;
+    const paused = c.pausedAt !== null;
+    const backfilling = !paused && behind !== null && behind > BEHIND_BLOCKS;
     if (backfilling) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
       notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
@@ -82,12 +83,12 @@ export function status(s: Snapshot, now: number) {
     if (c.error) needsYou(`${label}: ${c.error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
-      behind, turn: backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
+      behind, turn: paused ? 'paused' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
     };
   });
 
   // Lanes take turns per collection, so a collection gets its chain's hourly rate split among those still checking.
-  const checking = (c: CollectionRow) => c.fundedWallets < c.wallets;
+  const checking = (c: CollectionRow) => c.pausedAt === null && c.fundedWallets < c.wallets;
   if (s.config.etherscanKey !== null) {
     for (const c of s.collections.filter(checking)) {
       const rate = (s.funding.find((f) => f.chainId === c.chainId)?.doneLastHour ?? 0) / s.collections.filter((o) => o.chainId === c.chainId && checking(o)).length;
