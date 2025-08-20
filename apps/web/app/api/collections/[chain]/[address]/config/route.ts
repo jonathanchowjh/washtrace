@@ -7,7 +7,7 @@ import { store } from '@/lib/store';
 type Ctx = { params: Promise<{ chain: string; address: string }> };
 
 function body(c: CollectionRow) {
-  return { chainId: c.chainId, address: c.address, name: c.name, overrides: c.rules, rules: effectiveRules(c.rules) };
+  return { chainId: c.chainId, address: c.address, name: c.name, overrides: c.rules, rules: effectiveRules(c.rules), priority: c.priority };
 }
 
 /** GET: the collection's name, the rules it overrides, and the rules its analysis runs under. */
@@ -24,7 +24,7 @@ export async function GET(_req: Request, { params }: Ctx): Promise<Response> {
 }
 
 /**
- * POST `{name?, rules?}`: merge into the collection's settings. A key left out
+ * POST `{name?, rules?, priority?}`: merge into the collection's settings. A key left out
  * is left alone; a rule set to null goes back to its default. A changed rule
  * queues the collection for analysis, so its flags follow within a pass.
  */

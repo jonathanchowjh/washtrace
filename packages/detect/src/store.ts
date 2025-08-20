@@ -208,8 +208,15 @@ export class Store {
     return rows[0]!;
   }
 
+  /**
+   * Delete a collection and, by cascade, its data, but only while it is paused:
+   * the condition is in the SQL, so a resume racing the caller's own check can
+   * never lead to a live collection being wiped. False when it is not there or
+   * not paused; look it up to tell which.
+   */
   async removeCollection(chainId: number, address: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query('DELETE FROM washtrace.collections WHERE chain_id = $1 AND address = $2', [chainId, address]);
+    const { rowCount } = await this.pool.query(
+      'DELETE FROM washtrace.collections WHERE chain_id = $1 AND address = $2 AND paused_at IS NOT NULL', [chainId, address]);
     return (rowCount ?? 0) > 0;
   }
 

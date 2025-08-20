@@ -21,12 +21,27 @@ afterAll(async () => {
   await pg?.stop();
 });
 
+/** Tests clean up with this: removeCollection only deletes what is paused. */
+async function drop(chainId: number, address: string): Promise<void> {
+  await store.pause(chainId, address);
+  await store.removeCollection(chainId, address);
+}
+
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
     expect(await store.migrate()).toBe(8);
     expect(await store.migrate()).toBe(8);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
     expect(rows).toEqual([{ version: 8 }]);
+  });
+
+  it('removeCollection deletes nothing that is not paused', async () => {
+    await store.addCollection(1, w('d0e'), null, null);
+    expect(await store.removeCollection(1, w('d0e'))).toBe(false);
+    expect(await store.collection(1, w('d0e'))).not.toBeNull();
+    await store.pause(1, w('d0e'));
+    expect(await store.removeCollection(1, w('d0e'))).toBe(true);
+    expect(await store.collection(1, w('d0e'))).toBeNull();
   });
 
   it('adds a collection once, and lists it before any analysis', async () => {
@@ -42,7 +57,7 @@ describe('Store', () => {
     await store.setStart(id, 500);
     await store.setStart(id, 900);
     expect(await store.collection(1, w('1a7e'))).toMatchObject({ startBlock: 500, cursorBlock: 499 });
-    await store.removeCollection(1, w('1a7e'));
+    await drop(1, w('1a7e'));
   });
 
   it('stores a span and moves the cursor with it, queueing its wallets busiest first', async () => {
@@ -63,7 +78,7 @@ describe('Store', () => {
     const { lanes } = await store.fundingLanes(1, 10);
     expect(lanes).toEqual([{ collectionId: c.id, wallets: [b, a] }, { collectionId: other, wallets: [b, w('o1')] }]);
     expect((await store.fundingLanes(1, 1)).lanes.map((l) => l.wallets.length)).toEqual([1, 1]);
-    await store.removeCollection(1, w('0be'));
+    await drop(1, w('0be'));
   });
 
   it('pausing stops a collection\'s lane but not a wallet another collection shares', async () => {
@@ -86,8 +101,8 @@ describe('Store', () => {
     expect(await store.resume(1, w('9c2'))).toBe(false);
     await store.pool.query('UPDATE washtrace.collections SET paused_at = NULL');
     expect((await store.collection(1, w('9c2')))!.pausedAt).toBeNull();
-    await store.removeCollection(1, w('9c1'));
-    await store.removeCollection(1, w('9c2'));
+    await drop(1, w('9c1'));
+    await drop(1, w('9c2'));
   });
 
   it('watching a paused collection again resumes it, data intact', async () => {
@@ -97,7 +112,7 @@ describe('Store', () => {
     const again = await store.addCollection(1, w('9c3'), null, 1);
     expect(again).toEqual({ id, created: false });
     expect(await store.collection(1, w('9c3'))).toMatchObject({ pausedAt: null, transfers: 2 });
-    await store.removeCollection(1, w('9c3'));
+    await drop(1, w('9c3'));
   });
 
   it('profiles a collection from its transfers: the latest receiver holds the token', async () => {
@@ -116,7 +131,7 @@ describe('Store', () => {
     expect(await store.collection(1, w('de5c'))).toMatchObject({
       name: 'Terraforms', contract: { name: 'Terraforms', symbol: 'TERRAFORMS', creator: a, creationTx: '0xtx' },
     });
-    await store.removeCollection(1, w('de5c'));
+    await drop(1, w('de5c'));
   });
 
   it('stores funding and takes the wallet off the queue', async () => {
@@ -189,7 +204,7 @@ describe('Store', () => {
     const { id } = await store.addCollection(1, w('90e'), 'Gone', 1);
     const due = (await store.stale()).find((s) => s.id === id)!;
     expect(due).toMatchObject({ name: 'Gone', ranAt: null, tookMs: null });
-    await store.removeCollection(1, w('90e'));
+    await drop(1, w('90e'));
     await expect(store.saveAnalysis(id, due.version, analyze(input([])), 1, null)).resolves.toBeUndefined();
     expect(await store.history(id)).toEqual([]);
   });
