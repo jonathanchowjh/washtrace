@@ -104,7 +104,7 @@ export function ReadingPanel({ c, cov, why }: { c: CollectionRow; cov: Coverage;
         bar={cov.blocks ?? 0}
         value={c.cursorBlock === null ? 'Finding the deployment block…'
           : cov.behind === 0 ? `${plural(c.transfers, 'transfer')}, through the finalized head (block ${c.cursorBlock.toLocaleString()})`
-          : `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, ${plural(cov.behind ?? 0, 'block')} to go`}
+          : `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, ${plural(cov.behind ?? 0, 'block')} ${c.pausedAt === null ? 'to go' : 'unread'}`}
         affects="all three lenses. Unread history can move any share either way."
       >
         {c.error ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}

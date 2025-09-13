@@ -10,7 +10,7 @@ import { History, LensCards, RangeBar, RangeKey, Ranked, Trend } from '@/compone
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
-import { StopWatching } from '@/components/watch';
+import { CollectionControls } from '@/components/watch';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
@@ -133,8 +133,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         ) : null}
       </Section>
 
-      <Section title="Stop watching" lead="The worker stops reading it, and its transfers and analyses are dropped from the store.">
-        <StopWatching chainId={chainId} address={address} />
+      <Section title="Reading this collection" lead={c.pausedAt === null ? 'Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
+        <CollectionControls chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>
     </>
   );

@@ -111,9 +111,9 @@ export default async function WorkerPage() {
             <li key={`${c.chainId}/${c.address}`} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
               <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
               <span className="text-xs text-muted-foreground">
-                {c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
-                {' · '}{c.turn === 'paused' ? 'paused' : c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}
-                {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale ? ' · new data waiting' : ''}
+                {c.turn === 'paused' ? 'paused' : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
+                {c.turn === 'paused' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
+                {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale && c.turn !== 'paused' ? ' · new data waiting' : ''}
               </span>
               {c.error ? <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
             </li>

@@ -1,31 +1,30 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { connection } from 'next/server';
-import { messageOf, type CollectionRow, type PassRow } from '@washtrace/detect';
-import { ReadingPill } from '@/components/coverage';
-import { Empty, Head, Problem, Warn } from '@/components/head';
-import { HowWeLook, RangeBar } from '@/components/methods';
+import { messageOf, type CollectionRow as Collection, type PassRow } from '@washtrace/detect';
+import { Empty, Head, Problem } from '@/components/head';
+import { HowWeLook } from '@/components/methods';
+import { CollectionRow, COLS } from '@/components/collection-row';
 import { Refresh } from '@/components/refresh';
+import { CollectionTabs, type Tab } from '@/components/tabs';
 import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
-import { chainName } from '@/lib/chains';
 import { ConfigError } from '@/lib/config';
-import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
-import { coverage, range, rangeText, waiting, type Range } from '@/lib/metrics';
+import { short } from '@/lib/format';
+import { waiting } from '@/lib/metrics';
 import { store } from '@/lib/store';
-import { Time } from '@/components/time';
 
 export const metadata: Metadata = { title: 'Collections' };
 
-const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
 
 /**
  * Every watched collection with its answer: how much of its trading looks
  * like wash trading, from the strictest lens to the widest, and how far the
  * reading under that answer has got. The paper's Table 3, kept current.
  */
-export default async function Collections() {
+export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   await connection();
-  let rows: CollectionRow[];
+  const asked = (await searchParams).tab;
+  const tab: Tab = asked === 'paused' || asked === 'all' ? asked : 'sync';
+  let rows: Collection[];
   let analyze: PassRow | undefined;
   try {
     const s = store();
@@ -40,6 +39,8 @@ export default async function Collections() {
       </>
     );
   }
+  const counts = { sync: rows.filter((c) => c.pausedAt === null).length, paused: rows.filter((c) => c.pausedAt !== null).length, all: rows.length, behind: 0 };
+  const shown = tab === 'all' ? rows : rows.filter((c) => (c.pausedAt !== null) === (tab === 'paused'));
   const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
   const now = Date.now();
   return (
@@ -63,8 +64,12 @@ export default async function Collections() {
         </div>
       </WatchPanel>
 
+      {rows.length > 0 ? <CollectionTabs counts={counts} current={tab} /> : null}
+
       {rows.length === 0 ? (
         <div className="mt-4"><Empty>No collection is watched yet. Add one above, or <code className="font-mono text-xs">POST /api/collections</code>. The worker reads every transfer since it was deployed, then checks who funded the wallets that traded it.</Empty></div>
+      ) : shown.length === 0 ? (
+        <div className="mt-4"><Empty>{tab === 'paused' ? 'Nothing is paused. Press Pause on a collection to stop the worker reading new blocks while keeping its data.' : 'Every collection is paused. Open the Paused tab and press Resume to have the worker read a collection again.'}</Empty></div>
       ) : (
         <div className="mt-4 rounded-lg border bg-card">
           <div className={`hidden gap-6 border-b px-4 py-2 text-xs text-muted-foreground md:grid ${COLS}`}>
@@ -73,61 +78,9 @@ export default async function Collections() {
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{rows.map((c) => <Row key={c.id} c={c} why={waiting(c, analyze, names, now)} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} />)}</ul>
         </div>
       )}
     </>
-  );
-}
-
-function Share({ r, label, detail }: { r: Range | null; label: string; detail: string }) {
-  if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
-  return (
-    <div className="min-w-0">
-      <p className="flex items-baseline gap-1.5">
-        <span className="text-xl font-semibold text-foreground tabular-nums">{rangeText(r)}</span>
-        <span className="text-xs text-muted-foreground md:hidden">{label}</span>
-      </p>
-      <RangeBar range={r} className="mt-1.5 max-w-56" />
-      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
-    </div>
-  );
-}
-
-function Row({ c, why }: { c: CollectionRow; why: string }) {
-  const a = c.latest;
-  const cov = coverage(c);
-  const sales = a && range(a.totals, 'sales');
-  const volume = a && range(a.totals, 'volume');
-  const href = `/c/${c.chainId}/${c.address}`;
-  return (
-    <li className={`relative grid gap-x-6 gap-y-3 px-4 py-4 hover:bg-muted/40 ${COLS}`}>
-      <div className="min-w-0">
-        {/* The whole row opens the collection; the name is the link a screen reader announces. */}
-        <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
-        <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
-        <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
-        {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
-      </div>
-      {a === null ? (
-        <p className="text-sm text-muted-foreground md:col-span-2">{why}</p>
-      ) : (
-        <>
-          <Share
-            r={sales} label="of sales"
-            detail={sales ? `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
-          />
-          <Share
-            r={volume} label="of volume"
-            detail={volume ? `${ethRange(a.totals[volume.low].flaggedVolumeWei, a.totals[volume.high].flaggedVolumeWei)} of ${eth(a.totals.A.volumeWei)}` : 'No priced sale read yet'}
-          />
-        </>
-      )}
-      <div className="flex flex-col items-start gap-1">
-        <ReadingPill cov={cov} />
-        <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
-        {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses can still rise</p> : null}
-      </div>
-    </li>
   );
 }

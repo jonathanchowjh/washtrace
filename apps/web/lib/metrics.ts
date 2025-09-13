@@ -106,6 +106,8 @@ export function isRunning(p: PassRow): boolean {
  * another that takes a while.
  */
 export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number): string {
+  // Never analysed while paused, so promise nothing.
+  if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
   if (c.transfers === 0) return 'Waiting for its first transfers.';
   const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
   if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';

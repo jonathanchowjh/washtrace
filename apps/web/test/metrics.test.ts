@@ -108,6 +108,10 @@ describe('waiting', () => {
   const names = new Map([[7, 'Terraforms']]);
   const fresh = row({ latest: null });
 
+  it('promises nothing for a paused collection', () => {
+    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, NOW)).toBe('Paused · it is not analysed until you resume it.');
+  });
+
   it('waits for transfers when none are read', () => {
     expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, NOW)).toBe('Waiting for its first transfers.');
   });
