@@ -95,6 +95,20 @@ describe('coverage', () => {
     expect(progress(1)).toBe('100%');
   });
 
+  it('is starting, never complete, while the head is unknown', () => {
+    const c = coverage(row({ headBlock: null, cursorBlock: null, transfers: 0, wallets: 0, fundedWallets: 0, latest: null }));
+    expect(c.reading).toBe('starting');
+    expect(c.label).toBe('Starting');
+    expect(coverage(row({ headBlock: null, wallets: 0, fundedWallets: 0 })).reading).toBe('starting');
+  });
+
+  it('labels a paused collection paused, even with its cursor at its head', () => {
+    const c = coverage(row({ pausedAt: 5 }));
+    expect(c.reading).toBe('paused');
+    expect(c.label).toBe('Paused · read to block 1,000');
+    expect(coverage(row({ pausedAt: 5, cursorBlock: null, startBlock: null })).label).toBe('Paused · not read yet');
+  });
+
   it('is starting before the deployment block is known', () => {
     expect(coverage(row({ startBlock: null, cursorBlock: null })).reading).toBe('starting');
   });

@@ -59,7 +59,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'starting' | 'catching-up' | 'checking' | 'complete';
+export type Reading = 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -78,9 +78,10 @@ export interface Coverage {
  * How far the reading the numbers rest on has got. History comes first: with
  * blocks unread, any share can still move either way. Then wallets: with
  * money unread, the money lenses have missed links but not invented any, so
- * their shares are floors.
+ * their shares are floors. A paused collection is none of these: its head
+ * stops moving, so "up to date" would be a claim nobody is keeping true.
  */
-export function coverage(c: Pick<CollectionRow, 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'>): Coverage {
+export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'>): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
   const wallets = { checked: c.fundedWallets, of: c.wallets };
   const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
@@ -89,7 +90,9 @@ export function coverage(c: Pick<CollectionRow, 'startBlock' | 'cursorBlock' | '
   const unchecked = money && wallets.checked < wallets.of;
   const floor: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
   const base = { blocks, behind, wallets, money, floor };
-  if (c.cursorBlock === null || c.startBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
+  if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
+  // An unknown head cannot be caught up to.
+  if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
   if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };

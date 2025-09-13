@@ -194,7 +194,7 @@ describe('CollectionTabs', () => {
 });
 
 describe('CollectionRow', () => {
-  const base = { id: 1, chainId: 1, address: '0xabc', name: 'Demo', transfers: 5, latest: null, error: null, pausedAt: null, priority: false } as unknown as Parameters<typeof CollectionRow>[0]['c'];
+  const base = { id: 1, chainId: 1, address: '0xabc', name: 'Demo', transfers: 5, startBlock: 1, cursorBlock: 10, headBlock: 10, wallets: 0, fundedWallets: 0, latest: null, error: null, pausedAt: null, priority: false } as unknown as Parameters<typeof CollectionRow>[0]['c'];
 
   it('offers Pause in sync, and a press posts without leaving the list', async () => {
     const fetch = ok({ paused: true });

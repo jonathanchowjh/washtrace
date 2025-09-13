@@ -11,13 +11,14 @@ const PILL = {
   checking: 'bg-focus/12 text-focus',
   'catching-up': 'bg-focus/12 text-focus',
   starting: 'bg-muted text-muted-foreground',
+  paused: 'bg-muted text-muted-foreground',
 } as const;
 
 /** How far the reading under a collection's numbers has got, as one word or two. */
 export function ReadingPill({ cov }: { cov: Coverage }) {
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap', PILL[cov.reading])}>
-      <i aria-hidden className={cn('size-1.5 rounded-full bg-current', cov.reading !== 'complete' && 'animate-pulse')} />
+      <i aria-hidden className={cn('size-1.5 rounded-full bg-current', cov.reading !== 'complete' && cov.reading !== 'paused' && 'animate-pulse')} />
       {cov.label}
     </span>
   );
@@ -27,6 +28,7 @@ export function ReadingPill({ cov }: { cov: Coverage }) {
 export function trust(c: CollectionRow, cov: Coverage): string | null {
   // No analysis yet means no shares on screen; the empty state says why instead.
   if (c.latest === null) return null;
+  if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
   if (cov.floor.length > 0) return `${progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
@@ -44,6 +46,7 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
 export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Coverage; href: string }) {
   const stage = cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
+    : cov.reading === 'paused' ? { share: cov.blocks ?? 0, of: 'of its history read when paused' }
     : cov.reading === 'complete' ? { share: 1, of: 'read: every transfer, and every wallet the lenses need' }
     : null;
   return (
