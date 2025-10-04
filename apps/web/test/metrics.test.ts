@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { coverage, isRunning, progress, range, rangeText, summary, waiting } from '@/lib/metrics';
+import { coverage, unread, isRunning, progress, range, rangeText, summary, waiting } from '@/lib/metrics';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -107,6 +107,14 @@ describe('coverage', () => {
     expect(c.reading).toBe('paused');
     expect(c.label).toBe('Paused · read to block 1,000');
     expect(coverage(row({ pausedAt: 5, cursorBlock: null, startBlock: null })).label).toBe('Paused · not read yet');
+    expect(coverage(row({ pausedAt: 5, startBlock: 1, cursorBlock: 0 })).label).toBe('Paused · not read yet');
+  });
+
+  it('keeps the unread stretch of history unread when paused, and only then', () => {
+    const far = { startBlock: 100, cursorBlock: 500, headBlock: 1_000_000 };
+    expect(unread(coverage(row({ ...far, pausedAt: 5 })))).toBe(true);
+    expect(unread(coverage(row({ ...far })))).toBe(true);
+    expect(unread(coverage(row({ pausedAt: 5 })))).toBe(false);
   });
 
   it('is starting before the deployment block is known', () => {

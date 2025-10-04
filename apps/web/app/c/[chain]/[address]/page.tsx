@@ -16,7 +16,7 @@ import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { coverage, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -117,9 +117,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       {a && timeline && timeline.points.length > 0 ? (
         <Section
           title="When did it happen?"
-          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{cov.reading === 'catching-up' ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
+          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: cov.reading === 'catching-up' ? timeline.readThrough : null }} totals={a.totals} floor={cov.floor} now={Date.now()} zone={zone} />
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} floor={cov.floor} now={Date.now()} zone={zone} />
         </Section>
       ) : null}
 

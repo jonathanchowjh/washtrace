@@ -40,7 +40,6 @@ export function CollectionRow({ c, why }: { c: Collection; why: string }) {
         <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
-        {c.pausedAt !== null ? <p className="mt-1 text-xs font-medium text-foreground">Paused: not reading new blocks, data kept</p> : null}
         {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
       </div>
       {a === null ? (

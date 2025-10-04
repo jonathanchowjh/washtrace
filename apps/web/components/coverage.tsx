@@ -60,7 +60,7 @@ export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Covera
         <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : progress(stage.share)}</span>
         <div className="min-w-[11rem] flex-1">
           <p className="text-xs text-muted-foreground">{stage === null ? 'Finding where the collection begins' : stage.of}</p>
-          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} /></div>
+          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused'} /></div>
         </div>
       </div>
       <p className="max-w-xl text-xs text-muted-foreground">{trust(c, cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The three steps ↓</a></p>
@@ -68,27 +68,41 @@ export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Covera
   );
 }
 
-function Bar({ share }: { share: number }) {
+/** Never green when paused: a paused collection's head is frozen, so a full bar would claim it is current. */
+function Bar({ share, paused = false }: { share: number; paused?: boolean }) {
   return (
     <span aria-hidden className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
-      <i className={cn('block h-full rounded-full', share >= 1 ? 'bg-ok' : 'bg-muted-foreground')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
+      <i className={cn('block h-full rounded-full', share >= 1 && !paused ? 'bg-ok' : 'bg-muted-foreground')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
     </span>
   );
 }
 
-function Step({ n, title, figure, value, bar, affects, children }: { n: number; title: string; figure: ReactNode; value: ReactNode; bar?: number; affects: ReactNode; children?: ReactNode }) {
+function Step({ n, title, figure, value, bar, paused, affects, children }: { n: number; title: string; figure: ReactNode; value: ReactNode; bar?: number; paused?: boolean; affects: ReactNode; children?: ReactNode }) {
   return (
     <li className="relative flex flex-col gap-1 px-4 py-3.5">
       <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
         <span className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{n}</span>{title}
       </p>
       <p className="text-xl font-semibold text-foreground tabular-nums">{figure}</p>
-      {bar !== undefined ? <Bar share={bar} /> : null}
+      {bar !== undefined ? <Bar share={bar} paused={paused} /> : null}
       <p className="text-xs tabular-nums">{value}</p>
       {children}
       <p className="mt-auto pt-1.5 text-xs text-muted-foreground"><span className="font-medium text-body">Affects </span>{affects}</p>
     </li>
   );
+}
+
+/**
+ * Step 1's line. A paused collection's head stopped moving when it paused, so
+ * nothing computed from the head is said of it but where it had read to.
+ */
+function step1(c: CollectionRow, cov: Coverage): string {
+  const unread = c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock);
+  if (c.pausedAt !== null) return unread ? 'Not read yet · paused' : `${plural(c.transfers, 'transfer')} · read to block ${c.cursorBlock!.toLocaleString('en-US')} when paused`;
+  if (c.cursorBlock === null) return 'Finding the deployment block…';
+  if (cov.behind === null) return `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, head not known yet`;
+  if (cov.behind === 0) return `${plural(c.transfers, 'transfer')}, through the finalized head (block ${c.cursorBlock.toLocaleString()})`;
+  return `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, ${plural(cov.behind, 'block')} to go`;
 }
 
 /**
@@ -104,10 +118,8 @@ export function ReadingPanel({ c, cov, why }: { c: CollectionRow; cov: Coverage;
       <Step
         n={1} title="Transfers read"
         figure={cov.blocks === null ? '…' : progress(cov.blocks)}
-        bar={cov.blocks ?? 0}
-        value={c.cursorBlock === null ? 'Finding the deployment block…'
-          : cov.behind === 0 ? `${plural(c.transfers, 'transfer')}, through the finalized head (block ${c.cursorBlock.toLocaleString()})`
-          : `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, ${plural(cov.behind ?? 0, 'block')} ${c.pausedAt === null ? 'to go' : 'unread'}`}
+        bar={cov.blocks ?? 0} paused={cov.reading === 'paused'}
+        value={step1(c, cov)}
         affects="all three lenses. Unread history can move any share either way."
       >
         {c.error ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}

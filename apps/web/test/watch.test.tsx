@@ -1,3 +1,4 @@
+import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/api';
@@ -184,6 +185,11 @@ describe('CollectionTabs', () => {
     localStorage.setItem('washtrace.collections.tab', 'all');
     render(<CollectionTabs counts={counts} current="sync" />);
     expect((screen.getByLabelText('Open on') as HTMLSelectElement).value).toBe('all');
+  });
+
+  it('renders the server markup with sync selected while storage holds another', () => {
+    localStorage.setItem('washtrace.collections.tab', 'all');
+    expect(renderToString(<CollectionTabs counts={counts} current="sync" />)).toMatch(/<option value="sync" selected/);
   });
 
   it('remembers the Open on choice', () => {

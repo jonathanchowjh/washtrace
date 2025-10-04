@@ -86,16 +86,21 @@ export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cur
   const wallets = { checked: c.fundedWallets, of: c.wallets };
   const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
   const span = c.headBlock === null || c.startBlock === null ? null : c.headBlock - c.startBlock;
-  const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.min(1, (c.cursorBlock - c.startBlock) / span);
+  const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.max(0, Math.min(1, (c.cursorBlock - c.startBlock) / span));
   const unchecked = money && wallets.checked < wallets.of;
   const floor: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
   const base = { blocks, behind, wallets, money, floor };
-  if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
+  if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
   // An unknown head cannot be caught up to.
   if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
   if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
+}
+
+/** Whether history is still unread, paused or not: a pause does not read what was left. The history chart shades that stretch. */
+export function unread(cov: Pick<Coverage, 'behind'>): boolean {
+  return cov.behind !== null && cov.behind > BEHIND_BLOCKS;
 }
 
 /** A pass is running from when it starts until it finishes. The status route and the pages both decide it here. */
