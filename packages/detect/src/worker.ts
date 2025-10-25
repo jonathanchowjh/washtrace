@@ -3,9 +3,9 @@ import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
-import type { CollectionRow, FundingLane, StaleRow, Store } from './store.js';
+import type { CollectionRow, FundingLane, SettingSource, StaleRow, Store } from './store.js';
 
-/** What the worker reads from the environment on every pass, so a changed setting needs no restart. */
+/** What the worker reads from the environment and the console's settings on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
   /** RPC URL per chain id. A collection on a chain with none reports so, and waits. */
   rpc: ReadonlyMap<number, string>;
@@ -14,6 +14,8 @@ export interface WorkerConfig {
   etherscanUrl: string;
   /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
   followHops: number;
+  /** Where each set value came from, keyed by setting key. Never a secret's value: the store publishes this. */
+  sources: Record<string, SettingSource>;
 }
 
 /**
@@ -150,13 +152,22 @@ export class Worker {
   /** What each running job is doing now, so the keep-alive can say it again while a long step goes on. */
   /** The last heartbeat error logged, so an outage is one line and not one every 30 seconds. */
   private beatFailed = '';
+  /** The console's settings as last read, kept when a read fails so a store hiccup changes no setting. */
+  private settings: ReadonlyMap<string, string> = new Map();
+  /** The last settings error logged, so an outage is one line and not one a pass. */
+  private settingsFailed = '';
   private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
    * connection of its own with. It carries the password: never logged.
+   * `config` merges the environment with the console's settings it is given.
    */
-  constructor(private readonly store: Store, private readonly config: () => WorkerConfig, private readonly storeUrl: string) {}
+  constructor(
+    private readonly store: Store,
+    private readonly config: (settings: ReadonlyMap<string, string>) => WorkerConfig,
+    private readonly storeUrl: string,
+  ) {}
 
   start(): void {
     if (this.timers.length > 0) return;
@@ -200,6 +211,7 @@ export class Worker {
     alive.unref?.();
     try {
       const outcome = await this.store.locked(LOCK[job], false, async () => {
+        await this.loadSettings();
         await this.store.passStarted(job);
         try {
           const detail = await this[job]();
@@ -225,7 +237,7 @@ export class Worker {
    * the head first, then each backfill within its own slice of the budget.
    */
   async ingest(): Promise<string> {
-    const { rpc } = this.config();
+    const { rpc } = this.config(this.settings);
     const passEnd = Date.now() + BUDGET_MS;
     const collections = await this.store.collections();
     const total = { spans: 0, read: 0, blocks: 0 };
@@ -300,7 +312,7 @@ export class Worker {
 
   /** The Etherscan client for the current settings, or null when no key is set. */
   etherscanClient(): Etherscan | null {
-    const { etherscanKey, etherscanPerSecond, etherscanUrl } = this.config();
+    const { etherscanKey, etherscanPerSecond, etherscanUrl } = this.config(this.settings);
     if (etherscanKey === null) return null;
     const settings = `${etherscanKey} ${etherscanPerSecond} ${etherscanUrl}`;
     if (this.etherscan === null || this.etherscanSettings !== settings) {
@@ -312,7 +324,7 @@ export class Worker {
 
   /** Read the funding of wallets not yet read, collections taking turns, within the budget. */
   async fund(): Promise<string> {
-    const { followHops } = this.config();
+    const { followHops } = this.config(this.settings);
     const etherscan = this.etherscanClient();
     if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
@@ -350,7 +362,7 @@ export class Worker {
    * longer than one analysis, and the next pass sees what changed meanwhile.
    */
   async analyze(): Promise<string> {
-    const { etherscanKey } = this.config();
+    const { etherscanKey } = this.config(this.settings);
     const c = nextAnalysis(await this.store.stale(), Date.now());
     if (c === null) return 'nothing due';
     const name = c.name ?? `collection ${c.id}`;
@@ -380,6 +392,22 @@ export class Worker {
   }
 
   /** Record what `job` is doing and tell the store. Fail-soft: a heartbeat must never fail a pass. */
+  /**
+   * Read the console's settings and publish where each value came from, once
+   * a pass. A failure keeps the settings read last and lets the pass go on:
+   * the store being briefly away must not stop a pass that may not need it.
+   */
+  private async loadSettings(): Promise<void> {
+    try {
+      this.settings = await this.store.settings();
+      await this.store.reportSources(this.config(this.settings).sources);
+      this.settingsFailed = '';
+    } catch (err) {
+      if (this.settingsFailed !== messageOf(err)) console.warn('[washtrace] settings not read: %s', messageOf(err));
+      this.settingsFailed = messageOf(err);
+    }
+  }
+
   private async beat(job: Job, doing: string | null, subjectId: number | null): Promise<void> {
     this.current.set(job, { doing, subjectId });
     try {

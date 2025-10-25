@@ -18,7 +18,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   };
 }
 
-const CONFIG: WorkerConfig = { rpc: new Map([[1, 'https://secret.example/key']]), etherscanKey: 'secret', etherscanPerSecond: 4, etherscanUrl: 'https://api.etherscan.io/v2/api', followHops: 3 };
+const CONFIG: WorkerConfig = { rpc: new Map([[1, 'https://secret.example/key']]), etherscanKey: 'secret', etherscanPerSecond: 4, etherscanUrl: 'https://api.etherscan.io/v2/api', followHops: 3, sources: {} };
 
 function snapshot(more: Partial<Snapshot> = {}): Snapshot {
   return {

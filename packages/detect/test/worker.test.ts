@@ -43,7 +43,7 @@ describe('ingestTurns', () => {
 describe('Worker.ingest', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  const config: WorkerConfig = { rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 };
+  const config: WorkerConfig = { rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} };
 
   /** A worker on a stub store and a chain whose every span takes `spanMs` of a fake clock. */
   function setup(rows: CollectionRow[], spanMs: number) {
@@ -122,7 +122,7 @@ describe('Worker.fund', () => {
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
       fundingFailed: async () => {},
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
     expect(funded).toEqual(['c', 'a', 'f', 'b']);
@@ -133,7 +133,7 @@ describe('Worker.fund', () => {
 describe('Worker heartbeat', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 });
+  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} });
 
   it('does not fail a funding pass when the heartbeat write throws, and says so once', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -172,6 +172,68 @@ describe('Worker heartbeat', () => {
     expect(beats).toEqual(Array(4).fill(['analyze', 'Analyzing Terraforms', 7]));
     await vi.advanceTimersByTimeAsync(60_000);
     expect(beats).toHaveLength(4);
+  });
+});
+
+describe('Worker settings', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A store whose pass runs at once, recording what the worker reported. */
+  function stub(more: Record<string, unknown> = {}) {
+    const reported: unknown[] = [];
+    const store: any = {
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<void>) => { await fn(); return 'ran'; },
+      passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
+      settings: async () => new Map([['follow.hops', '2']]),
+      reportSources: async (s: unknown) => { reported.push(s); },
+      ...more,
+    };
+    return { store, reported };
+  }
+
+  it('loads the console settings once a pass, gives them to config, and reports where each came from', async () => {
+    const { store, reported } = stub();
+    const seen: ReadonlyMap<string, string>[] = [];
+    const sources = { 'follow.hops': { source: 'console' as const, value: '2' } };
+    const w = new Worker(store, (s) => {
+      seen.push(s);
+      return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: Number(s.get('follow.hops') ?? 0), sources };
+    }, '');
+    let hops = -1;
+    (w as any).analyze = async () => { hops = (w as any).config((w as any).settings).followHops; return 'done'; };
+    expect(await w.run('analyze')).toBe('ran');
+    expect(reported).toEqual([sources]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s.get('follow.hops') === '2')).toBe(true);
+    expect(hops).toBe(2);
+  });
+
+  it('still runs the pass, on the settings it had, when the store cannot give them', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const finished: string[] = [];
+    const { store } = stub({
+      settings: async () => { throw new Error('db down'); },
+      passFinished: async (_job: string, _ms: number, outcome: string) => { finished.push(outcome); },
+    });
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).analyze = async () => 'done';
+    expect(await w.run('analyze')).toBe('ran');
+    expect(await w.run('analyze')).toBe('ran');
+    expect(finished).toEqual(['ok', 'ok']);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('still runs the pass when reporting sources fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const finished: string[] = [];
+    const { store } = stub({
+      reportSources: async () => { throw new Error('db down'); },
+      passFinished: async (_job: string, _ms: number, outcome: string) => { finished.push(outcome); },
+    });
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).analyze = async () => 'done';
+    expect(await w.run('analyze')).toBe('ran');
+    expect(finished).toEqual(['ok']);
   });
 });
 
@@ -228,7 +290,7 @@ describe('Worker.analyze', () => {
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
       saveAnalysis: async (id: number) => { saved.push(id); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     const off: number[] = [];
     w.analyzeOff = async (request) => { off.push(request.id); return { analysis: {} as Analysis, through: 7 }; };
     expect(await w.analyze()).toBe('Doodles analyzed');
@@ -249,7 +311,7 @@ describe('Worker.analyze', () => {
       saveAnalysis: async (id: number, _version: number, _a: Analysis, _ms: number, through: number | null) => { saved.push([id, through]); },
     };
     const url = 'postgres://washtrace:secret@db:5432/washtrace';
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), url);
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), url);
     const sent: AnalysisRequest[] = [];
     w.analyzeOff = async (request) => { sent.push(request); return { analysis: {} as Analysis, through: 7 }; };
     await w.analyze();

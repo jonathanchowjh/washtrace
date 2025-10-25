@@ -271,7 +271,7 @@ describe('Store', () => {
   });
 
   it('analyzes a collection with its own rules', async () => {
-    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0 }), pg.getConnectionUri());
+    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri());
     // The thread's own body, in-process: the TS sources cannot start the thread.
     worker.analyzeOff = (request) => analyzeStored(store, request);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });

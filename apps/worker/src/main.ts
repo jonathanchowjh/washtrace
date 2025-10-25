@@ -29,15 +29,17 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-const worker = new Worker(store, () => workerConfig(process.env), url);
+// The environment wins over the console's settings, which each pass re-reads.
+const worker = new Worker(store, (s) => workerConfig(process.env, s), url);
 worker.start();
 
-const config = workerConfig(process.env);
+// Chain ids and on/off only: never an RPC URL or the key.
+const config = workerConfig(process.env, await store.settings().catch(() => new Map<string, string>()));
 console.info(
   '[worker] started: ingest every %ds, fund every %ds, analyze every %ds; RPC for %s; funding %s; following money %d hops out.',
   EVERY.ingest / 1000, EVERY.fund / 1000, EVERY.analyze / 1000,
-  config.rpc.size === 0 ? 'no chain (set WASHTRACE_RPC_<chainId>)' : `chain ${[...config.rpc.keys()].join(', ')}`,
-  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY), so SCC AU and AC are unavailable' : 'from Etherscan',
+  config.rpc.size === 0 ? 'no chain (set WASHTRACE_RPC_<chainId> or an RPC in Settings)' : `chain ${[...config.rpc.keys()].join(', ')}`,
+  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY or the key in Settings), so SCC AU and AC are unavailable' : 'from Etherscan',
   config.followHops,
 );
 

@@ -1,4 +1,5 @@
 import { ETHERSCAN_V2 } from './etherscan.js';
+import { SECRET_KEYS, type SettingSource } from './store.js';
 import type { WorkerConfig } from './worker.js';
 
 /**
@@ -32,15 +33,48 @@ export function rpcUrls(env: Env): Map<number, string> {
   return out;
 }
 
-/** Read on every pass, so the worker follows the environment it is given without being rebuilt. */
-export function workerConfig(env: Env): WorkerConfig {
-  const perSecond = Number(env.WASHTRACE_ETHERSCAN_RPS ?? '4');
+/**
+ * Read on every pass, so the worker follows the environment and the
+ * console's settings without being rebuilt. The environment wins, so a
+ * deployment can pin a value; an empty variable (copied from .env.example)
+ * counts as unset. Each setting key has one variable: `rpc.<chainId>` is
+ * `WASHTRACE_RPC_<chainId>`, `etherscan.key` is `WASHTRACE_ETHERSCAN_KEY`, and
+ * so on. `sources` says where each set value came from, never a secret's
+ * value, for the console to lock what the environment pinned.
+ */
+export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = new Map()): WorkerConfig {
+  const sources: Record<string, SettingSource> = {};
+  const pick = (key: string, variable: string): string | undefined => {
+    const shown = (value: string) => (SECRET_KEYS(key) ? null : value);
+    const fromEnv = env[variable]?.trim();
+    if (fromEnv) {
+      sources[key] = { source: 'env', value: shown(fromEnv) };
+      return fromEnv;
+    }
+    const fromConsole = settings.get(key)?.trim();
+    if (fromConsole) {
+      sources[key] = { source: 'console', value: shown(fromConsole) };
+      return fromConsole;
+    }
+    return undefined;
+  };
+  const rpc = new Map<number, string>();
+  const chains = new Set([...Object.keys(env), ...settings.keys()].flatMap((k) => {
+    const m = /^(?:WASHTRACE_RPC_|rpc\.)(\d+)$/.exec(k);
+    return m ? [Number(m[1])] : [];
+  }));
+  for (const id of [...chains].sort((a, b) => a - b)) {
+    const url = pick(`rpc.${id}`, `WASHTRACE_RPC_${id}`);
+    if (url !== undefined) rpc.set(id, url);
+  }
+  const perSecond = Number(pick('etherscan.rps', 'WASHTRACE_ETHERSCAN_RPS') ?? '4');
   return {
-    rpc: rpcUrls(env),
-    etherscanKey: env.WASHTRACE_ETHERSCAN_KEY || null,
+    rpc,
+    etherscanKey: pick('etherscan.key', 'WASHTRACE_ETHERSCAN_KEY') ?? null,
     etherscanPerSecond: Number.isFinite(perSecond) && perSecond > 0 ? perSecond : 4,
-    etherscanUrl: env.WASHTRACE_ETHERSCAN_URL || ETHERSCAN_V2,
-    followHops: hops(env.WASHTRACE_FOLLOW_HOPS),
+    etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL') ?? ETHERSCAN_V2,
+    followHops: hops(pick('follow.hops', 'WASHTRACE_FOLLOW_HOPS')),
+    sources,
   };
 }
 
