@@ -173,4 +173,36 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules_at timestamptz;
 -- reads it, analyses it nor checks its wallets until it is watched again.
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS paused_at timestamptz;
 `,
+  `
+-- Settings saved from the console. The worker reads them each pass; an
+-- environment variable for the same key wins over them.
+CREATE TABLE IF NOT EXISTS washtrace.settings (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text
+);
+
+-- Where each setting the worker uses came from, as the worker last said.
+-- Only the worker knows its own environment, and the console locks a field
+-- the environment sets. value is null for a secret: never kept here.
+CREATE TABLE IF NOT EXISTS washtrace.setting_sources (
+  key         text PRIMARY KEY,
+  source      text NOT NULL CHECK (source IN ('env', 'console')),
+  value       text,
+  reported_at timestamptz NOT NULL
+);
+
+-- A Test pressed in the console. The API writes the request and notifies;
+-- the worker, which alone calls chains, runs it and writes the result.
+CREATE TABLE IF NOT EXISTS washtrace.checks (
+  id           bigserial PRIMARY KEY,
+  kind         text NOT NULL CHECK (kind IN ('rpc', 'etherscan')),
+  chain_id     int,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  finished_at  timestamptz,
+  ok           bool,
+  detail       jsonb
+);
+`,
 ];

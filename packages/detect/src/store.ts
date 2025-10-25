@@ -129,6 +129,25 @@ export interface PassRow {
   subjectId: number | null;
 }
 
+/**
+ * The settings that hold a secret: an RPC URL carries its provider's key.
+ * Their values are kept in `settings`, which the worker needs, but never in
+ * `setting_sources`, which the API reads, nor in anything the API returns.
+ */
+export const SECRET_KEYS = (key: string): boolean => key.startsWith('rpc.') || key === 'etherscan.key';
+
+/** Where the worker found one setting. `value` is null for a secret. */
+export interface SettingSource {
+  source: 'env' | 'console';
+  value: string | null;
+}
+
+/** A Test the console asked the worker to run. */
+export type CheckKind = 'rpc' | 'etherscan';
+
+/** The channel `requestCheck` notifies, so a listening worker runs the check at once rather than next pass. */
+export const CHECKS_CHANNEL = 'washtrace_checks';
+
 /** A collection waiting for analysis, as `Store.stale` reads it. */
 export type StaleRow = Awaited<ReturnType<Store['stale']>>[number];
 
@@ -792,6 +811,96 @@ export class Store {
        FROM washtrace.passes ORDER BY job`,
     );
     return rows.map((r) => ({ job: r.job, startedAt: r.s * 1000, finishedAt: r.f === null ? null : r.f * 1000, tookMs: r.took_ms, outcome: r.outcome, detail: r.detail, heartbeatAt: r.h === null ? null : r.h * 1000, doing: r.doing, subjectId: r.subject_id }));
+  }
+
+  // ---- settings and checks ------------------------------------------------
+
+  /** Every setting saved from the console, secrets included: only the worker reads this whole. */
+  async settings(): Promise<Map<string, string>> {
+    const { rows } = await this.pool.query<{ key: string; value: string }>('SELECT key, value FROM washtrace.settings ORDER BY key');
+    return new Map(rows.map((r) => [r.key, r.value]));
+  }
+
+  /** Save a setting, or with null delete it so the default applies again. `actor` is who saved it. */
+  async setSetting(key: string, value: string | null, actor: string): Promise<void> {
+    if (value === null) {
+      await this.pool.query('DELETE FROM washtrace.settings WHERE key = $1', [key]);
+      return;
+    }
+    await this.pool.query(
+      `INSERT INTO washtrace.settings (key, value, updated_by) VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [key, value, actor],
+    );
+  }
+
+  /**
+   * The worker says where each setting it uses came from, replacing what it
+   * said last: a setting it no longer uses is gone from the report. A secret's
+   * value is blanked here too, whatever the caller passed, so it never
+   * reaches a table the API reads.
+   */
+  async reportSources(s: Record<string, SettingSource>): Promise<void> {
+    const keys = Object.keys(s);
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('DELETE FROM washtrace.setting_sources');
+      if (keys.length > 0) {
+        await c.query(
+          `INSERT INTO washtrace.setting_sources (key, source, value, reported_at)
+           SELECT k, src, v, now() FROM unnest($1::text[], $2::text[], $3::text[]) AS u(k, src, v)`,
+          [keys, keys.map((k) => s[k]!.source), keys.map((k) => (SECRET_KEYS(k) ? null : s[k]!.value))],
+        );
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  /** Where the worker last said each setting came from. Never a secret's value. */
+  async sources(): Promise<Record<string, SettingSource & { reportedAt: number }>> {
+    const { rows } = await this.pool.query(
+      'SELECT key, source, value, extract(epoch FROM reported_at)::float8 AS reported FROM washtrace.setting_sources ORDER BY key',
+    );
+    return Object.fromEntries(rows.map((r) => [r.key, { source: r.source, value: r.value, reportedAt: r.reported * 1000 }]));
+  }
+
+  /**
+   * Ask the worker to run a Test, and tell it at once. The insert and the
+   * notify are one statement, so the notify goes out when the row is
+   * committed and a woken worker always finds it. Returns the check's id,
+   * which the console polls.
+   */
+  async requestCheck(kind: CheckKind, chainId: number | null): Promise<number> {
+    const { rows } = await this.pool.query<{ id: string }>(
+      `WITH i AS (INSERT INTO washtrace.checks (kind, chain_id) VALUES ($1, $2) RETURNING id)
+       SELECT id, pg_notify($3, id::text) FROM i`,
+      [kind, chainId, CHECKS_CHANNEL],
+    );
+    return Number(rows[0]!.id);
+  }
+
+  /** Checks requested and not yet finished, oldest first. */
+  async pendingChecks(): Promise<{ id: number; kind: CheckKind; chainId: number | null }[]> {
+    const { rows } = await this.pool.query('SELECT id, kind, chain_id FROM washtrace.checks WHERE finished_at IS NULL ORDER BY id');
+    return rows.map((r) => ({ id: Number(r.id), kind: r.kind, chainId: r.chain_id }));
+  }
+
+  /** Record a check's result. `detail` is shown in the console, so it must never hold a URL or a key. */
+  async finishCheck(id: number, ok: boolean, detail: Record<string, unknown>): Promise<void> {
+    await this.pool.query('UPDATE washtrace.checks SET finished_at = now(), ok = $2, detail = $3 WHERE id = $1', [id, ok, JSON.stringify(detail)]);
+  }
+
+  /** One check as the console polls it, or null when there is no such check. */
+  async check(id: number): Promise<{ finished: boolean; ok: boolean | null; detail: Record<string, unknown> | null } | null> {
+    const { rows } = await this.pool.query('SELECT finished_at IS NOT NULL AS finished, ok, detail FROM washtrace.checks WHERE id = $1', [id]);
+    const r = rows[0];
+    return r ? { finished: r.finished, ok: r.ok, detail: r.detail } : null;
   }
 }
 

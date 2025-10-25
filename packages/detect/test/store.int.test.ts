@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { Store } from '../src/store.js';
+import pgClient from 'pg';
+import { SECRET_KEYS, Store } from '../src/store.js';
 import { analyze } from '../src/methods.js';
 import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
@@ -29,10 +30,10 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(8);
-    expect(await store.migrate()).toBe(8);
+    expect(await store.migrate()).toBe(9);
+    expect(await store.migrate()).toBe(9);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 8 }]);
+    expect(rows).toEqual([{ version: 9 }]);
   });
 
   it('removeCollection deletes nothing that is not paused', async () => {
@@ -320,6 +321,71 @@ describe('Store', () => {
       const [c] = await store.collections();
       await store.ingest(c!.id, 1, [], c!.cursorBlock!, [w('m1')]);
       expect(await depthOf(w('m1'))).toBe(0);
+    });
+  });
+
+  describe('settings, where they came from, and checks', () => {
+    it('round-trips a setting, and null deletes it', async () => {
+      expect(await store.settings()).toEqual(new Map());
+      await store.setSetting('follow.hops', '2', 'alice');
+      await store.setSetting('follow.hops', '3', 'bob');
+      await store.setSetting('etherscan.key', 'k-secret', 'alice');
+      expect(await store.settings()).toEqual(new Map([['etherscan.key', 'k-secret'], ['follow.hops', '3']]));
+      const { rows } = await store.pool.query(`SELECT updated_by FROM washtrace.settings WHERE key = 'follow.hops'`);
+      expect(rows).toEqual([{ updated_by: 'bob' }]);
+      await store.setSetting('follow.hops', null, 'bob');
+      await store.setSetting('etherscan.key', null, 'bob');
+      expect(await store.settings()).toEqual(new Map());
+    });
+
+    it('knows which keys are secret', () => {
+      expect(['rpc.1', 'rpc.8453', 'etherscan.key'].every(SECRET_KEYS)).toBe(true);
+      expect(['etherscan.rps', 'etherscan.url', 'follow.hops'].some(SECRET_KEYS)).toBe(false);
+    });
+
+    it('replaces the earlier report of where settings came from, and never keeps a secret', async () => {
+      await store.reportSources({ 'rpc.1': { source: 'env', value: null }, 'follow.hops': { source: 'env', value: '2' } });
+      await store.reportSources({
+        'etherscan.rps': { source: 'console', value: '5' },
+        // A caller that forgot to blank a secret: the store blanks it.
+        'rpc.1': { source: 'console', value: 'https://rpc.example/key' },
+      });
+      const sources = await store.sources();
+      expect(Object.keys(sources).sort()).toEqual(['etherscan.rps', 'rpc.1']);
+      expect(sources['etherscan.rps']).toMatchObject({ source: 'console', value: '5' });
+      expect(sources['rpc.1']).toMatchObject({ source: 'console', value: null });
+      expect(sources['rpc.1']!.reportedAt).toBeGreaterThan(Date.now() - 60_000);
+      expect(JSON.stringify(sources)).not.toContain('https');
+    });
+
+    it('keeps a requested check pending until it is finished', async () => {
+      const id = await store.requestCheck('rpc', 1);
+      const other = await store.requestCheck('etherscan', null);
+      expect(await store.check(id)).toEqual({ finished: false, ok: null, detail: null });
+      expect(await store.pendingChecks()).toEqual([{ id, kind: 'rpc', chainId: 1 }, { id: other, kind: 'etherscan', chainId: null }]);
+      await store.finishCheck(id, true, { finalized: 100, archive: true, logs: false });
+      expect(await store.check(id)).toEqual({ finished: true, ok: true, detail: { finalized: 100, archive: true, logs: false } });
+      expect(await store.pendingChecks()).toEqual([{ id: other, kind: 'etherscan', chainId: null }]);
+      await store.finishCheck(other, false, { error: 'timed out' });
+      expect(await store.pendingChecks()).toEqual([]);
+      expect(await store.check(999_999)).toBeNull();
+    });
+
+    it('tells a listener on another connection that a check was requested', async () => {
+      const listener = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+      await listener.connect();
+      try {
+        await listener.query('LISTEN washtrace_checks');
+        const heard = new Promise<string | undefined>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('no notify within 5s')), 5_000);
+          listener.on('notification', (n) => { clearTimeout(timer); resolve(n.channel); });
+        });
+        const id = await store.requestCheck('rpc', 1);
+        expect(await heard).toBe('washtrace_checks');
+        await store.finishCheck(id, true, {});
+      } finally {
+        await listener.end();
+      }
     });
   });
 });
