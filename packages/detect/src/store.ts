@@ -838,13 +838,17 @@ export class Store {
    * The worker says where each setting it uses came from, replacing what it
    * said last: a setting it no longer uses is gone from the report. A secret's
    * value is blanked here too, whatever the caller passed, so it never
-   * reaches a table the API reads.
+   * reaches a table the API reads. Reports are taken one at a time: the
+   * worker's three jobs start together and each reports, and two
+   * delete-then-insert transactions at once collide on the key. EXCLUSIVE
+   * still lets the API read the table meanwhile.
    */
   async reportSources(s: Record<string, SettingSource>): Promise<void> {
     const keys = Object.keys(s);
     const c = await this.pool.connect();
     try {
       await c.query('BEGIN');
+      await c.query('LOCK TABLE washtrace.setting_sources IN EXCLUSIVE MODE');
       await c.query('DELETE FROM washtrace.setting_sources');
       if (keys.length > 0) {
         await c.query(

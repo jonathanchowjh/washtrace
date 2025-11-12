@@ -150,13 +150,14 @@ export class Worker {
   /** The last error logged per collection, so an outage is one line and not one a minute. */
   private readonly logged = new Map<number, string>();
   /** What each running job is doing now, so the keep-alive can say it again while a long step goes on. */
+  private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
   /** The last heartbeat error logged, so an outage is one line and not one every 30 seconds. */
   private beatFailed = '';
   /** The console's settings as last read, kept when a read fails so a store hiccup changes no setting. */
   private settings: ReadonlyMap<string, string> = new Map();
-  /** The last settings error logged, so an outage is one line and not one a pass. */
-  private settingsFailed = '';
-  private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
+  /** The last settings read and sources report errors logged, so an outage is one line and not one a pass. */
+  private readFailed = '';
+  private reportFailed = '';
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -391,23 +392,28 @@ export class Worker {
     return analyzeInThread(request);
   }
 
-  /** Record what `job` is doing and tell the store. Fail-soft: a heartbeat must never fail a pass. */
   /**
    * Read the console's settings and publish where each value came from, once
-   * a pass. A failure keeps the settings read last and lets the pass go on:
-   * the store being briefly away must not stop a pass that may not need it.
+   * a pass. Either failing lets the pass go on, a failed read on the settings
+   * read last: the store being briefly away must not stop a pass that may not
+   * need it.
    */
   private async loadSettings(): Promise<void> {
     try {
       this.settings = await this.store.settings();
-      await this.store.reportSources(this.config(this.settings).sources);
-      this.settingsFailed = '';
     } catch (err) {
-      if (this.settingsFailed !== messageOf(err)) console.warn('[washtrace] settings not read: %s', messageOf(err));
-      this.settingsFailed = messageOf(err);
+      if (this.readFailed !== messageOf(err)) console.warn('[washtrace] settings not read: %s', messageOf(err));
+      this.readFailed = messageOf(err);
+    }
+    try {
+      await this.store.reportSources(this.config(this.settings).sources);
+    } catch (err) {
+      if (this.reportFailed !== messageOf(err)) console.warn('[washtrace] settings sources not reported: %s', messageOf(err));
+      this.reportFailed = messageOf(err);
     }
   }
 
+  /** Record what `job` is doing and tell the store. Fail-soft: a heartbeat must never fail a pass. */
   private async beat(job: Job, doing: string | null, subjectId: number | null): Promise<void> {
     this.current.set(job, { doing, subjectId });
     try {

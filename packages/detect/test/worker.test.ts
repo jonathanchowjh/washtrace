@@ -192,7 +192,8 @@ describe('Worker settings', () => {
   }
 
   it('loads the console settings once a pass, gives them to config, and reports where each came from', async () => {
-    const { store, reported } = stub();
+    let reads = 0;
+    const { store, reported } = stub({ settings: async () => { reads += 1; return new Map([['follow.hops', '2']]); } });
     const seen: ReadonlyMap<string, string>[] = [];
     const sources = { 'follow.hops': { source: 'console' as const, value: '2' } };
     const w = new Worker(store, (s) => {
@@ -202,29 +203,39 @@ describe('Worker settings', () => {
     let hops = -1;
     (w as any).analyze = async () => { hops = (w as any).config((w as any).settings).followHops; return 'done'; };
     expect(await w.run('analyze')).toBe('ran');
+    expect(reads).toBe(1);
     expect(reported).toEqual([sources]);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((s) => s.get('follow.hops') === '2')).toBe(true);
     expect(hops).toBe(2);
+    expect(await w.run('analyze')).toBe('ran');
+    expect(reads).toBe(2);
   });
 
   it('still runs the pass, on the settings it had, when the store cannot give them', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const finished: string[] = [];
+    let reads = 0;
     const { store } = stub({
-      settings: async () => { throw new Error('db down'); },
+      settings: async () => { if (++reads > 1) throw new Error('db down'); return new Map([['follow.hops', '2']]); },
       passFinished: async (_job: string, _ms: number, outcome: string) => { finished.push(outcome); },
     });
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
-    (w as any).analyze = async () => 'done';
+    const seen: ReadonlyMap<string, string>[] = [];
+    const w = new Worker(store, (s) => { seen.push(s); return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }; }, '');
+    (w as any).analyze = async () => { (w as any).config((w as any).settings); return 'done'; };
+    expect(await w.run('analyze')).toBe('ran');
+    seen.length = 0;
     expect(await w.run('analyze')).toBe('ran');
     expect(await w.run('analyze')).toBe('ran');
-    expect(finished).toEqual(['ok', 'ok']);
+    expect(finished).toEqual(['ok', 'ok', 'ok']);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s.get('follow.hops') === '2')).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('settings not read');
   });
 
-  it('still runs the pass when reporting sources fails', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('still runs the pass when reporting sources fails, and says the report failed, once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const finished: string[] = [];
     const { store } = stub({
       reportSources: async () => { throw new Error('db down'); },
@@ -233,7 +244,10 @@ describe('Worker settings', () => {
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     (w as any).analyze = async () => 'done';
     expect(await w.run('analyze')).toBe('ran');
-    expect(finished).toEqual(['ok']);
+    expect(await w.run('analyze')).toBe('ran');
+    expect(finished).toEqual(['ok', 'ok']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('settings sources not reported');
   });
 });
 

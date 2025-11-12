@@ -358,6 +358,18 @@ describe('Store', () => {
       expect(JSON.stringify(sources)).not.toContain('https');
     });
 
+    it('takes reports from passes that run at once, keeping the last', async () => {
+      // ingest, fund and analyze start together and each reports where settings came from.
+      const report = (n: number) => ({ 'follow.hops': { source: 'console' as const, value: String(n) }, [`rpc.${n}`]: { source: 'env' as const, value: null } });
+      for (let round = 0; round < 5; round++) {
+        await expect(Promise.all([1, 2, 3].map((n) => store.reportSources(report(n))))).resolves.toBeDefined();
+      }
+      await store.reportSources(report(4));
+      const sources = await store.sources();
+      expect(Object.keys(sources).sort()).toEqual(['follow.hops', 'rpc.4']);
+      expect(sources['follow.hops']).toMatchObject({ source: 'console', value: '4' });
+    });
+
     it('keeps a requested check pending until it is finished', async () => {
       const id = await store.requestCheck('rpc', 1);
       const other = await store.requestCheck('etherscan', null);
