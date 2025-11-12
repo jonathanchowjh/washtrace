@@ -1,10 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
 import { SECRET_KEYS, Store } from '../src/store.js';
 import { analyze } from '../src/methods.js';
 import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
+import { Chain } from '../src/chain.js';
+import { Etherscan } from '../src/etherscan.js';
+import { workerConfig } from '../src/env.js';
+import { HttpRequestError } from 'viem';
 import { chain, flow, input, w } from './fixtures.js';
 
 let pg: StartedPostgreSqlContainer;
@@ -397,6 +401,222 @@ describe('Store', () => {
         await store.finishCheck(id, true, {});
       } finally {
         await listener.end();
+      }
+    });
+  });
+
+  describe('the worker running checks', () => {
+    const RPC = 'https://rpc.example/v2/RPCSECRET0123456789';
+    const KEY = 'ESKEYSECRET987654321';
+    /** A worker on the real store whose chain and Etherscan clients never touch a network. */
+    function checker(env: Record<string, string> = {}, check: Chain['check'] = async () => ({ finalized: 26_253_624, archive: true, logs: false })) {
+      const worker = new Worker(store, (s) => workerConfig(env, s), pg.getConnectionUri());
+      const urls: string[] = [];
+      worker.chain = (chainId, url) => {
+        urls.push(url);
+        const c = new Chain(chainId, url);
+        c.check = check;
+        return c;
+      };
+      return { worker, urls };
+    }
+
+    it('finishes a requested RPC check with what the chain answered, and no URL', async () => {
+      const id = await store.requestCheck('rpc', 1);
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC });
+      expect(await worker.runChecks()).toBe(1);
+      const done = await store.check(id);
+      expect(done).toEqual({ finished: true, ok: true, detail: { finalized: 26_253_624, archive: true, logs: false } });
+      expect(JSON.stringify(done)).not.toContain('https');
+      expect(await worker.runChecks()).toBe(0);
+    });
+
+    it('tests the URL saved a moment ago, not the one read at the last pass', async () => {
+      const { worker, urls } = checker();
+      (worker as any).settings = new Map([['rpc.1', 'https://old.example/rpc']]);
+      await store.setSetting('rpc.1', 'https://fresh.example/rpc', 'alice');
+      try {
+        await store.requestCheck('rpc', 1);
+        await worker.runChecks();
+        expect(urls).toEqual(['https://fresh.example/rpc']);
+        // A store that cannot be read falls back to the settings read last.
+        const read = store.settings;
+        store.settings = async () => { throw new Error('store away'); };
+        try {
+          await store.requestCheck('rpc', 1);
+          await worker.runChecks();
+        } finally {
+          store.settings = read;
+        }
+        expect(urls).toEqual(['https://fresh.example/rpc', 'https://old.example/rpc']);
+      } finally {
+        await store.setSetting('rpc.1', null, 'alice');
+      }
+    });
+
+    it('never keeps a short key a provider echoes without the scheme, nor one it echoes decoded', async () => {
+      const cases = [
+        { url: 'http://127.0.0.1:8545/v2/Sh0rtK3y', echo: '127.0.0.1:8545/v2/Sh0rtK3y refused', leaks: ['127.0.0.1:8545', 'Sh0rtK3y'] },
+        { url: 'https://rpc.example/v2/ab%2Bcd%2Fefghijklmno', echo: 'key ab+cd/efghijklmno refused', leaks: ['ab+cd/efghijklmno', 'ab%2Bcd%2Fefghijklmno'] },
+        // A key in the subdomain, echoed as the host alone.
+        { url: 'https://SECRETLABEL12345.rpc.example/', echo: 'no route to SECRETLABEL12345.rpc.example refused', leaks: ['SECRETLABEL12345'] },
+        // A query value's '+' is a space once decoded.
+        { url: 'https://rpc.example/v2?key=ab+cd+efgh', echo: 'key ab cd efgh refused', leaks: ['ab cd efgh'] },
+        // A proxy echoing the Authorization header it was sent: base64 of user:password.
+        { url: 'https://alice:p%40ss%2Fw0rd@rpc.example/', echo: 'header Basic YWxpY2U6cEBzcy93MHJk refused', leaks: ['YWxpY2U6cEBzcy93MHJk'] },
+      ];
+      for (const { url, echo, leaks } of cases) {
+        const id = await store.requestCheck('rpc', 1);
+        const { worker } = checker({ WASHTRACE_RPC_1: url }, async () => {
+          throw new HttpRequestError({ url, status: 401, details: echo });
+        });
+        await worker.runChecks();
+        const done = (await store.check(id))!;
+        expect(done.ok).toBe(false);
+        // The short message and details came through, minus the secrets.
+        expect(String(done.detail?.error)).toMatch(/^HTTP request failed\. .*refused$/);
+        for (const leak of leaks) expect(JSON.stringify(done)).not.toContain(leak);
+      }
+    });
+
+    it('lets every check finish before it gives up the run over one that could not be saved', async () => {
+      const first = await store.requestCheck('rpc', 1);
+      const second = await store.requestCheck('rpc', 1);
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC });
+      const finish = store.finishCheck;
+      store.finishCheck = async (id, ok, detail) => {
+        if (id === first) throw new Error('store away');
+        await new Promise((r) => setTimeout(r, 200));
+        return finish.call(store, id, ok, detail);
+      };
+      try {
+        await expect(worker.runChecks()).rejects.toThrow('store away');
+        expect((await store.check(second))!.finished).toBe(true);
+      } finally {
+        store.finishCheck = finish;
+        await store.finishCheck(first, false, { error: 'test done' });
+      }
+    });
+
+    it('never keeps a URL or a key from an error', async () => {
+      const id = await store.requestCheck('rpc', 1);
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC, WASHTRACE_ETHERSCAN_KEY: KEY }, async () => {
+        throw new Error(`HTTP request failed.\n\nStatus: 401\nURL: ${RPC}\nDetails: key ${KEY} refused at http://other.example/x?apikey=${KEY}`);
+      });
+      await worker.runChecks();
+      const done = (await store.check(id))!;
+      expect(done.ok).toBe(false);
+      expect(typeof done.detail?.error).toBe('string');
+      const text = JSON.stringify(done);
+      for (const leak of ['https', 'http://', 'RPCSECRET0123456789', KEY]) expect(text).not.toContain(leak);
+      // Etherscan's own URL carries the key in its query.
+      const es = await store.requestCheck('etherscan', 1);
+      worker.etherscanClient = () => {
+        const e = new Etherscan(KEY);
+        e.ping = async () => { throw new Error(`fetch failed for https://api.etherscan.io/v2/api?chainid=1&apikey=${KEY}`); };
+        return e;
+      };
+      await worker.runChecks();
+      const failed = JSON.stringify(await store.check(es));
+      expect(failed).toContain('"ok":false');
+      for (const leak of ['https', 'apikey', KEY]) expect(failed).not.toContain(leak);
+    });
+
+    it('expires a check asked for more than 5 minutes ago instead of running it', async () => {
+      const id = await store.requestCheck('rpc', 1);
+      await store.pool.query(`UPDATE washtrace.checks SET requested_at = now() - interval '6 minutes' WHERE id = $1`, [id]);
+      const { worker, urls } = checker({ WASHTRACE_RPC_1: RPC });
+      expect(await worker.runChecks()).toBe(1);
+      expect(await store.check(id)).toEqual({ finished: true, ok: false, detail: { error: 'expired' } });
+      expect(urls).toEqual([]);
+    });
+
+    it('finishes a malformed check with an error rather than throwing', async () => {
+      const id = await store.requestCheck('rpc', null);
+      const { worker, urls } = checker({ WASHTRACE_RPC_1: RPC });
+      expect(await worker.runChecks()).toBe(1);
+      const done = (await store.check(id))!;
+      expect(done).toMatchObject({ finished: true, ok: false });
+      expect(done.detail?.error).toMatch(/chain/i);
+      expect(urls).toEqual([]);
+    });
+
+    it('says what is missing: an Etherscan key, or an RPC for the chain', async () => {
+      const noKey = await store.requestCheck('etherscan', 1);
+      const noRpc = await store.requestCheck('rpc', 5);
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC });
+      expect(await worker.runChecks()).toBe(2);
+      expect(await store.check(noKey)).toEqual({ finished: true, ok: false, detail: { error: 'No Etherscan key is set' } });
+      expect(await store.check(noRpc)).toEqual({ finished: true, ok: false, detail: { error: 'No RPC is set for chain 5' } });
+    });
+
+    it('finishes an Etherscan check ok when Etherscan answers', async () => {
+      const id = await store.requestCheck('etherscan', 1);
+      const { worker } = checker({ WASHTRACE_ETHERSCAN_KEY: KEY });
+      const pinged: number[] = [];
+      worker.etherscanClient = () => {
+        const e = new Etherscan(KEY);
+        e.ping = async (chainId) => { pinged.push(chainId); };
+        return e;
+      };
+      await worker.runChecks();
+      expect(pinged).toEqual([1]);
+      expect(await store.check(id)).toMatchObject({ finished: true, ok: true });
+    });
+
+    it('runs a check as soon as it is requested, one run at a time, until stopped', async () => {
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC });
+      const run = worker.runChecks.bind(worker);
+      let running = 0, most = 0, runs = 0;
+      worker.runChecks = async () => {
+        running += 1; runs += 1; most = Math.max(most, running);
+        try {
+          await new Promise((r) => setTimeout(r, 200));
+          return await run();
+        } finally {
+          running -= 1;
+        }
+      };
+      await worker.listen();
+      try {
+        const ids = [await store.requestCheck('rpc', 1), await store.requestCheck('rpc', 1), await store.requestCheck('rpc', 1)];
+        const until = Date.now() + 5_000;
+        while (Date.now() < until && (await Promise.all(ids.map((i) => store.check(i)))).some((c) => !c!.finished)) await new Promise((r) => setTimeout(r, 50));
+        for (const i of ids) expect(await store.check(i)).toMatchObject({ finished: true, ok: true });
+        expect(most).toBe(1);
+        expect(runs).toBeGreaterThanOrEqual(2);
+      } finally {
+        worker.stop();
+      }
+      // Stopped: a request is no longer heard.
+      await new Promise((r) => setTimeout(r, 300));
+      const before = runs;
+      const late = await store.requestCheck('rpc', 1);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(runs).toBe(before);
+      await store.finishCheck(late, false, { error: 'test done' });
+    });
+
+    it('listens again after its connection is lost', async () => {
+      const { worker } = checker({ WASHTRACE_RPC_1: RPC });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await worker.listen();
+      try {
+        const { rowCount } = await store.pool.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'washtrace-checks'`);
+        expect(rowCount).toBe(1);
+        const until = Date.now() + 15_000;
+        while (Date.now() < until && (await store.pool.query(`SELECT 1 FROM pg_stat_activity WHERE application_name = 'washtrace-checks' AND query ILIKE 'LISTEN%'`)).rowCount === 0) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        const id = await store.requestCheck('rpc', 1);
+        while (Date.now() < until && !(await store.check(id))!.finished) await new Promise((r) => setTimeout(r, 50));
+        expect(await store.check(id)).toMatchObject({ finished: true, ok: true });
+        // One line, and never the store's URL with its password.
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]!.slice(1))).not.toContain(pg.getPassword());
+      } finally {
+        worker.stop();
+        warn.mockRestore();
       }
     });
   });

@@ -4,8 +4,9 @@ import { EVERY, Store, Worker, messageOf, storeUrl, workerConfig } from '@washtr
 /**
  * The worker service: the polling half of washtrace, as its own process.
  *
- * It reads chains and Etherscan on timers and writes the store. It serves no
- * API; the api service reads what it wrote. Run one, or several: each pass
+ * It reads chains and Etherscan on timers and writes the store, and runs the
+ * console's Tests of an RPC or a key when asked. It serves no API; the api
+ * service reads what it wrote. Run one, or several: each pass
  * takes its job's advisory lock without waiting, so N replicas do one
  * worker's work, and a replica that dies mid-pass leaves the lock to the next.
  *
@@ -32,6 +33,8 @@ for (let attempt = 1; ; attempt++) {
 // The environment wins over the console's settings, which each pass re-reads.
 const worker = new Worker(store, (s) => workerConfig(process.env, s), url);
 worker.start();
+// A Test asked for in the console is heard at once over LISTEN, not next pass.
+void worker.listen();
 
 // Chain ids and on/off only: never an RPC URL or the key.
 const config = workerConfig(process.env, await store.settings().catch(() => new Map<string, string>()));

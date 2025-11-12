@@ -1,9 +1,10 @@
+import pg from 'pg';
 import { analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
-import type { CollectionRow, FundingLane, SettingSource, StaleRow, Store } from './store.js';
+import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
 
 /** What the worker reads from the environment and the console's settings on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -128,6 +129,20 @@ export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow 
 /** Each job's advisory lock key. Only one replica runs a job at a time. */
 const LOCK: Readonly<Record<Job, number>> = { ingest: 1, fund: 2, analyze: 3 };
 
+/** The checks' advisory lock key: every replica hears a request, and one runs it. */
+const CHECKS_LOCK = 4;
+
+/**
+ * A check asked for longer ago than this is finished as expired, not run.
+ * The page that asked stopped polling after 20 seconds, and a URL tested now
+ * may no longer be the one it asked about.
+ */
+export const CHECK_EXPIRY_MS = 5 * 60_000;
+
+/** The listener's wait before connecting again grows by this each failure in a row, up to a minute. */
+const RELISTEN_MS = 5_000;
+const RELISTEN_MAX_MS = 60_000;
+
 /**
  * The polling half of the service. Three jobs on intervals: ingest reads new
  * finalized transfers per collection, fund reads the money of each wallet
@@ -158,6 +173,15 @@ export class Worker {
   /** The last settings read and sources report errors logged, so an outage is one line and not one a pass. */
   private readFailed = '';
   private reportFailed = '';
+  /** The connection that hears check requests, while listening. It holds no pool slot and is never shared. */
+  private listener: pg.Client | null = null;
+  private listening = false;
+  private relisten: ReturnType<typeof setTimeout> | null = null;
+  private listenFailures = 0;
+  /** The checks run in flight, and whether a request came during it: runs never overlap, and none is missed. */
+  private checking: Promise<void> | null = null;
+  private checkAgain = false;
+  private checksFailed = '';
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -180,9 +204,16 @@ export class Worker {
     }
   }
 
+  /** Stops the timers and the listener, so nothing of the worker's keeps the process alive. */
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
+    this.listening = false;
+    if (this.relisten !== null) clearTimeout(this.relisten);
+    this.relisten = null;
+    const listener = this.listener;
+    this.listener = null;
+    listener?.end().catch(() => {});
   }
 
   /** The jobs with a pass in flight in this process. */
@@ -191,13 +222,13 @@ export class Worker {
   }
 
   /**
-   * Resolves once no pass is in flight, or after `ms`. For shutdown: a pass
-   * stopped mid-span would roll its transaction back and redo the span, which
-   * is safe but wasted, so it is given the time to commit.
+   * Resolves once no pass or check run is in flight, or after `ms`. For
+   * shutdown: a pass stopped mid-span would roll its transaction back and redo
+   * the span, which is safe but wasted, so it is given the time to commit.
    */
   async drain(ms = 30_000): Promise<void> {
     const until = Date.now() + ms;
-    while (this.running.size > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    while ((this.running.size > 0 || this.checking !== null) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   }
 
   /** One pass of `job`, unless one is in flight here or in another replica. Never rejects: a timer has no caller. */
@@ -311,9 +342,13 @@ export class Worker {
     await this.store.describe(id, { name, symbol, creator: created?.creator ?? null, creationTx: created?.txHash ?? null });
   }
 
-  /** The Etherscan client for the current settings, or null when no key is set. */
-  etherscanClient(): Etherscan | null {
-    const { etherscanKey, etherscanPerSecond, etherscanUrl } = this.config(this.settings);
+  /**
+   * The Etherscan client for `config`, by default the settings read this
+   * pass, or null when no key is set. One instance while the settings stay
+   * the same, so every caller shares its pacing. Tests override it on the instance.
+   */
+  etherscanClient(config: WorkerConfig = this.config(this.settings)): Etherscan | null {
+    const { etherscanKey, etherscanPerSecond, etherscanUrl } = config;
     if (etherscanKey === null) return null;
     const settings = `${etherscanKey} ${etherscanPerSecond} ${etherscanUrl}`;
     if (this.etherscan === null || this.etherscanSettings !== settings) {
@@ -393,6 +428,131 @@ export class Worker {
   }
 
   /**
+   * Hear the console's Test requests on a connection of its own and run them
+   * at once, not next pass: the page polls for about 20 seconds. Runs the
+   * checks on connecting too, for any asked while no worker listened. A lost
+   * connection is a log line and a retry, 5 seconds later and longer each
+   * time it fails in a row, up to a minute. Never rejects; `stop` ends it.
+   */
+  async listen(): Promise<void> {
+    if (this.listening) return;
+    this.listening = true;
+    await this.connectListener();
+  }
+
+  private async connectListener(): Promise<void> {
+    this.relisten = null;
+    if (!this.listening) return;
+    const client = new pg.Client({ connectionString: this.storeUrl, application_name: 'washtrace-checks' });
+    this.listener = client;
+    const lose = (err: unknown) => {
+      // Only the current listener retries: one ended by `stop`, or already lost, does not.
+      if (this.listener !== client) return;
+      this.listener = null;
+      client.end().catch(() => {});
+      if (!this.listening) return;
+      this.listenFailures += 1;
+      const wait = Math.min(RELISTEN_MAX_MS, RELISTEN_MS * this.listenFailures);
+      // A long outage is a line at its start and one every tenth retry, as for the store at startup.
+      if (this.listenFailures % 10 === 1) {
+        console.warn('[washtrace] check requests not heard (%s); listening again in %ds', redact(messageOf(err), urlSecrets(this.storeUrl)), wait / 1000);
+      }
+      this.relisten = setTimeout(() => { void this.connectListener(); }, wait);
+      this.relisten.unref?.();
+    };
+    client.on('error', lose);
+    client.on('end', () => lose(new Error('connection ended')));
+    client.on('notification', () => { void this.checksSoon(); });
+    try {
+      await client.connect();
+      await client.query(`LISTEN ${CHECKS_CHANNEL}`);
+    } catch (err) {
+      lose(err);
+      return;
+    }
+    if (this.listener !== client) return;
+    this.listenFailures = 0;
+    void this.checksSoon();
+  }
+
+  /** Run the checks now, or once more after the run in flight. Never two runs at once, and never rejects. */
+  private checksSoon(): Promise<void> {
+    if (this.checking !== null) {
+      this.checkAgain = true;
+      return this.checking;
+    }
+    this.checking = (async () => {
+      try {
+        do {
+          this.checkAgain = false;
+          try {
+            await this.runChecks();
+            this.checksFailed = '';
+          } catch (err) {
+            const message = redact(messageOf(err), urlSecrets(this.storeUrl));
+            if (this.checksFailed !== message) console.error('[washtrace] checks not run: %s', message);
+            this.checksFailed = message;
+          }
+        } while (this.checkAgain && this.listening);
+      } finally {
+        this.checking = null;
+      }
+    })();
+    return this.checking;
+  }
+
+  /**
+   * Finish every check the console asked for, with the settings as saved
+   * this moment, so a URL saved a second ago is the one tested; the settings
+   * read last when the store cannot say. A check older than CHECK_EXPIRY_MS
+   * is finished as expired instead. One replica runs checks at a time; one
+   * that heard the same request skips. Returns how many it finished.
+   */
+  async runChecks(): Promise<number> {
+    const finished = await this.store.locked(CHECKS_LOCK, false, async () => {
+      const settings = await this.store.settings().catch(() => this.settings);
+      const config = this.config(settings);
+      const n = await this.store.expireChecks(CHECK_EXPIRY_MS);
+      // At once, so several Tests asked together do not add up their waits.
+      // All settle before the lock goes: one that cannot be saved does not end the run under the rest.
+      const pending = await this.store.pendingChecks();
+      const settled = await Promise.allSettled(pending.map(async (c) => {
+        const { ok, detail } = await this.runCheck(c, config);
+        await this.store.finishCheck(c.id, ok, detail);
+      }));
+      const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed !== undefined) throw failed.reason;
+      return n + pending.length;
+    });
+    return finished === 'skipped' ? 0 : finished;
+  }
+
+  /**
+   * One check's result: the chain's three answers, Etherscan answering, or
+   * `{ error }`. Never throws, so one bad check cannot hold up the rest. The
+   * console shows the detail, so every URL and key is taken out of an error.
+   */
+  private async runCheck(c: { kind: CheckKind; chainId: number | null }, config: WorkerConfig): Promise<{ ok: boolean; detail: Record<string, unknown> }> {
+    const fail = (error: string) => ({ ok: false, detail: { error } });
+    try {
+      if (c.kind === 'etherscan') {
+        const etherscan = this.etherscanClient(config);
+        if (etherscan === null) return fail('No Etherscan key is set');
+        // One key serves every chain; Ethereum when the console named none.
+        await etherscan.ping(c.chainId ?? 1);
+        return { ok: true, detail: {} };
+      }
+      if (c.kind !== 'rpc') return fail(`Unknown check: ${String(c.kind).slice(0, 40)}`);
+      if (c.chainId === null) return fail('An RPC check needs a chain');
+      const url = config.rpc.get(c.chainId);
+      if (url === undefined) return fail(`No RPC is set for chain ${c.chainId}`);
+      return { ok: true, detail: await this.chain(c.chainId, url).check() };
+    } catch (err) {
+      return fail(redact(briefOf(err), configSecrets(config)));
+    }
+  }
+
+  /**
    * Read the console's settings and publish where each value came from, once
    * a pass. Either failing lets the pass go on, a failed read on the settings
    * read last: the store being briefly away must not stop a pass that may not
@@ -424,7 +584,8 @@ export class Worker {
     }
   }
 
-  private chain(chainId: number, url: string): Chain {
+  /** The client for `chainId` at `url`, one per URL so its span is learned once. Tests override it on the instance. */
+  chain(chainId: number, url: string): Chain {
     const key = `${chainId} ${url}`;
     let chain = this.chains.get(key);
     if (!chain) this.chains.set(key, (chain = new Chain(chainId, url)));
@@ -440,4 +601,62 @@ export class Worker {
 
 export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * An error in a line: viem's short message and details, not its full
+ * message, which adds the request body and the version. Other errors as
+ * they are.
+ */
+function briefOf(err: unknown): string {
+  const e = err as { shortMessage?: unknown; details?: unknown } | null;
+  if (typeof e?.shortMessage !== 'string') return messageOf(err);
+  return typeof e.details === 'string' && e.details !== '' ? `${e.shortMessage} ${e.details}` : e.shortMessage;
+}
+
+/**
+ * `text` with every secret and every URL taken out, cut to one short line.
+ * RPC and HTTP clients put the request URL in their errors, and an RPC
+ * URL is often its own key, so a URL is never kept even when not configured.
+ */
+function redact(text: string, secrets: readonly string[]): string {
+  // URLs first, whole: hiding a secret inside one first would leave the rest of it.
+  let out = text.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]');
+  for (const s of [...secrets].filter((s) => s.length >= 4).sort((a, b) => b.length - a.length)) out = out.split(s).join('[hidden]');
+  out = out.replace(/\s+/g, ' ').trim();
+  return out.length > 300 ? `${out.slice(0, 299)}…` : out;
+}
+
+/**
+ * The URL and its parts, as secrets. A provider's key is a path segment, a
+ * query value or a subdomain, and a provider may echo it on its own, in the
+ * URL without its scheme, or decoded, so each part is kept both as written
+ * and decoded.
+ */
+function urlSecrets(url: string): string[] {
+  const bare = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const parts = [url, bare, bare.replace(/\/+$/, '')];
+  try {
+    const u = new URL(url);
+    parts.push(u.host, u.hostname, ...u.hostname.split('.').filter((l) => l.length >= 6));
+    parts.push(u.username, u.password);
+    // The Authorization header the transport sends for them, which a proxy may echo.
+    if (u.username !== '' || u.password !== '') {
+      parts.push(Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'));
+    }
+    parts.push(...u.pathname.split('/').filter((p) => p.length >= 6));
+    parts.push(...u.search.slice(1).split('&').map((kv) => kv.slice(kv.indexOf('=') + 1)).filter((v) => v.length >= 6));
+  } catch {
+    // Not a URL: every run of six or more between separators.
+    parts.push(...url.split(/[/?&=:@#]/).filter((p) => p.length >= 6));
+  }
+  // A query value encodes a space as '+', which decodeURIComponent leaves.
+  return parts.flatMap((p) => {
+    try { return [p, decodeURIComponent(p), decodeURIComponent(p.replace(/\+/g, ' '))]; } catch { return [p]; }
+  });
+}
+
+/** Every secret in a config: the RPC URLs, the Etherscan URL (its query may carry a key) and the key. */
+function configSecrets(config: WorkerConfig): string[] {
+  return [...[...config.rpc.values(), config.etherscanUrl].flatMap(urlSecrets), config.etherscanKey ?? ''];
 }

@@ -895,6 +895,21 @@ export class Store {
     return rows.map((r) => ({ id: Number(r.id), kind: r.kind, chainId: r.chain_id }));
   }
 
+  /**
+   * Finish, unrun, every check asked for more than `olderThanMs` ago, with
+   * `{ error: 'expired' }`. Its page stopped polling long since, and a URL
+   * tested now may not be the one it asked about. Aged by the store's clock,
+   * not the worker's. Returns how many.
+   */
+  async expireChecks(olderThanMs: number): Promise<number> {
+    const { rowCount } = await this.pool.query(
+      `UPDATE washtrace.checks SET finished_at = now(), ok = false, detail = '{"error":"expired"}'
+       WHERE finished_at IS NULL AND requested_at < now() - make_interval(secs => $1::float8 / 1000)`,
+      [olderThanMs],
+    );
+    return rowCount ?? 0;
+  }
+
   /** Record a check's result. `detail` is shown in the console, so it must never hold a URL or a key. */
   async finishCheck(id: number, ok: boolean, detail: Record<string, unknown>): Promise<void> {
     await this.pool.query('UPDATE washtrace.checks SET finished_at = now(), ok = $2, detail = $3 WHERE id = $1', [id, ok, JSON.stringify(detail)]);

@@ -74,4 +74,26 @@ describe('Etherscan', () => {
     await expect(e.call(1, { action: 'txlist' })).rejects.not.toThrow(/KEY/);
     expect(calls).toBeGreaterThanOrEqual(2);
   });
+
+  it('pings once with a short timeout, so a Test answers while the page still polls', async () => {
+    const e = new Etherscan('KEY', 1_000);
+    const timeouts: (number | undefined)[] = [];
+    e.fetch = async (_url: URL, timeoutMs?: number) => {
+      timeouts.push(timeoutMs);
+      return new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: 'Max calls per sec rate limit reached (5/sec)' }));
+    };
+    await expect(e.ping(1)).rejects.toThrow(/rate limit/);
+    expect(timeouts).toEqual([6_000]);
+  });
+
+  it('pings with one cheap call, and a refusal names the reason but never the key', async () => {
+    const { e, urls } = fake(() => ({ jsonrpc: '2.0', id: 83, result: '0x1908a3c' }));
+    await e.ping(8453);
+    expect([urls[0]!.searchParams.get('module'), urls[0]!.searchParams.get('action'), urls[0]!.searchParams.get('chainid')]).toEqual(['proxy', 'eth_blockNumber', '8453']);
+    const refused = fake(() => ({ status: '0', message: 'NOTOK', result: 'Invalid API Key' })).e;
+    await expect(refused.ping(1)).rejects.toThrow(/Invalid API Key/);
+    await expect(refused.ping(1)).rejects.not.toThrow(/KEY/);
+    const jsonRpcError = fake(() => ({ jsonrpc: '2.0', id: 83, error: { code: -32000, message: 'chain not supported' } })).e;
+    await expect(jsonRpcError.ping(999)).rejects.toThrow(/chain not supported/);
+  });
 });
