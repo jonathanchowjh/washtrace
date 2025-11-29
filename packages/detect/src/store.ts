@@ -815,7 +815,11 @@ export class Store {
 
   // ---- settings and checks ------------------------------------------------
 
-  /** Every setting saved from the console, secrets included: only the worker reads this whole. */
+  /**
+   * Every setting saved from the console, secrets included. The worker reads
+   * it to run; the settings API reads it to show what is set and a secret's
+   * last 4, and never returns a secret's value.
+   */
   async settings(): Promise<Map<string, string>> {
     const { rows } = await this.pool.query<{ key: string; value: string }>('SELECT key, value FROM washtrace.settings ORDER BY key');
     return new Map(rows.map((r) => [r.key, r.value]));
