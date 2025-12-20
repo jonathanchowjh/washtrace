@@ -9,3 +9,7 @@ export { MIGRATIONS } from './migrations.js';
 export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } from './analysis-thread.js';
 export { Worker, EVERY, BUDGET_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
 export { ConfigError, storeUrl, workerConfig } from './env.js';
+export {
+  StoredDataError, storedDir, storedFile, entryFor, upsertEntry, readManifest, writeManifest, sha256File,
+  writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type WalletRow, type Written,
+} from './stored.js';

@@ -620,4 +620,39 @@ describe('Store', () => {
       }
     });
   });
+
+  describe('cutting stored data', () => {
+    // A chain of its own, so the rest of this file's wallets stay out of it.
+    const chainId = 7, coll = w('57d'), m = w('5d1');
+    const all = async <T>(rows: AsyncIterable<T>) => { const out: T[] = []; for await (const r of rows) out.push(r); return out; };
+
+    it('streams a collection\'s transfers up to its cursor, and its money trail', async () => {
+      await store.migrate(); // a no-op in a full run; lets this block run by itself
+      const { id } = await store.addCollection(chainId, coll, null, 1);
+      const ts = chain('1', a, b, a).map((t, i) => ({ ...t, blockNumber: 10 + i, blockTime: 1_700_000_000 + i }));
+      await store.ingest(id, chainId, ts, 12, [a, b, a, b]);
+      // A span stored past the cursor is not in a snapshot that stops at it.
+      await store.pool.query('UPDATE washtrace.collections SET cursor_block = 11 WHERE id = $1', [id]);
+      expect(await store.storedHeader(chainId, coll.toUpperCase().replace('0X', '0x'))).toEqual({
+        id, name: coll, startBlock: 1, throughBlock: 11, throughTime: 1_700_000_001_000,
+      });
+      expect(await all(store.storedTransfers(id, 11))).toEqual(ts.slice(0, 2));
+
+      const paid = [flow(a, m), flow(b, a)], onward = [flow(m, b)];
+      await store.fund(chainId, a, paid, false, { hops: 2, fanout: 3, exclude: [] });
+      await store.fund(chainId, m, onward, false);
+      const trail = await store.trail(id, chainId);
+      // b is still unchecked: it counts in "of", and stays out of the file.
+      expect({ checked: trail.checked, of: trail.of }).toEqual({ checked: 1, of: 2 });
+      const wallets = await all(trail.wallets);
+      expect(wallets.map((x) => [x.address, x.status, x.depth])).toEqual([[a, 'done', 0], [m, 'done', 1]]);
+      expect(wallets.every((x) => typeof x.fetchedAt === 'number')).toBe(true);
+      const byTx = (x: { txHash: string }, y: { txHash: string }) => x.txHash.localeCompare(y.txHash);
+      expect((await all(trail.flows)).sort(byTx)).toEqual([...paid, ...onward].sort(byTx));
+    });
+
+    it('has nothing to cut for a collection it does not watch', async () => {
+      expect(await store.storedHeader(chainId, w('404'))).toBeNull();
+    });
+  });
 });

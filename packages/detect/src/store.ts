@@ -2,6 +2,7 @@ import pg from 'pg';
 import { ZERO } from './graph.js';
 import { MIGRATIONS } from './migrations.js';
 import type { Rules } from './methods.js';
+import type { WalletRow } from './stored.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
@@ -12,6 +13,8 @@ const FOREIGN_KEY_VIOLATION = '23503';
 /** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
 const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
+/** Rows a cursor fetches at a time when stored data is cut. */
+const CURSOR_PAGE = 10_000;
 
 export interface CollectionRow {
   id: number;
@@ -639,6 +642,111 @@ export class Store {
       [id, limit],
     );
     return rows.map(toAnalysis).reverse();
+  }
+
+  // ---- stored data --------------------------------------------------------
+
+  /**
+   * What a stored-data cut of a collection starts from: where its data
+   * begins and ends. The snapshot stops at the cursor, and its time is that
+   * of the latest transfer at or below it. Null when it is not watched; the
+   * blocks and time are null until it has read some.
+   */
+  async storedHeader(chainId: number, address: string): Promise<{
+    id: number; name: string; startBlock: number | null; throughBlock: number | null; throughTime: number | null;
+  } | null> {
+    const { rows } = await this.pool.query(
+      `SELECT c.id, COALESCE(c.name, c.contract_name, c.address) AS name, c.start_block, c.cursor_block,
+              (SELECT extract(epoch FROM max(t.block_time))::float8 FROM washtrace.transfers t
+               WHERE t.collection_id = c.id AND t.block_number <= c.cursor_block) AS through
+       FROM washtrace.collections c WHERE c.chain_id = $1 AND c.address = lower($2)`,
+      [chainId, address],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id, name: r.name, startBlock: r.start_block === null ? null : Number(r.start_block),
+      throughBlock: r.cursor_block === null ? null : Number(r.cursor_block), throughTime: r.through === null ? null : r.through * 1000,
+    };
+  }
+
+  /** A collection's transfers up to block `through`, in chain order, streamed for writing to a file. */
+  storedTransfers(id: number, through: number): AsyncGenerator<Transfer> {
+    return this.cursor(
+      `${TRANSFER_COLUMNS} FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.block_number <= $2 ORDER BY t.block_number, t.log_index`,
+      [id, through], toTransfer,
+    );
+  }
+
+  /**
+   * A collection's money trail: the wallets checked so far and the flows they
+   * found. The same wallets and flows `analysisInput` reads, so a store that
+   * imports the trail analyses the collection as this one does: its traders,
+   * and every followed wallet on the chain. `checked` of `of` is how many of
+   * its traders have been read. The rows stream; nothing is read until they
+   * are iterated.
+   */
+  async trail(id: number, chainId: number): Promise<{ checked: number; of: number; wallets: AsyncGenerator<WalletRow>; flows: AsyncGenerator<Flow> }> {
+    // Arrays, not subqueries, for the reason analysisInput gives.
+    const traders = (await this.pool.query<{ address: string }>(
+      `SELECT from_address AS address FROM washtrace.transfers WHERE collection_id = $1
+       UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1`,
+      [id],
+    )).rows.map((r) => r.address);
+    const followed = (await this.pool.query<{ address: string }>(
+      `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
+      [chainId],
+    )).rows.map((r) => r.address);
+    const { rows } = await this.pool.query<{ checked: number; of: number }>(
+      `SELECT count(*) FILTER (WHERE status = 'done')::int AS checked, count(*)::int AS of
+       FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2::text[])`,
+      [chainId, traders],
+    );
+    return {
+      checked: rows[0]!.checked,
+      of: rows[0]!.of,
+      wallets: this.cursor(
+        `SELECT address, transfers, status, truncated, extract(epoch FROM fetched_at)::float8 AS fetched, depth FROM washtrace.wallets
+         WHERE chain_id = $1 AND status <> 'pending' AND (address = ANY($2::text[]) OR depth > 0) ORDER BY address`,
+        [chainId, traders],
+        (r): WalletRow => ({
+          address: r.address, transfers: r.transfers, status: r.status, truncated: r.truncated, depth: r.depth,
+          fetchedAt: r.fetched === null ? null : r.fetched * 1000,
+        }),
+      ),
+      flows: this.cursor(
+        `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
+                extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+         WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[]) OR f.from_address = ANY($3::text[]))
+         ORDER BY f.block_number, f.tx_hash`,
+        [chainId, traders, followed], toFlow,
+      ),
+    };
+  }
+
+  /**
+   * The rows of `sql`, a page at a time through a server-side cursor, so
+   * millions of them stream rather than land in memory. One read-only
+   * transaction, so the rows are one snapshot. Leaving the loop early (a
+   * failed write) closes the cursor and gives the connection back.
+   */
+  private async *cursor<T>(sql: string, params: unknown[], map: (r: any) => T): AsyncGenerator<T> {
+    const c = await this.pool.connect();
+    let finished = false;
+    try {
+      await c.query('BEGIN READ ONLY');
+      await c.query(`DECLARE stored NO SCROLL CURSOR FOR ${sql}`, params);
+      for (;;) {
+        const { rows } = await c.query(`FETCH ${CURSOR_PAGE} FROM stored`);
+        for (const r of rows) yield map(r);
+        if (rows.length < CURSOR_PAGE) break;
+      }
+      await c.query('COMMIT');
+      finished = true;
+    } finally {
+      if (!finished) await c.query('ROLLBACK').catch(() => {});
+      c.release();
+    }
   }
 
   // ---- reads for the console and the API ----------------------------------
