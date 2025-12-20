@@ -8,4 +8,4 @@ export { Store, SECRET_KEYS, CHECKS_CHANNEL, type SettingSource, type CheckKind,
 export { MIGRATIONS } from './migrations.js';
 export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } from './analysis-thread.js';
 export { Worker, EVERY, BUDGET_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
-export { ConfigError, storeUrl, rpcUrls, workerConfig } from './env.js';
+export { ConfigError, storeUrl, workerConfig } from './env.js';

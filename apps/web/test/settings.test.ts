@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SettingSource } from '@washtrace/detect';
-import { FIELDS, view } from '@/lib/settings';
+import { FIELDS, configFromSources, variableOf, view } from '@/lib/settings';
 
 type Sources = Record<string, SettingSource & { reportedAt: number }>;
 const fake = {
@@ -90,6 +90,40 @@ describe('view', () => {
     expect(env('etherscan.url', 'http://x')).toBeNull();
     expect(env('etherscan.rps', '1e3')).toBeNull();
     expect(env('etherscan.rps', '0')).toBe('Calls per second must be a number above 0, such as 4.');
+  });
+});
+
+describe('configFromSources', () => {
+  it('reads chains, funding and the numbers the worker reported', () => {
+    const sources = { 'rpc.1': src('env', null), 'rpc.8453': src('env', null), 'etherscan.key': src('console', null), 'etherscan.rps': src('env', '2.5'), 'follow.hops': src('console', '5') };
+    expect(configFromSources(sources)).toEqual({ chains: [1, 8453], funding: true, perSecond: 2.5, followHops: 5 });
+  });
+
+  it('says nothing is set when the worker reported nothing', () => {
+    expect(configFromSources({})).toEqual({ chains: [], funding: false, perSecond: null, followHops: null });
+  });
+
+  it('counts a console RPC and key saved before the worker reports them', () => {
+    const settings = new Map([['rpc.1', RPC], ['etherscan.key', 'ABCD1234EFGH']]);
+    expect(configFromSources({ 'rpc.10': src('env', null) }, settings)).toMatchObject({ chains: [1, 10], funding: true });
+  });
+
+  it('does not count a blank console setting', () => {
+    expect(configFromSources({}, new Map([['rpc.1', '  '], ['etherscan.key', '']]))).toMatchObject({ chains: [], funding: false });
+  });
+
+  it('leaves out a number the worker ignores, so its default is meant', () => {
+    expect(configFromSources({ 'etherscan.rps': src('env', '0'), 'follow.hops': src('env', '99') })).toMatchObject({ perSecond: null, followHops: null });
+  });
+
+  it('reads the numbers from the report only, as the worker uses what it reported', () => {
+    expect(configFromSources({}, new Map([['follow.hops', '5']]))).toMatchObject({ followHops: null });
+  });
+});
+
+describe('variableOf', () => {
+  it('names the environment variable that pins each setting', () => {
+    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS']);
   });
 });
 

@@ -278,7 +278,9 @@ export class Worker {
       const started = Date.now();
       const url = rpc.get(c.chainId);
       if (url === undefined) {
-        await this.fail(c.id, `No RPC is configured for chain ${c.chainId}. Set WASHTRACE_RPC_${c.chainId}.`);
+        // The console offers an RPC field for Ethereum only (FIELDS in the web app); other chains are set in the environment.
+        const where = c.chainId === 1 ? 'Set it in Settings, or WASHTRACE_RPC_1 for the worker.' : `Set WASHTRACE_RPC_${c.chainId} for the worker.`;
+        await this.fail(c.id, `No RPC is configured for chain ${c.chainId}. ${where}`);
         return;
       }
       const got = { spans: 0, read: 0, blocks: 0 };

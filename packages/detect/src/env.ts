@@ -21,19 +21,6 @@ export function storeUrl(env: Env): string {
 }
 
 /**
- * One variable per chain, `WASHTRACE_RPC_<chainId>`, so a chain is added
- * without editing a JSON blob that holds every provider key at once.
- */
-export function rpcUrls(env: Env): Map<number, string> {
-  const out = new Map<number, string>();
-  for (const [k, v] of Object.entries(env)) {
-    const m = /^WASHTRACE_RPC_(\d+)$/.exec(k);
-    if (m && v) out.set(Number(m[1]), v);
-  }
-  return out;
-}
-
-/**
  * Read on every pass, so the worker follows the environment and the
  * console's settings without being rebuilt. The environment wins, so a
  * deployment can pin a value; an empty variable (copied from .env.example)

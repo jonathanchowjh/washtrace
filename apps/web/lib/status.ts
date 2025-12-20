@@ -1,14 +1,16 @@
-import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow, type WorkerConfig } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta } from './format';
 import { isRunning } from './metrics';
+import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
 export interface Snapshot {
   passes: readonly PassRow[];
   collections: readonly CollectionRow[];
   funding: readonly { chainId: number; pending: number; done: number; failed: number; truncated: number; doneLastHour: number }[];
-  config: WorkerConfig;
+  /** From the worker's report (configFromSources), never this process's environment. */
+  config: SourcesConfig;
 }
 
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
@@ -30,8 +32,8 @@ const WORKER_DOWN = 'Check the worker process is running: docker compose ps work
 
 /** What to do when a job reports a failure, and where to do it. */
 const FAILED: Record<Job, [string, string?]> = {
-  ingest: ['Check the chain RPC under What it reads from.', '/worker#sources'],
-  fund: ['Check the Etherscan key under What it reads from.', '/worker#sources'],
+  ingest: ['Check the chain RPC in Settings, and Test it there.', '/settings#rpc.1'],
+  fund: ['Check the Etherscan key in Settings, and Test it there.', '/settings#etherscan.key'],
   analyze: ['Open the collection and check its rules.'],
 };
 
@@ -80,7 +82,13 @@ export function status(s: Snapshot, now: number) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
       notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
     }
-    if (c.error) needsYou(`${label}: ${c.error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
+    if (c.error && !s.config.chains.includes(c.chainId)) {
+      // No RPC for its chain: the fix is a setting, not anything on the collection's page.
+      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) needsYou(`${label}: ${c.error}`, `Open Settings and set an ${chainName(c.chainId)} RPC URL.`, `/settings#rpc.${c.chainId}`);
+      else needsYou(`${label}: ${c.error}`, `Set WASHTRACE_RPC_${c.chainId} in the worker's environment, then restart it.`);
+    } else if (c.error) {
+      needsYou(`${label}: ${c.error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
+    }
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
       behind, turn: paused ? 'paused' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
@@ -89,18 +97,18 @@ export function status(s: Snapshot, now: number) {
 
   // Lanes take turns per collection, so a collection gets its chain's hourly rate split among those still checking.
   const checking = (c: CollectionRow) => c.pausedAt === null && c.fundedWallets < c.wallets;
-  if (s.config.etherscanKey !== null) {
+  if (s.config.funding) {
     for (const c of s.collections.filter(checking)) {
       const rate = (s.funding.find((f) => f.chainId === c.chainId)?.doneLastHour ?? 0) / s.collections.filter((o) => o.chainId === c.chainId && checking(o)).length;
       const left = rate > 0 ? ` · ${eta(((c.wallets - c.fundedWallets) / rate) * 3_600_000)}` : '';
       notice('working', `Checking wallets for ${c.name ?? `${c.chainId}:${c.address}`}: ${c.fundedWallets.toLocaleString('en')} of ${c.wallets.toLocaleString('en')}${left}`);
     }
   }
-  if (s.config.etherscanKey === null) {
-    notice('info', 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'How to turn it on', href: '/worker#sources' });
+  if (!s.config.funding) {
+    notice('info', 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
   }
   for (const f of s.funding) {
-    if (f.failed > 0) needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`, 'They retry on their own after an hour; if they keep failing, check the Etherscan key under What it reads from.', '/worker#sources');
+    if (f.failed > 0) needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`, 'They retry on their own after an hour; if they keep failing, check the Etherscan key in Settings.', '/settings#etherscan.key');
   }
   notices.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
 
@@ -110,7 +118,7 @@ export function status(s: Snapshot, now: number) {
     // The wait is what is pending at the rate of the last hour; unknown until the worker has done some.
     funding: s.funding.map((f) => ({ ...f, etaMs: f.pending > 0 && f.doneLastHour > 0 ? (f.pending / f.doneLastHour) * 3_600_000 : null })),
     // Chain ids only: a provider URL usually carries its key.
-    config: { chains: [...s.config.rpc.keys()].sort((a, b) => a - b), funding: s.config.etherscanKey !== null },
+    config: { chains: s.config.chains, funding: s.config.funding },
     notices,
   };
 }

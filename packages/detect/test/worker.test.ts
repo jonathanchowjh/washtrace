@@ -90,6 +90,17 @@ describe('Worker.ingest', () => {
     await w.ingest();
     expect(served).toEqual([{ id: 1, blocks: 10 }]);
   });
+
+  it('says where to set a missing RPC: Settings for Ethereum, the environment for other chains', async () => {
+    const { w } = setup([at(1, { chainId: 1 }), at(2, { chainId: 8453 })], 1_000);
+    const errors = new Map<number, string>();
+    (w as any).store.setError = async (id: number, message: string) => { errors.set(id, message); };
+    (w as any).config = () => ({ ...config, rpc: new Map() });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await w.ingest();
+    expect(errors.get(1)).toBe('No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.');
+    expect(errors.get(2)).toBe('No RPC is configured for chain 8453. Set WASHTRACE_RPC_8453 for the worker.');
+  });
 });
 
 describe('interleave', () => {

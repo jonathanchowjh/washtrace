@@ -19,6 +19,8 @@ export interface Field {
   secret: boolean;
   validate(v: string): string | null;
   used(v: string): boolean;
+  /** What the worker uses while this is not set (env.ts), for the page to say. None for a source, which is off until set. */
+  fallback?: string;
 }
 
 /** A field as the API answers it: where its value came from and as much of it as may be shown. */
@@ -70,6 +72,7 @@ export const FIELDS: readonly Field[] = [
     secret: false,
     validate: (v) => (v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) > 0 ? null : 'Calls per second must be a number above 0, such as 4.'),
     used: (v) => Number.isFinite(Number(v)) && Number(v) > 0,
+    fallback: '4',
   },
   {
     key: 'etherscan.url',
@@ -78,6 +81,7 @@ export const FIELDS: readonly Field[] = [
     validate: (v) => (urlOf(v)?.protocol === 'https:' ? null : 'The Etherscan URL starts with https://.'),
     // The worker takes any value here; a bad one shows when Etherscan is tested.
     used: () => true,
+    fallback: 'https://api.etherscan.io/v2/api',
   },
   {
     key: 'follow.hops',
@@ -86,6 +90,7 @@ export const FIELDS: readonly Field[] = [
     validate: (v) => (/^\d+$/.test(v) && Number(v) <= 10 ? null : 'Follow hops must be a whole number from 0 to 10.'),
     // hops() in env.ts: '5.0' and '1e1' pass; outside 0–10 the worker uses 3.
     used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10,
+    fallback: '3',
   },
 ];
 
@@ -124,3 +129,43 @@ export function view(settings: ReadonlyMap<string, string>, sources: Record<stri
 
 /** The 403 every settings write and Test answers while basic auth is off: anyone could otherwise change them, or spend the RPC quota. */
 export const READ_ONLY = 'Settings are read-only until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
+
+/** The variable that pins a setting in the worker's environment, as env.ts reads it: `rpc.1` is WASHTRACE_RPC_1. */
+export function variableOf(key: string): string {
+  return `WASHTRACE_${key.toUpperCase().replace('.', '_')}`;
+}
+
+/** What the console knows of the worker's sources: which chains it can read, whether funding is on, and the numbers it runs with (null: its default). Never a URL or the key. */
+export interface SourcesConfig {
+  chains: number[];
+  funding: boolean;
+  perSecond: number | null;
+  followHops: number | null;
+}
+
+/**
+ * The worker's sources as the console says them, from where the worker last
+ * said each value came from (`sources`) and what the console saved
+ * (`settings`). The API never reads its own environment for this: only the
+ * worker's counts. A non-empty console RPC or key counts at once, so a fresh
+ * save doesn't warn until the worker's next report. The numbers come from the
+ * report alone, and only when the worker uses them; otherwise null.
+ */
+export function configFromSources(sources: Record<string, SettingSource>, settings: ReadonlyMap<string, string> = new Map()): SourcesConfig {
+  const saved = (key: string) => Boolean(settings.get(key)?.trim());
+  const chains = new Set([...Object.keys(sources), ...[...settings.keys()].filter(saved)].flatMap((k) => {
+    const m = /^rpc\.(\d+)$/.exec(k);
+    return m ? [Number(m[1])] : [];
+  }));
+  const reported = (key: string): number | null => {
+    const v = sources[key]?.value;
+    const f = FIELDS.find((x) => x.key === key)!;
+    return v != null && f.used(v) ? Number(v) : null;
+  };
+  return {
+    chains: [...chains].sort((a, b) => a - b),
+    funding: sources['etherscan.key'] !== undefined || saved('etherscan.key'),
+    perSecond: reported('etherscan.rps'),
+    followHops: reported('follow.hops'),
+  };
+}

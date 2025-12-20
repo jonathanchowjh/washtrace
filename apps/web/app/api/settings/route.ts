@@ -1,7 +1,8 @@
 import { ACTOR_HEADER, authConfigured } from '@/lib/auth';
 import { bad, handle, json, readJson } from '@/lib/api';
-import { FIELDS, READ_ONLY, view } from '@/lib/settings';
+import { FIELDS, READ_ONLY } from '@/lib/settings';
 import { store } from '@/lib/store';
+import { settingsView } from '@/lib/views';
 
 /**
  * GET: every setting the console offers, where its value came from, and
@@ -9,11 +10,7 @@ import { store } from '@/lib/store';
  * most its last 4: the browser can replace or clear a secret, never read it.
  */
 export async function GET(): Promise<Response> {
-  return handle(async () => {
-    const s = store();
-    const writable = authConfigured(process.env);
-    return json({ writable, fields: view(await s.settings(), await s.sources(), writable) });
-  });
+  return handle(async () => json(await settingsView()));
 }
 
 /**

@@ -6,12 +6,19 @@ import { Head, Notices, Problem, Section, Warn } from '@/components/head';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
 import { LENSES, eta, plural, short } from '@/lib/format';
+import { FIELDS } from '@/lib/settings';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 
 export const metadata: Metadata = { title: 'Worker' };
+
+/** What the worker uses for a number it has no value for, or one it ignores (env.ts, mirrored in FIELDS). */
+const DEFAULT = {
+  rps: Number(FIELDS.find((f) => f.key === 'etherscan.rps')!.fallback),
+  hops: Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback),
+};
 
 /** The three jobs in the order data flows through them, each with what it feeds. */
 const STEPS = {
@@ -90,17 +97,19 @@ export default async function WorkerPage() {
         </ol>
       </Section>
 
-      <Section id="sources" title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%.">
+      <Section id="sources" title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%. Each one is set in Settings.">
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ step 1</span></span>
-            {v.rpcChains.length === 0 ? <span className="text-fault">None. Set WASHTRACE_RPC_1 to an Ethereum JSON-RPC URL.</span> : <span>{v.rpcChains.map(chainName).join(', ')}</span>}
+            {v.rpcChains.length === 0
+              ? <Link href="/settings#rpc.1" className="flex items-start gap-1 text-fault underline"><Warn className="mt-0.5 size-3.5" />None. Set an Ethereum RPC URL in Settings.</Link>
+              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
             {v.funding === null
-              ? <span className="text-muted-foreground">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. Set WASHTRACE_ETHERSCAN_KEY.</span>
-              : <span>Etherscan API V2, {v.funding.perSecond} calls a second, following money {plural(v.followHops, 'hop')} out of traders</span>}
+              ? <span className="text-muted-foreground">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings</Link>.</span>
+              : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'hop')}</Link> out of traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>
       </Section>

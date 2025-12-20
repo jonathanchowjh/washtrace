@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionRow, PassRow, WorkerConfig } from '@washtrace/detect';
+import type { CollectionRow, PassRow } from '@washtrace/detect';
 import { status, type Notice, type Snapshot } from '@/lib/status';
 import { eta } from '@/lib/format';
 
@@ -18,7 +18,8 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   };
 }
 
-const CONFIG: WorkerConfig = { rpc: new Map([[1, 'https://secret.example/key']]), etherscanKey: 'secret', etherscanPerSecond: 4, etherscanUrl: 'https://api.etherscan.io/v2/api', followHops: 3, sources: {} };
+// What the worker reported, as configFromSources reads it: chain ids and whether funding is on, never a URL or the key.
+const CONFIG: Snapshot['config'] = { chains: [1], funding: true, perSecond: 4, followHops: 3 };
 
 function snapshot(more: Partial<Snapshot> = {}): Snapshot {
   return {
@@ -87,9 +88,9 @@ describe('status', () => {
   });
 
   it('says funding off is a choice, not a fault', () => {
-    const r = status(snapshot({ config: { ...CONFIG, etherscanKey: null } }), NOW);
+    const r = status(snapshot({ config: { ...CONFIG, funding: false } }), NOW);
     expect(r.notices.filter((n) => n.severity === 'needs-you')).toEqual([]);
-    expect(r.notices).toContainEqual(expect.objectContaining({ severity: 'info', action: expect.objectContaining({ href: '/worker#sources' }) }));
+    expect(r.notices).toContainEqual(expect.objectContaining({ severity: 'info', action: expect.objectContaining({ href: '/settings#etherscan.key' }) }));
   });
 
   it('counts a backfill as work in progress with an ETA', () => {
@@ -104,6 +105,19 @@ describe('status', () => {
   it('reports wallets whose funding failed as needing a person', () => {
     const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0, doneLastHour: 0 }] });
     expect(texts(s, 'needs-you')).toEqual(['Ethereum: 2 wallets could not be funded.']);
+    expect(status(s, NOW).notices[0]).toMatchObject({ href: '/settings#etherscan.key' });
+  });
+
+  it('sends a collection failing for want of an RPC to its setting, not to the collection', () => {
+    const s = snapshot({ config: { ...CONFIG, chains: [] }, collections: [collection({ error: 'No RPC is configured for chain 1. Set WASHTRACE_RPC_1.' })] });
+    expect(status(s, NOW).notices.find((n) => n.severity === 'needs-you')).toMatchObject({ doThis: expect.stringContaining('Ethereum RPC URL'), href: '/settings#rpc.1' });
+  });
+
+  it('says where to set an RPC for a chain the console has no field for', () => {
+    const s = snapshot({ config: { ...CONFIG, chains: [] }, collections: [collection({ chainId: 8453, error: 'No RPC is configured for chain 8453.' })] });
+    const n = status(s, NOW).notices.find((x) => x.severity === 'needs-you');
+    expect(n).toMatchObject({ doThis: expect.stringContaining('WASHTRACE_RPC_8453') });
+    expect(n && 'href' in n ? n.href : undefined).toBeUndefined();
   });
 
   describe('checking wallets', () => {
@@ -121,12 +135,12 @@ describe('status', () => {
       expect(texts(s, 'working')).toEqual(['Checking wallets for BAYC: 1,000 of 2,000 · about 2 h left', 'Checking wallets for Other: 1,000 of 2,000 · about 2 h left']);
     });
     it('says nothing about it when funding is off', () => {
-      expect(texts(snapshot({ collections: [half()], config: { ...CONFIG, etherscanKey: null } }), 'working')).toEqual([]);
+      expect(texts(snapshot({ collections: [half()], config: { ...CONFIG, funding: false } }), 'working')).toEqual([]);
     });
   });
 
   it('orders notices needs-you, working, info', () => {
-    const s = snapshot({ config: { ...CONFIG, etherscanKey: null }, collections: [collection({ cursorBlock: 0 }), collection({ address: '0xdead', error: 'boom' })] });
+    const s = snapshot({ config: { ...CONFIG, funding: false }, collections: [collection({ cursorBlock: 0 }), collection({ address: '0xdead', error: 'boom' })] });
     expect(status(s, NOW).notices.map((n) => n.severity)).toEqual(['needs-you', 'working', 'info']);
   });
 
@@ -139,7 +153,8 @@ describe('status', () => {
     const needs = status(s, NOW).notices.filter((n) => n.severity === 'needs-you');
     expect(needs).toHaveLength(5);
     for (const n of needs) expect(n.severity === 'needs-you' && n.doThis.length > 10).toBe(true);
-    expect(needs).toContainEqual(expect.objectContaining({ doThis: expect.stringContaining('Etherscan key'), href: '/worker#sources' }));
+    expect(needs).toContainEqual(expect.objectContaining({ doThis: expect.stringContaining('Etherscan key'), href: '/settings#etherscan.key' }));
+    expect(needs).toContainEqual(expect.objectContaining({ doThis: expect.stringContaining('RPC'), href: '/settings#rpc.1' }));
     expect(needs).toContainEqual(expect.objectContaining({ href: '/c/1/0xbc4c' }));
     const never = status(snapshot({ passes: [] }), NOW).notices.filter((n) => n.severity === 'needs-you');
     expect(never.every((n) => n.severity === 'needs-you' && n.doThis.includes('docker compose ps worker'))).toBe(true);
