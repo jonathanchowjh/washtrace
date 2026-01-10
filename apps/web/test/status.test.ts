@@ -14,7 +14,8 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
   };
 }
 
@@ -85,6 +86,25 @@ describe('status', () => {
     expect(texts(s, 'needs-you')).toEqual(['1:0xdead: RPC timed out']);
     expect(texts(s, 'working')).toEqual(['BAYC: 1,000 blocks behind the finalized head.']);
     expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'backfilling' });
+  });
+
+  it('says a collection loading stored data is loading it, not behind', () => {
+    const s = snapshot({ collections: [collection({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 })] });
+    expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'restoring' });
+    expect(texts(s, 'working')).toEqual(['Loading stored data for BAYC · 42%']);
+    expect(texts(s, 'needs-you')).toEqual([]);
+  });
+
+  it('says why stored data was not loaded as information, not a fault: the worker reads the chain instead', () => {
+    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
+    const s = snapshot({ collections: [collection({ restoreNote: note })] });
+    expect(texts(s, 'info')).toContain(`BAYC: ${note}`);
+    expect(texts(s, 'needs-you')).toEqual([]);
+  });
+
+  it('calls a paused collection paused even with a load\'s progress left over', () => {
+    const s = snapshot({ collections: [collection({ restoreProgress: 0.5, pausedAt: NOW })] });
+    expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'paused' });
   });
 
   it('says funding off is a choice, not a fault', () => {

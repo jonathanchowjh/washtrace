@@ -205,4 +205,16 @@ CREATE TABLE IF NOT EXISTS washtrace.checks (
   detail       jsonb
 );
 `,
+  `
+-- Stored data (data/stored), loaded before the chain is read. While a load
+-- runs, restore_progress says how far it has got (0 to 1), written outside
+-- the load's transaction so the console sees it; null otherwise. A worker
+-- that dies mid-load leaves it set, and the next worker to start clears it.
+-- restore_note says why stored data could not be loaded: the worker reads
+-- the chain instead, and does not try the stored data again. stored_through_time
+-- is when the loaded data stops: how long a collection with no RPC is unsynced.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_progress real;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_note text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_time timestamptz;
+`,
 ];

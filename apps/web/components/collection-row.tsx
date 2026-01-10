@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { CollectionRow as Collection } from '@washtrace/detect';
-import { ReadingPill } from '@/components/coverage';
+import { ReadingPill, RestoreProgress } from '@/components/coverage';
 import { Warn } from '@/components/head';
 import { RangeBar } from '@/components/methods';
 import { Time } from '@/components/time';
@@ -41,6 +41,8 @@ export function CollectionRow({ c, why }: { c: Collection; why: string }) {
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
         {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+        {/* Not a fault: the worker reads the chain instead, which only takes longer. */}
+        {c.restoreNote ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{c.restoreNote}</p> : null}
       </div>
       {a === null ? (
         <p className="text-sm text-muted-foreground md:col-span-2">{why}</p>
@@ -58,6 +60,7 @@ export function CollectionRow({ c, why }: { c: Collection; why: string }) {
       )}
       <div className="flex flex-col items-start gap-1">
         <ReadingPill cov={cov} />
+        <RestoreProgress cov={cov} />
         <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
         {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses can still rise</p> : null}
         {/* Above the link's whole-row overlay, so a press reaches the button and not the collection page. Prioritize stays on the collection page. */}

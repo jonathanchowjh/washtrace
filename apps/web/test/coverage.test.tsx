@@ -33,6 +33,24 @@ describe('ReadingPanel step 1', () => {
   });
 });
 
+describe('loading stored data', () => {
+  it('leads the page with how far the load has got, as a bar', () => {
+    const c = row({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 });
+    const text = render(<ReadingSummary c={c} cov={coverage(c)} href="#reading" />).container.textContent!;
+    expect(text).toContain('42%');
+    expect(text).toContain('Loading stored data');
+    expect(panel(c).textContent).toContain('Loading stored data · 42%');
+  });
+
+  it('says why stored data was not loaded beside step 1, as information and not a fault', () => {
+    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
+    const el = panel(row({ restoreNote: note }));
+    const line = [...el.querySelectorAll('p')].find((p) => p.textContent === note)!;
+    expect(line).toBeTruthy();
+    expect(line.className).not.toContain('text-fault');
+  });
+});
+
 describe('bars', () => {
   it('are never green for a paused collection, whatever the share', () => {
     const c = row({ pausedAt: 5 });

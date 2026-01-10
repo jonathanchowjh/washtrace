@@ -1,10 +1,13 @@
+import { join } from 'node:path';
 import pg from 'pg';
 import { analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
-import { CUSTODIANS, contractsFor, moneyFor } from './marketplaces.js';
+import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
+import { entryFor, readManifest, readTransfers, storedDir, type Manifest, type StoredEntry } from './stored.js';
+import type { Transfer } from './types.js';
 
 /** What the worker reads from the environment and the console's settings on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -69,6 +72,20 @@ export function ingestTurns(
   const rest = live.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
   const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
   return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
+}
+
+/**
+ * Whether to load a collection's stored data before reading its chain: it is
+ * watched, there is stored data for it, no earlier load failed (the note
+ * says why, and the chain is read instead), and the stored data reaches past
+ * what was read. That covers a fresh watch and one that started reading from
+ * the deploy block before stored data came. Not one whose reading stopped
+ * short of where the stored data starts: the cursor would jump the blocks
+ * in between, and they would never be read.
+ */
+export function needsRestore(c: CollectionRow, entry: StoredEntry | null): boolean {
+  if (c.pausedAt !== null || entry === null || c.restoreNote !== null) return false;
+  return c.cursorBlock === null || (c.cursorBlock >= entry.startBlock - 1 && c.cursorBlock < entry.throughBlock);
 }
 
 /**
@@ -182,16 +199,20 @@ export class Worker {
   private checking: Promise<void> | null = null;
   private checkAgain = false;
   private checksFailed = '';
+  /** The last manifest read error logged, so a broken manifest is one line and not one a pass. */
+  private manifestFailed = '';
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
    * connection of its own with. It carries the password: never logged.
    * `config` merges the environment with the console's settings it is given.
+   * `stored` is the stored-data folder, which holds manifest.json.
    */
   constructor(
     private readonly store: Store,
     private readonly config: (settings: ReadonlyMap<string, string>) => WorkerConfig,
     private readonly storeUrl: string,
+    private readonly stored: string = storedDir(process.env),
   ) {}
 
   start(): void {
@@ -267,11 +288,17 @@ export class Worker {
   /**
    * Read each collection's next spans of finalized transfers. Collections at
    * the head first, then each backfill within its own slice of the budget.
+   * Before any of that, and outside the budget, load the stored data of any
+   * collection it reaches further for: it needs no RPC, and is the head
+   * start the chain is then read on from.
    */
   async ingest(): Promise<string> {
     const { rpc } = this.config(this.settings);
+    let collections = await this.store.collections();
+    const restored = await this.restore(collections);
+    // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
+    if (restored > 0) collections = await this.store.collections();
     const passEnd = Date.now() + BUDGET_MS;
-    const collections = await this.store.collections();
     const total = { spans: 0, read: 0, blocks: 0 };
     const serve = async (c: CollectionRow, deadline: number) => {
       if (Date.now() >= deadline) return;
@@ -301,12 +328,55 @@ export class Worker {
     // Slices come from what keep-up left, and no turn runs past the pass.
     const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;
     for (const { c, sliceMs } of rest) await serve(c, Math.min(Date.now() + sliceMs, passEnd));
-    return `${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
+    const loaded = restored > 0 ? `stored data loaded for ${restored} collections; ` : '';
+    return `${loaded}${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
+  }
+
+  /**
+   * Load the stored data of every collection that needs it (see
+   * needsRestore), one at a time, and say how many loaded. This runs in
+   * the ingest pass, under its lock, so no span is read into a collection
+   * while it loads. A load that fails has said why on the collection, and
+   * its chain is read as if there were no stored data; a manifest that
+   * cannot be read means no collection has any.
+   */
+  private async restore(collections: readonly CollectionRow[]): Promise<number> {
+    let manifest: Manifest;
+    try {
+      manifest = await this.manifest();
+      this.manifestFailed = '';
+    } catch (err) {
+      if (this.manifestFailed !== messageOf(err)) console.warn('[washtrace] stored data not used: %s', messageOf(err));
+      this.manifestFailed = messageOf(err);
+      return 0;
+    }
+    let loaded = 0;
+    for (const c of collections) {
+      const entry = entryFor(manifest, c.chainId, c.address);
+      if (entry === null || !needsRestore(c, entry)) continue;
+      await this.beat('ingest', `Loading stored data for ${c.name ?? entry.name}`, c.id);
+      try {
+        await this.store.restore(c.id, c.chainId, entry, this.storedTransfers(entry));
+        loaded += 1;
+      } catch (err) {
+        console.error('[washtrace] collection %d: stored data not loaded, reading the chain instead: %s', c.id, messageOf(err));
+      }
+    }
+    return loaded;
+  }
+
+  /** The stored-data manifest; empty when there is none. Tests override it on the instance. */
+  manifest(): Promise<Manifest> {
+    return readManifest(join(this.stored, 'manifest.json'));
+  }
+
+  /** A collection's stored transfers, checked against the manifest's sha256 first. Tests override it on the instance. */
+  storedTransfers(entry: StoredEntry): AsyncIterable<Transfer[]> {
+    return readTransfers(join(this.stored, entry.transfers.file), entry.transfers.sha256);
   }
 
   /** Read one collection's spans until it reaches the head or `deadline`, counting into `got` so a throw keeps what was read. `blocks` is how far the cursor moved. */
   private async readSpans(c: CollectionRow, chain: Chain, deadline: number, got: { spans: number; read: number; blocks: number }): Promise<void> {
-    const contracts = contractsFor(c.chainId);
     const head = await chain.finalized();
     await this.store.setHead(c.id, head);
     let cursor = c.cursorBlock;
@@ -323,8 +393,7 @@ export class Worker {
     while (cursor! < head && Date.now() < deadline) {
       await this.beat('ingest', `Reading ${c.name ?? c.address}, blocks ${cursor! + 1}–${head}`, c.id);
       const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
-      const queue = transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
-      await this.store.ingest(c.id, c.chainId, transfers, through, queue);
+      await this.store.ingest(c.id, c.chainId, transfers, through, traders(c.chainId, transfers));
       cursor = through;
       got.spans += 1;
       got.read += transfers.length;

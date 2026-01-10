@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 
 const PILL = {
+  restoring: 'bg-focus/12 text-focus',
   complete: 'bg-ok/12 text-ok',
   checking: 'bg-focus/12 text-focus',
   'catching-up': 'bg-focus/12 text-focus',
@@ -28,6 +29,7 @@ export function ReadingPill({ cov }: { cov: Coverage }) {
 export function trust(c: CollectionRow, cov: Coverage): string | null {
   // No analysis yet means no shares on screen; the empty state says why instead.
   if (c.latest === null) return null;
+  if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
   if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
@@ -44,7 +46,8 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
  * themselves are further down the page.
  */
 export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Coverage; href: string }) {
-  const stage = cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
+  const stage = cov.reading === 'restoring' ? { share: cov.restore ?? 0, of: 'Loading stored data: history cut ahead of time, so the chain is read only from where it stops' }
+    : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
     : cov.reading === 'paused' ? { share: cov.blocks ?? 0, of: 'of its history read when paused' }
     : cov.reading === 'complete' ? { share: 1, of: 'read: every transfer, and every wallet the lenses need' }
@@ -68,10 +71,16 @@ export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Covera
   );
 }
 
+/** How far a load of stored data has got, as a bar under the pill that says it in words: the list row's view of it. */
+export function RestoreProgress({ cov }: { cov: Coverage }) {
+  if (cov.restore === null) return null;
+  return <div className="w-full max-w-44"><Bar share={cov.restore} name="restore" /></div>;
+}
+
 /** Never green when paused: a paused collection's head is frozen, so a full bar would claim it is current. */
-function Bar({ share, paused = false }: { share: number; paused?: boolean }) {
+function Bar({ share, paused = false, name }: { share: number; paused?: boolean; name?: string }) {
   return (
-    <span aria-hidden className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
+    <span aria-hidden data-bar={name} className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
       <i className={cn('block h-full rounded-full', share >= 1 && !paused ? 'bg-ok' : 'bg-muted-foreground')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
     </span>
   );
@@ -98,6 +107,7 @@ function Step({ n, title, figure, value, bar, paused, affects, children }: { n: 
  */
 function step1(c: CollectionRow, cov: Coverage): string {
   const unread = c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock);
+  if (cov.reading === 'restoring') return cov.label;
   if (c.pausedAt !== null) return unread ? 'Not read yet · paused' : `${plural(c.transfers, 'transfer')} · read to block ${c.cursorBlock!.toLocaleString('en-US')} when paused`;
   if (c.cursorBlock === null) return 'Finding the deployment block…';
   if (cov.behind === null) return `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, head not known yet`;
@@ -117,12 +127,13 @@ export function ReadingPanel({ c, cov, why }: { c: CollectionRow; cov: Coverage;
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
         n={1} title="Transfers read"
-        figure={cov.blocks === null ? '…' : progress(cov.blocks)}
-        bar={cov.blocks ?? 0} paused={cov.reading === 'paused'}
+        figure={cov.reading === 'restoring' ? progress(cov.restore ?? 0) : cov.blocks === null ? '…' : progress(cov.blocks)}
+        bar={cov.reading === 'restoring' ? cov.restore ?? 0 : cov.blocks ?? 0} paused={cov.reading === 'paused'}
         value={step1(c, cov)}
         affects="all three lenses. Unread history can move any share either way."
       >
         {c.error ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
+        {c.restoreNote ? <p className="text-xs text-muted-foreground">{c.restoreNote}</p> : null}
       </Step>
       <Step
         n={2} title="Wallets checked for money"

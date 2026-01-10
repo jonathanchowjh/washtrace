@@ -61,7 +61,8 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 1_000, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
     latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
-    servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
+    servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
   };
 }
 
@@ -76,6 +77,19 @@ describe('coverage', () => {
     const c = coverage(row({ fundedWallets: 20 }));
     expect(c.reading).toBe('checking');
     expect(c.floor).toEqual(['AU', 'AC']);
+  });
+
+  it('is loading stored data while a load runs, with how far it has got', () => {
+    const c = coverage(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 }));
+    expect(c.reading).toBe('restoring');
+    expect(c.label).toBe('Loading stored data · 42%');
+    expect(coverage(row({ restoreProgress: 0.42, pausedAt: 5 })).reading).toBe('paused');
+  });
+
+  it('never shows a load as done before it has committed', () => {
+    const c = coverage(row({ restoreProgress: 1 }));
+    expect(c.restore).toBe(0.99);
+    expect(c.label).toBe('Loading stored data · 99%');
   });
 
   it('is catching up when far behind the head, whatever the wallets', () => {
@@ -132,6 +146,10 @@ describe('waiting', () => {
 
   it('promises nothing for a paused collection', () => {
     expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, NOW)).toBe('Paused · it is not analysed until you resume it.');
+  });
+
+  it('waits for stored data to load, not for transfers to be read', () => {
+    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, NOW)).toBe('Loading stored data · it is analysed once it has loaded.');
   });
 
   it('waits for transfers when none are read', () => {

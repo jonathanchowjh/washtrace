@@ -226,6 +226,19 @@ describe('CollectionRow', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('says it is loading stored data, with a bar of how far it has got', () => {
+    const { container } = render(<CollectionRow c={{ ...base, cursorBlock: null, startBlock: null, restoreProgress: 0.42 } as typeof base} why="Waiting" />);
+    expect(screen.getAllByText('Loading stored data · 42%').length).toBeGreaterThan(0);
+    const bar = container.querySelector('[data-bar="restore"] i') as HTMLElement;
+    expect(bar.style.width).toBe('42%');
+  });
+
+  it('says why stored data was not loaded as information, not a fault', () => {
+    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
+    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" />);
+    expect(screen.getByText(note).className).not.toContain('text-fault');
+  });
+
   it('offers Resume and Delete data when paused', () => {
     render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" />);
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();

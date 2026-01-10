@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, entryFor, readManifest, readTransfers, readTrail, storedFile, upsertEntry, writeTransfers, writeTrail,
+  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, upsertEntry, writeTransfers, writeTrail,
   type Manifest, type StoredEntry, type WalletRow,
 } from '../src/stored.js';
 import type { Flow, Transfer } from '../src/types.js';
@@ -74,12 +74,19 @@ describe('stored transfers', () => {
     await writeFile(path, bytes);
     const seen: Transfer[][] = [];
     await expect((async () => { for await (const batch of readTransfers(path, written.sha256)) seen.push(batch); })())
-      .rejects.toBeInstanceOf(StoredDataError);
+      .rejects.toMatchObject({ constructor: StoredDataError, kind: 'mismatch' });
     expect(seen).toEqual([]);
   });
 
   it('throws StoredDataError for a missing file', async () => {
-    await expect(collect(readTransfers(join(dir, 'missing.transfers.csv.zst'), 'ab'.repeat(32)))).rejects.toBeInstanceOf(StoredDataError);
+    await expect(collect(readTransfers(join(dir, 'missing.transfers.csv.zst'), 'ab'.repeat(32))))
+      .rejects.toMatchObject({ constructor: StoredDataError, kind: 'missing' });
+  });
+
+  it('calls a file that matches its checksum but will not parse unreadable', async () => {
+    const path = join(dir, 'garbled.transfers.csv.zst');
+    await writeFile(path, 'not zstd');
+    await expect(collect(readTransfers(path, await sha256File(path)))).rejects.toMatchObject({ constructor: StoredDataError, kind: 'unreadable' });
   });
 
   it('refuses a value with a comma rather than quoting it, and leaves no file behind', async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import type { StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
 import type { AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
@@ -8,7 +9,8 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
-    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null, ...more,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
   };
 }
 
@@ -58,6 +60,7 @@ describe('Worker.ingest', () => {
       served: async (id: number, blocks: number) => { served.push({ id, blocks }); },
     };
     const w = new Worker(store, () => config, '');
+    (w as any).manifest = async () => ({ version: 1, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       transfers: async (address: string, from: number) => {
@@ -100,6 +103,93 @@ describe('Worker.ingest', () => {
     await w.ingest();
     expect(errors.get(1)).toBe('No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.');
     expect(errors.get(2)).toBe('No RPC is configured for chain 8453. Set WASHTRACE_RPC_8453 for the worker.');
+  });
+});
+
+const ENTRY: StoredEntry = {
+  chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, throughBlock: 900, throughTime: 1_700_000_000_000,
+  transfers: { file: '1-0xbc4c.transfers.csv.zst', rows: 3, bytes: 10, sha256: 'abc' }, trail: null,
+};
+
+describe('needsRestore', () => {
+  it('restores a watched collection whose stored data reaches past its cursor, and nothing else', () => {
+    expect(needsRestore(row({ cursorBlock: null }), null)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: null, pausedAt: 5 }), ENTRY)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: null, restoreNote: 'Stored data could not be loaded (x); reading from the chain instead.' }), ENTRY)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: 900 }), ENTRY)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: 950 }), ENTRY)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: null }), ENTRY)).toBe(true);
+    expect(needsRestore(row({ cursorBlock: 899 }), ENTRY)).toBe(true);
+    // Read up to just before the stored start: the stored data carries on from there.
+    expect(needsRestore(row({ cursorBlock: 99 }), ENTRY)).toBe(true);
+    // Stopped short of the stored start: loading would skip the blocks in between for good.
+    expect(needsRestore(row({ cursorBlock: 50 }), ENTRY)).toBe(false);
+  });
+});
+
+describe('Worker.ingest restoring stored data', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A worker whose store says what happened, in order, and whose collections move to `after` once restored. */
+  function setup(before: CollectionRow[], after: CollectionRow[], rpc: ReadonlyMap<number, string> = new Map()) {
+    const events: string[] = [];
+    let restored = false;
+    const store: any = {
+      collections: async () => { events.push('collections'); return restored ? after : before; },
+      restore: async (id: number, chainId: number, entry: StoredEntry, batches: AsyncIterable<unknown>) => {
+        events.push(`restore ${id} ${chainId} ${entry.address}`);
+        for await (const _ of batches) events.push('batch');
+        restored = true;
+      },
+      heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { events.push(`beat ${doing} ${subjectId}`); },
+      setError: async (id: number) => { events.push(`error ${id}`); },
+      setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
+      served: async (id: number) => { events.push(`served ${id}`); },
+    };
+    const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
+    return { w, events, store };
+  }
+
+  it('loads stored data first, with no RPC at all, then serves the collection as it now is', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events } = setup([row({ cursorBlock: null, startBlock: null })], [row({ cursorBlock: 900 })]);
+    await w.ingest();
+    expect(events.slice(0, 6)).toEqual([
+      'collections', 'beat Loading stored data for BAYC 1', 'restore 1 1 0xbc4c', 'read 1-0xbc4c.transfers.csv.zst', 'batch', 'collections',
+    ]);
+    // Only then is the missing RPC found, and said.
+    expect(events.indexOf('error 1')).toBeGreaterThan(events.indexOf('restore 1 1 0xbc4c'));
+  });
+
+  it('never loads stored data for a paused collection', async () => {
+    const { w, events } = setup([row({ cursorBlock: null, pausedAt: 5 })], []);
+    await w.ingest();
+    expect(events.filter((e) => e.startsWith('restore'))).toEqual([]);
+  });
+
+  it('goes on to read the chain when a load fails, and says so in the log', async () => {
+    const { w, events, store } = setup([row({ cursorBlock: 100 })], []);
+    store.restore = async () => { events.push('restore'); throw new Error('checksum differs'); };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (w as any).chain = () => ({ finalized: async () => 1_000, transfers: async () => ({ transfers: [], through: 1_000 }) });
+    (w as any).config = () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} });
+    await w.ingest();
+    expect(events).toContain('restore');
+    expect(events).toContain('served 1');
+    expect(logged.mock.calls.some((c) => c.join(' ').includes('checksum differs'))).toBe(true);
+  });
+
+  it('reads the chain as before when the manifest cannot be read', async () => {
+    const { w, events } = setup([row({ cursorBlock: null })], []);
+    (w as any).manifest = async () => { throw new Error('not json'); };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await w.ingest();
+    expect(events.filter((e) => e.startsWith('restore'))).toEqual([]);
+    expect(events).toContain('error 1');
   });
 });
 

@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
-import { EVERY, Store, Worker, messageOf, storeUrl, workerConfig } from '@washtrace/detect';
+import { fileURLToPath } from 'node:url';
+import { EVERY, Store, Worker, messageOf, storeUrl, storedDir, workerConfig } from '@washtrace/detect';
 
 /**
  * The worker service: the polling half of washtrace, as its own process.
@@ -30,8 +31,18 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
+// A load of stored data that was running when the last worker died rolled
+// back, but the progress it showed was written outside it: clear it, or the
+// console says "Loading stored data" for ever. Before the first pass, which
+// may start a load of its own.
+await store.clearRestoreProgress().catch((err) => console.warn('[worker] stale stored-data progress not cleared: %s', messageOf(err)));
+
+// Stored data is data/stored at the repo root (/app in the image), wherever
+// the process was started from: `npm run worker` starts it in apps/worker.
+const root = fileURLToPath(new URL('../../..', import.meta.url));
+
 // The environment wins over the console's settings, which each pass re-reads.
-const worker = new Worker(store, (s) => workerConfig(process.env, s), url);
+const worker = new Worker(store, (s) => workerConfig(process.env, s), url, storedDir(process.env, root));
 worker.start();
 // A Test asked for in the console is heard at once over LISTEN, not next pass.
 void worker.listen();

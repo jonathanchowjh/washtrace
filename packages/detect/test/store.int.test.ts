@@ -10,6 +10,9 @@ import { Etherscan } from '../src/etherscan.js';
 import { workerConfig } from '../src/env.js';
 import { HttpRequestError } from 'viem';
 import { chain, flow, input, w } from './fixtures.js';
+import { StoredDataError, type StoredEntry } from '../src/stored.js';
+import { needsRestore } from '../src/worker.js';
+import type { Transfer } from '../src/types.js';
 
 let pg: StartedPostgreSqlContainer;
 let store: Store;
@@ -34,10 +37,10 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(9);
-    expect(await store.migrate()).toBe(9);
+    expect(await store.migrate()).toBe(10);
+    expect(await store.migrate()).toBe(10);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 9 }]);
+    expect(rows).toEqual([{ version: 10 }]);
   });
 
   it('removeCollection deletes nothing that is not paused', async () => {
@@ -674,6 +677,210 @@ describe('Store', () => {
 
     it('has nothing to cut for a collection it does not watch', async () => {
       expect(await store.storedHeader(chainId, w('404'))).toBeNull();
+    });
+  });
+
+  describe('restoring stored data', () => {
+    // A chain of its own, so the rest of this file's wallets stay out of it.
+    const chainId = 8;
+    const entry = (address: string, more: Partial<StoredEntry> = {}): StoredEntry => ({
+      chainId, address, name: 'Stored', startBlock: 5, throughBlock: 300, throughTime: 1_700_000_100_000,
+      transfers: { file: `${chainId}-${address}.transfers.csv.zst`, rows: 3, bytes: 0, sha256: '' }, trail: null, ...more,
+    });
+    async function* batches(...bs: Transfer[][]): AsyncIterable<Transfer[]> {
+      for (const b of bs) yield b;
+    }
+    const version = async (id: number) => Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
+    const wallets = async (...addresses: string[]) => Object.fromEntries((await store.pool.query(
+      'SELECT address, transfers FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2)', [chainId, addresses])).rows.map((r) => [r.address, r.transfers]));
+
+    it('loads every stored transfer in one go, keeps the ones already read, and moves the cursor to where the data stops', async () => {
+      await store.migrate(); // a no-op in a full run; lets this block run by itself
+      const coll = w('8e1'), p = w('8a1'), q = w('8a2'), r = w('8a3');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const ts = chain('1', p, q, r).map((t, i) => ({ ...t, blockNumber: 20 + i, blockTime: 1_700_000_000 + i }));
+      await store.ingest(id, chainId, ts.slice(0, 1), 20, [p]);
+      const before = await version(id);
+      await store.restore(id, chainId, entry(coll), batches(ts.slice(0, 2), ts.slice(2)));
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({
+        transfers: 3, startBlock: 5, cursorBlock: 300, storedThroughTime: 1_700_000_100_000, restoreProgress: null, restoreNote: null,
+      });
+      expect(await version(id)).toBe(before + 1);
+      // Queued as ingest queues them: the zero address left out, and the one already read not counted twice.
+      expect(await wallets(p, q, r)).toEqual({ [p]: 2, [q]: 2, [r]: 1 });
+      expect((await store.fundingLanes(chainId, 10)).lanes.find((l) => l.collectionId === id)!.wallets.sort()).toEqual([p, q, r].sort());
+      await drop(chainId, coll);
+    });
+
+    it('takes the stored start block when none is known, and never moves a start or a cursor the wrong way', async () => {
+      const fresh = w('8e2'), ahead = w('8e3');
+      const f = (await store.addCollection(chainId, fresh, null, null)).id;
+      await store.restore(f, chainId, entry(fresh), batches());
+      expect(await store.collection(chainId, fresh)).toMatchObject({ startBlock: 5, cursorBlock: 300 });
+      const a2 = (await store.addCollection(chainId, ahead, null, 2)).id;
+      await store.pool.query('UPDATE washtrace.collections SET cursor_block = 500 WHERE id = $1', [a2]);
+      await store.restore(a2, chainId, entry(ahead), batches());
+      expect(await store.collection(chainId, ahead)).toMatchObject({ startBlock: 2, cursorBlock: 500 });
+      await drop(chainId, fresh);
+      await drop(chainId, ahead);
+    });
+
+    it('stores nothing when the stored data turns out bad partway, and says why in a few words', async () => {
+      const coll = w('8e4');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const read = chain('2', w('8a4'), w('8a5')).map((t, i) => ({ ...t, blockNumber: 20 + i }));
+      await store.ingest(id, chainId, read.slice(0, 1), 20, []);
+      async function* broken(): AsyncIterable<Transfer[]> {
+        yield read;
+        throw new StoredDataError('/app/data/stored/8-x.transfers.csv.zst has a row of 3 fields, expected 10', 'unreadable');
+      }
+      await expect(store.restore(id, chainId, entry(coll), broken())).rejects.toThrow('has a row of 3 fields');
+      expect(await store.collection(chainId, coll)).toMatchObject({
+        transfers: 1, startBlock: 10, cursorBlock: 20, restoreProgress: null, storedThroughTime: null,
+        restoreNote: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+      });
+      await drop(chainId, coll);
+    });
+
+    it('says which way a stored file was bad: missing, or not matching the manifest', async () => {
+      const coll = w('8e8');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const failing = (err: Error) => (async function* (): AsyncIterable<Transfer[]> { throw err; })();
+      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x is missing', 'missing')))).rejects.toThrow();
+      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file is missing. Reading from the chain instead.');
+      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x does not match', 'mismatch')))).rejects.toThrow();
+      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file does not match the manifest. Reading from the chain instead.');
+      await drop(chainId, coll);
+    });
+
+    it('leaves no note when the store, not the data, failed, so the next pass tries again', async () => {
+      const coll = w('8e9');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const deadlock = Object.assign(new Error('deadlock detected'), { code: '40P01' });
+      async function* interrupted(): AsyncIterable<Transfer[]> {
+        yield chain('5', w('8b1'), w('8b2'));
+        throw deadlock;
+      }
+      await expect(store.restore(id, chainId, entry(coll), interrupted())).rejects.toThrow('deadlock detected');
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ transfers: 0, restoreProgress: null, restoreNote: null, cursorBlock: 9 });
+      expect(needsRestore(c, entry(coll))).toBe(true);
+      await drop(chainId, coll);
+    });
+
+    it('holds no wallet while it loads, so funding is never kept waiting on it', async () => {
+      const coll = w('8ea'), p = w('8b3'), q = w('8b4');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const ts = chain('6', p, q).map((t, i) => ({ ...t, blockNumber: 20 + i }));
+      await store.ingest(id, chainId, ts.slice(0, 1), 20, [p]);
+      // What fund does to a wallet, from its own connection, with no patience for a lock.
+      const probe = await store.pool.connect();
+      await probe.query("SET lock_timeout = '500ms'");
+      const funded: string[] = [];
+      async function* loading(): AsyncIterable<Transfer[]> {
+        yield ts;
+        await probe.query("UPDATE washtrace.wallets SET status = 'done' WHERE chain_id = $1 AND address = $2", [chainId, p]);
+        funded.push(p);
+        yield [];
+      }
+      try {
+        await store.restore(id, chainId, entry(coll), loading());
+      } finally {
+        probe.release();
+      }
+      expect(funded).toEqual([p]);
+      expect(await wallets(p, q)).toEqual({ [p]: 2, [q]: 1 });
+      await drop(chainId, coll);
+    });
+
+    it('stops quietly when the collection is paused midway, and lets a delete through at once', async () => {
+      const coll = w('8eb');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      let now = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let deleting: Promise<boolean> | null = null;
+      async function* paused(): AsyncIterable<Transfer[]> {
+        yield chain('7', w('8b5'), w('8b6'));
+        await store.pause(chainId, coll);
+        deleting = store.removeCollection(chainId, coll);
+        await new Promise((r) => setTimeout(r, 200));
+        now += 2_000;
+        yield chain('8', w('8b7'));
+        throw new Error('read on after the pause');
+      }
+      try {
+        await expect(store.restore(id, chainId, entry(coll), paused())).resolves.toBeUndefined();
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(await deleting).toBe(true);
+      expect(await store.collection(chainId, coll)).toBeNull();
+    });
+
+    it('stops quietly when paused midway, with no note and no progress left', async () => {
+      const coll = w('8ec');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      let now = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      async function* paused(): AsyncIterable<Transfer[]> {
+        yield chain('9', w('8b8'), w('8b9'));
+        await store.pause(chainId, coll);
+        now += 2_000;
+        yield chain('10', w('8ba'));
+      }
+      try {
+        await expect(store.restore(id, chainId, entry(coll), paused())).resolves.toBeUndefined();
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(await store.collection(chainId, coll)).toMatchObject({ transfers: 0, cursorBlock: 9, restoreProgress: null, restoreNote: null, storedThroughTime: null });
+      await drop(chainId, coll);
+    });
+
+    it('shows its progress outside the load while the transfers stay unseen until it commits', async () => {
+      const coll = w('8e5');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const ts = chain('3', w('8a6'), w('8a7')).map((t, i) => ({ ...t, blockNumber: 20 + i }));
+      let now = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const seen: { progress: number | null; transfers: number }[] = [];
+      async function* watched(): AsyncIterable<Transfer[]> {
+        yield ts.slice(0, 1);
+        // Two seconds on: the next batch first writes the progress so far.
+        now += 2_000;
+        yield ts.slice(1, 2);
+        const c = (await store.collection(chainId, coll))!;
+        seen.push({ progress: c.restoreProgress, transfers: c.transfers });
+        yield [];
+      }
+      try {
+        await store.restore(id, chainId, entry(coll, { transfers: { file: 'x', rows: 3, bytes: 0, sha256: '' } }), watched());
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.progress).toBeCloseTo(1 / 3, 5);
+      expect(seen[0]!.transfers).toBe(0);
+      expect(await store.collection(chainId, coll)).toMatchObject({ transfers: 2, restoreProgress: null });
+      await drop(chainId, coll);
+    });
+
+    it('drops a load quietly when the collection was deleted under it', async () => {
+      const coll = w('8e6');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await drop(chainId, coll);
+      await expect(store.restore(id, chainId, entry(coll), batches(chain('4', w('8a8'))))).resolves.toBeUndefined();
+      expect(await store.collection(chainId, coll)).toBeNull();
+    });
+
+    it('clears the progress a worker that died mid-load left behind, and keeps any note', async () => {
+      const coll = w('8e7');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.pool.query("UPDATE washtrace.collections SET restore_progress = 0.5, restore_note = 'kept' WHERE id = $1", [id]);
+      await store.clearRestoreProgress();
+      expect(await store.collection(chainId, coll)).toMatchObject({ restoreProgress: null, restoreNote: 'kept' });
+      await drop(chainId, coll);
     });
   });
 });

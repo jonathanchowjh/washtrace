@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta } from './format';
-import { isRunning } from './metrics';
+import { isRunning, progress } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -77,7 +77,12 @@ export function status(s: Snapshot, now: number) {
     const label = c.name ?? `${c.chainId}:${c.address}`;
     const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
     const paused = c.pausedAt !== null;
-    const backfilling = !paused && behind !== null && behind > BEHIND_BLOCKS;
+    // While stored data loads, the cursor jumps when it commits: how far behind it is now says nothing.
+    const restoring = !paused && c.restoreProgress !== null;
+    const backfilling = !paused && !restoring && behind !== null && behind > BEHIND_BLOCKS;
+    if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
+    // Not a fault: the worker reads the chain from the deploy block instead, which only takes longer.
+    if (c.restoreNote) notice('info', `${label}: ${c.restoreNote}`);
     if (backfilling) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
       notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
@@ -91,7 +96,7 @@ export function status(s: Snapshot, now: number) {
     }
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
-      behind, turn: paused ? 'paused' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
+      behind, turn: paused ? 'paused' as const : restoring ? 'restoring' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
     };
   });
 

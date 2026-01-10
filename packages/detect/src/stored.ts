@@ -59,8 +59,15 @@ export interface WalletRow {
   fetchedAt: number | null;
 }
 
+/** Which way stored data is bad, for a reader who needs it in a few words. */
+export type StoredDataFault = 'missing' | 'mismatch' | 'unreadable';
+
 /** Stored data that is missing, changed or malformed. Callers fall back to reading the chain. */
-export class StoredDataError extends Error {}
+export class StoredDataError extends Error {
+  constructor(message: string, readonly kind: StoredDataFault = 'unreadable') {
+    super(message);
+  }
+}
 
 /** Rows to write: an array, or a store's cursor as it streams. */
 type Rows<T> = AsyncIterable<T> | Iterable<T>;
@@ -131,7 +138,7 @@ export async function sha256File(path: string): Promise<string> {
   try {
     for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new StoredDataError(`${path} is missing`);
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new StoredDataError(`${path} is missing`, 'missing');
     throw err;
   }
   return hash.digest('hex');
@@ -315,7 +322,7 @@ async function writeCompressed(path: string, lines: AsyncIterable<string>): Prom
 /** The decompressed lines of `path`, after its sha256 is checked. Empty lines (the last newline) are skipped. */
 async function* readLines(path: string, sha256: string): AsyncIterable<string> {
   const actual = await sha256File(path);
-  if (actual !== sha256) throw new StoredDataError(`${path} does not match its checksum (sha256 ${actual}, expected ${sha256})`);
+  if (actual !== sha256) throw new StoredDataError(`${path} does not match its checksum (sha256 ${actual}, expected ${sha256})`, 'mismatch');
   const decompress = createZstdDecompress();
   const source = createReadStream(path);
   source.on('error', (err) => decompress.destroy(err));

@@ -1,8 +1,9 @@
 import pg from 'pg';
 import { ZERO } from './graph.js';
+import { traders } from './marketplaces.js';
 import { MIGRATIONS } from './migrations.js';
 import type { Rules } from './methods.js';
-import type { WalletRow } from './stored.js';
+import { StoredDataError, type StoredDataFault, type StoredEntry, type WalletRow } from './stored.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
@@ -15,6 +16,18 @@ const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
 /** Rows a cursor fetches at a time when stored data is cut. */
 const CURSOR_PAGE = 10_000;
+/** A load of stored data looks up from its work at most this often: Terraforms is a thousand batches. */
+const RESTORE_CHECK_MS = 1_000;
+/** Wallets a load queues per statement, in address order. */
+const QUEUE_BATCH = 10_000;
+/** Why stored data could not be loaded, in the words the console shows. The full error goes to the log. */
+const RESTORE_NOTES: Readonly<Record<StoredDataFault, string>> = {
+  missing: 'Stored data could not be loaded: its file is missing. Reading from the chain instead.',
+  mismatch: 'Stored data could not be loaded: its file does not match the manifest. Reading from the chain instead.',
+  unreadable: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+};
+/** Thrown inside a load to stop it quietly: its collection was paused or deleted under it. */
+const STOPPED = Symbol('restore stopped');
 
 export interface CollectionRow {
   id: number;
@@ -42,6 +55,12 @@ export interface CollectionRow {
   priority: boolean;
   /** When it was paused: the worker leaves it alone, its data kept. Null while it is watched. */
   pausedAt: number | null;
+  /** How far a load of stored data has got, 0 to 1, while one runs. Null otherwise. */
+  restoreProgress: number | null;
+  /** Why stored data could not be loaded. The worker reads the chain instead and does not try the stored data again. */
+  restoreNote: string | null;
+  /** When the stored data it loaded stops, in ms. Null when none was loaded. */
+  storedThroughTime: number | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -362,31 +381,8 @@ export class Store {
     const c = await this.pool.connect();
     try {
       await c.query('BEGIN');
-      if (transfers.length > 0) {
-        await c.query(
-          `INSERT INTO washtrace.transfers
-             (collection_id, tx_hash, log_index, block_number, block_time, token_id, from_address, to_address, marketplace, price_wei, currency)
-           SELECT $1, tx, li, bn, to_timestamp(bt), tok, fr, too, mk, pr, cur
-           FROM unnest($2::text[], $3::int[], $4::bigint[], $5::float8[], $6::numeric[], $7::text[], $8::text[], $9::text[], $10::numeric[], $11::text[])
-             AS u(tx, li, bn, bt, tok, fr, too, mk, pr, cur)
-           ON CONFLICT DO NOTHING`,
-          [
-            id,
-            transfers.map((t) => t.txHash), transfers.map((t) => t.logIndex), transfers.map((t) => t.blockNumber),
-            transfers.map((t) => t.blockTime), transfers.map((t) => t.tokenId), transfers.map((t) => t.from),
-            transfers.map((t) => t.to), transfers.map((t) => t.marketplace), transfers.map((t) => t.priceWei),
-            transfers.map((t) => t.currency),
-          ],
-        );
-      }
-      if (queue.length > 0) {
-        await c.query(
-          `INSERT INTO washtrace.wallets (chain_id, address, transfers)
-           SELECT $1, a, count(*) FROM unnest($2::text[]) AS a GROUP BY a
-           ON CONFLICT (chain_id, address) DO UPDATE SET transfers = washtrace.wallets.transfers + EXCLUDED.transfers, depth = 0`,
-          [chainId, queue],
-        );
-      }
+      await insertTransfers(c, id, transfers);
+      await queueWallets(c, chainId, tally(queue));
       await c.query(
         `UPDATE washtrace.collections SET cursor_block = $2, ingested_at = now(), error = NULL, error_at = NULL,
            version = version + CASE WHEN $3 THEN 1 ELSE 0 END WHERE id = $1`,
@@ -399,6 +395,100 @@ export class Store {
     } finally {
       c.release();
     }
+  }
+
+  /**
+   * Load a collection's stored data: every transfer in `batches`, then its
+   * wallets queued and the cursor moved to where the data stops, all in one
+   * transaction, so nothing (analysis included) ever sees half a load. A
+   * transfer already read is kept, and only the ones new here count toward
+   * their wallets, as ingest counts them. One batch is held at a time: a big
+   * collection is millions of rows.
+   *
+   * Wallets are queued once, at the end, in address order: queued per batch,
+   * their rows stayed locked for the whole load, and funding, which writes
+   * them, waited minutes or deadlocked with it. Their counts are tallied
+   * meanwhile: far fewer traders than transfers.
+   *
+   * About once a second, from a connection of its own (the transaction's
+   * writes are invisible until it commits), the load writes its progress and
+   * looks whether its collection was paused or deleted. Either stops it
+   * quietly, as saveAnalysis drops an analysis whose collection went: so a
+   * Delete, allowed only once paused, waits at most that second, not the
+   * whole load. Neither look ever waits on a lock.
+   *
+   * On failure nothing is kept and the progress is cleared. Bad stored data
+   * (a StoredDataError) also leaves a note, and the worker reads the chain
+   * instead from then on. Any other error (a deadlock, a lost connection)
+   * leaves none, so the next pass tries again. Either way it is thrown on.
+   */
+  async restore(id: number, chainId: number, entry: StoredEntry, batches: AsyncIterable<Transfer[]>): Promise<void> {
+    const c = await this.pool.connect();
+    try {
+      // Shown at once: the whole file is checked against its sha256 before the first batch.
+      await this.pool.query('UPDATE washtrace.collections SET restore_progress = 0 WHERE id = $1', [id]);
+      let checked = Date.now();
+      let loaded = 0;
+      const counts = new Map<string, number>();
+      await c.query('BEGIN');
+      for await (const batch of batches) {
+        if (Date.now() - checked >= RESTORE_CHECK_MS) {
+          if (!(await this.restoreGoesOn(id, Math.min(1, loaded / Math.max(1, entry.transfers.rows))))) throw STOPPED;
+          checked = Date.now();
+        }
+        for (const a of traders(chainId, await insertTransfers(c, id, batch))) counts.set(a, (counts.get(a) ?? 0) + 1);
+        loaded += batch.length;
+      }
+      // Once more before the wallets and the cursor are written: a pause in the last second still stops it.
+      if (!(await this.restoreGoesOn(id, null))) throw STOPPED;
+      await queueWallets(c, chainId, counts);
+      // LEAST and GREATEST skip a null, so a collection with no start yet takes the stored one.
+      await c.query(
+        `UPDATE washtrace.collections SET start_block = LEAST(start_block, $2::bigint), cursor_block = GREATEST(cursor_block, $3::bigint),
+           stored_through_time = to_timestamp($4::float8 / 1000), restore_progress = NULL, restore_note = NULL, version = version + 1
+         WHERE id = $1`,
+        [id, entry.startBlock, entry.throughBlock, entry.throughTime],
+      );
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      // After the rollback, so a Delete waiting on the load has gone through and this finds nothing to wait on.
+      const note = err instanceof StoredDataError ? RESTORE_NOTES[err.kind] : null;
+      await this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL, restore_note = coalesce($2, restore_note) WHERE id = $1', [id, note])
+        .catch(() => {});
+      if (err === STOPPED || (err as { code?: string }).code === FOREIGN_KEY_VIOLATION) return;
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  /**
+   * Whether a load may go on: its collection is still there and not paused.
+   * Writes `progress` too, unless null. A plain read never waits, and the
+   * write skips a row it would have to wait for (a Delete queued on the
+   * load), so the load is never stuck behind something waiting on it.
+   */
+  private async restoreGoesOn(id: number, progress: number | null): Promise<boolean> {
+    const { rows } = await this.pool.query<{ paused: boolean }>('SELECT paused_at IS NOT NULL AS paused FROM washtrace.collections WHERE id = $1', [id]);
+    if (rows.length === 0 || rows[0]!.paused) return false;
+    if (progress !== null) {
+      await this.pool.query(
+        `UPDATE washtrace.collections SET restore_progress = $2
+         WHERE id = (SELECT id FROM washtrace.collections WHERE id = $1 FOR NO KEY UPDATE SKIP LOCKED)`,
+        [id, progress],
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Forget every load's progress. For a worker starting: a load that was
+   * running when the last one died rolled back, but its progress, written
+   * outside the load, would otherwise say "Loading stored data" for ever.
+   */
+  async clearRestoreProgress(): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL WHERE restore_progress IS NOT NULL');
   }
 
   // ---- funding -------------------------------------------------------------
@@ -1047,6 +1137,7 @@ export class Store {
 const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
        extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served, extract(epoch FROM c.paused_at)::float8 AS paused,
+       extract(epoch FROM c.stored_through_time)::float8 AS stored_through,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -1103,7 +1194,61 @@ function toCollection(r: any): CollectionRow {
     latest: r.analysis_id === null ? null : toAnalysis(r),
     servedAt: r.served === null ? null : r.served * 1000, readRate: num(r.read_rate), priority: r.priority,
     pausedAt: r.paused === null ? null : r.paused * 1000,
+    restoreProgress: num(r.restore_progress), restoreNote: r.restore_note,
+    storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };
+}
+
+/**
+ * Insert transfers, keeping any already stored, and return the senders and
+ * receivers of the ones that were new. Ingest and a load of stored data
+ * share it.
+ */
+async function insertTransfers(c: pg.PoolClient, id: number, transfers: readonly Transfer[]): Promise<{ from: string; to: string }[]> {
+  if (transfers.length === 0) return [];
+  const { rows } = await c.query<{ from: string; to: string }>(
+    `INSERT INTO washtrace.transfers
+       (collection_id, tx_hash, log_index, block_number, block_time, token_id, from_address, to_address, marketplace, price_wei, currency)
+     SELECT $1, tx, li, bn, to_timestamp(bt), tok, fr, too, mk, pr, cur
+     FROM unnest($2::text[], $3::int[], $4::bigint[], $5::float8[], $6::numeric[], $7::text[], $8::text[], $9::text[], $10::numeric[], $11::text[])
+       AS u(tx, li, bn, bt, tok, fr, too, mk, pr, cur)
+     ON CONFLICT DO NOTHING
+     RETURNING from_address AS "from", to_address AS "to"`,
+    [
+      id,
+      transfers.map((t) => t.txHash), transfers.map((t) => t.logIndex), transfers.map((t) => t.blockNumber),
+      transfers.map((t) => t.blockTime), transfers.map((t) => t.tokenId), transfers.map((t) => t.from),
+      transfers.map((t) => t.to), transfers.map((t) => t.marketplace), transfers.map((t) => t.priceWei),
+      transfers.map((t) => t.currency),
+    ],
+  );
+  return rows;
+}
+
+/** How many times each address appears. */
+function tally(addresses: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const a of addresses) counts.set(a, (counts.get(a) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * Queue wallets for a funding check, weighted by how often they traded. A
+ * wallet a collection traded is a trader, depth 0, even if it was first met
+ * as a followed one. In address order, so two writers lock wallets in the
+ * same order. Ingest and a load of stored data share it.
+ */
+async function queueWallets(c: pg.PoolClient, chainId: number, counts: ReadonlyMap<string, number>): Promise<void> {
+  const sorted = [...counts.keys()].sort();
+  for (let at = 0; at < sorted.length; at += QUEUE_BATCH) {
+    const addresses = sorted.slice(at, at + QUEUE_BATCH);
+    await c.query(
+      `INSERT INTO washtrace.wallets (chain_id, address, transfers)
+       SELECT $1, a, n FROM unnest($2::text[], $3::int[]) AS u(a, n) ORDER BY a
+       ON CONFLICT (chain_id, address) DO UPDATE SET transfers = washtrace.wallets.transfers + EXCLUDED.transfers, depth = 0`,
+      [chainId, addresses, addresses.map((a) => counts.get(a)!)],
+    );
+  }
 }

@@ -59,7 +59,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
+export type Reading = 'restoring' | 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -71,6 +71,8 @@ export interface Coverage {
   money: boolean;
   /** Lenses whose shares can only rise as the reading completes. */
   floor: Method[];
+  /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
+  restore: number | null;
   label: string;
 }
 
@@ -78,10 +80,12 @@ export interface Coverage {
  * How far the reading the numbers rest on has got. History comes first: with
  * blocks unread, any share can still move either way. Then wallets: with
  * money unread, the money lenses have missed links but not invented any, so
- * their shares are floors. A paused collection is none of these: its head
- * stops moving, so "up to date" would be a claim nobody is keeping true.
+ * their shares are floors. Before either, stored data may be loading: the
+ * history it holds arrives at once, when the load commits. A paused
+ * collection is none of these: its head stops moving, so "up to date" would
+ * be a claim nobody is keeping true.
  */
-export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'>): Coverage {
+export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress'>>): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
   const wallets = { checked: c.fundedWallets, of: c.wallets };
   const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
@@ -89,7 +93,11 @@ export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cur
   const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.max(0, Math.min(1, (c.cursorBlock - c.startBlock) / span));
   const unchecked = money && wallets.checked < wallets.of;
   const floor: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
-  const base = { blocks, behind, wallets, money, floor };
+  // A load is never resumed after a pause, so progress left on a paused collection is stale.
+  // Never shown as done: the data is not there until the load commits, and then the progress is gone.
+  const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
+  const base = { blocks, behind, wallets, money, floor, restore };
+  if (restore !== null) return { ...base, reading: 'restoring', label: `Loading stored data · ${progress(restore)}` };
   if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
   // An unknown head cannot be caught up to.
   if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
@@ -116,6 +124,8 @@ export function isRunning(p: PassRow): boolean {
 export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number): string {
   // Never analysed while paused, so promise nothing.
   if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
+  // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
+  if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
   if (c.transfers === 0) return 'Waiting for its first transfers.';
   const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
   if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
