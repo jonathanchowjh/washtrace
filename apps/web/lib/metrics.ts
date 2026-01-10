@@ -1,5 +1,5 @@
 import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals, type PassRow } from '@washtrace/detect';
-import { pct } from './format';
+import { localTime, pct, plural } from './format';
 
 /**
  * The analysis, said the way a reader asks it. The three methods are three
@@ -59,7 +59,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'restoring' | 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
+export type Reading = 'restoring' | 'stored-only' | 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -73,7 +73,28 @@ export interface Coverage {
   floor: Method[];
   /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
   restore: number | null;
+  /** When the stored data stops, while it is all there is (stored-only); else null. */
+  stops: number | null;
+  /** How long ago that was, "9 days unsynced", while stored-only; else null. */
+  unsynced: string | null;
   label: string;
+}
+
+/**
+ * Whether a collection shows stored data only: its stored data has loaded
+ * (the cursor sits past its start), and its chain has no RPC to read on
+ * from there. Not a fault, and not starting: the numbers are all there, they
+ * just stop where the stored data was cut.
+ */
+export function storedOnly(c: Pick<CollectionRow, 'chainId' | 'startBlock' | 'cursorBlock'> & Partial<Pick<CollectionRow, 'storedThroughTime'>>, rpcChains: ReadonlySet<number>): boolean {
+  return !rpcChains.has(c.chainId) && (c.storedThroughTime ?? null) !== null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock;
+}
+
+/** How long stored data has gone unread, as the owner put it: "9 days unsynced". With no RPC there is no head to count blocks to, only time. */
+function unsyncedFor(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 1) return 'up to date with its stored data';
+  return hours < 24 ? `${plural(hours, 'hour')} unsynced` : `${plural(Math.floor(hours / 24), 'day')} unsynced`;
 }
 
 /**
@@ -83,9 +104,14 @@ export interface Coverage {
  * their shares are floors. Before either, stored data may be loading: the
  * history it holds arrives at once, when the load commits. A paused
  * collection is none of these: its head stops moving, so "up to date" would
- * be a claim nobody is keeping true.
+ * be a claim nobody is keeping true. Nor is one showing stored data with no
+ * RPC: its numbers stop at the stored date, said in `zone` (the reader's;
+ * the console draws that date with Time).
  */
-export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress'>>): Coverage {
+export function coverage(
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime'>>,
+  rpcChains: ReadonlySet<number>, now: number, zone = 'UTC',
+): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
   const wallets = { checked: c.fundedWallets, of: c.wallets };
   const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
@@ -96,14 +122,28 @@ export function coverage(c: Pick<CollectionRow, 'pausedAt' | 'startBlock' | 'cur
   // A load is never resumed after a pause, so progress left on a paused collection is stale.
   // Never shown as done: the data is not there until the load commits, and then the progress is gone.
   const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
-  const base = { blocks, behind, wallets, money, floor, restore };
+  const stops = c.pausedAt === null && restore === null && storedOnly(c, rpcChains) ? c.storedThroughTime! : null;
+  const unsynced = stops === null ? null : unsyncedFor(now - stops);
+  const base = { blocks, behind, wallets, money, floor, restore, stops, unsynced };
   if (restore !== null) return { ...base, reading: 'restoring', label: `Loading stored data · ${progress(restore)}` };
   if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
+  // Before 'starting': with no RPC the head is never known, and the stored numbers are all there is.
+  if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone)} · ${unsynced}` };
   // An unknown head cannot be caught up to.
   if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
   if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
+}
+
+/**
+ * The collections tabs' counts. "Behind" is the In sync collections showing
+ * stored data only: in sync by choice, but nothing reads them on until their
+ * chain has an RPC.
+ */
+export function tabCounts(rows: readonly CollectionRow[], rpcChains: ReadonlySet<number>): { sync: number; paused: number; all: number; behind: number } {
+  const sync = rows.filter((c) => c.pausedAt === null);
+  return { sync: sync.length, paused: rows.length - sync.length, all: rows.length, behind: sync.filter((c) => storedOnly(c, rpcChains)).length };
 }
 
 /** Whether history is still unread, paused or not: a pause does not read what was left. The history chart shades that stretch. */

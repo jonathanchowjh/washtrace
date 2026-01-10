@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
 import { Head, Notices, Problem, Section, Warn } from '@/components/head';
@@ -10,6 +11,7 @@ import { FIELDS } from '@/lib/settings';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
+import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 import { Time } from '@/components/time';
 
 export const metadata: Metadata = { title: 'Worker' };
@@ -40,7 +42,8 @@ export default async function WorkerPage() {
   await connection();
   let v: Awaited<ReturnType<typeof workerView>>;
   try {
-    v = await workerView();
+    // The reader's zone, for the dates in the notices.
+    v = await workerView(parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone);
   } catch (err) {
     return <><Head title="Worker" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
   }
@@ -120,11 +123,12 @@ export default async function WorkerPage() {
             <li key={`${c.chainId}/${c.address}`} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
               <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
               <span className="text-xs text-muted-foreground">
-                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
-                {c.turn === 'paused' || c.turn === 'restoring' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
+                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.turn === 'stored-only' ? 'stored data only, no RPC for its chain' : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
+                {c.turn === 'paused' || c.turn === 'restoring' || c.turn === 'stored-only' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
                 {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale && c.turn !== 'paused' ? ' · new data waiting' : ''}
               </span>
-              {c.error ? <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+              {/* A "No RPC" left from before stored data loaded is no fault; the notice above says how to read on. */}
+              {c.error && c.turn !== 'stored-only' ? <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
             </li>
           ))}
         </ul>

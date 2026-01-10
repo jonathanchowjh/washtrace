@@ -7,7 +7,7 @@ import { Time } from '@/components/time';
 import { CollectionControls } from '@/components/watch';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
-import { coverage, range, rangeText, type Range } from '@/lib/metrics';
+import { coverage, range, rangeText, storedOnly, type Range } from '@/lib/metrics';
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
@@ -26,10 +26,14 @@ function Share({ r, label, detail }: { r: Range | null; label: string; detail: s
   );
 }
 
-/** One collection in the list: its answer, how complete it is, and what can be done with it (pause, resume, delete data). */
-export function CollectionRow({ c, why }: { c: Collection; why: string }) {
+/**
+ * One collection in the list: its answer, how complete it is, and what can be
+ * done with it (pause, resume, delete data). `rpcChains` are the chains the
+ * worker can read, so a collection showing stored data with none says so.
+ */
+export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: string; rpcChains: ReadonlySet<number>; now: number }) {
   const a = c.latest;
-  const cov = coverage(c);
+  const cov = coverage(c, rpcChains, now);
   const sales = a && range(a.totals, 'sales');
   const volume = a && range(a.totals, 'volume');
   const href = `/c/${c.chainId}/${c.address}`;
@@ -40,7 +44,8 @@ export function CollectionRow({ c, why }: { c: Collection; why: string }) {
         <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
-        {c.error ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+        {/* A "No RPC" left from before stored data loaded is no fault: the pill says where the data stops. */}
+        {c.error && !storedOnly(c, rpcChains) ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the worker reads the chain instead, which only takes longer. */}
         {c.restoreNote ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{c.restoreNote}</p> : null}
       </div>

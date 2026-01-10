@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { eta } from './format';
-import { isRunning, progress } from './metrics';
+import { eta, localTime } from './format';
+import { isRunning, progress, storedOnly } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -43,9 +43,9 @@ const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
  * What the system is doing right now, from what the worker recorded in the
  * store. Any replica answers the same, worker or not. `notices` is the
  * report in sentences, each with how serious it is; only `needs-you` ones are
- * faults.
+ * faults. Dates in them are said in `zone`, the reader's when it is known.
  */
-export function status(s: Snapshot, now: number) {
+export function status(s: Snapshot, now: number, zone = 'UTC') {
   const notices: Notice[] = [];
   const notice = (severity: 'working' | 'info', text: string, action?: { label: string; href: string }) => notices.push({ severity, text, ...(action ? { action } : {}) });
   const needsYou = (text: string, doThis: string, href?: string) => notices.push({ severity: 'needs-you', text, doThis, ...(href ? { href } : {}) });
@@ -79,24 +79,34 @@ export function status(s: Snapshot, now: number) {
     const paused = c.pausedAt !== null;
     // While stored data loads, the cursor jumps when it commits: how far behind it is now says nothing.
     const restoring = !paused && c.restoreProgress !== null;
-    const backfilling = !paused && !restoring && behind !== null && behind > BEHIND_BLOCKS;
+    // No RPC, so nothing reads past the stored data: a limit to lift, not a fault.
+    const stored = storedOnly(c, new Set(s.config.chains));
+    const storedTurn = !paused && !restoring && stored;
+    const backfilling = !paused && !restoring && !stored && behind !== null && behind > BEHIND_BLOCKS;
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
     // Not a fault: the worker reads the chain from the deploy block instead, which only takes longer.
     if (c.restoreNote) notice('info', `${label}: ${c.restoreNote}`);
+    if (storedTurn) {
+      const from = localTime(c.storedThroughTime!, 'date', zone);
+      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) notice('info', `${label} shows stored data only. Set an RPC to continue from ${from}.`, { label: 'Open Settings', href: `/settings#rpc.${c.chainId}` });
+      else notice('info', `${label} shows stored data only. Set WASHTRACE_RPC_${c.chainId} for the worker to continue from ${from}.`);
+    }
     if (backfilling) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
       notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
     }
-    if (c.error && !s.config.chains.includes(c.chainId)) {
+    // The worker clears its "No RPC" once it sees the stored data; until then that error is no fault either.
+    const error = stored ? null : c.error;
+    if (error && !s.config.chains.includes(c.chainId)) {
       // No RPC for its chain: the fix is a setting, not anything on the collection's page.
-      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) needsYou(`${label}: ${c.error}`, `Open Settings and set an ${chainName(c.chainId)} RPC URL.`, `/settings#rpc.${c.chainId}`);
-      else needsYou(`${label}: ${c.error}`, `Set WASHTRACE_RPC_${c.chainId} in the worker's environment, then restart it.`);
-    } else if (c.error) {
-      needsYou(`${label}: ${c.error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
+      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) needsYou(`${label}: ${error}`, `Open Settings and set an ${chainName(c.chainId)} RPC URL.`, `/settings#rpc.${c.chainId}`);
+      else needsYou(`${label}: ${error}`, `Set WASHTRACE_RPC_${c.chainId} in the worker's environment, then restart it.`);
+    } else if (error) {
+      needsYou(`${label}: ${error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
     }
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
-      behind, turn: paused ? 'paused' as const : restoring ? 'restoring' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
+      behind, turn: paused ? 'paused' as const : restoring ? 'restoring' as const : storedTurn ? 'stored-only' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
     };
   });
 

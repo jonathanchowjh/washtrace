@@ -140,6 +140,36 @@ describe('status', () => {
     expect(n && 'href' in n ? n.href : undefined).toBeUndefined();
   });
 
+  describe('stored data with no RPC', () => {
+    // Restored: cursor at the stored throughBlock, no head without an RPC, and the worker's old "No RPC" error not yet cleared.
+    const stored = (more: Partial<CollectionRow> = {}) => collection({
+      headBlock: null, cursorBlock: 900, storedThroughTime: Date.UTC(2026, 9, 14), error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.', ...more,
+    });
+    const none = (c: CollectionRow) => snapshot({ config: { ...CONFIG, chains: [] }, collections: [c] });
+
+    it('says it shows stored data only, as information with the way to read on, never as a fault', () => {
+      const report = status(none(stored()), NOW);
+      expect(report.collections[0]).toMatchObject({ turn: 'stored-only' });
+      expect(report.notices).toContainEqual({ severity: 'info', text: 'BAYC shows stored data only. Set an RPC to continue from 14 Oct 2026.', action: { label: 'Open Settings', href: '/settings#rpc.1' } });
+      expect(texts(none(stored()), 'needs-you')).toEqual([]);
+    });
+
+    it('names the environment variable for a chain the console has no field for', () => {
+      const n = status(none(stored({ chainId: 8453 })), NOW).notices.find((x) => x.text.startsWith('BAYC shows stored data only'));
+      expect(n).toEqual({ severity: 'info', text: 'BAYC shows stored data only. Set WASHTRACE_RPC_8453 for the worker to continue from 14 Oct 2026.' });
+    });
+
+    it('calls a paused one paused, and says nothing of its stored data', () => {
+      const report = status(none(stored({ pausedAt: 5 })), NOW);
+      expect(report.collections[0]).toMatchObject({ turn: 'paused' });
+      expect(report.notices.some((n) => n.text.includes('stored data only'))).toBe(false);
+    });
+
+    it('is read as usual once its chain has an RPC', () => {
+      expect(status(snapshot({ collections: [stored({ error: null })] }), NOW).collections[0]!.turn).not.toBe('stored-only');
+    });
+  });
+
   describe('checking wallets', () => {
     const funding = (doneLastHour: number) => [{ chainId: 1, pending: 1_000, done: 1_000, failed: 0, truncated: 0, doneLastHour }];
     const half = (more: Partial<CollectionRow> = {}) => collection({ wallets: 2_000, fundedWallets: 1_000, ...more });

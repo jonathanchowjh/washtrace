@@ -9,7 +9,8 @@ import { CollectionTabs, type Tab } from '@/components/tabs';
 import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
 import { ConfigError } from '@/lib/config';
 import { short } from '@/lib/format';
-import { waiting } from '@/lib/metrics';
+import { tabCounts, waiting } from '@/lib/metrics';
+import { configFromSources } from '@/lib/settings';
 import { store } from '@/lib/store';
 
 export const metadata: Metadata = { title: 'Collections' };
@@ -26,11 +27,14 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   const tab: Tab = asked === 'paused' || asked === 'all' ? asked : 'sync';
   let rows: Collection[];
   let analyze: PassRow | undefined;
+  let rpcChains: ReadonlySet<number>;
   try {
     const s = store();
-    let passes: PassRow[];
-    [rows, passes] = await Promise.all([s.collections(), s.passes()]);
+    const [all, passes, sources, settings] = await Promise.all([s.collections(), s.passes(), s.sources(), s.settings()]);
+    rows = all;
     analyze = passes.find((p) => p.job === 'analyze');
+    // The chains the worker reports it can read, and a console RPC saved since: a collection on none shows its stored data only.
+    rpcChains = new Set(configFromSources(sources, settings).chains);
   } catch (err) {
     return (
       <>
@@ -39,7 +43,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
       </>
     );
   }
-  const counts = { sync: rows.filter((c) => c.pausedAt === null).length, paused: rows.filter((c) => c.pausedAt !== null).length, all: rows.length, behind: 0 };
+  const counts = tabCounts(rows, rpcChains);
   const shown = tab === 'all' ? rows : rows.filter((c) => (c.pausedAt !== null) === (tab === 'paused'));
   const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
   const now = Date.now();
@@ -78,7 +82,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} rpcChains={rpcChains} now={now} />)}</ul>
         </div>
       )}
     </>

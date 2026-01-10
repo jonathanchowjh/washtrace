@@ -200,12 +200,14 @@ describe('CollectionTabs', () => {
 });
 
 describe('CollectionRow', () => {
+  // Ethereum has an RPC unless a test says otherwise.
+  const ON = new Set([1]);
   const base = { id: 1, chainId: 1, address: '0xabc', name: 'Demo', transfers: 5, startBlock: 1, cursorBlock: 10, headBlock: 10, wallets: 0, fundedWallets: 0, latest: null, error: null, pausedAt: null, priority: false } as unknown as Parameters<typeof CollectionRow>[0]['c'];
 
   it('offers Pause in sync, and a press posts without leaving the list', async () => {
     const fetch = ok({ paused: true });
     vi.stubGlobal('fetch', fetch);
-    render(<CollectionRow c={base} why="Waiting" />);
+    render(<CollectionRow c={base} why="Waiting" rpcChains={ON} now={0} />);
     expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
@@ -219,7 +221,7 @@ describe('CollectionRow', () => {
 
   it('stays on the list after deleting, refreshing in place', async () => {
     vi.stubGlobal('fetch', ok({ deleted: true }));
-    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" />);
+    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} now={0} />);
     fireEvent.click(screen.getByRole('button', { name: /Delete data/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
@@ -227,20 +229,29 @@ describe('CollectionRow', () => {
   });
 
   it('says it is loading stored data, with a bar of how far it has got', () => {
-    const { container } = render(<CollectionRow c={{ ...base, cursorBlock: null, startBlock: null, restoreProgress: 0.42 } as typeof base} why="Waiting" />);
+    const { container } = render(<CollectionRow c={{ ...base, cursorBlock: null, startBlock: null, restoreProgress: 0.42 } as typeof base} why="Waiting" rpcChains={ON} now={0} />);
     expect(screen.getAllByText('Loading stored data · 42%').length).toBeGreaterThan(0);
     const bar = container.querySelector('[data-bar="restore"] i') as HTMLElement;
     expect(bar.style.width).toBe('42%');
   });
 
+  it('shows stored data with no RPC as where it stops, never as a fault', () => {
+    document.cookie = 'washtrace_tz=UTC; path=/';
+    const c = { ...base, startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), error: 'No RPC is configured for chain 1.' } as typeof base;
+    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
+    expect(screen.getByText(/^Stored data · stops/).textContent).toBe('Stored data · stops 14 Oct 2026 · 9 days unsynced');
+    expect(container.textContent).not.toContain('No RPC');
+    expect(container.querySelector('.text-fault')).toBeNull();
+  });
+
   it('says why stored data was not loaded as information, not a fault', () => {
     const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
-    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" />);
+    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} now={0} />);
     expect(screen.getByText(note).className).not.toContain('text-fault');
   });
 
   it('offers Resume and Delete data when paused', () => {
-    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" />);
+    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} now={0} />);
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Delete data/ })).toBeTruthy();
   });

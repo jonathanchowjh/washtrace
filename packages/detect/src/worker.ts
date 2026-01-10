@@ -304,6 +304,12 @@ export class Worker {
       if (Date.now() >= deadline) return;
       const started = Date.now();
       const url = rpc.get(c.chainId);
+      if (url === undefined && c.storedThroughTime !== null) {
+        // Stored data and no RPC is a state, not a fault: the console says where the data stops. Clears the "No RPC" left from before it loaded.
+        this.logged.delete(c.id);
+        await this.store.setError(c.id, null);
+        return;
+      }
       if (url === undefined) {
         // The console offers an RPC field for Ethereum only (FIELDS in the web app); other chains are set in the environment.
         const where = c.chainId === 1 ? 'Set it in Settings, or WASHTRACE_RPC_1 for the worker.' : `Set WASHTRACE_RPC_${c.chainId} for the worker.`;

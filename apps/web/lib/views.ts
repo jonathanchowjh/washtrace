@@ -40,13 +40,14 @@ export async function settingsView() {
   return { writable, fields: view(settings, sources, writable) };
 }
 
-export async function workerView() {
+/** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
+export async function workerView(zone = 'UTC') {
   const s = store();
   const [passes, backlog, collections, sources, settings] = await Promise.all([s.passes(), s.fundingBacklog(), s.collections(), s.sources(), s.settings()]);
   // What the worker reported, not this process's environment: only the worker reads the chain.
   const config = configFromSources(sources, settings);
   // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
-  const report = status({ passes, collections, funding: backlog, config }, Date.now());
+  const report = status({ passes, collections, funding: backlog, config }, Date.now(), zone);
   return {
     every: EVERY,
     rpcChains: config.chains,

@@ -17,6 +17,7 @@ import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/forma
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
 import { coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { configFromSources } from '@/lib/settings';
 import { store } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -48,11 +49,12 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const method = methodOf((await searchParams).method);
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
-  const [history, timeline, tokens, wallets, profile, passes, all] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections()]);
+  const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
   const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now());
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
-  const cov = coverage(c);
+  // The chains the worker can read: with none for this one, its stored data is all there is.
+  const cov = coverage(c, new Set(configFromSources(sources, settings).chains), Date.now(), zone);
   const name = c.name ?? short(address);
   const lens = LENSES[method];
   const t = a?.totals[method];

@@ -104,6 +104,20 @@ describe('Worker.ingest', () => {
     expect(errors.get(1)).toBe('No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.');
     expect(errors.get(2)).toBe('No RPC is configured for chain 8453. Set WASHTRACE_RPC_8453 for the worker.');
   });
+
+  it('leaves a collection with stored data and no RPC alone, and clears a "No RPC" error already recorded', async () => {
+    const { w, started, served } = setup([at(1, { storedThroughTime: 1_700_000_000_000, error: 'No RPC is configured for chain 1.' })], 1_000);
+    const errors = new Map<number, string | null>();
+    (w as any).store.setError = async (id: number, message: string | null) => { errors.set(id, message); };
+    (w as any).config = () => ({ ...config, rpc: new Map() });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await w.ingest();
+    expect(errors.has(1)).toBe(true);
+    expect(errors.get(1)).toBeNull();
+    expect(logged).not.toHaveBeenCalled();
+    expect(started).toEqual([]);
+    expect(served).toEqual([]);
+  });
 });
 
 const ENTRY: StoredEntry = {

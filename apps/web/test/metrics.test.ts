@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { coverage, unread, isRunning, progress, range, rangeText, summary, waiting } from '@/lib/metrics';
+import { coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -66,73 +66,121 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
   };
 }
 
+/** Coverage of a row on Ethereum with an RPC set, so the stored-only reading never applies. */
+const cov = (c: CollectionRow) => coverage(c, new Set([1]), 0);
+
 describe('coverage', () => {
   it('is complete at the finalized head with every wallet checked', () => {
-    const c = coverage(row());
+    const c = cov(row());
     expect(c.reading).toBe('complete');
     expect(c.floor).toEqual([]);
   });
 
   it('marks the money lenses as floors while wallets are still being checked', () => {
-    const c = coverage(row({ fundedWallets: 20 }));
+    const c = cov(row({ fundedWallets: 20 }));
     expect(c.reading).toBe('checking');
     expect(c.floor).toEqual(['AU', 'AC']);
   });
 
   it('is loading stored data while a load runs, with how far it has got', () => {
-    const c = coverage(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 }));
+    const c = cov(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 }));
     expect(c.reading).toBe('restoring');
     expect(c.label).toBe('Loading stored data · 42%');
-    expect(coverage(row({ restoreProgress: 0.42, pausedAt: 5 })).reading).toBe('paused');
+    expect(cov(row({ restoreProgress: 0.42, pausedAt: 5 })).reading).toBe('paused');
   });
 
   it('never shows a load as done before it has committed', () => {
-    const c = coverage(row({ restoreProgress: 1 }));
+    const c = cov(row({ restoreProgress: 1 }));
     expect(c.restore).toBe(0.99);
     expect(c.label).toBe('Loading stored data · 99%');
   });
 
   it('is catching up when far behind the head, whatever the wallets', () => {
-    expect(coverage(row({ cursorBlock: 500, fundedWallets: 20 })).reading).toBe('catching-up');
+    expect(cov(row({ cursorBlock: 500, fundedWallets: 20 })).reading).toBe('catching-up');
   });
 
   it('does not wait on wallets when no funding source is configured', () => {
-    const c = coverage(row({ fundedWallets: 0, latest: { ...row().latest!, totals: OFF } }));
+    const c = cov(row({ fundedWallets: 0, latest: { ...row().latest!, totals: OFF } }));
     expect(c.reading).toBe('complete');
     expect(c.money).toBe(false);
   });
 
   it('never says 100% of history read while still behind the head', () => {
-    const c = coverage(row({ startBlock: 12_000_000, cursorBlock: 20_999_800, headBlock: 21_000_000 }));
+    const c = cov(row({ startBlock: 12_000_000, cursorBlock: 20_999_800, headBlock: 21_000_000 }));
     expect(c.reading).toBe('catching-up');
     expect(c.label).toBe('Reading history · >99%');
     expect(progress(1)).toBe('100%');
   });
 
   it('is starting, never complete, while the head is unknown', () => {
-    const c = coverage(row({ headBlock: null, cursorBlock: null, transfers: 0, wallets: 0, fundedWallets: 0, latest: null }));
+    const c = cov(row({ headBlock: null, cursorBlock: null, transfers: 0, wallets: 0, fundedWallets: 0, latest: null }));
     expect(c.reading).toBe('starting');
     expect(c.label).toBe('Starting');
-    expect(coverage(row({ headBlock: null, wallets: 0, fundedWallets: 0 })).reading).toBe('starting');
+    expect(cov(row({ headBlock: null, wallets: 0, fundedWallets: 0 })).reading).toBe('starting');
   });
 
   it('labels a paused collection paused, even with its cursor at its head', () => {
-    const c = coverage(row({ pausedAt: 5 }));
+    const c = cov(row({ pausedAt: 5 }));
     expect(c.reading).toBe('paused');
     expect(c.label).toBe('Paused · read to block 1,000');
-    expect(coverage(row({ pausedAt: 5, cursorBlock: null, startBlock: null })).label).toBe('Paused · not read yet');
-    expect(coverage(row({ pausedAt: 5, startBlock: 1, cursorBlock: 0 })).label).toBe('Paused · not read yet');
+    expect(cov(row({ pausedAt: 5, cursorBlock: null, startBlock: null })).label).toBe('Paused · not read yet');
+    expect(cov(row({ pausedAt: 5, startBlock: 1, cursorBlock: 0 })).label).toBe('Paused · not read yet');
   });
 
   it('keeps the unread stretch of history unread when paused, and only then', () => {
     const far = { startBlock: 100, cursorBlock: 500, headBlock: 1_000_000 };
-    expect(unread(coverage(row({ ...far, pausedAt: 5 })))).toBe(true);
-    expect(unread(coverage(row({ ...far })))).toBe(true);
-    expect(unread(coverage(row({ pausedAt: 5 })))).toBe(false);
+    expect(unread(cov(row({ ...far, pausedAt: 5 })))).toBe(true);
+    expect(unread(cov(row({ ...far })))).toBe(true);
+    expect(unread(cov(row({ pausedAt: 5 })))).toBe(false);
   });
 
   it('is starting before the deployment block is known', () => {
-    expect(coverage(row({ startBlock: null, cursorBlock: null })).reading).toBe('starting');
+    expect(cov(row({ startBlock: null, cursorBlock: null })).reading).toBe('starting');
+  });
+});
+
+describe('coverage of stored data with no RPC', () => {
+  const NONE = new Set<number>();
+  const STOPS = Date.UTC(2026, 9, 14);
+  const NOW = Date.UTC(2026, 9, 23);
+  const HOUR = 3_600_000;
+  // Restored: start at the deploy block, cursor at the stored throughBlock, and no head without an RPC.
+  const stored = (more: Partial<CollectionRow> = {}) => row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: STOPS, ...more });
+
+  it('says where the stored data stops and how long ago, never that it is starting', () => {
+    const c = coverage(stored(), NONE, NOW);
+    expect(c.reading).toBe('stored-only');
+    expect(c.label).toBe('Stored data · stops 14 Oct 2026 · 9 days unsynced');
+    expect(c.stops).toBe(STOPS);
+  });
+
+  it('counts hours under a day, says up to date under an hour, and says 1 day', () => {
+    expect(coverage(stored(), NONE, STOPS + 5 * HOUR).unsynced).toBe('5 hours unsynced');
+    expect(coverage(stored(), NONE, STOPS + HOUR).unsynced).toBe('1 hour unsynced');
+    expect(coverage(stored(), NONE, STOPS + 59 * 60_000).unsynced).toBe('up to date with its stored data');
+    expect(coverage(stored(), NONE, STOPS + 30 * HOUR).label).toBe('Stored data · stops 14 Oct 2026 · 1 day unsynced');
+  });
+
+  it('gives way to paused and to a load in progress', () => {
+    expect(coverage(stored({ pausedAt: 5 }), NONE, NOW).reading).toBe('paused');
+    expect(coverage(stored({ restoreProgress: 0.4 }), NONE, NOW).reading).toBe('restoring');
+  });
+
+  it('is not stored-only once the chain has an RPC, or before stored data has landed', () => {
+    expect(coverage(stored(), new Set([1]), NOW).reading).toBe('starting');
+    expect(coverage(stored({ cursorBlock: null }), NONE, NOW).reading).toBe('starting');
+    expect(coverage(stored({ storedThroughTime: null }), NONE, NOW).reading).toBe('starting');
+    expect(coverage(stored(), new Set([1]), NOW).stops).toBeNull();
+  });
+});
+
+describe('tabCounts', () => {
+  it('counts the stored-only collections in In sync as behind, paused ones not', () => {
+    const NONE = new Set<number>();
+    const stored = { startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14) };
+    const rows = [row({ id: 1, ...stored }), row({ id: 2, ...stored, pausedAt: 5 }), row({ id: 3 }), row({ id: 4, chainId: 8453, ...stored })];
+    expect(tabCounts(rows, NONE)).toEqual({ sync: 3, paused: 1, all: 4, behind: 2 });
+    expect(tabCounts(rows, new Set([1]))).toEqual({ sync: 3, paused: 1, all: 4, behind: 1 });
   });
 });
 
