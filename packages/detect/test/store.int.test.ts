@@ -638,17 +638,38 @@ describe('Store', () => {
       });
       expect(await all(store.storedTransfers(id, 11))).toEqual(ts.slice(0, 2));
 
-      const paid = [flow(a, m), flow(b, a)], onward = [flow(m, b)];
+      const m2 = w('5d2'), outsider = w('0u7');
+      const paid = [flow(a, m), flow(b, a), flow(a, m2)];
+      // m was paid by a wallet that is neither a trader nor followed. An install
+      // that imports m as done never reads it again, so the file must carry it.
+      const onward = [flow(m, b), flow(outsider, m)];
       await store.fund(chainId, a, paid, false, { hops: 2, fanout: 3, exclude: [] });
       await store.fund(chainId, m, onward, false);
       const trail = await store.trail(id, chainId);
+      // m2 is checked after the trail was begun: it is not in the file, rather
+      // than in it as done without the flows that were not looked for.
+      await store.fund(chainId, m2, [flow(m2, w('0u8'))], false);
       // b is still unchecked: it counts in "of", and stays out of the file.
       expect({ checked: trail.checked, of: trail.of }).toEqual({ checked: 1, of: 2 });
       const wallets = await all(trail.wallets);
       expect(wallets.map((x) => [x.address, x.status, x.depth])).toEqual([[a, 'done', 0], [m, 'done', 1]]);
       expect(wallets.every((x) => typeof x.fetchedAt === 'number')).toBe(true);
-      const byTx = (x: { txHash: string }, y: { txHash: string }) => x.txHash.localeCompare(y.txHash);
-      expect((await all(trail.flows)).sort(byTx)).toEqual([...paid, ...onward].sort(byTx));
+      // In block order, each flow in its own block here.
+      expect(await all(trail.flows)).toEqual([...paid, ...onward]);
+    });
+
+    it('gives the connection back when a stream is left early', async () => {
+      const [c] = (await store.collections()).filter((x) => x.chainId === chainId);
+      const out = () => store.pool.totalCount - store.pool.idleCount;
+      const before = out();
+      for await (const _ of store.storedTransfers(c!.id, 11)) break;
+      expect(out()).toBe(before);
+      const trail = await store.trail(c!.id, chainId);
+      for await (const _ of trail.wallets) break;
+      for await (const _ of trail.flows) break;
+      expect(out()).toBe(before);
+      // And the pool still answers: nothing is left holding a transaction open.
+      expect((await store.pool.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE state = $1', ['idle in transaction'])).rows[0].n).toBe(0);
     });
 
     it('has nothing to cut for a collection it does not watch', async () => {

@@ -20,7 +20,7 @@ docs/CS470/
 .remember/
 # Plans and reports from agent sessions: working notes, not the product.
 .superpowers/
-# A money trail is too big to commit: kept locally, published as a Release
-# asset. A .part is a cut or a download not yet checked and renamed.
+# A money trail is too big to commit: it stays local, and the worker loads
+# it when it is there. A .part is a file being written, not yet renamed.
 data/stored/*.trail.csv.zst
 data/stored/*.part

@@ -35,11 +35,12 @@ export interface StoredEntry {
   /** Committed beside the manifest; `file` is relative to it. */
   transfers: { file: string; rows: number; bytes: number; sha256: string };
   /**
-   * Too big to commit: kept locally and published as a Release asset at
-   * `url`. `rows` counts flows. `checked` of `of` is the coverage the
-   * console shows before anyone downloads it.
+   * The money trail: too big to commit, so it stays local and gitignored,
+   * beside the manifest, and is loaded when it is there and matches
+   * `sha256`. Nothing downloads it. `rows` counts flows. `checked` of `of`
+   * is how many of the collection's traders it covers.
    */
-  trail: { url: string; rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string } | null;
+  trail: { rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string } | null;
 }
 
 /** Every collection with stored data. In the repo at data/stored/manifest.json. */

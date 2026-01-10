@@ -684,7 +684,14 @@ export class Store {
    * imports the trail analyses the collection as this one does: its traders,
    * and every followed wallet on the chain. `checked` of `of` is how many of
    * its traders have been read. The rows stream; nothing is read until they
-   * are iterated.
+   * are iterated, wallets before flows.
+   *
+   * An importing install never reads a done wallet again, so every done
+   * wallet in the file carries all of its flows, in and out. The followed
+   * wallets are fixed when the trail is begun, and both streams use that
+   * list: one checked later is left out, not written done without the flows
+   * nobody looked for. Traders need no such care, since flows to or from
+   * them are all read, and only grow between the two streams.
    */
   async trail(id: number, chainId: number): Promise<{ checked: number; of: number; wallets: AsyncGenerator<WalletRow>; flows: AsyncGenerator<Flow> }> {
     // Arrays, not subqueries, for the reason analysisInput gives.
@@ -707,8 +714,8 @@ export class Store {
       of: rows[0]!.of,
       wallets: this.cursor(
         `SELECT address, transfers, status, truncated, extract(epoch FROM fetched_at)::float8 AS fetched, depth FROM washtrace.wallets
-         WHERE chain_id = $1 AND status <> 'pending' AND (address = ANY($2::text[]) OR depth > 0) ORDER BY address`,
-        [chainId, traders],
+         WHERE chain_id = $1 AND status <> 'pending' AND (address = ANY($2::text[]) OR address = ANY($3::text[])) ORDER BY address`,
+        [chainId, traders, followed],
         (r): WalletRow => ({
           address: r.address, transfers: r.transfers, status: r.status, truncated: r.truncated, depth: r.depth,
           fetchedAt: r.fetched === null ? null : r.fetched * 1000,
@@ -717,8 +724,10 @@ export class Store {
       flows: this.cursor(
         `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
                 extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-         WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[]) OR f.from_address = ANY($3::text[]))
-         ORDER BY f.block_number, f.tx_hash`,
+         WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
+           OR f.from_address = ANY($3::text[]) OR f.to_address = ANY($3::text[]))
+         -- A total order: the same flows cut again give the same file, and the same sha256.
+         ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address, f.token, f.value_wei`,
         [chainId, traders, followed], toFlow,
       ),
     };
