@@ -63,7 +63,8 @@ export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: 
           />
         </>
       )}
-      <div className="flex flex-col items-start gap-1">
+      {/* min-w-0: the column keeps to its grid track, so the pill wraps instead of running past the card. */}
+      <div className="flex min-w-0 flex-col items-start gap-1">
         <ReadingPill cov={cov} />
         <StoredStop cov={cov} />
         <RestoreProgress cov={cov} />

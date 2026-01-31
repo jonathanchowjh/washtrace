@@ -132,3 +132,21 @@ describe('stored data with no RPC', () => {
     expect(render(<ReadingPill cov={coverage(past, NONE, NOW)} />).container.textContent).toBe('No RPC for its chain');
   });
 });
+
+describe('ReadingPill layout', () => {
+  it('wraps within its column rather than running past it, the dot on the first line', () => {
+    const labels = [
+      row({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 }),
+      row({ pausedAt: 5, cursorBlock: 1_234_567 }),
+      row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2025, 9, 9), storedThroughBlock: 900 }),
+      row({ startBlock: 100, cursorBlock: 1_250_000, headBlock: null, storedThroughTime: Date.UTC(2025, 9, 9), storedThroughBlock: 900 }),
+    ];
+    for (const c of labels) {
+      const pill = render(<ReadingPill cov={coverage(c, new Set(), Date.UTC(2026, 9, 24))} />).container.firstElementChild!;
+      expect(pill.className).not.toContain('whitespace-nowrap');
+      expect(pill.className).toContain('max-w-full');
+      expect(pill.className).toContain('items-start');
+      cleanup();
+    }
+  });
+});

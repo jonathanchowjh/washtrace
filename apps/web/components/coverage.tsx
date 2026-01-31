@@ -27,10 +27,11 @@ const PILL = {
 export function ReadingPill({ cov }: { cov: Coverage }) {
   const text = cov.reading !== 'stored-only' ? cov.label : cov.stops !== null ? `Stored data · ${cov.unsynced}` : 'No RPC for its chain';
   return (
-    <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap', PILL[cov.reading])}>
-      <i aria-hidden className={cn('size-1.5 rounded-full bg-current', cov.reading !== 'complete' && cov.reading !== 'paused' && cov.reading !== 'stored-only' && 'animate-pulse')} />
+    // Wraps inside its column rather than running past it: a radius that is round on one line, and the dot kept on the first.
+    <span className={cn('inline-flex max-w-full items-start gap-1.5 rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL[cov.reading])}>
+      <i aria-hidden className={cn('mt-[5px] size-1.5 shrink-0 rounded-full bg-current', cov.reading !== 'complete' && cov.reading !== 'paused' && cov.reading !== 'stored-only' && 'animate-pulse')} />
       {/* One flex item: the gap between several read as a double space. */}
-      <span>{text}</span>
+      <span className="min-w-0">{text}</span>
     </span>
   );
 }

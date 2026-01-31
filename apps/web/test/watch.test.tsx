@@ -247,6 +247,12 @@ describe('CollectionRow', () => {
     expect(container.querySelector('.text-fault')).toBeNull();
   });
 
+  it('lets the How complete column shrink to its track, so the pill wraps inside it', () => {
+    const { container } = render(<CollectionRow c={base} why="Waiting" rpcChains={ON} now={0} />);
+    const column = container.querySelector('li > div:last-child')!;
+    expect(column.className).toContain('min-w-0');
+  });
+
   it('says how far it was read under the pill once read past the stored data', () => {
     const c = { ...base, startBlock: 100, cursorBlock: 1_250_000, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900 } as typeof base;
     render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
