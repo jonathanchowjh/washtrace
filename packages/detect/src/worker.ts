@@ -298,24 +298,27 @@ export class Worker {
     const restored = await this.restore(collections);
     // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
     if (restored > 0) collections = await this.store.collections();
+    // A chain with no RPC has nothing to read, so its collections are settled here and hold no slice of the budget.
+    const readable: CollectionRow[] = [];
+    for (const c of collections) {
+      if (rpc.has(c.chainId)) readable.push(c);
+      else if (c.pausedAt !== null) continue;
+      else if (c.storedThroughTime !== null) {
+        // Stored data and no RPC is a state, not a fault: the console says where the data stops. Clears the "No RPC" left from before it loaded.
+        this.logged.delete(c.id);
+        if (c.error !== null) await this.store.setError(c.id, null);
+      } else {
+        // The console offers an RPC field for Ethereum only (FIELDS in the web app); other chains are set in the environment.
+        const where = c.chainId === 1 ? 'Set it in Settings, or WASHTRACE_RPC_1 for the worker.' : `Set WASHTRACE_RPC_${c.chainId} for the worker.`;
+        await this.fail(c.id, `No RPC is configured for chain ${c.chainId}. ${where}`);
+      }
+    }
     const passEnd = Date.now() + BUDGET_MS;
     const total = { spans: 0, read: 0, blocks: 0 };
     const serve = async (c: CollectionRow, deadline: number) => {
       if (Date.now() >= deadline) return;
       const started = Date.now();
-      const url = rpc.get(c.chainId);
-      if (url === undefined && c.storedThroughTime !== null) {
-        // Stored data and no RPC is a state, not a fault: the console says where the data stops. Clears the "No RPC" left from before it loaded.
-        this.logged.delete(c.id);
-        await this.store.setError(c.id, null);
-        return;
-      }
-      if (url === undefined) {
-        // The console offers an RPC field for Ethereum only (FIELDS in the web app); other chains are set in the environment.
-        const where = c.chainId === 1 ? 'Set it in Settings, or WASHTRACE_RPC_1 for the worker.' : `Set WASHTRACE_RPC_${c.chainId} for the worker.`;
-        await this.fail(c.id, `No RPC is configured for chain ${c.chainId}. ${where}`);
-        return;
-      }
+      const url = rpc.get(c.chainId)!;
       const got = { spans: 0, read: 0, blocks: 0 };
       try {
         await this.readSpans(c, this.chain(c.chainId, url), deadline, got);
@@ -329,7 +332,7 @@ export class Worker {
         await this.store.served(c.id, got.blocks, Date.now() - started);
       }
     };
-    const { keepUp, backfill } = ingestTurns(collections, BUDGET_MS);
+    const { keepUp, backfill } = ingestTurns(readable, BUDGET_MS);
     for (const c of keepUp) await serve(c, passEnd);
     // Slices come from what keep-up left, and no turn runs past the pass.
     const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;

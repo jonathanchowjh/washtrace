@@ -61,6 +61,8 @@ export interface CollectionRow {
   restoreNote: string | null;
   /** When the stored data it loaded stops, in ms. Null when none was loaded. */
   storedThroughTime: number | null;
+  /** The block the stored data it loaded stops at. Null when none was loaded. */
+  storedThroughBlock: number | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -445,7 +447,7 @@ export class Store {
       // LEAST and GREATEST skip a null, so a collection with no start yet takes the stored one.
       await c.query(
         `UPDATE washtrace.collections SET start_block = LEAST(start_block, $2::bigint), cursor_block = GREATEST(cursor_block, $3::bigint),
-           stored_through_time = to_timestamp($4::float8 / 1000), restore_progress = NULL, restore_note = NULL, version = version + 1
+           stored_through_time = to_timestamp($4::float8 / 1000), stored_through_block = $3::bigint, restore_progress = NULL, restore_note = NULL, version = version + 1
          WHERE id = $1`,
         [id, entry.startBlock, entry.throughBlock, entry.throughTime],
       );
@@ -1196,6 +1198,7 @@ function toCollection(r: any): CollectionRow {
     pausedAt: r.paused === null ? null : r.paused * 1000,
     restoreProgress: num(r.restore_progress), restoreNote: r.restore_note,
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
+    storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };

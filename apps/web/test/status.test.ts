@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, PassRow } from '@washtrace/detect';
 import { status, type Notice, type Snapshot } from '@/lib/status';
-import { eta } from '@/lib/format';
+import { eta, localTime } from '@/lib/format';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -15,7 +15,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, ...more,
   };
 }
 
@@ -143,20 +143,28 @@ describe('status', () => {
   describe('stored data with no RPC', () => {
     // Restored: cursor at the stored throughBlock, no head without an RPC, and the worker's old "No RPC" error not yet cleared.
     const stored = (more: Partial<CollectionRow> = {}) => collection({
-      headBlock: null, cursorBlock: 900, storedThroughTime: Date.UTC(2026, 9, 14), error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.', ...more,
+      headBlock: null, cursorBlock: 900, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.', ...more,
     });
     const none = (c: CollectionRow) => snapshot({ config: { ...CONFIG, chains: [] }, collections: [c] });
+    // Built on the server, so in a pinned locale; the date from the app's own formatter, never hard-coded.
+    const DAY = localTime(Date.UTC(2026, 9, 14), 'date', 'UTC', 'en-GB');
 
     it('says it shows stored data only, as information with the way to read on, never as a fault', () => {
       const report = status(none(stored()), NOW);
       expect(report.collections[0]).toMatchObject({ turn: 'stored-only' });
-      expect(report.notices).toContainEqual({ severity: 'info', text: 'BAYC shows stored data only. Set an RPC to continue from 14 Oct 2026.', action: { label: 'Open Settings', href: '/settings#rpc.1' } });
+      expect(report.notices).toContainEqual({ severity: 'info', text: `BAYC shows stored data only. Set an RPC to continue from ${DAY}.`, action: { label: 'Open Settings', href: '/settings#rpc.1' } });
       expect(texts(none(stored()), 'needs-you')).toEqual([]);
     });
 
     it('names the environment variable for a chain the console has no field for', () => {
       const n = status(none(stored({ chainId: 8453 })), NOW).notices.find((x) => x.text.startsWith('BAYC shows stored data only'));
-      expect(n).toEqual({ severity: 'info', text: 'BAYC shows stored data only. Set WASHTRACE_RPC_8453 for the worker to continue from 14 Oct 2026.' });
+      expect(n).toEqual({ severity: 'info', text: `BAYC shows stored data only. Set WASHTRACE_RPC_8453 for the worker to continue from ${DAY}.` });
+    });
+
+    it('says the block it was read to, with no stored date, once read past the stored data', () => {
+      const report = status(none(stored({ cursorBlock: 1_250_000 })), NOW);
+      expect(report.collections[0]).toMatchObject({ turn: 'stored-only' });
+      expect(report.notices).toContainEqual({ severity: 'info', text: 'BAYC is read to block 1,250,000 and its chain has no RPC. Set an RPC to continue from block 1,250,000.', action: { label: 'Open Settings', href: '/settings#rpc.1' } });
     });
 
     it('calls a paused one paused, and says nothing of its stored data', () => {

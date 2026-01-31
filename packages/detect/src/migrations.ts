@@ -217,4 +217,10 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_progress real
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_note text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_time timestamptz;
 `,
+  `
+-- The block the loaded stored data stops at. Once the cursor is past it the
+-- chain was read on from there, so with no RPC the collection stops at its
+-- cursor, not at stored_through_time.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_block bigint;
+`,
 ];

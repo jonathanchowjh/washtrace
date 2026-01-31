@@ -50,13 +50,15 @@ const STYLES: Record<TimeStyle, Intl.DateTimeFormatOptions> = {
  * say when, not how long before some other moment. The zone is the reader's,
  * detected or chosen; called without one it is whatever zone runs it, which
  * on the server is the container's, so the console calls it in the browser.
+ * `locale` is the reader's when left out, which on the server is whatever
+ * the container has (often none); text built there pins one instead.
  */
-export function localTime(ms: number, style: TimeStyle = 'datetime', zone?: string): string {
-  const key = `${style}|${zone ?? ''}`;
+export function localTime(ms: number, style: TimeStyle = 'datetime', zone?: string, locale?: string): string {
+  const key = `${style}|${zone ?? ''}|${locale ?? ''}`;
   let f = formatters.get(key);
   // One formatter per style and zone: a chart asks for hundreds of labels on every hover.
   if (!f) {
-    f = new Intl.DateTimeFormat(undefined, zone ? { ...STYLES[style], timeZone: zone } : STYLES[style]);
+    f = new Intl.DateTimeFormat(locale, zone ? { ...STYLES[style], timeZone: zone } : STYLES[style]);
     formatters.set(key, f);
   }
   return f.format(ms);

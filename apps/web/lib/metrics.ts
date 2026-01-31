@@ -73,10 +73,12 @@ export interface Coverage {
   floor: Method[];
   /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
   restore: number | null;
-  /** When the stored data stops, while it is all there is (stored-only); else null. */
+  /** When the stored data stops, while it is all there is (stored-only, not read past it); else null. */
   stops: number | null;
-  /** How long ago that was, "9 days unsynced", while stored-only; else null. */
+  /** How long ago that was, "9 days unsynced", whenever `stops` is set; else null. */
   unsynced: string | null;
+  /** Stored-only but read past the stored data before the RPC went: the block it was read to. Else null. */
+  readTo: number | null;
   label: string;
 }
 
@@ -109,7 +111,7 @@ function unsyncedFor(ms: number): string {
  * the console draws that date with Time).
  */
 export function coverage(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime'>>,
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime' | 'storedThroughBlock'>>,
   rpcChains: ReadonlySet<number>, now: number, zone = 'UTC',
 ): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
@@ -122,13 +124,19 @@ export function coverage(
   // A load is never resumed after a pause, so progress left on a paused collection is stale.
   // Never shown as done: the data is not there until the load commits, and then the progress is gone.
   const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
-  const stops = c.pausedAt === null && restore === null && storedOnly(c, rpcChains) ? c.storedThroughTime! : null;
+  const noRpc = c.pausedAt === null && restore === null && storedOnly(c, rpcChains);
+  // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
+  const past = noRpc && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
+  const stops = noRpc && !past ? c.storedThroughTime! : null;
   const unsynced = stops === null ? null : unsyncedFor(now - stops);
-  const base = { blocks, behind, wallets, money, floor, restore, stops, unsynced };
+  const readTo = past ? c.cursorBlock : null;
+  const base = { blocks, behind, wallets, money, floor, restore, stops, unsynced, readTo };
   if (restore !== null) return { ...base, reading: 'restoring', label: `Loading stored data · ${progress(restore)}` };
   if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
   // Before 'starting': with no RPC the head is never known, and the stored numbers are all there is.
-  if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone)} · ${unsynced}` };
+  // Built on the server, so the locale is pinned; the console draws its own date with Time.
+  if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone, 'en-GB')} · ${unsynced}` };
+  if (readTo !== null) return { ...base, reading: 'stored-only', label: `Read to block ${readTo.toLocaleString('en-US')} · no RPC for its chain` };
   // An unknown head cannot be caught up to.
   if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };

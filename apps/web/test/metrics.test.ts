@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -62,7 +63,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
     latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
     servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, ...more,
   };
 }
 
@@ -144,21 +145,35 @@ describe('coverage of stored data with no RPC', () => {
   const STOPS = Date.UTC(2026, 9, 14);
   const NOW = Date.UTC(2026, 9, 23);
   const HOUR = 3_600_000;
+  // Built on the server, so in a pinned locale; the date from the app's own formatter, never hard-coded.
+  const DAY = localTime(STOPS, 'date', 'UTC', 'en-GB');
   // Restored: start at the deploy block, cursor at the stored throughBlock, and no head without an RPC.
-  const stored = (more: Partial<CollectionRow> = {}) => row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: STOPS, ...more });
+  const stored = (more: Partial<CollectionRow> = {}) => row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: STOPS, storedThroughBlock: 900, ...more });
 
   it('says where the stored data stops and how long ago, never that it is starting', () => {
     const c = coverage(stored(), NONE, NOW);
     expect(c.reading).toBe('stored-only');
-    expect(c.label).toBe('Stored data · stops 14 Oct 2026 · 9 days unsynced');
+    expect(c.label).toBe(`Stored data · stops ${DAY} · 9 days unsynced`);
     expect(c.stops).toBe(STOPS);
+  });
+
+  it('dates it in a pinned locale, whatever the server runs in', () => {
+    expect(DAY).toBe('14 Oct 2026');
   });
 
   it('counts hours under a day, says up to date under an hour, and says 1 day', () => {
     expect(coverage(stored(), NONE, STOPS + 5 * HOUR).unsynced).toBe('5 hours unsynced');
     expect(coverage(stored(), NONE, STOPS + HOUR).unsynced).toBe('1 hour unsynced');
     expect(coverage(stored(), NONE, STOPS + 59 * 60_000).unsynced).toBe('up to date with its stored data');
-    expect(coverage(stored(), NONE, STOPS + 30 * HOUR).label).toBe('Stored data · stops 14 Oct 2026 · 1 day unsynced');
+    expect(coverage(stored(), NONE, STOPS + 30 * HOUR).label).toBe(`Stored data · stops ${DAY} · 1 day unsynced`);
+  });
+
+  it('says how far it was read, with no stored date, once read past the stored data', () => {
+    const c = coverage(stored({ cursorBlock: 1_250_000 }), NONE, NOW);
+    expect(c.reading).toBe('stored-only');
+    expect(c.label).toBe('Read to block 1,250,000 · no RPC for its chain');
+    expect(c.stops).toBeNull();
+    expect(c.unsynced).toBeNull();
   });
 
   it('gives way to paused and to a load in progress', () => {

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { CollectionRow as Collection } from '@washtrace/detect';
-import { ReadingPill, RestoreProgress } from '@/components/coverage';
+import { ReadingPill, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/head';
 import { RangeBar } from '@/components/methods';
 import { Time } from '@/components/time';
@@ -65,6 +65,7 @@ export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: 
       )}
       <div className="flex flex-col items-start gap-1">
         <ReadingPill cov={cov} />
+        <StoredStop cov={cov} />
         <RestoreProgress cov={cov} />
         <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
         {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses can still rise</p> : null}

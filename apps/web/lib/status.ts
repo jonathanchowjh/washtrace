@@ -87,9 +87,13 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     // Not a fault: the worker reads the chain from the deploy block instead, which only takes longer.
     if (c.restoreNote) notice('info', `${label}: ${c.restoreNote}`);
     if (storedTurn) {
-      const from = localTime(c.storedThroughTime!, 'date', zone);
-      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) notice('info', `${label} shows stored data only. Set an RPC to continue from ${from}.`, { label: 'Open Settings', href: `/settings#rpc.${c.chainId}` });
-      else notice('info', `${label} shows stored data only. Set WASHTRACE_RPC_${c.chainId} for the worker to continue from ${from}.`);
+      // Past the stored data (read on while an RPC was set), it stops at its cursor, whose date is not known. Text, so the locale is pinned.
+      const past = c.storedThroughBlock !== null && c.cursorBlock! > c.storedThroughBlock;
+      const block = `block ${c.cursorBlock!.toLocaleString('en')}`;
+      const said = past ? `${label} is read to ${block} and its chain has no RPC.` : `${label} shows stored data only.`;
+      const from = past ? block : localTime(c.storedThroughTime!, 'date', zone, 'en-GB');
+      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) notice('info', `${said} Set an RPC to continue from ${from}.`, { label: 'Open Settings', href: `/settings#rpc.${c.chainId}` });
+      else notice('info', `${said} Set WASHTRACE_RPC_${c.chainId} for the worker to continue from ${from}.`);
     }
     if (backfilling) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';

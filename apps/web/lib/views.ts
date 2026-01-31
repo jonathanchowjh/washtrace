@@ -1,5 +1,6 @@
 import { EVERY, ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
 import { authConfigured } from './auth';
+import { storedOnly } from './metrics';
 import { configFromSources, view } from './settings';
 import { status } from './status';
 import { store } from './store';
@@ -63,6 +64,8 @@ export async function workerView(zone = 'UTC') {
       headBlock: c.headBlock, ingestedAt: c.ingestedAt, error: c.error, errorAt: c.errorAt, stale: c.stale,
       analyzedAt: c.latest?.ranAt ?? null, analysisMs: c.latest?.tookMs ?? null,
       turn: report.collections.find((r) => r.chainId === c.chainId && r.address === c.address)?.turn ?? 'keeping-up',
+      // Paused or not: its "No RPC" is no fault while its stored data is there.
+      storedOnly: storedOnly(c, new Set(config.chains)),
       backfillEtaMs: c.readRate && c.headBlock !== null && c.cursorBlock !== null ? (Math.max(0, c.headBlock - c.cursorBlock) / c.readRate) * 1000 : null,
     })),
   };

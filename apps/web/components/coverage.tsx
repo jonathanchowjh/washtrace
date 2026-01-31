@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { CollectionRow } from '@washtrace/detect';
 import { chainName } from '@/lib/chains';
 import { LENSES, lensList, plural } from '@/lib/format';
-import { progress, type Coverage } from '@/lib/metrics';
+import { progress, storedOnly, type Coverage } from '@/lib/metrics';
 import { Warn } from '@/components/head';
 import { FIELDS } from '@/lib/settings';
 import { cn } from '@/lib/utils';
@@ -19,19 +19,27 @@ const PILL = {
   'stored-only': 'bg-muted text-muted-foreground',
 } as const;
 
-/** Stored data's label with its date in the reader's zone: Time fills it in the browser, as every date in the console. */
-function Stops({ cov }: { cov: Coverage }) {
-  return <>Stored data · stops <Time ms={cov.stops!} style="date" /> · {cov.unsynced}</>;
-}
-
-/** How far the reading under a collection's numbers has got, as one word or two. */
+/**
+ * How far the reading under a collection's numbers has got, as one word or
+ * two. Stored-only keeps the pill short enough for its column: where the
+ * data stops goes on the line under it (StoredStop).
+ */
 export function ReadingPill({ cov }: { cov: Coverage }) {
+  const text = cov.reading !== 'stored-only' ? cov.label : cov.stops !== null ? `Stored data · ${cov.unsynced}` : 'No RPC for its chain';
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap', PILL[cov.reading])}>
       <i aria-hidden className={cn('size-1.5 rounded-full bg-current', cov.reading !== 'complete' && cov.reading !== 'paused' && cov.reading !== 'stored-only' && 'animate-pulse')} />
-      {cov.reading === 'stored-only' ? <Stops cov={cov} /> : cov.label}
+      {/* One flex item: the gap between several read as a double space. */}
+      <span>{text}</span>
     </span>
   );
+}
+
+/** Under a stored-only pill: where its data stops, the date in the reader's zone (Time, as every date in the console), or the block it was read to. */
+export function StoredStop({ cov }: { cov: Coverage }) {
+  if (cov.stops !== null) return <p className="text-xs text-muted-foreground">stops <Time ms={cov.stops} style="date" /></p>;
+  if (cov.readTo !== null) return <p className="text-xs text-muted-foreground">read to block {cov.readTo.toLocaleString('en-US')}</p>;
+  return null;
 }
 
 /** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
@@ -40,7 +48,9 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
   if (c.latest === null) return null;
   if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
   if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
-  if (cov.reading === 'stored-only') return 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.';
+  if (cov.reading === 'stored-only') return cov.stops !== null
+    ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
+    : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.';
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
   if (cov.floor.length > 0) return `${progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
@@ -56,7 +66,8 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
  * themselves are further down the page.
  */
 export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Coverage; href: string }) {
-  const stage: { share: number; of: ReactNode; figure?: string } | null = cov.reading === 'stored-only' ? { share: 1, figure: 'Stored data', of: <>stops <Time ms={cov.stops!} style="date" /> · {cov.unsynced}. No newer block is read until its chain has an RPC.</> }
+  const stage: { share: number; of: ReactNode; figure?: string } | null = cov.stops !== null ? { share: 1, figure: 'Stored data', of: <>stops <Time ms={cov.stops} style="date" /> · {cov.unsynced}. No newer block is read until its chain has an RPC.</> }
+    : cov.readTo !== null ? { share: 1, figure: 'No RPC', of: `Read to block ${cov.readTo.toLocaleString('en-US')}. No newer block is read until its chain has an RPC.` }
     : cov.reading === 'restoring' ? { share: cov.restore ?? 0, of: 'Loading stored data: history cut ahead of time, so the chain is read only from where it stops' }
     : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
@@ -120,7 +131,8 @@ function Step({ n, title, figure, value, bar, paused, affects, children }: { n: 
 function step1(c: CollectionRow, cov: Coverage): ReactNode {
   const unread = c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock);
   if (cov.reading === 'restoring') return cov.label;
-  if (cov.reading === 'stored-only') return <>{plural(c.transfers, 'transfer')} from stored data, through block {c.cursorBlock!.toLocaleString('en-US')} (<Time ms={cov.stops!} style="date" />)</>;
+  if (cov.stops !== null) return <>{plural(c.transfers, 'transfer')} from stored data, through block {c.cursorBlock!.toLocaleString('en-US')} (<Time ms={cov.stops} style="date" />)</>;
+  if (cov.readTo !== null) return `${plural(c.transfers, 'transfer')} · read to block ${cov.readTo.toLocaleString('en-US')} · no RPC for its chain`;
   if (c.pausedAt !== null) return unread ? 'Not read yet · paused' : `${plural(c.transfers, 'transfer')} · read to block ${c.cursorBlock!.toLocaleString('en-US')} when paused`;
   if (c.cursorBlock === null) return 'Finding the deployment block…';
   if (cov.behind === null) return `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, head not known yet`;
@@ -134,23 +146,23 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
  * seen from the collection. It leads the page, because it says how far to
  * trust everything after it.
  */
-export function ReadingPanel({ c, cov, why }: { c: CollectionRow; cov: Coverage; why: string }) {
+export function ReadingPanel({ c, cov, why, rpcChains }: { c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number> }) {
   const a = c.latest;
   const stored = cov.reading === 'stored-only';
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
         n={1} title="Transfers read"
-        figure={cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">Stored data</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
+        figure={cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
         bar={cov.reading === 'restoring' ? cov.restore ?? 0 : stored ? 1 : cov.blocks ?? 0} paused={cov.reading === 'paused' || stored}
         value={step1(c, cov)}
         affects="all three lenses. Unread history can move any share either way."
       >
-        {/* A "No RPC" left from before the stored data loaded is no fault: the worker clears it on its next pass. */}
-        {c.error && !stored ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
+        {/* A "No RPC" left from before the stored data loaded is no fault, paused or not: the worker clears it on its next pass. */}
+        {c.error && !storedOnly(c, rpcChains) ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
         {stored ? (
           <p className="text-xs text-muted-foreground">
-            {cov.unsynced}: no RPC is set for {chainName(c.chainId)}, so no newer block is read.{' '}
+            {cov.unsynced !== null ? `${cov.unsynced}: no` : 'No'} RPC is set for {chainName(c.chainId)}, so no newer block is read.{' '}
             {FIELDS.some((f) => f.key === `rpc.${c.chainId}`)
               ? <a href={`/settings#rpc.${c.chainId}`} className="underline hover:text-foreground">Set one in Settings to read on from here</a>
               : <>Set WASHTRACE_RPC_{c.chainId} for the worker to read on from here.</>}

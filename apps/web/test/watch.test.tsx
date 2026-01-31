@@ -2,6 +2,7 @@ import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/api';
+import { localTime } from '@/lib/format';
 import { CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { CollectionRow } from '@/components/collection-row';
 import { CollectionTabs } from '@/components/tabs';
@@ -237,11 +238,20 @@ describe('CollectionRow', () => {
 
   it('shows stored data with no RPC as where it stops, never as a fault', () => {
     document.cookie = 'washtrace_tz=UTC; path=/';
-    const c = { ...base, startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), error: 'No RPC is configured for chain 1.' } as typeof base;
+    const c = { ...base, startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, error: 'No RPC is configured for chain 1.' } as typeof base;
     const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
-    expect(screen.getByText(/^Stored data · stops/).textContent).toBe('Stored data · stops 14 Oct 2026 · 9 days unsynced');
+    // The pill stays short enough for its column; where the data stops goes on a muted line under it, drawn by Time.
+    expect(screen.getByText('Stored data · 9 days unsynced')).toBeTruthy();
+    expect(screen.getByText('stops').textContent).toBe(`stops ${localTime(Date.UTC(2026, 9, 14), 'date', 'UTC')}`);
     expect(container.textContent).not.toContain('No RPC');
     expect(container.querySelector('.text-fault')).toBeNull();
+  });
+
+  it('says how far it was read under the pill once read past the stored data', () => {
+    const c = { ...base, startBlock: 100, cursorBlock: 1_250_000, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900 } as typeof base;
+    render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
+    expect(screen.getByText('No RPC for its chain')).toBeTruthy();
+    expect(screen.getByText('read to block 1,250,000')).toBeTruthy();
   });
 
   it('says why stored data was not loaded as information, not a fault', () => {

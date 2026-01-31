@@ -10,7 +10,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, ...more,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, ...more,
   };
 }
 
@@ -117,6 +117,27 @@ describe('Worker.ingest', () => {
     expect(logged).not.toHaveBeenCalled();
     expect(started).toEqual([]);
     expect(served).toEqual([]);
+  });
+
+  it('writes nothing for a collection with stored data and no RPC whose error is already clear', async () => {
+    const { w } = setup([at(1, { storedThroughTime: 1_700_000_000_000 })], 1_000);
+    const calls: number[] = [];
+    (w as any).store.setError = async (id: number) => { calls.push(id); };
+    (w as any).config = () => ({ ...config, rpc: new Map() });
+    await w.ingest();
+    expect(calls).toEqual([]);
+  });
+
+  it('gives a stored-only collection no slice of the budget, so the real backfill gets all of it', async () => {
+    // Both behind the head: the stored-only one on a chain with no RPC, the other reading Ethereum.
+    const { w, started } = setup([
+      at(2, { chainId: 8453, cursorBlock: 10, servedAt: null, storedThroughTime: 1_700_000_000_000 }),
+      at(1, { cursorBlock: 10, servedAt: 5 }),
+    ], 1_000);
+    await w.ingest();
+    // One span a second over a 45 s budget: about 45 spans alone, about 22 in half a budget.
+    expect(started.filter((s) => s.id === 1).length).toBeGreaterThanOrEqual(40);
+    expect(started.some((s) => s.id === 2)).toBe(false);
   });
 });
 

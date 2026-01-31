@@ -37,10 +37,10 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(10);
-    expect(await store.migrate()).toBe(10);
+    expect(await store.migrate()).toBe(11);
+    expect(await store.migrate()).toBe(11);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 10 }]);
+    expect(rows).toEqual([{ version: 11 }]);
   });
 
   it('removeCollection deletes nothing that is not paused', async () => {
@@ -704,7 +704,7 @@ describe('Store', () => {
       await store.restore(id, chainId, entry(coll), batches(ts.slice(0, 2), ts.slice(2)));
       const c = (await store.collection(chainId, coll))!;
       expect(c).toMatchObject({
-        transfers: 3, startBlock: 5, cursorBlock: 300, storedThroughTime: 1_700_000_100_000, restoreProgress: null, restoreNote: null,
+        transfers: 3, startBlock: 5, cursorBlock: 300, storedThroughTime: 1_700_000_100_000, storedThroughBlock: 300, restoreProgress: null, restoreNote: null,
       });
       expect(await version(id)).toBe(before + 1);
       // Queued as ingest queues them: the zero address left out, and the one already read not counted twice.
@@ -834,7 +834,7 @@ describe('Store', () => {
       } finally {
         vi.restoreAllMocks();
       }
-      expect(await store.collection(chainId, coll)).toMatchObject({ transfers: 0, cursorBlock: 9, restoreProgress: null, restoreNote: null, storedThroughTime: null });
+      expect(await store.collection(chainId, coll)).toMatchObject({ transfers: 0, cursorBlock: 9, restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null });
       await drop(chainId, coll);
     });
 
