@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
-import type { StoredEntry } from '../src/stored.js';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
 import type { AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
@@ -10,7 +13,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, ...more,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -228,6 +231,124 @@ describe('Worker.ingest restoring stored data', () => {
   });
 });
 
+describe('needsTrail', () => {
+  const TRAILED: StoredEntry = { ...ENTRY, trail: { rows: 9, wallets: 3, checked: 1_612, of: 11_259, bytes: 157, sha256: 'feed' } };
+
+  it('imports a trail on disk that matches the manifest and was not imported yet, and nothing else', () => {
+    expect(needsTrail(row(), TRAILED, 'feed')).toBe('import');
+    // Already loaded: once per file.
+    expect(needsTrail(row({ trailImportedSha: 'feed' }), TRAILED, 'feed')).toBeNull();
+    // A re-cut trail loads again.
+    expect(needsTrail(row({ trailImportedSha: 'old' }), TRAILED, 'feed')).toBe('import');
+    // No file, or a file that is not the one the manifest names: nothing to load.
+    expect(needsTrail(row(), TRAILED, null)).toBeNull();
+    expect(needsTrail(row(), TRAILED, 'beef')).toBeNull();
+    // No trail in the manifest, no manifest entry, or a paused collection.
+    expect(needsTrail(row(), ENTRY, 'feed')).toBeNull();
+    expect(needsTrail(row(), null, 'feed')).toBeNull();
+    expect(needsTrail(row({ pausedAt: 5 }), TRAILED, 'feed')).toBeNull();
+  });
+});
+
+describe('Worker.ingest loading a money trail', () => {
+  const TRAILED: StoredEntry = { ...ENTRY, trail: { rows: 9, wallets: 3, checked: 1_612, of: 11_259, bytes: 157, sha256: 'feed' } };
+  let dir: string;
+  beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'washtrace-trail-')); });
+  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A worker over a stub store that says what happened, in order, with a trail file on disk whose sha256 is `sha`. */
+  async function setup(rows: CollectionRow[], sha: string, after: CollectionRow[] = rows) {
+    await writeFile(trailPath(dir, TRAILED), 'trail');
+    const events: string[] = [];
+    let restored = false;
+    const store: any = {
+      collections: async () => { events.push('collections'); return restored ? after : rows; },
+      restore: async () => { events.push('restore'); restored = true; },
+      importTrail: async (id: number, chainId: number, sha256: string, open: () => AsyncIterable<unknown>) => {
+        events.push(`import ${id} ${chainId} ${sha256}`);
+        for await (const _ of open()) events.push('batch');
+        return { wallets: 1, flows: 1 };
+      },
+      setTrailNote: async (id: number, note: string | null) => { events.push(`note ${id} ${note}`); },
+      heartbeat: async (_job: string, doing: string | null) => { events.push(`beat ${doing}`); },
+      setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {}, served: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '', dir);
+    (w as any).manifest = async () => ({ version: 1, collections: [TRAILED] });
+    (w as any).storedTransfers = async function* () { yield []; };
+    const hashed: string[] = [];
+    w.fileSha = async (path: string) => { hashed.push(path); return sha; };
+    (w as any).storedTrail = async function* (path: string, sha256: string) { events.push(`read ${path.slice(dir.length + 1)} ${sha256}`); yield { wallets: [], flows: [] }; };
+    return { w, events, store, hashed };
+  }
+
+  it('loads a matching trail on disk after any stored data, in the ingest pass, with no button', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events } = await setup([row({ cursorBlock: null, startBlock: null })], 'feed', [row({ cursorBlock: 900 })]);
+    await w.ingest();
+    const at = (e: string) => events.indexOf(e);
+    expect(at('import 1 1 feed')).toBeGreaterThan(at('restore'));
+    expect(events).toContain('beat Loading the money trail for BAYC');
+    expect(events).toContain('read 1-0xbc4c.trail.csv.zst feed');
+  });
+
+  it('leaves a paused collection\'s trail alone, and one already imported', async () => {
+    const paused = await setup([row({ pausedAt: 5 })], 'feed');
+    await paused.w.ingest();
+    expect(paused.events.some((e) => e.startsWith('import'))).toBe(false);
+    const done = await setup([row({ trailImportedSha: 'feed' })], 'feed');
+    await done.w.ingest();
+    expect(done.events.some((e) => e.startsWith('import'))).toBe(false);
+  });
+
+  it('hashes a trail once while the file stays the same, and again once it changes', async () => {
+    const { w, hashed } = await setup([row({ trailImportedSha: 'feed' })], 'feed');
+    await w.ingest();
+    await w.ingest();
+    expect(hashed).toHaveLength(1);
+    await writeFile(trailPath(dir, TRAILED), 'a longer trail');
+    await w.ingest();
+    expect(hashed).toHaveLength(2);
+  });
+
+  it('loads nothing from a trail that does not match the manifest, and says so once', async () => {
+    const { w, events } = await setup([row()], 'beef');
+    await w.ingest();
+    expect(events.some((e) => e.startsWith('import'))).toBe(false);
+    expect(events).toContain('note 1 Money trail on disk does not match the stored data, so it was not loaded.');
+    // The note already says it: not written again.
+    const noted = await setup([row({ trailNote: 'Money trail on disk does not match the stored data, so it was not loaded.' })], 'beef');
+    await noted.w.ingest();
+    expect(noted.events.some((e) => e.startsWith('note'))).toBe(false);
+  });
+
+  it('notes a trail that cannot be read and does not try it again until the file changes', async () => {
+    const { w, events, store } = await setup([row()], 'feed');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store.importTrail = async () => { events.push('import'); throw new StoredDataError('/data/1-0xbc4c.trail.csv.zst has a row of 3 fields, expected 8'); };
+    await w.ingest();
+    await w.ingest();
+    expect(events.filter((e) => e === 'import')).toHaveLength(1);
+    expect(events).toContain('note 1 Money trail on disk could not be read, so it was not loaded.');
+    expect(logged.mock.calls.some((c) => c.join(' ').includes('has a row of 3 fields'))).toBe(true);
+    await writeFile(trailPath(dir, TRAILED), 'a trail cut again');
+    await w.ingest();
+    expect(events.filter((e) => e === 'import')).toHaveLength(2);
+  });
+
+  it('writes no note when the store failed, and tries again next pass', async () => {
+    const { w, events, store } = await setup([row()], 'feed');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store.importTrail = async () => { events.push('import'); throw Object.assign(new Error('deadlock detected'), { code: '40P01' }); };
+    await w.ingest();
+    await w.ingest();
+    expect(events.filter((e) => e === 'import')).toHaveLength(2);
+    expect(events.some((e) => e.startsWith('note'))).toBe(false);
+    expect(logged.mock.calls.some((c) => c.join(' ').includes('deadlock detected'))).toBe(true);
+  });
+});
+
 describe('interleave', () => {
   it('takes one wallet from each lane in turn and checks a shared one once', () => {
     expect(interleave([{ collectionId: 1, wallets: ['a', 'b', 'c'] }, { collectionId: 2, wallets: ['b', 'd'] }, { collectionId: null, wallets: ['f'] }], null))
@@ -439,6 +560,7 @@ describe('Worker.analyze', () => {
       ],
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
       saveAnalysis: async (id: number) => { saved.push(id); },
+      importedFunding: async () => false,
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     const off: number[] = [];
@@ -450,6 +572,24 @@ describe('Worker.analyze', () => {
 
     store.stale = async () => [{ id: 1, chainId: 1, version: 3, rules: {}, name: 'BAYC', ranAt: Date.now(), tookMs: 10, rulesAt: null }];
     expect(await w.analyze()).toBe('nothing due');
+  });
+
+  it('runs the money lenses with no key when the chain has an imported money trail', async () => {
+    const asked: number[] = [];
+    let imported = true;
+    const store: any = {
+      stale: async () => [{ id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
+      heartbeat: async () => {}, saveAnalysis: async () => {},
+      importedFunding: async (chainId: number) => { asked.push(chainId); return imported; },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const sent: AnalysisRequest[] = [];
+    w.analyzeOff = async (request) => { sent.push(request); return { analysis: {} as Analysis, through: 7 }; };
+    await w.analyze();
+    imported = false;
+    await w.analyze();
+    expect(asked).toEqual([1, 1]);
+    expect(sent.map((r) => r.fundingAvailable)).toEqual([true, false]);
   });
 
   it('gives the thread where the store is and which collection, never the flows', async () => {

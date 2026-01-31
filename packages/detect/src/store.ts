@@ -63,6 +63,10 @@ export interface CollectionRow {
   storedThroughTime: number | null;
   /** The block the stored data it loaded stops at. Null when none was loaded. */
   storedThroughBlock: number | null;
+  /** The sha256 of the money trail loaded from stored data for it. Null when none was. */
+  trailImportedSha: string | null;
+  /** Why a money trail on disk was not loaded. It is not tried again until the file changes. */
+  trailNote: string | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -493,6 +497,90 @@ export class Store {
     await this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL WHERE restore_progress IS NOT NULL');
   }
 
+  /**
+   * Load a money trail another store cut (see trail): its flows, then its
+   * wallets, then the mark that this collection has it. `open` reads the
+   * trail from its start, wallets first, as readTrail does; it is read twice.
+   *
+   * Every flow goes in before any wallet is marked done. A done wallet is
+   * never read again, so one marked done before its flows were in, with the
+   * load cut off between the two, would be a gap for good. Flows alone claim
+   * nothing, so each batch commits on its own.
+   *
+   * Then the wallets, one short statement a batch, in address order as
+   * queueWallets writes them: held for a whole load, their rows kept funding
+   * waiting and deadlocked with it, as a load of stored data once did. A
+   * wallet this store already checked keeps its own check. One still to
+   * check here takes the trail's check, if it has one. Either way it keeps
+   * its own transfer count (the trail's counts the other store's
+   * collections) and takes the nearer of the two depths. A wallet new here
+   * comes in done or still to check, as the trail has it, with no transfer
+   * counted: this store counts its own as it reads them.
+   *
+   * Only then is the trail's sha recorded and every collection on the chain
+   * queued for analysis, in one statement. A load cut off anywhere is safe
+   * to run again from the start, and ends as one clean run does. Returns
+   * how many wallets and flows the trail held.
+   */
+  async importTrail(id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }>): Promise<{ wallets: number; flows: number }> {
+    let flows = 0;
+    for await (const batch of open()) {
+      await insertFlows(this.pool, chainId, batch.flows);
+      flows += batch.flows.length;
+    }
+    let wallets = 0;
+    for await (const batch of open()) {
+      // The wallets come first; past them are only flows, all in already.
+      if (batch.wallets.length === 0) break;
+      const rows = [...batch.wallets].sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
+      const done = rows.map((r) => r.status === 'done');
+      await this.pool.query(
+        `INSERT INTO washtrace.wallets (chain_id, address, transfers, status, truncated, fetched_at, depth)
+         SELECT $1, a, 0, s, tr, to_timestamp(fa / 1000), d FROM unnest($2::text[], $3::text[], $4::bool[], $5::float8[], $6::int[]) AS u(a, s, tr, fa, d)
+         ORDER BY a
+         ON CONFLICT (chain_id, address) DO UPDATE SET
+           status = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN 'done' ELSE washtrace.wallets.status END,
+           truncated = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN EXCLUDED.truncated ELSE washtrace.wallets.truncated END,
+           fetched_at = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN EXCLUDED.fetched_at ELSE washtrace.wallets.fetched_at END,
+           error = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN NULL ELSE washtrace.wallets.error END,
+           depth = LEAST(washtrace.wallets.depth, EXCLUDED.depth)`,
+        [
+          // A wallet the trail has failed is one to check here: 'failed' says this store tried.
+          chainId, rows.map((r) => r.address), done.map((d) => (d ? 'done' : 'pending')), rows.map((r, i) => done[i] && r.truncated),
+          rows.map((r, i) => (done[i] ? r.fetchedAt : null)), rows.map((r) => r.depth),
+        ],
+      );
+      wallets += rows.length;
+    }
+    // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
+    await this.pool.query(
+      `UPDATE washtrace.collections SET version = version + 1,
+         trail_imported_sha = CASE WHEN id = $2 THEN $3 ELSE trail_imported_sha END,
+         trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END
+       WHERE id IN (SELECT id FROM washtrace.collections WHERE chain_id = $1 ORDER BY id FOR NO KEY UPDATE)`,
+      [chainId, id, sha256],
+    );
+    return { wallets, flows };
+  }
+
+  /** Say why a money trail on disk was not loaded, or with null that nothing is wrong. */
+  async setTrailNote(id: number, note: string | null): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET trail_note = $2 WHERE id = $1', [id, note]);
+  }
+
+  /**
+   * Whether the money lenses have funding to run on with no key: a money
+   * trail was loaded on this chain, and some wallet on it is checked.
+   */
+  async importedFunding(chainId: number): Promise<boolean> {
+    const { rows } = await this.pool.query<{ ok: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM washtrace.collections WHERE chain_id = $1 AND trail_imported_sha IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done') AS ok`,
+      [chainId],
+    );
+    return rows[0]!.ok;
+  }
+
   // ---- funding -------------------------------------------------------------
 
   /**
@@ -548,19 +636,7 @@ export class Store {
     const c = await this.pool.connect();
     try {
       await c.query('BEGIN');
-      if (flows.length > 0) {
-        await c.query(
-          `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
-           SELECT $1, tx, k, fr, too, v, tok, bn, to_timestamp(bt)
-           FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::text[], $8::bigint[], $9::float8[])
-             AS u(tx, k, fr, too, v, tok, bn, bt)
-           ON CONFLICT DO NOTHING`,
-          [
-            chainId, flows.map((f) => f.txHash), flows.map((f) => f.kind), flows.map((f) => f.from), flows.map((f) => f.to),
-            flows.map((f) => f.valueWei), flows.map((f) => f.token), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
-          ],
-        );
-      }
+      await insertFlows(c, chainId, flows);
       await c.query(
         `UPDATE washtrace.wallets SET status = 'done', truncated = $3, fetched_at = now(), error = NULL WHERE chain_id = $1 AND address = $2`,
         [chainId, wallet, truncated],
@@ -784,6 +860,11 @@ export class Store {
    * list: one checked later is left out, not written done without the flows
    * nobody looked for. Traders need no such care, since flows to or from
    * them are all read, and only grow between the two streams.
+   *
+   * The followed wallets not yet checked (pending, or failed here) go in
+   * too, as pending: the frontier this store would have read next. An
+   * importing install with a key follows on from there, rather than from
+   * the traders alone. Wallets are in address order, as importTrail writes them.
    */
   async trail(id: number, chainId: number): Promise<{ checked: number; of: number; wallets: AsyncGenerator<WalletRow>; flows: AsyncGenerator<Flow> }> {
     // Arrays, not subqueries, for the reason analysisInput gives.
@@ -796,6 +877,8 @@ export class Store {
       `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
       [chainId],
     )).rows.map((r) => r.address);
+    // A followed wallet still to check: written as pending, whether it is pending or failed here.
+    const frontier = `(depth > 0 AND status <> 'done')`;
     const { rows } = await this.pool.query<{ checked: number; of: number }>(
       `SELECT count(*) FILTER (WHERE status = 'done')::int AS checked, count(*)::int AS of
        FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2::text[])`,
@@ -805,8 +888,11 @@ export class Store {
       checked: rows[0]!.checked,
       of: rows[0]!.of,
       wallets: this.cursor(
-        `SELECT address, transfers, status, truncated, extract(epoch FROM fetched_at)::float8 AS fetched, depth FROM washtrace.wallets
-         WHERE chain_id = $1 AND status <> 'pending' AND (address = ANY($2::text[]) OR address = ANY($3::text[])) ORDER BY address`,
+        `SELECT address, transfers, CASE WHEN ${frontier} THEN 'pending' ELSE status END AS status,
+                truncated AND NOT ${frontier} AS truncated, CASE WHEN ${frontier} THEN NULL ELSE extract(epoch FROM fetched_at)::float8 END AS fetched, depth
+         FROM washtrace.wallets
+         WHERE chain_id = $1 AND ((status <> 'pending' AND (address = ANY($2::text[]) OR address = ANY($3::text[]))) OR ${frontier})
+         ORDER BY address`,
         [chainId, traders, followed],
         (r): WalletRow => ({
           address: r.address, transfers: r.transfers, status: r.status, truncated: r.truncated, depth: r.depth,
@@ -1199,6 +1285,7 @@ function toCollection(r: any): CollectionRow {
     restoreProgress: num(r.restore_progress), restoreNote: r.restore_note,
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
+    trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };
@@ -1228,6 +1315,26 @@ async function insertTransfers(c: pg.PoolClient, id: number, transfers: readonly
     ],
   );
   return rows;
+}
+
+/**
+ * Insert flows, keeping any already stored: a flow between two checked
+ * wallets is read from both sides, and is one edge. Funding and a loaded
+ * money trail share it.
+ */
+async function insertFlows(c: pg.Pool | pg.PoolClient, chainId: number, flows: readonly Flow[]): Promise<void> {
+  if (flows.length === 0) return;
+  await c.query(
+    `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
+     SELECT $1, tx, k, fr, too, v, tok, bn, to_timestamp(bt)
+     FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::text[], $8::bigint[], $9::float8[])
+       AS u(tx, k, fr, too, v, tok, bn, bt)
+     ON CONFLICT DO NOTHING`,
+    [
+      chainId, flows.map((f) => f.txHash), flows.map((f) => f.kind), flows.map((f) => f.from), flows.map((f) => f.to),
+      flows.map((f) => f.valueWei), flows.map((f) => f.token), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
+    ],
+  );
 }
 
 /** How many times each address appears. */

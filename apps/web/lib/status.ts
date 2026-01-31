@@ -124,7 +124,11 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     }
   }
   if (!s.config.funding) {
-    notice('info', 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
+    // A money trail loaded from stored data is funding the worker does not have to fetch.
+    const trailed = s.collections.some((c) => c.trailImportedSha != null);
+    notice('info', trailed
+      ? 'Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.'
+      : 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
   }
   for (const f of s.funding) {
     if (f.failed > 0) needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`, 'They retry on their own after an hour; if they keep failing, check the Etherscan key in Settings.', '/settings#etherscan.key');

@@ -94,8 +94,11 @@ const SEAM = { A: 'md:rounded-tl-none', AU: '', AC: 'md:rounded-tr-none' } as co
  * panel, so what is listed is visibly that card's, with nothing between them.
  * A lens that could not run says why in grey.
  */
-export function LensCards({ totals, selected, href, floor, children }: {
-  totals: Record<Method, MethodTotals>; selected: Method; href: (m: Method) => string; floor: readonly Method[]; children: ReactNode;
+export function LensCards({ totals, selected, href, floor, trail = false, children }: {
+  totals: Record<Method, MethodTotals>; selected: Method; href: (m: Method) => string; floor: readonly Method[];
+  /** A money trail was loaded from stored data: a money lens that did not run will on the next analysis. */
+  trail?: boolean;
+  children: ReactNode;
 }) {
   return (
     <div>
@@ -128,7 +131,9 @@ export function LensCards({ totals, selected, href, floor, children }: {
                 </div>
               ) : (
                 <p className="mt-auto text-sm text-muted-foreground">
-                  Not run. It needs to know who paid whom, and no funding source is set: <code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>.
+                  {trail
+                    ? 'Not run yet. The stored money trail is loaded, so it says who paid whom, and the next analysis runs this lens on it.'
+                    : <>Not run. It needs to know who paid whom, and no funding source is set: <code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>.</>}
                 </p>
               )}
               {on ? null : <span className="text-xs text-muted-foreground group-hover:text-foreground">Show what it flags</span>}

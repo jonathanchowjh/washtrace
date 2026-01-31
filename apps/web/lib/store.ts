@@ -1,4 +1,5 @@
-import { Store } from '@washtrace/detect';
+import { join } from 'node:path';
+import { Store, entryFor, readManifest, storedDir, type StoredEntry } from '@washtrace/detect';
 import { storeUrl } from './config';
 
 /**
@@ -15,4 +16,20 @@ export function store(): Store {
     HELD.washtraceStore = { url, store: Store.connect(url) };
   }
   return HELD.washtraceStore.store;
+}
+
+/**
+ * A collection's entry in the stored-data manifest, or null: what the
+ * console says of its stored data, such as how many traders its money trail
+ * checked. The manifest is data/stored at the repo root, two up from where
+ * Next runs (apps/web, in dev and in the image alike), unless
+ * WASHTRACE_STORED_DIR says otherwise, as for the worker. One that cannot be
+ * read is no entry: the page says less, and never fails over it.
+ */
+export async function storedEntry(chainId: number, address: string): Promise<StoredEntry | null> {
+  try {
+    return entryFor(await readManifest(join(storedDir(process.env, join(process.cwd(), '..', '..')), 'manifest.json')), chainId, address);
+  } catch {
+    return null;
+  }
 }

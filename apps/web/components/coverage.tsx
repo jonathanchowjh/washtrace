@@ -146,10 +146,19 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
  * the answer it holds up. Ingest, fund, analyze: the worker's three jobs,
  * seen from the collection. It leads the page, because it says how far to
  * trust everything after it.
+ *
+ * `funding` is whether an Etherscan key is set. `trail` is the stored money
+ * trail's coverage, as the manifest gives it, when the trail it describes is
+ * the one this collection loaded; else null.
  */
-export function ReadingPanel({ c, cov, why, rpcChains }: { c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number> }) {
+export function ReadingPanel({ c, cov, why, rpcChains, funding = true, trail = null }: {
+  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; trail?: { checked: number; of: number } | null;
+}) {
   const a = c.latest;
   const stored = cov.reading === 'stored-only';
+  // A loaded money trail is funding: the money lenses run on it, key or not, from the next analysis on.
+  const trailed = c.trailImportedSha != null;
+  const money = cov.money || trailed;
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
@@ -173,11 +182,23 @@ export function ReadingPanel({ c, cov, why, rpcChains }: { c: CollectionRow; cov
       </Step>
       <Step
         n={2} title="Wallets checked for money"
-        figure={cov.money ? progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of) : 'Off'}
-        bar={cov.money ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
-        value={cov.money ? `${cov.wallets.checked.toLocaleString()} of ${cov.wallets.of.toLocaleString()} trading wallets, busiest first` : 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'}
+        figure={money ? progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of) : 'Off'}
+        bar={money ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
+        value={money ? `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} trading wallets, busiest first` : 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'}
         affects={<>{LENSES.AU.name} and {LENSES.AC.name}. An unchecked wallet hides its links, so their shares can only rise.</>}
       >
+        {trailed ? (
+          <p className="text-xs text-muted-foreground">
+            Money trail loaded from stored data{trail ? ` · ${trail.checked.toLocaleString('en-US')} of ${trail.of.toLocaleString('en-US')} traders checked` : ''}
+          </p>
+        ) : null}
+        {trailed && !funding ? (
+          <p className="text-xs text-muted-foreground">
+            Using the stored money trail; <a href="/settings#etherscan.key" className="underline hover:text-foreground">add an Etherscan key</a> to check newer wallets.
+          </p>
+        ) : null}
+        {/* Why a trail on disk did not load: information, since the lenses run as they would without it. */}
+        {c.trailNote ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
         {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
       </Step>
       <Step

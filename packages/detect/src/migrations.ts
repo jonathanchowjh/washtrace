@@ -223,4 +223,12 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_time t
 -- cursor, not at stored_through_time.
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_block bigint;
 `,
+  `
+-- A money trail on disk loads by itself once its sha256 matches the manifest.
+-- trail_imported_sha is the sha of the trail loaded for this collection, so a
+-- file loads once, and a trail cut again loads again. trail_note says why a
+-- trail on disk was not loaded; it is not tried again until the file changes.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_imported_sha text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_note text;
+`,
 ];

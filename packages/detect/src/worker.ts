@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import pg from 'pg';
 import { analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
@@ -6,8 +7,10 @@ import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
-import { entryFor, readManifest, readTransfers, storedDir, type Manifest, type StoredEntry } from './stored.js';
-import type { Transfer } from './types.js';
+import {
+  StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedDir, trailPath, type Manifest, type StoredEntry, type WalletRow,
+} from './stored.js';
+import type { Flow, Transfer } from './types.js';
 
 /** What the worker reads from the environment and the console's settings on every pass, so a changed setting needs no restart. */
 export interface WorkerConfig {
@@ -87,6 +90,24 @@ export function needsRestore(c: CollectionRow, entry: StoredEntry | null): boole
   if (c.pausedAt !== null || entry === null || c.restoreNote !== null) return false;
   return c.cursorBlock === null || (c.cursorBlock >= entry.startBlock - 1 && c.cursorBlock < entry.throughBlock);
 }
+
+/**
+ * Whether to load a collection's money trail from disk: it is watched, the
+ * manifest has a trail for it, the file on disk is that trail (`fileSha`, null
+ * when there is no file, matches the manifest's), and it is not the trail
+ * already loaded. A trail cut again has a new sha, so it loads again. No
+ * request is needed: a trail on disk loads as stored data does.
+ */
+export function needsTrail(c: CollectionRow, e: StoredEntry | null, fileSha: string | null): 'import' | null {
+  if (c.pausedAt !== null || e?.trail == null || fileSha === null) return null;
+  return fileSha === e.trail.sha256 && c.trailImportedSha !== fileSha ? 'import' : null;
+}
+
+/** Why a money trail on disk was not loaded, in the words the console shows. The full error goes to the log. */
+export const TRAIL_NOTES = {
+  mismatch: 'Money trail on disk does not match the stored data, so it was not loaded.',
+  unreadable: 'Money trail on disk could not be read, so it was not loaded.',
+} as const;
 
 /**
  * The order to check wallets in: one from each lane in turn, so no collection
@@ -201,6 +222,13 @@ export class Worker {
   private checksFailed = '';
   /** The last manifest read error logged, so a broken manifest is one line and not one a pass. */
   private manifestFailed = '';
+  /**
+   * Each money trail's sha256, by path, kept while its modified time and size
+   * stay the same: a trail can be hundreds of MB, and is looked at every pass.
+   */
+  private readonly trailShas = new Map<string, { file: string; sha: string }>();
+  /** Trail files that could not be read, by path and the same key: not tried again until the file changes. */
+  private readonly trailsFailed = new Map<string, string>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -295,9 +323,12 @@ export class Worker {
   async ingest(): Promise<string> {
     const { rpc } = this.config(this.settings);
     let collections = await this.store.collections();
-    const restored = await this.restore(collections);
+    const manifest = await this.storedManifest();
+    const restored = manifest === null ? 0 : await this.restore(collections, manifest);
     // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
     if (restored > 0) collections = await this.store.collections();
+    // After every load of stored data, under the same lock, so a trail never loads beside one.
+    const trails = manifest === null ? 0 : await this.trails(collections, manifest);
     // A chain with no RPC has nothing to read, so its collections are settled here and hold no slice of the budget.
     const readable: CollectionRow[] = [];
     for (const c of collections) {
@@ -337,8 +368,21 @@ export class Worker {
     // Slices come from what keep-up left, and no turn runs past the pass.
     const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;
     for (const { c, sliceMs } of rest) await serve(c, Math.min(Date.now() + sliceMs, passEnd));
-    const loaded = restored > 0 ? `stored data loaded for ${restored} collections; ` : '';
+    const loaded = `${restored > 0 ? `stored data loaded for ${restored} collections; ` : ''}${trails > 0 ? `money trails loaded for ${trails}; ` : ''}`;
     return `${loaded}${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
+  }
+
+  /** The stored-data manifest, or null when it cannot be read: then no collection has stored data, and that is said once. */
+  private async storedManifest(): Promise<Manifest | null> {
+    try {
+      const manifest = await this.manifest();
+      this.manifestFailed = '';
+      return manifest;
+    } catch (err) {
+      if (this.manifestFailed !== messageOf(err)) console.warn('[washtrace] stored data not used: %s', messageOf(err));
+      this.manifestFailed = messageOf(err);
+      return null;
+    }
   }
 
   /**
@@ -346,19 +390,9 @@ export class Worker {
    * needsRestore), one at a time, and say how many loaded. This runs in
    * the ingest pass, under its lock, so no span is read into a collection
    * while it loads. A load that fails has said why on the collection, and
-   * its chain is read as if there were no stored data; a manifest that
-   * cannot be read means no collection has any.
+   * its chain is read as if there were no stored data.
    */
-  private async restore(collections: readonly CollectionRow[]): Promise<number> {
-    let manifest: Manifest;
-    try {
-      manifest = await this.manifest();
-      this.manifestFailed = '';
-    } catch (err) {
-      if (this.manifestFailed !== messageOf(err)) console.warn('[washtrace] stored data not used: %s', messageOf(err));
-      this.manifestFailed = messageOf(err);
-      return 0;
-    }
+  private async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<number> {
     let loaded = 0;
     for (const c of collections) {
       const entry = entryFor(manifest, c.chainId, c.address);
@@ -372,6 +406,87 @@ export class Worker {
       }
     }
     return loaded;
+  }
+
+  /**
+   * Load the money trail on disk of every collection that needs it (see
+   * needsTrail), one at a time, and say how many loaded. A file that is not
+   * the manifest's trail, or cannot be read, loads nothing and says so on the
+   * collection, and is not tried again until it changes. A store that failed
+   * (a deadlock, a lost connection) says nothing there: the next pass tries
+   * again, and loading again is safe (see Store.importTrail).
+   */
+  private async trails(collections: readonly CollectionRow[], manifest: Manifest): Promise<number> {
+    let loaded = 0;
+    for (const c of collections) {
+      const entry = entryFor(manifest, c.chainId, c.address);
+      if (c.pausedAt !== null || entry?.trail == null) continue;
+      const path = trailPath(this.stored, entry);
+      let file: { key: string; sha: string } | null;
+      try {
+        file = await this.trailSha(path);
+      } catch (err) {
+        console.error('[washtrace] collection %d: money trail not read: %s', c.id, messageOf(err));
+        continue;
+      }
+      if (file !== null && file.sha !== entry.trail.sha256) {
+        if (c.trailNote !== TRAIL_NOTES.mismatch) {
+          console.warn('[washtrace] collection %d: %s does not match the manifest (sha256 %s, expected %s)', c.id, path, file.sha, entry.trail.sha256);
+          await this.noteTrail(c.id, TRAIL_NOTES.mismatch);
+        }
+        continue;
+      }
+      if (needsTrail(c, entry, file?.sha ?? null) !== 'import' || this.trailsFailed.get(path) === file!.key) continue;
+      await this.beat('ingest', `Loading the money trail for ${c.name ?? entry.name}`, c.id);
+      try {
+        const sha = file!.sha;
+        const { wallets, flows } = await this.store.importTrail(c.id, c.chainId, sha, () => this.storedTrail(path, sha));
+        console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
+        loaded += 1;
+      } catch (err) {
+        console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, messageOf(err));
+        if (!(err instanceof StoredDataError)) continue;
+        this.trailsFailed.set(path, file!.key);
+        await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
+      }
+    }
+    return loaded;
+  }
+
+  /** Say on the collection why its trail was not loaded. Fail-soft: the rest of the pass goes on. */
+  private async noteTrail(id: number, note: string): Promise<void> {
+    await this.store.setTrailNote(id, note).catch((err) => console.error('[washtrace] collection %d: money trail note not written: %s', id, messageOf(err)));
+  }
+
+  /**
+   * The sha256 of the trail at `path`, and the modified time and size it was
+   * taken at; null when there is no file. Hashed again only once the file
+   * changes.
+   */
+  private async trailSha(path: string): Promise<{ key: string; sha: string } | null> {
+    let key: string;
+    try {
+      const s = await stat(path);
+      key = `${s.mtimeMs} ${s.size}`;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    const known = this.trailShas.get(path);
+    if (known?.file === key) return { key, sha: known.sha };
+    const sha = await this.fileSha(path);
+    this.trailShas.set(path, { file: key, sha });
+    return { key, sha };
+  }
+
+  /** A file's sha256. Tests override it on the instance. */
+  fileSha(path: string): Promise<string> {
+    return sha256File(path);
+  }
+
+  /** A money trail, checked against `sha256` first, as each read of it is. Tests override it on the instance. */
+  storedTrail(path: string, sha256: string): AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }> {
+    return readTrail(path, sha256);
   }
 
   /** The stored-data manifest; empty when there is none. Tests override it on the instance. */
@@ -481,6 +596,8 @@ export class Worker {
     const { etherscanKey } = this.config(this.settings);
     const c = nextAnalysis(await this.store.stale(), Date.now());
     if (c === null) return 'nothing due';
+    // A loaded money trail is funding too: the money lenses run on it with no key.
+    const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.chainId);
     const name = c.name ?? `collection ${c.id}`;
     await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();
@@ -489,7 +606,7 @@ export class Worker {
       id: c.id,
       chainId: c.chainId,
       rules: c.rules,
-      fundingAvailable: etherscanKey !== null,
+      fundingAvailable,
       custodians: new Set(CUSTODIANS),
       contracts: contractsFor(c.chainId),
       money: moneyFor(c.chainId),

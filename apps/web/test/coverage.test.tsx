@@ -4,6 +4,7 @@ import type { CollectionRow } from '@washtrace/detect';
 import { ReadingPanel, ReadingPill, ReadingSummary } from '@/components/coverage';
 import { localTime } from '@/lib/format';
 import { coverage } from '@/lib/metrics';
+import { LensCards } from '@/components/methods';
 
 afterEach(cleanup);
 
@@ -148,5 +149,62 @@ describe('ReadingPill layout', () => {
       expect(pill.className).toContain('items-start');
       cleanup();
     }
+  });
+});
+
+describe('a money trail loaded from stored data', () => {
+  const totals = (available: boolean) => ({
+    A: { available: true }, AU: { available }, AC: { available },
+  }) as unknown as NonNullable<CollectionRow['latest']>['totals'];
+  const analysed = (available: boolean) => ({
+    ranAt: 0, tookMs: 1, throughBlock: 10, totals: totals(available), missingData: 0, fundedWallets: 1_612, wallets: 11_259, truncatedSearches: 0,
+  }) as unknown as CollectionRow['latest'];
+  const loaded = (more: Partial<CollectionRow> = {}) => row({ trailImportedSha: 'feed', wallets: 11_259, fundedWallets: 1_612, latest: analysed(true), ...more });
+  const panelOf = (c: CollectionRow, funding: boolean, trail: { checked: number; of: number } | null) =>
+    render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} funding={funding} trail={trail} />).container;
+
+  it('says in step 2 that the trail loaded, and how many traders it checked', () => {
+    const text = panelOf(loaded(), true, { checked: 1_612, of: 11_259 }).textContent!;
+    expect(text).toContain('Money trail loaded from stored data · 1,612 of 11,259 traders checked');
+  });
+
+  it('leaves the numbers out when the manifest no longer describes the trail that loaded', () => {
+    const text = panelOf(loaded(), true, null).textContent!;
+    expect(text).toContain('Money trail loaded from stored data');
+    expect(text).not.toContain('traders checked');
+  });
+
+  it('never says no funding source is set while the trail feeds the money lenses, and says what a key adds', () => {
+    for (const c of [loaded(), loaded({ latest: analysed(false) })]) {
+      const text = panelOf(c, false, { checked: 1_612, of: 11_259 }).textContent!;
+      expect(text).not.toMatch(/no funding source/i);
+      expect(text).toContain('Using the stored money trail; add an Etherscan key to check newer wallets');
+    }
+    const link = [...panelOf(loaded(), false, null).querySelectorAll('a')].find((a) => a.textContent!.includes('Etherscan key'));
+    expect(link?.getAttribute('href')).toBe('/settings#etherscan.key');
+  });
+
+  it('says nothing of a trail when none loaded', () => {
+    const text = panelOf(row({ latest: analysed(false) }), false, null).textContent!;
+    expect(text).not.toContain('Money trail');
+    expect(text).toContain('No funding source is set');
+  });
+
+  it('shows why a trail on disk was not loaded as information, not a fault', () => {
+    const note = 'Money trail on disk does not match the stored data, so it was not loaded.';
+    const el = panelOf(row({ trailNote: note }), true, null);
+    const line = [...el.querySelectorAll('p')].find((p) => p.textContent === note)!;
+    expect(line).toBeTruthy();
+    expect(line.className).toContain('text-muted-foreground');
+    expect(line.className).not.toContain('text-fault');
+  });
+
+  it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
+    const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
+    const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
+    const cards = (trail: boolean) => render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail}>{null}</LensCards>).container.textContent!;
+    expect(cards(true)).not.toMatch(/no funding source/i);
+    expect(cards(true)).toContain('The stored money trail is loaded');
+    expect(cards(false)).toMatch(/no funding source is set/i);
   });
 });

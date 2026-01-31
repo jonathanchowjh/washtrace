@@ -18,7 +18,7 @@ import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
 import { coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
-import { store } from '@/lib/store';
+import { store, storedEntry } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 /** Rows of each ranking shown in the lens panel; the rest are a page away. */
@@ -54,7 +54,11 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
   // The chains the worker can read: with none for this one, its stored data is all there is.
-  const rpcChains = new Set(configFromSources(sources, settings).chains);
+  const config = configFromSources(sources, settings);
+  const rpcChains = new Set(config.chains);
+  // How many traders the loaded money trail checked, from the manifest, when the trail it describes is the one loaded.
+  const entry = c.trailImportedSha === null ? null : await storedEntry(chainId, address);
+  const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   const cov = coverage(c, rpcChains, Date.now(), zone);
   const name = c.name ?? short(address);
   const lens = LENSES[method];
@@ -93,7 +97,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       {a ? (
         <Section id="evidence" title="How was it found?" lead="Three lenses, strictest first; each is one end, or the middle, of the range above. Choose one to see the tokens and wallets it flags.">
-          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor}>
+          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null}>
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available
                 ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
@@ -127,7 +131,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} trail={trail} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

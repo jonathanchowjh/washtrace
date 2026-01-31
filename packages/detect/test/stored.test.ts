@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, upsertEntry, writeTransfers, writeTrail,
+  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, trailPath, upsertEntry, writeTransfers, writeTrail,
   type Manifest, type StoredEntry, type WalletRow,
 } from '../src/stored.js';
 import type { Flow, Transfer } from '../src/types.js';
@@ -157,5 +157,7 @@ describe('the manifest', () => {
   it('names files by chain and lowercase address', () => {
     expect(storedFile(1, '0xABC', 'transfers')).toBe('1-0xabc.transfers.csv.zst');
     expect(storedFile(1, '0xabc', 'trail')).toBe('1-0xabc.trail.csv.zst');
+    // The money trail sits beside the manifest, never named by it.
+    expect(trailPath('/app/data/stored', { chainId: 1, address: '0xABC' } as StoredEntry)).toBe('/app/data/stored/1-0xabc.trail.csv.zst');
   });
 });

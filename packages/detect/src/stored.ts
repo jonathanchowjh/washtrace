@@ -99,6 +99,15 @@ export function storedFile(chainId: number, address: string, part: 'transfers' |
   return `${chainId}-${address.toLowerCase()}.${part}.csv.zst`;
 }
 
+/**
+ * Where a collection's money trail is on disk: beside the manifest, under
+ * the name the cut gave it. The manifest names no trail file, since the
+ * trail is never committed; only its sha256 says which file it is.
+ */
+export function trailPath(dir: string, e: Pick<StoredEntry, 'chainId' | 'address'>): string {
+  return join(dir, storedFile(e.chainId, e.address, 'trail'));
+}
+
 /** The manifest's entry for a collection. Addresses compare case-insensitively: a URL may carry a checksummed one. */
 export function entryFor(m: Manifest, chainId: number, address: string): StoredEntry | null {
   const a = address.toLowerCase();

@@ -15,7 +15,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, ...more,
+    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -111,6 +111,13 @@ describe('status', () => {
     const r = status(snapshot({ config: { ...CONFIG, funding: false } }), NOW);
     expect(r.notices.filter((n) => n.severity === 'needs-you')).toEqual([]);
     expect(r.notices).toContainEqual(expect.objectContaining({ severity: 'info', action: expect.objectContaining({ href: '/settings#etherscan.key' }) }));
+  });
+
+  it('never calls the money lenses unavailable with funding off when a collection loaded a stored money trail', () => {
+    const off = { ...CONFIG, funding: false };
+    expect(texts(snapshot({ config: off }), 'info')).toContain('Funding is off, so Money loops back and Linked wallets are unavailable.');
+    const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })] }), 'info').find((t) => t.startsWith('Funding is off'));
+    expect(text).toBe('Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.');
   });
 
   it('counts a backfill as work in progress with an ETA', () => {
