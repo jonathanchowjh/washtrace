@@ -442,7 +442,8 @@ export class Store {
           if (!(await this.restoreGoesOn(id, Math.min(1, loaded / Math.max(1, entry.transfers.rows))))) throw STOPPED;
           checked = Date.now();
         }
-        for (const a of traders(chainId, await insertTransfers(c, id, batch))) counts.set(a, (counts.get(a) ?? 0) + 1);
+        const added = await insertTransfers(c, id, batch).catch((err) => { throw asDataFault(err); });
+        for (const a of traders(chainId, added)) counts.set(a, (counts.get(a) ?? 0) + 1);
         loaded += batch.length;
       }
       // Once more before the wallets and the cursor are written: a pause in the last second still stops it.
@@ -525,7 +526,7 @@ export class Store {
   async importTrail(id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }>): Promise<{ wallets: number; flows: number }> {
     let flows = 0;
     for await (const batch of open()) {
-      await insertFlows(this.pool, chainId, batch.flows);
+      await insertFlows(this.pool, chainId, batch.flows).catch((err) => { throw asDataFault(err); });
       flows += batch.flows.length;
     }
     let wallets = 0;
@@ -534,6 +535,7 @@ export class Store {
       if (batch.wallets.length === 0) break;
       const rows = [...batch.wallets].sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
       const done = rows.map((r) => r.status === 'done');
+      // Funding locks a wallet and then collections, so this can still deadlock with it, rarely: Postgres ends one, and it is retried.
       await this.pool.query(
         `INSERT INTO washtrace.wallets (chain_id, address, transfers, status, truncated, fetched_at, depth)
          SELECT $1, a, 0, s, tr, to_timestamp(fa / 1000), d FROM unnest($2::text[], $3::text[], $4::bool[], $5::float8[], $6::int[]) AS u(a, s, tr, fa, d)
@@ -549,7 +551,7 @@ export class Store {
           chainId, rows.map((r) => r.address), done.map((d) => (d ? 'done' : 'pending')), rows.map((r, i) => done[i] && r.truncated),
           rows.map((r, i) => (done[i] ? r.fetchedAt : null)), rows.map((r) => r.depth),
         ],
-      );
+      ).catch((err) => { throw asDataFault(err); });
       wallets += rows.length;
     }
     // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
@@ -569,16 +571,18 @@ export class Store {
   }
 
   /**
-   * Whether the money lenses have funding to run on with no key: a money
-   * trail was loaded on this chain, and some wallet on it is checked.
+   * Whether a collection's money lenses have funding to run on with no key:
+   * it loaded a money trail of its own, and some wallet on its chain is
+   * checked. Another collection's trail is not enough: its lenses would read
+   * as floors over a check that, with no key, never moves.
    */
-  async importedFunding(chainId: number): Promise<boolean> {
+  async importedFunding(id: number): Promise<boolean> {
     const { rows } = await this.pool.query<{ ok: boolean }>(
-      `SELECT EXISTS (SELECT 1 FROM washtrace.collections WHERE chain_id = $1 AND trail_imported_sha IS NOT NULL)
-          AND EXISTS (SELECT 1 FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done') AS ok`,
-      [chainId],
+      `SELECT EXISTS (SELECT 1 FROM washtrace.wallets w WHERE w.chain_id = c.chain_id AND w.status = 'done') AS ok
+       FROM washtrace.collections c WHERE c.id = $1 AND c.trail_imported_sha IS NOT NULL`,
+      [id],
     );
-    return rows[0]!.ok;
+    return rows[0]?.ok ?? false;
   }
 
   // ---- funding -------------------------------------------------------------
@@ -657,10 +661,14 @@ export class Store {
       // Every collection this wallet or any counterparty traded in reads it
       // again: a followed wallet's flows can close a path to a trader.
       const touched = [...new Set([wallet, ...flows.flatMap((f) => [f.from, f.to])])];
+      // Locked in id order, as a loaded trail's bump locks them, so two writers never wait on each other in a circle.
       await c.query(
         `UPDATE washtrace.collections SET version = version + 1
-         WHERE id IN (SELECT DISTINCT collection_id FROM washtrace.transfers WHERE from_address = ANY($2) OR to_address = ANY($2))
-           AND chain_id = $1`,
+         WHERE id IN (
+           SELECT id FROM washtrace.collections
+           WHERE id IN (SELECT DISTINCT collection_id FROM washtrace.transfers WHERE from_address = ANY($2) OR to_address = ANY($2))
+             AND chain_id = $1
+           ORDER BY id FOR NO KEY UPDATE)`,
         [chainId, touched],
       );
       await c.query('COMMIT');
@@ -1335,6 +1343,18 @@ async function insertFlows(c: pg.Pool | pg.PoolClient, chainId: number, flows: r
       flows.map((f) => f.valueWei), flows.map((f) => f.token), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
     ],
   );
+}
+
+/**
+ * A store error the data caused (class 22, a value it refuses; 23, a broken
+ * constraint) as bad stored data, so a file whose sha256 matched but holds
+ * such a value is noted once, not loaded and hashed again every pass. A row
+ * whose collection went (a foreign key) is not the data's fault.
+ */
+function asDataFault(err: unknown): unknown {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string' || code === FOREIGN_KEY_VIOLATION || !(code.startsWith('22') || code.startsWith('23'))) return err;
+  return new StoredDataError(`stored data holds a value the store refuses: ${(err as Error).message}`, 'unreadable');
 }
 
 /** How many times each address appears. */

@@ -323,6 +323,24 @@ describe('Worker.ingest loading a money trail', () => {
     expect(noted.events.some((e) => e.startsWith('note'))).toBe(false);
   });
 
+  it('clears a note once the file it was about is gone', async () => {
+    const { w, events } = await setup([row({ trailNote: 'Money trail on disk does not match the stored data, so it was not loaded.' })], 'feed');
+    await rm(trailPath(dir, TRAILED));
+    await w.ingest();
+    expect(events).toContain('note 1 null');
+  });
+
+  it('clears a mismatch note once the file on disk matches the manifest again', async () => {
+    const note = 'Money trail on disk does not match the stored data, so it was not loaded.';
+    const { w, events } = await setup([row({ trailImportedSha: 'feed', trailNote: note })], 'feed');
+    await w.ingest();
+    expect(events).toContain('note 1 null');
+    // No note, nothing to clear.
+    const clean = await setup([row({ trailImportedSha: 'feed' })], 'feed');
+    await clean.w.ingest();
+    expect(clean.events.some((e) => e.startsWith('note'))).toBe(false);
+  });
+
   it('notes a trail that cannot be read and does not try it again until the file changes', async () => {
     const { w, events, store } = await setup([row()], 'feed');
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -580,7 +598,7 @@ describe('Worker.analyze', () => {
     const store: any = {
       stale: async () => [{ id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
       heartbeat: async () => {}, saveAnalysis: async () => {},
-      importedFunding: async (chainId: number) => { asked.push(chainId); return imported; },
+      importedFunding: async (id: number) => { asked.push(id); return imported; },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     const sent: AnalysisRequest[] = [];
@@ -588,7 +606,8 @@ describe('Worker.analyze', () => {
     await w.analyze();
     imported = false;
     await w.analyze();
-    expect(asked).toEqual([1, 1]);
+    // Asked of the collection, not its chain: another collection's trail is not this one's funding.
+    expect(asked).toEqual([2, 2]);
     expect(sent.map((r) => r.fundingAvailable)).toEqual([true, false]);
   });
 

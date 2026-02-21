@@ -202,9 +202,25 @@ describe('a money trail loaded from stored data', () => {
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const cards = (trail: boolean) => render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail}>{null}</LensCards>).container.textContent!;
-    expect(cards(true)).not.toMatch(/no funding source/i);
-    expect(cards(true)).toContain('The stored money trail is loaded');
-    expect(cards(false)).toMatch(/no funding source is set/i);
+    const cards = (trail: boolean, funded: boolean) =>
+      render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+    expect(cards(true, true)).not.toMatch(/no funding source/i);
+    expect(cards(true, true)).toContain('The stored money trail is loaded');
+    expect(cards(true, true)).toContain('the next analysis runs this lens');
+    expect(cards(false, false)).toMatch(/no funding source is set/i);
+  });
+
+  it('promises a money lens a run only when the next analysis will have funding for it, and otherwise says what is missing', () => {
+    const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
+    const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
+    const cards = (trail: boolean, funded: boolean) =>
+      render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+    // Its trail checked no wallet, and there is no key: nothing to run on.
+    const empty = cards(true, false);
+    expect(empty).not.toContain('next analysis');
+    expect(empty).toContain('The stored money trail checked no wallet');
+    expect(empty).toContain('WASHTRACE_ETHERSCAN_KEY');
+    // A key set since the last analysis: the next one runs it.
+    expect(cards(false, true)).toContain('the next analysis runs this lens');
   });
 });

@@ -429,6 +429,10 @@ export class Worker {
         console.error('[washtrace] collection %d: money trail not read: %s', c.id, messageOf(err));
         continue;
       }
+      // A note about a file that is gone, or that now matches, says nothing true: cleared. A file that could not be read keeps its note.
+      if (c.trailNote !== null && (file === null || (file.sha === entry.trail.sha256 && c.trailNote === TRAIL_NOTES.mismatch))) {
+        await this.noteTrail(c.id, null);
+      }
       if (file !== null && file.sha !== entry.trail.sha256) {
         if (c.trailNote !== TRAIL_NOTES.mismatch) {
           console.warn('[washtrace] collection %d: %s does not match the manifest (sha256 %s, expected %s)', c.id, path, file.sha, entry.trail.sha256);
@@ -453,8 +457,8 @@ export class Worker {
     return loaded;
   }
 
-  /** Say on the collection why its trail was not loaded. Fail-soft: the rest of the pass goes on. */
-  private async noteTrail(id: number, note: string): Promise<void> {
+  /** Say on the collection why its trail was not loaded, or with null that nothing is wrong. Fail-soft: the rest of the pass goes on. */
+  private async noteTrail(id: number, note: string | null): Promise<void> {
     await this.store.setTrailNote(id, note).catch((err) => console.error('[washtrace] collection %d: money trail note not written: %s', id, messageOf(err)));
   }
 
@@ -597,7 +601,7 @@ export class Worker {
     const c = nextAnalysis(await this.store.stale(), Date.now());
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
-    const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.chainId);
+    const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.id);
     const name = c.name ?? `collection ${c.id}`;
     await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();

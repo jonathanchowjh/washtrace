@@ -757,6 +757,18 @@ describe('Store', () => {
       await drop(chainId, coll);
     });
 
+    it('takes a value the store refuses as bad stored data, noted once, not a failure to retry', async () => {
+      const coll = w('8ec');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      // A token id that is no number: the file matched its sha256, but holds what the store will not take.
+      const bad = chain('7', w('8b5')).map((t) => ({ ...t, tokenId: 'seven' }));
+      await expect(store.restore(id, chainId, entry(coll), batches(bad))).rejects.toBeInstanceOf(StoredDataError);
+      expect(await store.collection(chainId, coll)).toMatchObject({
+        transfers: 0, restoreNote: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+      });
+      await drop(chainId, coll);
+    });
+
     it('leaves no note when the store, not the data, failed, so the next pass tries again', async () => {
       const coll = w('8e9');
       const { id } = await store.addCollection(chainId, coll, null, 10);
@@ -1004,6 +1016,16 @@ describe('Store', () => {
       expect(await store.collection(11, w('11c1'))).toMatchObject({ trailImportedSha: 'feed' });
     });
 
+    it('takes a value the store refuses as a bad file, not a store failure, and marks no wallet done', async () => {
+      const id = await before(16, w('16c1'));
+      const was = await walletRows(16);
+      const bad = [trail[0]!, { wallets: [], flows: [flow(q, m, { valueWei: 'not a number' })] }];
+      const err = await store.importTrail(id, 16, 'feed', trailOf(...bad)).catch((e) => e);
+      expect(err).toBeInstanceOf(StoredDataError);
+      expect(err.kind).toBe('unreadable');
+      expect(await walletRows(16)).toEqual(was);
+    });
+
     it('holds no wallet between batches, so funding is never kept waiting on it', async () => {
       const id = await before(12, w('12c1'));
       const probe = await store.pool.connect();
@@ -1067,12 +1089,15 @@ describe('Store', () => {
         const e = entry(14, coll, sha256);
         const w14 = worker(null);
         const mine = async () => (await store.collections()).filter((c) => c.chainId === 14);
-        expect(await store.importedFunding(14)).toBe(false);
-        await (w14 as any).trails(await mine(), { version: 1, collections: [e] });
+        // Another collection on the chain, with no trail of its own.
+        const z = (await store.addCollection(14, w('14c2'), null, 10)).id;
+        expect(await store.importedFunding(id)).toBe(false);
+        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 1, collections: [e] });
         expect(await store.collection(14, coll)).toMatchObject({ trailImportedSha: sha256, trailNote: null });
         expect(await flowRows(14)).toHaveLength(3);
-        expect(await store.importedFunding(14)).toBe(true);
-        expect(await store.importedFunding(99)).toBe(false);
+        expect(await store.importedFunding(id)).toBe(true);
+        // Checked wallets on its chain are not its funding: no trail of its own, no key, no money lenses.
+        expect(await store.importedFunding(z)).toBe(false);
         // Loaded: not loaded again.
         let read = 0;
         (w14 as any).storedTrail = (path: string, sha: string) => { read += 1; return readTrail(path, sha); };
@@ -1080,13 +1105,18 @@ describe('Store', () => {
         expect(read).toBe(0);
 
         // No key, but checked wallets from the trail: the money lenses run.
-        const only = Object.assign(Object.create(store), { stale: async () => (await store.stale()).filter((s) => s.id === id) });
-        const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir);
-        analyst.analyzeOff = (request) => analyzeStored(store, request);
-        await analyst.analyze();
+        const analyse = async (which: number) => {
+          const only = Object.assign(Object.create(store), { stale: async () => (await store.stale()).filter((s) => s.id === which) });
+          const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir);
+          analyst.analyzeOff = (request) => analyzeStored(store, request);
+          await analyst.analyze();
+        };
+        await analyse(id);
         const latest = (await store.collection(14, coll))!.latest!;
         expect(latest.totals.AU.available).toBe(true);
         expect(latest.totals.AC.available).toBe(true);
+        await analyse(z);
+        expect((await store.collection(14, w('14c2')))!.latest!.totals.AU.available).toBe(false);
       });
 
       it('loads nothing from a trail that does not match the manifest, and says so', async () => {

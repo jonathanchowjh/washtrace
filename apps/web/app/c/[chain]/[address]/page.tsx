@@ -59,6 +59,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // How many traders the loaded money trail checked, from the manifest, when the trail it describes is the one loaded.
   const entry = c.trailImportedSha === null ? null : await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
+  // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
+  const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
   const cov = coverage(c, rpcChains, Date.now(), zone);
   const name = c.name ?? short(address);
   const lens = LENSES[method];
@@ -97,7 +99,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       {a ? (
         <Section id="evidence" title="How was it found?" lead="Three lenses, strictest first; each is one end, or the middle, of the range above. Choose one to see the tokens and wallets it flags.">
-          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null}>
+          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null} funded={funded}>
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available
                 ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>

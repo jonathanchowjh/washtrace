@@ -57,6 +57,9 @@ services:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
     ports:
       - "8080:8080"
+    # The same stored data as the worker's, so the console describes the manifest the worker loads from.
+    volumes:
+      - ./data/stored:/app/data/stored:ro
     restart: unless-stopped
 
 volumes:
