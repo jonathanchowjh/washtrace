@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '@/components/settings';
 import { READ_ONLY, type FieldView } from '@/lib/settings';
+import { withoutKey } from '@/lib/format';
 
 const refresh = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
@@ -310,5 +311,24 @@ describe('Settings, Test', () => {
     const b = box('rpc.1').querySelector('button[data-test]') as HTMLButtonElement;
     expect(b.disabled).toBe(true);
     expect(b.getAttribute('title')).toMatch(/nothing to test/i);
+  });
+});
+
+describe('no Etherscan key, and a stored money trail', () => {
+  it('says what no key means for the money lenses: off, or on stored money trails only', () => {
+    expect(withoutKey(false)).toBe('Money loops back and Linked wallets do not run');
+    expect(withoutKey(true)).toBe('Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked');
+  });
+
+  it('never says the money lenses do not run while a loaded trail feeds them', () => {
+    const text = render(<Settings fields={fields()} writable trailFunded />).container.textContent!;
+    expect(text).not.toContain('do not run');
+    expect(text).not.toContain('those lenses are off');
+    expect(text).toContain('Not set, so funding is off: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
+  });
+
+  it('says they do not run when nothing feeds them', () => {
+    const text = render(<Settings fields={fields()} writable />).container.textContent!;
+    expect(text).toContain('Not set, so funding is off, and Money loops back and Linked wallets do not run.');
   });
 });

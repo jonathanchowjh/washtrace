@@ -420,7 +420,12 @@ export class Worker {
     let loaded = 0;
     for (const c of collections) {
       const entry = entryFor(manifest, c.chainId, c.address);
-      if (c.pausedAt !== null || entry?.trail == null) continue;
+      if (c.pausedAt !== null) continue;
+      if (entry?.trail == null) {
+        // No trail in the manifest any more: a note about one says nothing true.
+        if (c.trailNote !== null) await this.noteTrail(c.id, null);
+        continue;
+      }
       const path = trailPath(this.stored, entry);
       let file: { key: string; sha: string } | null;
       try {

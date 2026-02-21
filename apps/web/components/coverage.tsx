@@ -147,18 +147,21 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
  * seen from the collection. It leads the page, because it says how far to
  * trust everything after it.
  *
- * `funding` is whether an Etherscan key is set. `trail` is the stored money
- * trail's coverage, as the manifest gives it, when the trail it describes is
- * the one this collection loaded; else null.
+ * `funding` is whether an Etherscan key is set. `funded` is whether the next
+ * analysis has funding for the money lenses: a key, or this collection's
+ * loaded trail with checked wallets (as the lens cards are told). `trail` is
+ * the stored money trail's coverage, as the manifest gives it, when the trail
+ * it describes is the one this collection loaded; else null.
  */
-export function ReadingPanel({ c, cov, why, rpcChains, funding = true, trail = null }: {
-  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; trail?: { checked: number; of: number } | null;
+export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, trail = null }: {
+  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null;
 }) {
   const a = c.latest;
   const stored = cov.reading === 'stored-only';
-  // A loaded money trail is funding: the money lenses run on it, key or not, from the next analysis on.
   const trailed = c.trailImportedSha != null;
-  const money = cov.money || trailed;
+  // A loaded money trail is funding once it checked a wallet: the money lenses run on it, key or not, from the next analysis on.
+  const fed = funded ?? (funding || trailed);
+  const money = cov.money || fed;
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
@@ -184,7 +187,8 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, trail = n
         n={2} title="Wallets checked for money"
         figure={money ? progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of) : 'Off'}
         bar={money ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
-        value={money ? `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} trading wallets, busiest first` : 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'}
+        value={money ? `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} trading wallets, busiest first`
+          : `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`}
         affects={<>{LENSES.AU.name} and {LENSES.AC.name}. An unchecked wallet hides its links, so their shares can only rise.</>}
       >
         {trailed ? (
@@ -192,7 +196,7 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, trail = n
             Money trail loaded from stored data{trail ? ` · ${trail.checked.toLocaleString('en-US')} of ${trail.of.toLocaleString('en-US')} traders checked` : ''}
           </p>
         ) : null}
-        {trailed && !funding ? (
+        {trailed && !funding && fed ? (
           <p className="text-xs text-muted-foreground">
             Using the stored money trail; <a href="/settings#etherscan.key" className="underline hover:text-foreground">add an Etherscan key</a> to check newer wallets.
           </p>

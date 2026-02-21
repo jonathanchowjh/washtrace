@@ -6,7 +6,7 @@ import { messageOf } from '@washtrace/detect';
 import { Head, Notices, Problem, Section, Warn } from '@/components/head';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
-import { LENSES, eta, plural, short } from '@/lib/format';
+import { LENSES, eta, plural, short, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
@@ -111,7 +111,7 @@ export default async function WorkerPage() {
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
             {v.funding === null
-              ? <span className="text-muted-foreground">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings</Link>.</span>
+              ? <span className="text-muted-foreground">{v.trailFunded ? `None: ${withoutKey(true)}.` : `None, so ${withoutKey(false)}.`} <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings</Link>.</span>
               : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'hop')}</Link> out of traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>

@@ -133,7 +133,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} trail={trail} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

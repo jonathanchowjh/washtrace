@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/head';
-import { LENSES } from '@/lib/format';
+import { LENSES, withoutKey } from '@/lib/format';
 import { FIELDS, READ_ONLY, variableOf, type FieldView } from '@/lib/settings';
 
 const INPUT = 'rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none disabled:opacity-60';
@@ -25,22 +25,27 @@ const HINTS: Record<string, string> = {
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls.`,
 };
 
-/** What not setting a source means; a number not set falls back to its default instead. */
-const UNSET: Record<string, string> = {
-  'rpc.1': 'so the worker reads nothing from Ethereum.',
-  'etherscan.key': `so funding is off, and ${MONEY} do not run.`,
-};
+/**
+ * What not setting a source means; a number not set falls back to its
+ * default instead. `trailFunded`: a collection's loaded money trail feeds the
+ * money lenses, so no key no longer means they are off.
+ */
+function unset(key: string, trailFunded: boolean): string | undefined {
+  if (key === 'rpc.1') return 'so the worker reads nothing from Ethereum.';
+  if (key === 'etherscan.key') return trailFunded ? `so funding is off: ${withoutKey(true)}.` : `so funding is off, and ${withoutKey(false)}.`;
+  return undefined;
+}
 
 /** The fields in groups, by the worker step they feed. */
 const GROUPS = [
   {
     title: 'Where it reads the chain',
-    lead: 'Read transfers, step 1 on the Worker page, needs an RPC for each chain it reads. Without one, nothing is read.',
+    lead: () => 'Read transfers, step 1 on the Worker page, needs an RPC for each chain it reads. Without one, nothing is read.',
     keys: (k: string) => k.startsWith('rpc.'),
   },
   {
     title: 'Where it checks who paid whom',
-    lead: `Check wallets for money, step 2 on the Worker page, needs an Etherscan key. It feeds ${MONEY}; without a key those lenses are off.`,
+    lead: (trailFunded: boolean) => `Check wallets for money, step 2 on the Worker page, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'those lenses are off'}.`,
     keys: (k: string) => !k.startsWith('rpc.'),
   },
 ];
@@ -59,14 +64,14 @@ async function save(key: string, value: string | null): Promise<string | null> {
  * Every setting the console offers, grouped by the worker step it feeds.
  * Read-only says so once at the top, and every control is off.
  */
-export function Settings({ fields, writable }: { fields: FieldView[]; writable: boolean }) {
+export function Settings({ fields, writable, trailFunded = false }: { fields: FieldView[]; writable: boolean; trailFunded?: boolean }) {
   return (
     <div className="max-w-3xl">
       {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{READ_ONLY}</p>}
       {GROUPS.map((g) => (
-        <Section key={g.title} title={g.title} lead={g.lead}>
+        <Section key={g.title} title={g.title} lead={g.lead(trailFunded)}>
           <div className="divide-y rounded-lg border bg-card">
-            {fields.filter((f) => g.keys(f.key)).map((f) => <SettingField key={f.key} field={f} writable={writable} />)}
+            {fields.filter((f) => g.keys(f.key)).map((f) => <SettingField key={f.key} field={f} writable={writable} trailFunded={trailFunded} />)}
           </div>
         </Section>
       ))}
@@ -75,11 +80,11 @@ export function Settings({ fields, writable }: { fields: FieldView[]; writable: 
 }
 
 /** Where a value came from, and what that means for changing it here. */
-function sourceLine(f: FieldView): string {
+function sourceLine(f: FieldView, trailFunded: boolean): string {
   if (f.source === 'env') return `Set by the environment (${variableOf(f.key)}), so it can't be changed here.`;
   if (f.source === 'console') return 'Set here.';
   const fallback = FIELDS.find((x) => x.key === f.key)?.fallback;
-  return `Not set, ${UNSET[f.key] ?? (fallback ? `so the worker uses ${fallback}.` : 'so the worker uses its default.')}`;
+  return `Not set, ${unset(f.key, trailFunded) ?? (fallback ? `so the worker uses ${fallback}.` : 'so the worker uses its default.')}`;
 }
 
 /**
@@ -91,7 +96,7 @@ function sourceLine(f: FieldView): string {
  * save or a Test says lands in one live region that is always there, so it is
  * announced.
  */
-function SettingField({ field, writable }: { field: FieldView; writable: boolean }) {
+function SettingField({ field, writable, trailFunded }: { field: FieldView; writable: boolean; trailFunded: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
@@ -152,7 +157,7 @@ function SettingField({ field, writable }: { field: FieldView; writable: boolean
   } else if (armed) {
     value = (
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <span>Clear the {field.label}? {UNSET[field.key] ? `Once cleared, ${UNSET[field.key]!.replace(/^so /, '')}` : 'The worker stops using it.'}</span>
+        <span>Clear the {field.label}? {unset(field.key, trailFunded) ? `Once cleared, ${unset(field.key, trailFunded)!.replace(/^so /, '')}` : 'The worker stops using it.'}</span>
         <button type="button" disabled={busy} onClick={() => put(null)} aria-label={named('Clear')} className={`${BUTTON} border-foreground`}>Clear</button>
         <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className={BUTTON}>Keep</button>
       </span>
@@ -195,7 +200,7 @@ function SettingField({ field, writable }: { field: FieldView; writable: boolean
           ? <p className={said.ok ? 'text-ok' : 'flex items-start gap-1 text-fault'}>{said.ok ? null : <Warn className="mt-px size-3.5" />}{said.text}</p>
           : null}
       </div>
-      <p className="text-xs text-muted-foreground">{sourceLine(field)}</p>
+      <p className="text-xs text-muted-foreground">{sourceLine(field, trailFunded)}</p>
       {field.invalid
         ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="mt-px size-3.5" />Ignored: {field.invalid.replace(/\.$/, '')}. The worker uses {fallback ?? 'its default'}.</p>
         : null}

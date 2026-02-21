@@ -184,6 +184,19 @@ describe('a money trail loaded from stored data', () => {
     expect(link?.getAttribute('href')).toBe('/settings#etherscan.key');
   });
 
+  it('tells the lens cards\' story in step 2 when the trail checked no wallet and there is no key: not run, not a bar at 0', () => {
+    const c = loaded({ latest: analysed(false), fundedWallets: 0 });
+    const el = render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} funding={false} funded={false} trail={null} />).container;
+    const text = el.textContent!;
+    expect(text).toContain('Off');
+    expect(text).toContain('The stored money trail checked no wallet, and no funding source is set (WASHTRACE_ETHERSCAN_KEY).');
+    expect(text).not.toContain('0 of 11,259');
+    expect(text).not.toContain('Using the stored money trail');
+    // Funded by the trail: the count and the bar, as before.
+    const ok = render(<ReadingPanel c={loaded()} cov={coverage(loaded(), ON, 0)} why="Waiting" rpcChains={ON} funding={false} funded trail={null} />).container.textContent!;
+    expect(ok).toContain('1,612 of 11,259 trading wallets');
+  });
+
   it('says nothing of a trail when none loaded', () => {
     const text = panelOf(row({ latest: analysed(false) }), false, null).textContent!;
     expect(text).not.toContain('Money trail');

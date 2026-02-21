@@ -83,6 +83,16 @@ export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
+/**
+ * What having no Etherscan key means for the money lenses: they do not run,
+ * or, while a collection's loaded money trail feeds them, they run on the
+ * stored trails alone and newer wallets go unchecked.
+ */
+export function withoutKey(trailFunded: boolean): string {
+  const money = `${LENSES.AU.name} and ${LENSES.AC.name}`;
+  return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
+}
+
 export function explorer(chainId: number): string {
   return EXPLORERS[chainId]?.host ?? 'https://etherscan.io';
 }

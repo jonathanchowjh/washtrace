@@ -12,6 +12,8 @@ const fake = {
   requestCheck: vi.fn(async (_kind: string, _chainId: number | null) => 42),
   check: vi.fn(async (_id: number) => ({ finished: true, ok: true, detail: { finalized: 26_253_624 } }) as unknown),
   addCollection: vi.fn(async () => ({ id: 7, created: true })),
+  collections: vi.fn(async () => [] as { id: number; trailImportedSha: string | null }[]),
+  importedFunding: vi.fn(async (_id: number) => true),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 // handle() opts into dynamic rendering with connection(), which only works inside a Next request.
@@ -165,6 +167,16 @@ describe('GET /api/settings', () => {
     // The non-secret Etherscan URL may say https; take it out, then no https is left: no RPC URL leaked.
     expect(text.replace('https://api.etherscan.io/v2/api', '').match(/https/g)).toBeNull();
     expect(text).not.toContain('sEcReT');
+    // No collection loaded a money trail: no key means the money lenses are off.
+    expect(JSON.parse(text).trailFunded).toBe(false);
+  });
+
+  it('says when a loaded money trail feeds the money lenses without a key', async () => {
+    fake.collections.mockResolvedValueOnce([{ id: 3, trailImportedSha: null }, { id: 4, trailImportedSha: 'feed' }]);
+    const body = await (await settingsRoute.GET()).json();
+    expect(body.trailFunded).toBe(true);
+    expect(fake.importedFunding).toHaveBeenCalledWith(4);
+    expect(fake.importedFunding).not.toHaveBeenCalledWith(3);
   });
 
   it('is not writable while basic auth is off', async () => {

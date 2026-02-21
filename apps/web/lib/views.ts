@@ -1,4 +1,4 @@
-import { EVERY, ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
+import { EVERY, ZERO, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
 import { authConfigured } from './auth';
 import { storedOnly } from './metrics';
 import { configFromSources, view } from './settings';
@@ -33,12 +33,25 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
   return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers, middles, flows };
 }
 
-/** /api/settings and the Settings page: every field, where its value came from, and whether this console may change them. */
+/**
+ * Whether some collection's loaded money trail feeds its money lenses (see
+ * Store.importedFunding), so having no Etherscan key does not turn them off.
+ */
+async function trailFunded(s: Store, collections: readonly CollectionRow[]): Promise<boolean> {
+  const trailed = collections.filter((c) => c.trailImportedSha !== null);
+  return (await Promise.all(trailed.map((c) => s.importedFunding(c.id)))).some(Boolean);
+}
+
+/**
+ * /api/settings and the Settings page: every field, where its value came
+ * from, whether this console may change them, and whether a loaded money
+ * trail feeds the money lenses without a key.
+ */
 export async function settingsView() {
   const s = store();
   const writable = authConfigured(process.env);
-  const [settings, sources] = await Promise.all([s.settings(), s.sources()]);
-  return { writable, fields: view(settings, sources, writable) };
+  const [settings, sources, collections] = await Promise.all([s.settings(), s.sources(), s.collections()]);
+  return { writable, fields: view(settings, sources, writable), trailFunded: await trailFunded(s, collections) };
 }
 
 /** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
@@ -55,6 +68,8 @@ export async function workerView(zone = 'UTC') {
     // null numbers are the worker's defaults; the page says them from FIELDS.
     funding: config.funding ? { source: 'etherscan-v2', perSecond: config.perSecond } : null,
     followHops: config.followHops,
+    // With no key, whether a loaded money trail still feeds the money lenses.
+    trailFunded: config.funding ? false : await trailFunded(s, collections),
     passes,
     jobs: report.jobs,
     notices: report.notices,

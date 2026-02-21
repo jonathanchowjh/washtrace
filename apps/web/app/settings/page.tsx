@@ -20,7 +20,7 @@ export default async function SettingsPage() {
   return (
     <>
       <Head title="Settings" sub={<>Where the <Link href="/worker" className="underline">worker</Link> reads from, and how hard. A change applies from its next pass, within a minute, with no restart. A value set in the worker&apos;s environment wins.</>} />
-      <Settings fields={v.fields} writable={v.writable} />
+      <Settings fields={v.fields} writable={v.writable} trailFunded={v.trailFunded} />
     </>
   );
 }

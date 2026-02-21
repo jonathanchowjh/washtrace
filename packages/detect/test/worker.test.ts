@@ -330,6 +330,18 @@ describe('Worker.ingest loading a money trail', () => {
     expect(events).toContain('note 1 null');
   });
 
+  it('clears a note once the manifest has no trail for the collection', async () => {
+    const { w, events } = await setup([row({ trailNote: 'Money trail on disk could not be read, so it was not loaded.' })], 'feed');
+    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    await w.ingest();
+    expect(events).toContain('note 1 null');
+    // And none to clear: nothing written.
+    const clean = await setup([row()], 'feed');
+    (clean.w as any).manifest = async () => ({ version: 1, collections: [] });
+    await clean.w.ingest();
+    expect(clean.events.some((e) => e.startsWith('note'))).toBe(false);
+  });
+
   it('clears a mismatch note once the file on disk matches the manifest again', async () => {
     const note = 'Money trail on disk does not match the stored data, so it was not loaded.';
     const { w, events } = await setup([row({ trailImportedSha: 'feed', trailNote: note })], 'feed');
