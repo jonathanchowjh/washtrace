@@ -298,13 +298,13 @@ export class Worker {
           const detail = await this[job]();
           await this.store.passFinished(job, Date.now() - started, 'ok', detail);
         } catch (err) {
-          await this.store.passFinished(job, Date.now() - started, 'failed', messageOf(err));
+          await this.store.passFinished(job, Date.now() - started, 'failed', this.scrubbed(err));
           throw err;
         }
       });
       return outcome === 'skipped' ? 'skipped' : 'ran';
     } catch (err) {
-      console.error('[washtrace] %s pass failed: %s', job, messageOf(err));
+      console.error('[washtrace] %s pass failed: %s', job, this.scrubbed(err));
       return 'ran';
     } finally {
       clearInterval(alive);
@@ -355,7 +355,7 @@ export class Worker {
         await this.readSpans(c, this.chain(c.chainId, url), deadline, got);
         this.logged.delete(c.id);
       } catch (err) {
-        await this.fail(c.id, messageOf(err));
+        await this.fail(c.id, this.scrubbed(err));
       } finally {
         // Even a collection that failed was given a turn: it must not stay the oldest served.
         total.spans += got.spans;
@@ -379,8 +379,9 @@ export class Worker {
       this.manifestFailed = '';
       return manifest;
     } catch (err) {
-      if (this.manifestFailed !== messageOf(err)) console.warn('[washtrace] stored data not used: %s', messageOf(err));
-      this.manifestFailed = messageOf(err);
+      const message = this.scrubbed(err);
+      if (this.manifestFailed !== message) console.warn('[washtrace] stored data not used: %s', message);
+      this.manifestFailed = message;
       return null;
     }
   }
@@ -402,7 +403,7 @@ export class Worker {
         await this.store.restore(c.id, c.chainId, entry, this.storedTransfers(entry));
         loaded += 1;
       } catch (err) {
-        console.error('[washtrace] collection %d: stored data not loaded, reading the chain instead: %s', c.id, messageOf(err));
+        console.error('[washtrace] collection %d: stored data not loaded, reading the chain instead: %s', c.id, this.scrubbed(err));
       }
     }
     return loaded;
@@ -431,7 +432,7 @@ export class Worker {
       try {
         file = await this.trailSha(path);
       } catch (err) {
-        console.error('[washtrace] collection %d: money trail not read: %s', c.id, messageOf(err));
+        console.error('[washtrace] collection %d: money trail not read: %s', c.id, this.scrubbed(err));
         continue;
       }
       // A note about a file that is gone, or that now matches, says nothing true: cleared. A file that could not be read keeps its note.
@@ -453,7 +454,7 @@ export class Worker {
         console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
         loaded += 1;
       } catch (err) {
-        console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, messageOf(err));
+        console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, this.scrubbed(err));
         if (!(err instanceof StoredDataError)) continue;
         this.trailsFailed.set(path, file!.key);
         await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
@@ -464,7 +465,7 @@ export class Worker {
 
   /** Say on the collection why its trail was not loaded, or with null that nothing is wrong. Fail-soft: the rest of the pass goes on. */
   private async noteTrail(id: number, note: string | null): Promise<void> {
-    await this.store.setTrailNote(id, note).catch((err) => console.error('[washtrace] collection %d: money trail note not written: %s', id, messageOf(err)));
+    await this.store.setTrailNote(id, note).catch((err) => console.error('[washtrace] collection %d: money trail note not written: %s', id, this.scrubbed(err)));
   }
 
   /**
@@ -520,7 +521,7 @@ export class Worker {
     }
     if (c.contract === null) {
       await this.describe(c.id, c.chainId, c.address, chain)
-        .catch((err) => console.warn('[washtrace] %d/%s not described yet: %s', c.chainId, c.address, messageOf(err)));
+        .catch((err) => console.warn('[washtrace] %d/%s not described yet: %s', c.chainId, c.address, this.scrubbed(err)));
     }
     const from = cursor!;
     while (cursor! < head && Date.now() < deadline) {
@@ -588,7 +589,7 @@ export class Worker {
           await this.store.fund(chainId, wallet, flows, truncated, follow);
           done += 1;
         } catch (err) {
-          await this.store.fundingFailed(chainId, wallet, messageOf(err));
+          await this.store.fundingFailed(chainId, wallet, this.scrubbed(err));
           failed += 1;
         }
       }
@@ -661,7 +662,7 @@ export class Worker {
       const wait = Math.min(RELISTEN_MAX_MS, RELISTEN_MS * this.listenFailures);
       // A long outage is a line at its start and one every tenth retry, as for the store at startup.
       if (this.listenFailures % 10 === 1) {
-        console.warn('[washtrace] check requests not heard (%s); listening again in %ds', redact(messageOf(err), urlSecrets(this.storeUrl)), wait / 1000);
+        console.warn('[washtrace] check requests not heard (%s); listening again in %ds', this.scrubbed(err), wait / 1000);
       }
       this.relisten = setTimeout(() => { void this.connectListener(); }, wait);
       this.relisten.unref?.();
@@ -695,7 +696,7 @@ export class Worker {
             await this.runChecks();
             this.checksFailed = '';
           } catch (err) {
-            const message = redact(messageOf(err), urlSecrets(this.storeUrl));
+            const message = this.scrubbed(err);
             if (this.checksFailed !== message) console.error('[washtrace] checks not run: %s', message);
             this.checksFailed = message;
           }
@@ -768,14 +769,16 @@ export class Worker {
     try {
       this.settings = await this.store.settings();
     } catch (err) {
-      if (this.readFailed !== messageOf(err)) console.warn('[washtrace] settings not read: %s', messageOf(err));
-      this.readFailed = messageOf(err);
+      const message = this.scrubbed(err);
+      if (this.readFailed !== message) console.warn('[washtrace] settings not read: %s', message);
+      this.readFailed = message;
     }
     try {
       await this.store.reportSources(this.config(this.settings).sources);
     } catch (err) {
-      if (this.reportFailed !== messageOf(err)) console.warn('[washtrace] settings sources not reported: %s', messageOf(err));
-      this.reportFailed = messageOf(err);
+      const message = this.scrubbed(err);
+      if (this.reportFailed !== message) console.warn('[washtrace] settings sources not reported: %s', message);
+      this.reportFailed = message;
     }
   }
 
@@ -785,8 +788,9 @@ export class Worker {
     try {
       await this.store.heartbeat(job, doing, subjectId);
     } catch (err) {
-      if (this.beatFailed !== messageOf(err)) console.warn('[washtrace] %s heartbeat not written: %s', job, messageOf(err));
-      this.beatFailed = messageOf(err);
+      const message = this.scrubbed(err);
+      if (this.beatFailed !== message) console.warn('[washtrace] %s heartbeat not written: %s', job, message);
+      this.beatFailed = message;
     }
   }
 
@@ -798,6 +802,23 @@ export class Worker {
     return chain;
   }
 
+  /**
+   * An error as the console and the log may show it: brief, with every URL
+   * and every secret the worker knows (each RPC URL, the Etherscan key and
+   * URL, the store's URL) taken out. viem puts the RPC URL in its messages,
+   * and a collection's error reaches every visitor through the API.
+   */
+  private scrubbed(err: unknown): string {
+    let secrets = urlSecrets(this.storeUrl);
+    try {
+      secrets = [...secrets, ...configSecrets(this.config(this.settings))];
+    } catch {
+      // A config that cannot be read names no secret to add; every URL still goes.
+    }
+    return redact(briefOf(err), secrets);
+  }
+
+  /** Say on the collection what went wrong, and log it once. `message` is already scrubbed: it reaches the API. */
   private async fail(id: number, message: string): Promise<void> {
     if (this.logged.get(id) !== message) console.error('[washtrace] collection %d: %s', id, message);
     this.logged.set(id, message);
@@ -828,7 +849,10 @@ function briefOf(err: unknown): string {
 function redact(text: string, secrets: readonly string[]): string {
   // URLs first, whole: hiding a secret inside one first would leave the rest of it.
   let out = text.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]');
-  for (const s of [...secrets].filter((s) => s.length >= 4).sort((a, b) => b.length - a.length)) out = out.split(s).join('[hidden]');
+  // Ignoring case: a URL's host is lowercased once parsed, and a provider may echo it as it was written.
+  for (const s of [...secrets].filter((s) => s.length >= 4).sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[hidden]');
+  }
   out = out.replace(/\s+/g, ' ').trim();
   return out.length > 300 ? `${out.slice(0, 299)}…` : out;
 }

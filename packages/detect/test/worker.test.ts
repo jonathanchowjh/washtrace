@@ -3,6 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import { HttpRequestError } from 'viem';
+import { Chain } from '../src/chain.js';
+import { Etherscan } from '../src/etherscan.js';
 import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
 import type { AnalysisRequest } from '../src/analysis-thread.js';
@@ -643,5 +646,107 @@ describe('Worker.analyze', () => {
     expect(sent[0]).toMatchObject({ storeUrl: url, id: 2, chainId: 1, rules: { minCycles: 3 }, fundingAvailable: true });
     // The block the analysis ran through comes back from the thread, which read it with the input.
     expect(saved).toEqual([[2, 7]]);
+  });
+});
+
+describe('Worker keeps secrets out of what it records and logs', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // A key in the subdomain and another in the path, as providers issue them.
+  const RPC = 'https://SUBKEY0123456789.rpc.example/v2/PATHKEY0123456789';
+  const RPC_LEAKS = ['SUBKEY0123456789', 'PATHKEY0123456789'];
+  // A funding API on a URL of its own that carries a key in its query, as some do, beside the Etherscan key.
+  const ES_URL = 'https://explorer.example/api?apikey=URLKEY0123456789';
+  const ES_KEY = 'ESKEY0123456789';
+  const ES_LEAKS = ['URLKEY0123456789', ES_KEY];
+  const config = (): WorkerConfig => ({ rpc: new Map([[1, RPC]]), etherscanKey: ES_KEY, etherscanPerSecond: 1_000, etherscanUrl: ES_URL, followHops: 0, sources: {} });
+
+  /** Everything the console was asked to print, as text. */
+  const printed = (...spies: { mock: { calls: unknown[][] } }[]) => spies.flatMap((s) => s.mock.calls.map((c) => c.map(String).join(' '))).join('\n');
+
+  it('records and logs a failed RPC read without the RPC URL or any part of its key', async () => {
+    const errors: (string | null)[] = [];
+    const store: any = {
+      collections: async () => [row({ contract: {} as any })],
+      setError: async (_id: number, message: string | null) => { errors.push(message); },
+      setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
+    };
+    const w = new Worker(store, config, '');
+    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    // The real chain client, whose provider refuses: viem puts "URL: <the RPC URL>" in the message.
+    (w as any).chain = (chainId: number, url: string) => {
+      const c = new Chain(chainId, url);
+      Object.assign(c.client, { getBlock: async () => { throw new HttpRequestError({ url, status: 401, details: 'no such key at SUBKEY0123456789.rpc.example' }); } });
+      return c;
+    };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await w.ingest();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^HTTP request failed\./);
+    for (const leak of RPC_LEAKS) {
+      expect(errors[0]).not.toContain(leak);
+      expect(printed(logged)).not.toContain(leak);
+    }
+    expect(printed(logged)).toContain('HTTP request failed');
+  });
+
+  it('logs a contract that could not be described without the RPC URL', async () => {
+    const store: any = {
+      collections: async () => [row({ contract: null, cursorBlock: 1_000 })],
+      setError: async () => {}, setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
+    };
+    const w = new Worker(store, config, '');
+    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).chain = () => ({
+      finalized: async () => 1_000,
+      describe: async () => { throw new HttpRequestError({ url: RPC, status: 429, details: `rate limited: ${RPC}` }); },
+    });
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await w.ingest();
+    expect(printed(warned)).toContain('not described yet');
+    for (const leak of RPC_LEAKS) expect(printed(warned)).not.toContain(leak);
+  });
+
+  it('records a wallet whose funding read failed without the Etherscan key or URL', async () => {
+    const failed: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1 })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      heartbeat: async () => {},
+      fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
+    };
+    const w = new Worker(store, config, '');
+    const etherscan = new Etherscan(ES_KEY, 1_000, ES_URL);
+    let calls = 0;
+    // A client that puts the request URL in its error, and an API that echoes the key it was sent.
+    etherscan.fetch = async (url: URL) => {
+      if (++calls === 1) throw new TypeError(`fetch failed: ${url.toString()}`);
+      return new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Invalid API Key ${ES_KEY}` }));
+    };
+    (w as any).etherscanClient = () => etherscan;
+    expect(await w.fund()).toBe('0 wallets read, 2 failed');
+    expect(failed).toHaveLength(2);
+    expect(failed[1]).toContain('Invalid API Key');
+    for (const leak of ES_LEAKS) expect(failed.join('\n')).not.toContain(leak);
+  });
+
+  it('records and logs a failed pass without any configured secret', async () => {
+    const details: string[] = [];
+    const store: any = {
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<void>) => { await fn(); return 'ran'; },
+      settings: async () => new Map(), reportSources: async () => {},
+      passStarted: async () => {}, passFinished: async (_job: string, _ms: number, _outcome: string, detail: string) => { details.push(detail); },
+      heartbeat: async () => {},
+      collections: async () => { throw new Error(`lost ${RPC} and ${ES_URL}&key=${ES_KEY}`); },
+    };
+    const w = new Worker(store, config, '');
+    (w as any).etherscanClient = () => ({});
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await w.run('fund');
+    expect(details).toHaveLength(1);
+    for (const leak of [...RPC_LEAKS, ...ES_LEAKS]) {
+      expect(details[0]).not.toContain(leak);
+      expect(printed(logged)).not.toContain(leak);
+    }
   });
 });
