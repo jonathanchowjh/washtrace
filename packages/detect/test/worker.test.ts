@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
-import { Etherscan } from '../src/etherscan.js';
+import { ETHERSCAN_V2, Etherscan } from '../src/etherscan.js';
 import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
 import type { AnalysisRequest } from '../src/analysis-thread.js';
@@ -833,6 +833,25 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     expect(failed).toHaveLength(2);
     expect(failed[1]).toContain('Invalid API Key');
     for (const leak of ES_LEAKS) expect(failed.join('\n')).not.toContain(leak);
+  });
+
+  it('keeps the word Etherscan in an Etherscan error on its default URL, and still hides the key', async () => {
+    const failed: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1 })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      heartbeat: async () => {},
+      fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
+    };
+    const w = new Worker(store, () => ({ ...config(), etherscanUrl: ETHERSCAN_V2 }), '');
+    const etherscan = new Etherscan(ES_KEY, 1_000, ETHERSCAN_V2);
+    let calls = 0;
+    etherscan.fetch = async () => ++calls === 1
+      ? new Response('', { status: 403 })
+      : new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Invalid API Key ${ES_KEY}` }));
+    (w as any).etherscanClient = () => etherscan;
+    await w.fund();
+    expect(failed).toEqual(['Etherscan answered HTTP 403', 'Etherscan refused txlist: Invalid API Key [hidden]']);
   });
 
   it('records and logs a failed pass without any configured secret', async () => {

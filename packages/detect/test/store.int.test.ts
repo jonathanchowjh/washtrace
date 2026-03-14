@@ -40,10 +40,32 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(12);
-    expect(await store.migrate()).toBe(12);
+    expect(await store.migrate()).toBe(13);
+    expect(await store.migrate()).toBe(13);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 12 }]);
+    expect(rows).toEqual([{ version: 13 }]);
+  });
+
+  it('clears errors written before they were scrubbed, which may hold an RPC URL, and keeps the rest', async () => {
+    const leaky = (await store.addCollection(1, w('1ea1'), 'Leaky', 1)).id;
+    const plain = (await store.addCollection(1, w('1ea2'), 'Plain', 1)).id;
+    await store.setError(leaky, 'HTTP request failed. URL: https://eth.example/v2/KEY0123456789');
+    await store.setError(plain, 'No RPC is configured for chain 1.');
+    await store.pool.query(`INSERT INTO washtrace.wallets (chain_id, address, status, error) VALUES (1, $1, 'failed', 'fetch failed: HTTPS://api.example/?apikey=K0123456789'), (1, $2, 'failed', 'Etherscan answered HTTP 502')`, [w('1eb1'), w('1eb2')]);
+    try {
+      // Run the newest migration again, as an install upgrading to it would.
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
+      expect(await store.migrate()).toBe(13);
+      expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
+      expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
+      const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
+      expect(rows).toEqual([{ address: w('1eb1'), error: null }, { address: w('1eb2'), error: 'Etherscan answered HTTP 502' }]);
+    } finally {
+      await drop(1, w('1ea1'));
+      await drop(1, w('1ea2'));
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[w('1eb1'), w('1eb2')]]);
+    }
   });
 
   it('removeCollection deletes nothing that is not paused', async () => {
@@ -498,6 +520,20 @@ describe('Store', () => {
         expect(String(done.detail?.error)).toMatch(/^HTTP request failed\. .*refused$/);
         for (const leak of leaks) expect(JSON.stringify(done)).not.toContain(leak);
       }
+    });
+
+    it('says Etherscan in a failed Etherscan Test on the default URL, and never the key', async () => {
+      const id = await store.requestCheck('etherscan', 1);
+      const { worker } = checker({ WASHTRACE_ETHERSCAN_KEY: KEY });
+      const real = worker.etherscanClient.bind(worker);
+      worker.etherscanClient = (config) => {
+        const e = real(config)!;
+        e.fetch = async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message: `Invalid API Key ${KEY}` } }));
+        return e;
+      };
+      await worker.runChecks();
+      const done = (await store.check(id))!;
+      expect(done).toMatchObject({ finished: true, ok: false, detail: { error: 'Etherscan refused eth_blockNumber: Invalid API Key [hidden]' } });
     });
 
     it('lets every check finish before it gives up the run over one that could not be saved', async () => {

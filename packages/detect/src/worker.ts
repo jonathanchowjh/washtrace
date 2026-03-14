@@ -894,24 +894,25 @@ function redact(text: string, secrets: readonly string[]): string {
  * The URL and its parts, as secrets. A provider's key is a path segment, a
  * query value or a subdomain, and a provider may echo it on its own, in the
  * URL without its scheme, or decoded, so each part is kept both as written
- * and decoded.
+ * and decoded. With `credentialsOnly`, only the parts that can carry a key in
+ * a public API's URL: its userinfo and query values. Its host and path are
+ * public ("etherscan" among them), and hiding them would hide whose error it is.
  */
-function urlSecrets(url: string): string[] {
+function urlSecrets(url: string, credentialsOnly = false): string[] {
   const bare = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-  const parts = [url, bare, bare.replace(/\/+$/, '')];
+  const parts = credentialsOnly ? [] : [url, bare, bare.replace(/\/+$/, '')];
   try {
     const u = new URL(url);
-    parts.push(u.host, u.hostname, ...u.hostname.split('.').filter((l) => l.length >= 6));
+    if (!credentialsOnly) parts.push(u.host, u.hostname, ...u.hostname.split('.').filter((l) => l.length >= 6), ...u.pathname.split('/').filter((p) => p.length >= 6));
     parts.push(u.username, u.password);
     // The Authorization header the transport sends for them, which a proxy may echo.
     if (u.username !== '' || u.password !== '') {
       parts.push(Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'));
     }
-    parts.push(...u.pathname.split('/').filter((p) => p.length >= 6));
     parts.push(...u.search.slice(1).split('&').map((kv) => kv.slice(kv.indexOf('=') + 1)).filter((v) => v.length >= 6));
   } catch {
     // Not a URL: every run of six or more between separators.
-    parts.push(...url.split(/[/?&=:@#]/).filter((p) => p.length >= 6));
+    if (!credentialsOnly) parts.push(...url.split(/[/?&=:@#]/).filter((p) => p.length >= 6));
   }
   // A query value encodes a space as '+', which decodeURIComponent leaves.
   return parts.flatMap((p) => {
@@ -919,7 +920,11 @@ function urlSecrets(url: string): string[] {
   });
 }
 
-/** Every secret in a config: the RPC URLs, the Etherscan URL (its query may carry a key) and the key. */
+/**
+ * Every secret in a config: the RPC URLs whole (an RPC URL is often its own
+ * key), the credentials in the Etherscan URL (a compatible API may take a key
+ * in its query), and the key.
+ */
 function configSecrets(config: WorkerConfig): string[] {
-  return [...[...config.rpc.values(), config.etherscanUrl].flatMap(urlSecrets), config.etherscanKey ?? ''];
+  return [...[...config.rpc.values()].flatMap((u) => urlSecrets(u)), ...urlSecrets(config.etherscanUrl, true), config.etherscanKey ?? ''];
 }

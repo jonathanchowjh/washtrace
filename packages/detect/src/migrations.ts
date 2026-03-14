@@ -231,4 +231,12 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_block 
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_imported_sha text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_note text;
 `,
+  `
+-- Errors written before the worker scrubbed them may hold an RPC URL with its
+-- key, and the console shows them to every visitor; a paused collection's is
+-- never overwritten. Any error with a URL in it goes: the next failure, if
+-- any, says it again without one.
+UPDATE washtrace.collections SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
+UPDATE washtrace.wallets SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
+`,
 ];
