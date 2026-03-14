@@ -66,7 +66,14 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       needsYou(`${job} has not run for ${minutes(now - p.startedAt)}.`, WORKER_DOWN);
     } else if (p.outcome === 'failed') {
       state = 'failed';
-      needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
+      // An analysis fails for one collection, the one it was on: named, and linked to.
+      const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
+      if (on) {
+        const label = on.name ?? `${on.chainId}:${on.address}`;
+        needsYou(`Analysis of ${label} failed: ${p.detail}`, `Open ${label} and check its rules. It is tried again after a wait, and the other collections are analysed meanwhile.`, `/c/${on.chainId}/${on.address}`);
+      } else {
+        needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
+      }
     } else {
       state = 'ok';
     }

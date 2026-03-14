@@ -594,6 +594,7 @@ describe('Worker.analyze', () => {
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
       saveAnalysis: async (id: number) => { saved.push(id); },
       importedFunding: async () => false,
+      collections: async () => [],
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     const off: number[] = [];
@@ -614,6 +615,7 @@ describe('Worker.analyze', () => {
       stale: async () => [{ id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
       heartbeat: async () => {}, saveAnalysis: async () => {},
       importedFunding: async (id: number) => { asked.push(id); return imported; },
+      collections: async () => [],
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
     const sent: AnalysisRequest[] = [];
@@ -633,6 +635,7 @@ describe('Worker.analyze', () => {
       stale: async () => [{ id: 2, chainId: 1, version: 5, rules: { minCycles: 3 }, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
       heartbeat: async () => {},
       saveAnalysis: async (id: number, _version: number, _a: Analysis, _ms: number, through: number | null) => { saved.push([id, through]); },
+      collections: async () => [],
     };
     const url = 'postgres://washtrace:secret@db:5432/washtrace';
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), url);
@@ -646,6 +649,91 @@ describe('Worker.analyze', () => {
     expect(sent[0]).toMatchObject({ storeUrl: url, id: 2, chainId: 1, rules: { minCycles: 3 }, fundingAvailable: true });
     // The block the analysis ran through comes back from the thread, which read it with the input.
     expect(saved).toEqual([[2, 7]]);
+  });
+});
+
+describe('Worker.analyze when an analysis fails', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const stale = (id: number, name: string): StaleRow => ({ id, chainId: 1, version: 1, rules: {}, name, ranAt: null, tookMs: null, rulesAt: null });
+
+  /** Two never-analysed collections on a fake clock; BAYC's analysis throws while `broken` says so. */
+  function setup() {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const waiting = new Map([[1, stale(1, 'BAYC')], [2, stale(2, 'Doodles')]]);
+    const store: any = {
+      stale: async () => [...waiting.values()],
+      collections: async () => [row({ id: 1 }), row({ id: 2, address: '0xd00d' })],
+      heartbeat: async () => {}, importedFunding: async () => false,
+      saveAnalysis: async (id: number) => { waiting.delete(id); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    const tried: number[] = [];
+    const state = { broken: true };
+    w.analyzeOff = async (request) => {
+      tried.push(request.id);
+      if (request.id === 1 && state.broken) throw new Error('out of memory');
+      return { analysis: {} as Analysis, through: 7 };
+    };
+    const at = (ms: number) => { now = 1_000_000 + ms; };
+    return { w, tried, state, at, waiting };
+  }
+
+  it('analyses the others on the next pass, and retries the failing one only after its back-off', async () => {
+    const { w, tried, at } = setup();
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    at(60_000);
+    expect(await w.analyze()).toBe('Doodles analyzed');
+    at(4 * 60_000);
+    expect(await w.analyze()).toBe('nothing due');
+    at(5 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    // Twice as long after a second failure in a row.
+    at(5 * 60_000 + 9 * 60_000);
+    expect(await w.analyze()).toBe('nothing due');
+    at(5 * 60_000 + 10 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    expect(tried).toEqual([1, 2, 1, 1]);
+  });
+
+  it('never waits more than an hour between tries, and forgets the failures once one succeeds', async () => {
+    const { w, state, at, waiting } = setup();
+    waiting.delete(2);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    let t = 0;
+    // 5, 10, 20, 40 minutes, then an hour each time: tried at each, and not a minute before.
+    for (const wait of [5, 10, 20, 40, 60, 60]) {
+      t += wait * 60_000;
+      at(t - 60_000);
+      expect(await w.analyze()).toBe('nothing due');
+      at(t);
+      await expect(w.analyze()).rejects.toThrow('out of memory');
+    }
+    state.broken = false;
+    t += 60 * 60_000;
+    at(t);
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    // A failure after a success waits five minutes again, not an hour.
+    state.broken = true;
+    waiting.set(1, stale(1, 'BAYC'));
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    at(t + 5 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+  });
+
+  it('does not analyse a collection whose stored data is still to load, and analyses it once loaded', async () => {
+    const { w, tried, state, waiting } = setup();
+    state.broken = false;
+    waiting.delete(2);
+    let cursor: number | null = null;
+    (w as any).store.collections = async () => [row({ id: 1, cursorBlock: cursor, startBlock: cursor === null ? null : 100 })];
+    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    expect(await w.analyze()).toBe('nothing due');
+    cursor = 900;
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    expect(tried).toEqual([1]);
   });
 });
 

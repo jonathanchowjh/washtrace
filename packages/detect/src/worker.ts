@@ -164,6 +164,16 @@ export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow 
   return due.sort((a, b) => a.ranAt! - b.ranAt!)[0] ?? null;
 }
 
+/**
+ * How long a collection whose analysis failed waits before it is tried
+ * again: five minutes, doubling with each failure in a row, up to an hour.
+ * Meanwhile the others are analysed: a failure writes nothing, so without
+ * the wait the same collection would stay first and be tried every pass.
+ */
+function analyzeRetryMs(failures: number): number {
+  return Math.min(60 * 60_000, 5 * 60_000 * 2 ** (failures - 1));
+}
+
 /** Each job's advisory lock key. Only one replica runs a job at a time. */
 const LOCK: Readonly<Record<Job, number>> = { ingest: 1, fund: 2, analyze: 3 };
 
@@ -229,6 +239,12 @@ export class Worker {
   private readonly trailShas = new Map<string, { file: string; sha: string }>();
   /** Trail files that could not be read, by path and the same key: not tried again until the file changes. */
   private readonly trailsFailed = new Map<string, string>();
+  /**
+   * Collections whose last analysis failed, by id: failures in a row, and
+   * when to try again (see analyzeRetryMs). In memory: a replica that
+   * restarts tries each once more, which is all a failure costs.
+   */
+  private readonly analyzeFailed = new Map<number, { failures: number; retryAt: number }>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -601,27 +617,43 @@ export class Worker {
    * Rerun the three methods over one collection written to since its last
    * analysis, the one `nextAnalysis` picks. One a pass, so a pass is never
    * longer than one analysis, and the next pass sees what changed meanwhile.
+   * Left out: a collection whose stored data is still to load (it is
+   * analysed once loaded, not twice), and one waiting out a failure.
    */
   async analyze(): Promise<string> {
     const { etherscanKey } = this.config(this.settings);
-    const c = nextAnalysis(await this.store.stale(), Date.now());
+    const now = Date.now();
+    const manifest = await this.storedManifest();
+    const loading = new Set(manifest === null ? [] : (await this.store.collections())
+      .filter((r) => needsRestore(r, entryFor(manifest, r.chainId, r.address)))
+      .map((r) => r.id));
+    const due = (await this.store.stale()).filter((s) => !loading.has(s.id) && (this.analyzeFailed.get(s.id)?.retryAt ?? 0) <= now);
+    const c = nextAnalysis(due, now);
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
     const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.id);
     const name = c.name ?? `collection ${c.id}`;
     await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();
-    const { analysis, through } = await this.analyzeOff({
-      storeUrl: this.storeUrl,
-      id: c.id,
-      chainId: c.chainId,
-      rules: c.rules,
-      fundingAvailable,
-      custodians: new Set(CUSTODIANS),
-      contracts: contractsFor(c.chainId),
-      money: moneyFor(c.chainId),
-    });
-    await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through);
+    try {
+      const { analysis, through } = await this.analyzeOff({
+        storeUrl: this.storeUrl,
+        id: c.id,
+        chainId: c.chainId,
+        rules: c.rules,
+        fundingAvailable,
+        custodians: new Set(CUSTODIANS),
+        contracts: contractsFor(c.chainId),
+        money: moneyFor(c.chainId),
+      });
+      await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through);
+    } catch (err) {
+      // The pass fails as before, and says so; the collection waits, so the others go first.
+      const failures = (this.analyzeFailed.get(c.id)?.failures ?? 0) + 1;
+      this.analyzeFailed.set(c.id, { failures, retryAt: Date.now() + analyzeRetryMs(failures) });
+      throw err;
+    }
+    this.analyzeFailed.delete(c.id);
     return `${name} analyzed`;
   }
 

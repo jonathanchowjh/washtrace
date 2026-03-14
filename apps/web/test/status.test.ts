@@ -73,6 +73,18 @@ describe('status', () => {
     expect(texts(s, 'needs-you')).toContain('fund failed: Etherscan answered HTTP 502');
   });
 
+  it('names and links the collection whose analysis failed', () => {
+    const s = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'out of memory', subjectId: 1 }), pass('fund', 2_000), pass('ingest', 10_000)] });
+    const n = status(s, NOW).notices.find((x) => x.severity === 'needs-you');
+    expect(n).toEqual({
+      severity: 'needs-you', text: 'Analysis of BAYC failed: out of memory',
+      doThis: 'Open BAYC and check its rules. It is tried again after a wait, and the other collections are analysed meanwhile.', href: '/c/1/0xbc4c',
+    });
+    // A collection no longer watched: the job's own words, as before.
+    const gone = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'out of memory', subjectId: 9 }), pass('fund', 2_000), pass('ingest', 10_000)] });
+    expect(texts(gone, 'needs-you')).toEqual(['analyze failed: out of memory']);
+  });
+
   it('says a paused collection is paused, and does not call it behind or check its wallets', () => {
     const s = snapshot({
       collections: [collection({ cursorBlock: 0, wallets: 10, fundedWallets: 2, pausedAt: NOW })],
