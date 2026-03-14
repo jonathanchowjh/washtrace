@@ -599,11 +599,12 @@ export class Store {
   async fundingLanes(chainId: number, perLane: number): Promise<{ lanes: FundingLane[] }> {
     const unchecked = `w.chain_id = $1 AND (w.status = 'pending' OR (w.status = 'failed' AND w.fetched_at < now() - interval '1 hour'))`;
     const order = `ORDER BY w.status = 'failed', w.depth, w.transfers DESC`; // followed lane only
-    // Start from the unchecked wallets (few, and none in steady state), then probe
-    // each collection's transfers by index for whether it names them.
+    // Start from the unchecked traders (few, and none in steady state), then probe
+    // each collection's transfers by index for whether it names them. Followed
+    // wallets (depth > 0) trade in no collection: their own lane, never a probe.
     const { rows } = await this.pool.query<{ id: number; address: string | null }>(
       `WITH todo AS MATERIALIZED (
-         SELECT w.address, w.status, w.depth, w.transfers FROM washtrace.wallets w WHERE ${unchecked}
+         SELECT w.address, w.status, w.depth, w.transfers FROM washtrace.wallets w WHERE ${unchecked} AND w.depth = 0
        )
        SELECT c.id, l.address FROM washtrace.collections c
        LEFT JOIN LATERAL (

@@ -123,12 +123,15 @@ export default async function WorkerPage() {
             <li key={`${c.chainId}/${c.address}`} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
               <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
               <span className="text-xs text-muted-foreground">
-                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.turn === 'stored-only' ? 'no RPC for its chain, stored data loaded' : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
+                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.turn === 'stored-only' ? 'no RPC for its chain, stored data loaded' : c.headBlock === null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock ? `read to block ${c.cursorBlock.toLocaleString('en-US')}, head not known` : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
                 {c.turn === 'paused' || c.turn === 'restoring' || c.turn === 'stored-only' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
                 {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale && c.turn !== 'paused' ? ' · new data waiting' : ''}
               </span>
               {/* A "No RPC" left from before stored data loaded is no fault, paused or not; the notice above says how to read on. */}
-              {c.error && !c.storedOnly ? <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+              {/* Nor an error on a paused collection: the worker leaves it alone, so it is from before the pause. */}
+              {c.error && !c.storedOnly ? c.turn === 'paused'
+                ? <p className="basis-full text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
+                : <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
             </li>
           ))}
         </ul>

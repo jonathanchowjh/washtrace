@@ -88,6 +88,11 @@ describe('CollectionControls', () => {
     expect(screen.getByRole('button', { name: 'Prioritize' })).toBeTruthy();
   });
 
+  it('promises with Prioritize only what it does: checking wallets first', () => {
+    render(<CollectionControls chainId={1} address="0xabc" paused={false} priority={false} />);
+    expect(screen.getByRole('button', { name: 'Prioritize' }).getAttribute('title')).toBe("Check this collection's wallets for money before the others'");
+  });
+
   it('sets priority through config', async () => {
     const fetch = ok();
     vi.stubGlobal('fetch', fetch);
@@ -208,7 +213,7 @@ describe('CollectionRow', () => {
   it('offers Pause in sync, and a press posts without leaving the list', async () => {
     const fetch = ok({ paused: true });
     vi.stubGlobal('fetch', fetch);
-    render(<CollectionRow c={base} why="Waiting" rpcChains={ON} now={0} />);
+    render(<CollectionRow c={base} why="Waiting" rpcChains={ON} funding now={0} />);
     expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
@@ -222,7 +227,7 @@ describe('CollectionRow', () => {
 
   it('stays on the list after deleting, refreshing in place', async () => {
     vi.stubGlobal('fetch', ok({ deleted: true }));
-    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} now={0} />);
+    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} funding now={0} />);
     fireEvent.click(screen.getByRole('button', { name: /Delete data/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
@@ -230,7 +235,7 @@ describe('CollectionRow', () => {
   });
 
   it('says it is loading stored data, with a bar of how far it has got', () => {
-    const { container } = render(<CollectionRow c={{ ...base, cursorBlock: null, startBlock: null, restoreProgress: 0.42 } as typeof base} why="Waiting" rpcChains={ON} now={0} />);
+    const { container } = render(<CollectionRow c={{ ...base, cursorBlock: null, startBlock: null, restoreProgress: 0.42 } as typeof base} why="Waiting" rpcChains={ON} funding now={0} />);
     expect(screen.getAllByText('Loading stored data · 42%').length).toBeGreaterThan(0);
     const bar = container.querySelector('[data-bar="restore"] i') as HTMLElement;
     expect(bar.style.width).toBe('42%');
@@ -239,7 +244,7 @@ describe('CollectionRow', () => {
   it('shows stored data with no RPC as where it stops, never as a fault', () => {
     document.cookie = 'washtrace_tz=UTC; path=/';
     const c = { ...base, startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, error: 'No RPC is configured for chain 1.' } as typeof base;
-    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
+    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} funding now={Date.UTC(2026, 9, 23)} />);
     // The pill stays short enough for its column; where the data stops goes on a muted line under it, drawn by Time.
     expect(screen.getByText('Stored data · 9 days unsynced')).toBeTruthy();
     expect(screen.getByText('stops').textContent).toBe(`stops ${localTime(Date.UTC(2026, 9, 14), 'date', 'UTC')}`);
@@ -248,26 +253,53 @@ describe('CollectionRow', () => {
   });
 
   it('lets the How complete column shrink to its track, so the pill wraps inside it', () => {
-    const { container } = render(<CollectionRow c={base} why="Waiting" rpcChains={ON} now={0} />);
+    const { container } = render(<CollectionRow c={base} why="Waiting" rpcChains={ON} funding now={0} />);
     const column = container.querySelector('li > div:last-child')!;
     expect(column.className).toContain('min-w-0');
   });
 
   it('says how far it was read under the pill once read past the stored data', () => {
     const c = { ...base, startBlock: 100, cursorBlock: 1_250_000, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900 } as typeof base;
-    render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} now={Date.UTC(2026, 9, 23)} />);
+    render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} funding now={Date.UTC(2026, 9, 23)} />);
     expect(screen.getByText('No RPC for its chain')).toBeTruthy();
     expect(screen.getByText('read to block 1,250,000')).toBeTruthy();
   });
 
   it('says why stored data was not loaded as information, not a fault', () => {
     const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
-    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} now={0} />);
+    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} funding now={0} />);
     expect(screen.getByText(note).className).not.toContain('text-fault');
   });
 
+  const lens = (available: boolean, flaggedSales: number) => ({ available, transfers: 10, flagged: flaggedSales, sales: 10, flaggedSales, volumeWei: '10000000000000000000', flaggedVolumeWei: '1000000000000000000', wallets: 4, tokens: 2 });
+  const analysed = (money: boolean) => ({ ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0, totals: { A: lens(true, 2), AU: lens(money, 3), AC: lens(money, 4) } });
+
+  it('says money lenses can still rise only while wallets are being checked', () => {
+    const c = { ...base, wallets: 80, fundedWallets: 20, trailImportedSha: 'feed', latest: analysed(true) } as unknown as typeof base;
+    const idle = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding={false} now={0} />).container;
+    expect(idle.textContent).not.toContain('money lenses can still rise');
+    expect(idle.textContent).not.toContain('Checking wallets');
+    expect(idle.querySelector('.animate-pulse')).toBeNull();
+    cleanup();
+    const busy = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding now={0} />).container;
+    expect(busy.textContent).toContain('money lenses can still rise');
+  });
+
+  it('names one lens once when it holds the only share', () => {
+    const c = { ...base, latest: analysed(false) } as unknown as typeof base;
+    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding now={0} />);
+    expect(container.textContent).not.toContain('Round trips → Round trips');
+    expect(container.textContent).toContain('Round trips');
+  });
+
+  it('says the error of a paused collection as information, from before the pause', () => {
+    const { container } = render(<CollectionRow c={{ ...base, pausedAt: 1, error: 'RPC timed out' } as typeof base} why="Paused" rpcChains={ON} funding now={0} />);
+    expect(container.textContent).toContain('Paused · last error before the pause: RPC timed out');
+    expect(container.querySelector('.text-fault')).toBeNull();
+  });
+
   it('offers Resume and Delete data when paused', () => {
-    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} now={0} />);
+    render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} funding now={0} />);
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Delete data/ })).toBeTruthy();
   });

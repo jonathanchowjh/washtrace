@@ -28,13 +28,17 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   let rows: Collection[];
   let analyze: PassRow | undefined;
   let rpcChains: ReadonlySet<number>;
+  let funding: boolean;
   try {
     const s = store();
     const [all, passes, sources, settings] = await Promise.all([s.collections(), s.passes(), s.sources(), s.settings()]);
     rows = all;
     analyze = passes.find((p) => p.job === 'analyze');
     // The chains the worker reports it can read, and a console RPC saved since: a collection on none shows its stored data only.
-    rpcChains = new Set(configFromSources(sources, settings).chains);
+    const config = configFromSources(sources, settings);
+    rpcChains = new Set(config.chains);
+    // Whether a key is set, as the status report reads it: without one no wallet is being checked.
+    funding = config.funding;
   } catch (err) {
     return (
       <>
@@ -82,7 +86,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} rpcChains={rpcChains} now={now} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} rpcChains={rpcChains} funding={funding} now={now} />)}</ul>
         </div>
       )}
     </>

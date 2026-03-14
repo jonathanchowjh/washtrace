@@ -420,6 +420,23 @@ describe('Worker.fund', () => {
   });
 });
 
+describe('Worker.fund priority', () => {
+  it('gives a paused collection\'s priority to no one, and a live prioritised one its turns', async () => {
+    const funded: string[] = [];
+    const store: any = {
+      // Two prioritised, the first paused: its lane is not served (the store leaves it out), so its priority must not hide the other's.
+      collections: async () => [row({ id: 1, name: 'BAYC', priority: true, pausedAt: 5 }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 3, wallets: ['x1', 'x2'] }, { collectionId: 2, wallets: ['c1', 'c2'] }] }),
+      heartbeat: async () => {}, fundingFailed: async () => {},
+      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    await w.fund();
+    expect(funded).toEqual(['c1', 'x1', 'c2', 'x2']);
+  });
+});
+
 describe('Worker heartbeat', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 

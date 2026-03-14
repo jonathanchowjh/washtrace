@@ -14,10 +14,15 @@ const PILL = {
   checking: 'bg-focus/12 text-focus',
   'catching-up': 'bg-focus/12 text-focus',
   starting: 'bg-muted text-muted-foreground',
+  // Neutral: what was read stands, and the collection's error says why the head is not known.
+  'head-unknown': 'bg-muted text-muted-foreground',
   paused: 'bg-muted text-muted-foreground',
   // Neutral like paused: a limit to lift, neither a fault nor done.
   'stored-only': 'bg-muted text-muted-foreground',
 } as const;
+
+/** Readings where nothing is moving, so the pill's dot does not pulse. */
+const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', 'stored-only', 'head-unknown']);
 
 /**
  * How far the reading under a collection's numbers has got, as one word or
@@ -29,7 +34,7 @@ export function ReadingPill({ cov }: { cov: Coverage }) {
   return (
     // Wraps inside its column rather than running past it: a radius that is round on one line, and the dot kept on the first.
     <span className={cn('inline-flex max-w-full items-start gap-1.5 rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL[cov.reading])}>
-      <i aria-hidden className={cn('mt-[5px] size-1.5 shrink-0 rounded-full bg-current', cov.reading !== 'complete' && cov.reading !== 'paused' && cov.reading !== 'stored-only' && 'animate-pulse')} />
+      <i aria-hidden className={cn('mt-[5px] size-1.5 shrink-0 rounded-full bg-current', !STILL.has(cov.reading) && 'animate-pulse')} />
       {/* One flex item: the gap between several read as a double space. */}
       <span className="min-w-0">{text}</span>
     </span>
@@ -52,9 +57,13 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
   if (cov.reading === 'stored-only') return cov.stops !== null
     ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
     : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.';
+  if (cov.reading === 'head-unknown') return 'The chain\'s newest block is not known right now, so these numbers rest on what was read, not on the chain as it is now.';
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
-  if (cov.floor.length > 0) return `${progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
+  const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
+  // Floors with nothing checking: no key, so the rest wait for one.
+  if (cov.floor.length > 0 && cov.reading === 'complete') return `${checked} of wallets were checked for money, so ${lensList(cov.floor)} are floors: with no Etherscan key the rest go unchecked.`;
+  if (cov.floor.length > 0) return `${checked} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
   if (!cov.money) return 'Every transfer is read. Money links were not checked, so only Round trips ran.';
   return 'Every transfer to the finalized head is read, and every trading wallet checked for money.';
 }
@@ -73,6 +82,8 @@ export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Covera
     : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
     : cov.reading === 'paused' ? { share: cov.blocks ?? 0, of: 'of its history read when paused' }
+    : cov.reading === 'head-unknown' ? { share: 1, figure: 'Head unknown', of: `${cov.label}. The chain's newest block is not known right now, so how far behind that is cannot be said.` }
+    : cov.reading === 'complete' && cov.floor.length > 0 ? { share: 1, of: 'of transfers read. Wallets not yet checked for money wait for an Etherscan key' }
     : cov.reading === 'complete' ? { share: 1, of: 'read: every transfer, and every wallet the lenses need' }
     : null;
   return (
@@ -86,7 +97,7 @@ export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Covera
         <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : stage.figure ?? progress(stage.share)}</span>
         <div className="min-w-[11rem] flex-1">
           <p className="text-xs text-muted-foreground">{stage === null ? 'Finding where the collection begins' : stage.of}</p>
-          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'stored-only'} /></div>
+          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'stored-only' || cov.reading === 'head-unknown'} /></div>
         </div>
       </div>
       <p className="max-w-xl text-xs text-muted-foreground">{trust(c, cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The three steps ↓</a></p>
@@ -166,13 +177,17 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
         n={1} title="Transfers read"
-        figure={cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
-        bar={cov.reading === 'restoring' ? cov.restore ?? 0 : stored ? 1 : cov.blocks ?? 0} paused={cov.reading === 'paused' || stored}
+        figure={cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span>
+          : cov.reading === 'head-unknown' ? <span className="text-base">Head unknown</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
+        bar={cov.reading === 'head-unknown' ? undefined : cov.reading === 'restoring' ? cov.restore ?? 0 : stored ? 1 : cov.blocks ?? 0} paused={cov.reading === 'paused' || stored}
         value={step1(c, cov)}
         affects="all three lenses. Unread history can move any share either way."
       >
         {/* A "No RPC" left from before the stored data loaded is no fault, paused or not: the worker clears it on its next pass. */}
-        {c.error && !storedOnly(c, rpcChains) ? <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
+        {/* Nor one on a paused collection: the worker does not touch it, so it cannot clear it, and nothing is failing now. */}
+        {c.error && !storedOnly(c, rpcChains) ? c.pausedAt !== null
+          ? <p className="text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
+          : <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />Last read failed: {c.error}</p> : null}
         {stored ? (
           <p className="text-xs text-muted-foreground">
             {cov.unsynced !== null ? `${cov.unsynced}: no` : 'No'} RPC is set for {chainName(c.chainId)}, so no newer block is read.{' '}

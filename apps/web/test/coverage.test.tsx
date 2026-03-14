@@ -20,7 +20,31 @@ function panel(c: CollectionRow) {
   return render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container;
 }
 
+describe('a collection read before whose head is not known now', () => {
+  // Restored, and its chain's RPC failed before saying where the head is.
+  const c = row({ startBlock: 100, cursorBlock: 900, headBlock: null, transfers: 10, storedThroughTime: Date.UTC(2026, 9, 14), error: 'HTTP request failed. Status: 429' });
+
+  it('says what was read, never that it is starting or has no numbers', () => {
+    const summary = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container.textContent!;
+    const panelText = panel(c).textContent!;
+    for (const text of [summary, panelText]) {
+      expect(text).not.toContain('Finding where the collection begins');
+      expect(text).not.toContain('no numbers yet');
+      expect(text).toContain('block 900');
+    }
+    // The error says why.
+    expect(panelText).toContain('Last read failed: HTTP request failed. Status: 429');
+    expect(render(<ReadingPill cov={coverage(c, ON, 0)} />).container.textContent).toBe('Read to block 900');
+  });
+});
+
 describe('ReadingPanel step 1', () => {
+  it('says the error of a paused collection as information, from before the pause', () => {
+    const el = panel(row({ pausedAt: 5, error: 'RPC timed out' }));
+    expect(el.textContent).toContain('Paused · last error before the pause: RPC timed out');
+    expect(el.querySelector('.text-fault')).toBeNull();
+  });
+
   it('says a caught-up paused collection was read when paused', () => {
     expect(panel(row({ pausedAt: 5 })).textContent).toContain('5 transfers · read to block 10 when paused');
   });
@@ -195,6 +219,17 @@ describe('a money trail loaded from stored data', () => {
     // Funded by the trail: the count and the bar, as before.
     const ok = render(<ReadingPanel c={loaded()} cov={coverage(loaded(), ON, 0)} why="Waiting" rpcChains={ON} funding={false} funded trail={null} />).container.textContent!;
     expect(ok).toContain('1,612 of 11,259 trading wallets');
+  });
+
+  it('never says wallets are being checked when nothing checks them', () => {
+    const c = loaded();
+    const cov = coverage(c, ON, 0, 'UTC', false);
+    const pill = render(<ReadingPill cov={cov} />).container;
+    expect(pill.querySelector('.animate-pulse')).toBeNull();
+    const text = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
+    expect(text).not.toContain('so far');
+    expect(text).not.toContain('every wallet the lenses need');
+    expect(text).toContain('Etherscan key');
   });
 
   it('says nothing of a trail when none loaded', () => {

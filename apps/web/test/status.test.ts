@@ -28,6 +28,7 @@ function snapshot(more: Partial<Snapshot> = {}): Snapshot {
     collections: [collection()],
     funding: [{ chainId: 1, pending: 3, done: 4, failed: 0, truncated: 0, doneLastHour: 0 }],
     config: CONFIG,
+    trailFunded: false,
     ...more,
   };
 }
@@ -128,8 +129,14 @@ describe('status', () => {
   it('never calls the money lenses unavailable with funding off when a collection loaded a stored money trail', () => {
     const off = { ...CONFIG, funding: false };
     expect(texts(snapshot({ config: off }), 'info')).toContain('Funding is off, so Money loops back and Linked wallets are unavailable.');
-    const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })] }), 'info').find((t) => t.startsWith('Funding is off'));
+    const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: true }), 'info').find((t) => t.startsWith('Funding is off'));
     expect(text).toBe('Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.');
+  });
+
+  it('asks whether a trail feeds the money lenses as the worker page and Settings do, not whether one loaded', () => {
+    // Loaded, but it checked no wallet: the money lenses do not run on it.
+    const s = snapshot({ config: { ...CONFIG, funding: false }, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: false });
+    expect(texts(s, 'info')).toContain('Funding is off, so Money loops back and Linked wallets are unavailable.');
   });
 
   it('counts a backfill as work in progress with an ETA', () => {
@@ -141,10 +148,25 @@ describe('status', () => {
     expect(texts(snapshot({ collections: [collection({ cursorBlock: 0, readRate: null })] }), 'working')).toEqual(['BAYC: 1,000 blocks behind the finalized head.']);
   });
 
-  it('reports wallets whose funding failed as needing a person', () => {
+  it('reports wallets whose funding failed as needing a person once none is checked any more', () => {
     const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0, doneLastHour: 0 }] });
-    expect(texts(s, 'needs-you')).toEqual(['Ethereum: 2 wallets could not be funded.']);
+    expect(texts(s, 'needs-you')).toEqual(['Ethereum: 2 wallets could not be checked for money, and none was checked in the last hour.']);
     expect(status(s, NOW).notices[0]).toMatchObject({ href: '/settings#etherscan.key' });
+  });
+
+  it('reports a few failed wallets among wallets being checked as retrying on their own, not as a fault', () => {
+    const s = snapshot({ funding: [{ chainId: 1, pending: 10, done: 100, failed: 2, truncated: 0, doneLastHour: 50 }] });
+    expect(texts(s, 'needs-you')).toEqual([]);
+    expect(texts(s, 'working')).toContain('Ethereum: 2 wallets could not be checked for money; they retry on their own after an hour.');
+    // With funding off nothing retries them, and the funding-off notice says why.
+    const off = snapshot({ config: { ...CONFIG, funding: false }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0, doneLastHour: 0 }] });
+    expect(status(off, NOW).notices.some((n) => n.text.includes('could not be checked'))).toBe(false);
+  });
+
+  it('says the error of a paused collection as information: the worker does not touch it until it resumes', () => {
+    const s = snapshot({ collections: [collection({ pausedAt: NOW, error: 'RPC timed out' }), collection({ address: '0xbeef', chainId: 8453, pausedAt: NOW, error: 'No RPC is configured for chain 8453.' })] });
+    expect(texts(s, 'needs-you')).toEqual([]);
+    expect(texts(s, 'info')).toEqual(expect.arrayContaining(['BAYC: Paused · last error before the pause: RPC timed out', 'BAYC: Paused · last error before the pause: No RPC is configured for chain 8453.']));
   });
 
   it('sends a collection failing for want of an RPC to its setting, not to the collection', () => {

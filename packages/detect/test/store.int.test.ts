@@ -92,6 +92,21 @@ describe('Store', () => {
     await drop(1, w('0be'));
   });
 
+  it('probes a collection\'s transfers for its traders only, never for followed wallets', async () => {
+    const t = w('8f1'), m = w('8f2');
+    const id = (await store.addCollection(7, w('8c0'), 'Probe', 1)).id;
+    await store.ingest(id, 7, chain('31', t, m), 10, [t, m]);
+    // Named in its transfers yet followed (depth > 0), as no ingest leaves a trader: in the followed lane alone.
+    await store.pool.query('UPDATE washtrace.wallets SET depth = 1 WHERE chain_id = 7 AND address = $1', [m]);
+    try {
+      expect((await store.fundingLanes(7, 10)).lanes).toEqual([{ collectionId: id, wallets: [t] }, { collectionId: null, wallets: [m] }]);
+    } finally {
+      await drop(7, w('8c0'));
+      // Wallets outlive a collection's data: these would turn up in the other tests on chain 7.
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = 7 AND address = ANY($1)', [[t, m]]);
+    }
+  });
+
   it('pausing stops a collection\'s lane but not a wallet another collection shares', async () => {
     const s = w('5ba'), p1 = w('9a1'), p2 = w('9a2');
     const c1 = (await store.addCollection(1, w('9c1'), 'P1', 1)).id;

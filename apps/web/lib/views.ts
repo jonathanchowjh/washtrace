@@ -36,8 +36,9 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
 /**
  * Whether some collection's loaded money trail feeds its money lenses (see
  * Store.importedFunding), so having no Etherscan key does not turn them off.
+ * The one answer the worker page, Settings and /api/status all give.
  */
-async function trailFunded(s: Store, collections: readonly CollectionRow[]): Promise<boolean> {
+export async function trailFunded(s: Store, collections: readonly CollectionRow[]): Promise<boolean> {
   const trailed = collections.filter((c) => c.trailImportedSha !== null);
   return (await Promise.all(trailed.map((c) => s.importedFunding(c.id)))).some(Boolean);
 }
@@ -60,16 +61,17 @@ export async function workerView(zone = 'UTC') {
   const [passes, backlog, collections, sources, settings] = await Promise.all([s.passes(), s.fundingBacklog(), s.collections(), s.sources(), s.settings()]);
   // What the worker reported, not this process's environment: only the worker reads the chain.
   const config = configFromSources(sources, settings);
+  // With no key, whether a loaded money trail still feeds the money lenses.
+  const fed = config.funding ? false : await trailFunded(s, collections);
   // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
-  const report = status({ passes, collections, funding: backlog, config }, Date.now(), zone);
+  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed }, Date.now(), zone);
   return {
     every: EVERY,
     rpcChains: config.chains,
     // null numbers are the worker's defaults; the page says them from FIELDS.
     funding: config.funding ? { source: 'etherscan-v2', perSecond: config.perSecond } : null,
     followHops: config.followHops,
-    // With no key, whether a loaded money trail still feeds the money lenses.
-    trailFunded: config.funding ? false : await trailFunded(s, collections),
+    trailFunded: fed,
     passes,
     jobs: report.jobs,
     notices: report.notices,

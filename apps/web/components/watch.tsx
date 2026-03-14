@@ -173,7 +173,7 @@ export function CollectionControls({ chainId, address, paused, priority, compact
         <button type="button" disabled={busy} onClick={() => run('POST', `${path}/pause`)} className={BUTTON}
           title="Stop reading new blocks for this collection; keeps its data">Pause</button>
         {compact ? null : <button type="button" disabled={busy} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className={BUTTON}
-          title={priority ? 'Go back to taking turns with the other collections' : 'Have the worker read this collection before the others'}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
+          title={priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
         {fail}
       </span>
     );

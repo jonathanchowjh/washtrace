@@ -117,7 +117,7 @@ describe('coverage', () => {
     const c = cov(row({ headBlock: null, cursorBlock: null, transfers: 0, wallets: 0, fundedWallets: 0, latest: null }));
     expect(c.reading).toBe('starting');
     expect(c.label).toBe('Starting');
-    expect(cov(row({ headBlock: null, wallets: 0, fundedWallets: 0 })).reading).toBe('starting');
+    expect(cov(row({ headBlock: null, transfers: 0, wallets: 0, fundedWallets: 0 })).reading).toBe('starting');
   });
 
   it('labels a paused collection paused, even with its cursor at its head', () => {
@@ -133,6 +133,28 @@ describe('coverage', () => {
     expect(unread(cov(row({ ...far, pausedAt: 5 })))).toBe(true);
     expect(unread(cov(row({ ...far })))).toBe(true);
     expect(unread(cov(row({ pausedAt: 5 })))).toBe(false);
+  });
+
+  it('is not checking wallets while nothing checks them: a money trail with no Etherscan key, or a key just removed', () => {
+    for (const c of [row({ fundedWallets: 20, trailImportedSha: 'feed' }), row({ fundedWallets: 20 })]) {
+      const idle = coverage(c, new Set([1]), 0, 'UTC', false);
+      expect(idle.reading).toBe('complete');
+      expect(idle.label).toBe('Up to date');
+      // Still floors: an unchecked wallet hides links, key or not.
+      expect(idle.floor).toEqual(['AU', 'AC']);
+    }
+    expect(coverage(row({ fundedWallets: 20 }), new Set([1]), 0, 'UTC', true).reading).toBe('checking');
+  });
+
+  it('says how far it was read when its chain has an RPC that has not given the head, never that it is starting', () => {
+    // Restored, then the RPC failed (a typo, a rate limit) before the head was known.
+    const restored = row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), transfers: 10 });
+    expect(cov(restored).reading).toBe('head-unknown');
+    expect(cov(restored).label).toBe('Read to block 900');
+    // Read from the chain before, with no stored data: the same.
+    expect(cov(row({ headBlock: null, cursorBlock: 900, transfers: 10 })).reading).toBe('head-unknown');
+    // Nothing read yet: starting, as before.
+    expect(cov(row({ headBlock: null, cursorBlock: 99, transfers: 0 })).reading).toBe('starting');
   });
 
   it('is starting before the deployment block is known', () => {
@@ -182,9 +204,9 @@ describe('coverage of stored data with no RPC', () => {
   });
 
   it('is not stored-only once the chain has an RPC, or before stored data has landed', () => {
-    expect(coverage(stored(), new Set([1]), NOW).reading).toBe('starting');
+    expect(coverage(stored(), new Set([1]), NOW).reading).toBe('head-unknown');
     expect(coverage(stored({ cursorBlock: null }), NONE, NOW).reading).toBe('starting');
-    expect(coverage(stored({ storedThroughTime: null }), NONE, NOW).reading).toBe('starting');
+    expect(coverage(stored({ storedThroughTime: null, transfers: 0 }), NONE, NOW).reading).toBe('starting');
     expect(coverage(stored(), new Set([1]), NOW).stops).toBeNull();
   });
 });

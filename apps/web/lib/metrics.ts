@@ -59,7 +59,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'restoring' | 'stored-only' | 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
+export type Reading = 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -108,11 +108,17 @@ function unsyncedFor(ms: number): string {
  * collection is none of these: its head stops moving, so "up to date" would
  * be a claim nobody is keeping true. Nor is one showing stored data with no
  * RPC: its numbers stop at the stored date, said in `zone` (the reader's;
- * the console draws that date with Time).
+ * the console draws that date with Time). Nor one read before whose chain's
+ * head is not known now: its RPC failed before saying (the collection's
+ * error says why), and what was read stands.
+ *
+ * `funding` is whether an Etherscan key is set (SourcesConfig.funding, as the
+ * status report reads it). Without one nothing checks wallets, so unchecked
+ * wallets leave the money lenses as floors but are not a step in progress.
  */
 export function coverage(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime' | 'storedThroughBlock'>>,
-  rpcChains: ReadonlySet<number>, now: number, zone = 'UTC',
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers'>>,
+  rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', funding = true,
 ): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
   const wallets = { checked: c.fundedWallets, of: c.wallets };
@@ -137,10 +143,14 @@ export function coverage(
   // Built on the server, so the locale is pinned; the console draws its own date with Time.
   if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone, 'en-GB')} · ${unsynced}` };
   if (readTo !== null) return { ...base, reading: 'stored-only', label: `Read to block ${readTo.toLocaleString('en-US')} · no RPC for its chain` };
+  // Read before, but no head now: an RPC that fails (a typo, a rate limit) never said it. The numbers are there; how far behind is not known.
+  const read = c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && ((c.storedThroughTime ?? null) !== null || (c.transfers ?? 0) > 0);
+  if (c.headBlock === null && read) return { ...base, reading: 'head-unknown', label: `Read to block ${c.cursorBlock!.toLocaleString('en-US')}` };
   // An unknown head cannot be caught up to.
   if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
-  if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
+  // Only a key checks wallets: without one (a loaded money trail, or a key just removed) nothing is in progress.
+  if (unchecked && funding) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
 }
 

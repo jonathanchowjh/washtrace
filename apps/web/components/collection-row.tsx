@@ -30,10 +30,12 @@ function Share({ r, label, detail }: { r: Range | null; label: string; detail: s
  * One collection in the list: its answer, how complete it is, and what can be
  * done with it (pause, resume, delete data). `rpcChains` are the chains the
  * worker can read, so a collection showing stored data with none says so.
+ * `funding` is whether an Etherscan key is set: without one no wallet is
+ * being checked, whatever is left unchecked.
  */
-export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: string; rpcChains: ReadonlySet<number>; now: number }) {
+export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collection; why: string; rpcChains: ReadonlySet<number>; funding: boolean; now: number }) {
   const a = c.latest;
-  const cov = coverage(c, rpcChains, now);
+  const cov = coverage(c, rpcChains, now, 'UTC', funding);
   const sales = a && range(a.totals, 'sales');
   const volume = a && range(a.totals, 'volume');
   const href = `/c/${c.chainId}/${c.address}`;
@@ -45,7 +47,10 @@ export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: 
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
         {/* A "No RPC" left from before stored data loaded is no fault: the pill says where the data stops. */}
-        {c.error && !storedOnly(c, rpcChains) ? <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+        {/* Nor an error on a paused collection: the worker leaves it alone, so nothing is failing now and nothing clears it. */}
+        {c.error && !storedOnly(c, rpcChains) ? c.pausedAt !== null
+          ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
+          : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the worker reads the chain instead, which only takes longer. */}
         {c.restoreNote ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{c.restoreNote}</p> : null}
       </div>
@@ -55,7 +60,7 @@ export function CollectionRow({ c, why, rpcChains, now }: { c: Collection; why: 
         <>
           <Share
             r={sales} label="of sales"
-            detail={sales ? `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
+            detail={sales ? sales.low === sales.high ? LENSES[sales.low].name : `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
           />
           <Share
             r={volume} label="of volume"

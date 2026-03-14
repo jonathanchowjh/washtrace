@@ -61,7 +61,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
-  const cov = coverage(c, rpcChains, Date.now(), zone);
+  const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
   const name = c.name ?? short(address);
   const lens = LENSES[method];
   const t = a?.totals[method];

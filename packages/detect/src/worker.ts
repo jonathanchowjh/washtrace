@@ -586,7 +586,8 @@ export class Worker {
     if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
     const collections = await this.store.collections();
-    const priority = collections.find((c) => c.priority)?.id ?? null;
+    // A paused collection's lane is not served: its priority must not stand in for a live one's.
+    const priority = collections.find((c) => c.priority && c.pausedAt === null)?.id ?? null;
     let done = 0;
     let failed = 0;
     for (const chainId of new Set(collections.map((c) => c.chainId))) {

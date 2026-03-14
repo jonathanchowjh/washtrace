@@ -11,6 +11,8 @@ export interface Snapshot {
   funding: readonly { chainId: number; pending: number; done: number; failed: number; truncated: number; doneLastHour: number }[];
   /** From the worker's report (configFromSources), never this process's environment. */
   config: SourcesConfig;
+  /** Whether some collection's loaded money trail feeds its money lenses (trailFunded in views), as the worker page and Settings say it. */
+  trailFunded: boolean;
 }
 
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
@@ -108,7 +110,10 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     }
     // The worker clears its "No RPC" once it sees the stored data; until then that error is no fault either.
     const error = stored ? null : c.error;
-    if (error && !s.config.chains.includes(c.chainId)) {
+    if (error && paused) {
+      // The worker does not touch a paused collection, so its error stays from before the pause: nothing is failing now.
+      notice('info', `${label}: Paused · last error before the pause: ${error}`);
+    } else if (error && !s.config.chains.includes(c.chainId)) {
       // No RPC for its chain: the fix is a setting, not anything on the collection's page.
       if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) needsYou(`${label}: ${error}`, `Open Settings and set an ${chainName(c.chainId)} RPC URL.`, `/settings#rpc.${c.chainId}`);
       else needsYou(`${label}: ${error}`, `Set WASHTRACE_RPC_${c.chainId} in the worker's environment, then restart it.`);
@@ -132,13 +137,20 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
   }
   if (!s.config.funding) {
     // A money trail loaded from stored data is funding the worker does not have to fetch.
-    const trailed = s.collections.some((c) => c.trailImportedSha != null);
-    notice('info', trailed
+    notice('info', s.trailFunded
       ? 'Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.'
       : 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
   }
-  for (const f of s.funding) {
-    if (f.failed > 0) needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be funded.`, 'They retry on their own after an hour; if they keep failing, check the Etherscan key in Settings.', '/settings#etherscan.key');
+  // With funding off nothing retries failed wallets, and the notice above says why.
+  for (const f of s.config.funding ? s.funding : []) {
+    if (f.failed === 0) continue;
+    // Some wallets failing while others are checked is a rate limit or a timeout: they retry on their own.
+    // None checked in an hour while some fail is the key or the URL, and a person must look.
+    if (f.doneLastHour === 0) {
+      needsYou(`${chainName(f.chainId)}: ${f.failed} wallets could not be checked for money, and none was checked in the last hour.`, 'Check the Etherscan key in Settings, and Test it there.', '/settings#etherscan.key');
+    } else {
+      notice('working', `${chainName(f.chainId)}: ${f.failed} wallets could not be checked for money; they retry on their own after an hour.`);
+    }
   }
   notices.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
 
