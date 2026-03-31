@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
+import { workerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan } from '../src/etherscan.js';
 import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
@@ -541,6 +542,21 @@ describe('Worker settings', () => {
     expect(warn.mock.calls[0]![0]).toContain('settings not read');
   });
 
+  it('tests Etherscan at the environment\'s address, never a console one, while the key is from the environment', async () => {
+    const { store } = stub({
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<number>) => fn(),
+      settings: async () => new Map([['etherscan.url', 'https://attacker.example/api']]),
+      expireChecks: async () => 0,
+      pendingChecks: async () => [{ id: 1, kind: 'etherscan', chainId: null }],
+      finishCheck: async () => {},
+    });
+    const w = new Worker(store, (s) => workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'ENVKEY0123456789' }, s), '');
+    const urls: string[] = [];
+    w.etherscanClient = (config) => { urls.push(config!.etherscanUrl); return { ping: async () => {} } as unknown as Etherscan; };
+    expect(await w.runChecks()).toBe(1);
+    expect(urls).toEqual([ETHERSCAN_V2]);
+  });
+
   it('still runs the pass when reporting sources fails, and says the report failed, once', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const finished: string[] = [];
@@ -872,5 +888,23 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       expect(details[0]).not.toContain(leak);
       expect(printed(logged)).not.toContain(leak);
     }
+  });
+
+  it('hides a key from settings since replaced, in a pass and in a Test', async () => {
+    // An old provider's error can arrive after the URL is replaced mid-pass, echoing the old key without a scheme.
+    let rpc = 'https://OLDKEY0123456789.rpc.example';
+    const store: any = { settings: async () => new Map([['rpc.1', rpc]]), reportSources: async () => {} };
+    const w = new Worker(store, (s) => workerConfig({}, s), '');
+    await (w as any).loadSettings();
+    rpc = 'https://NEWKEY0123456789.rpc.example';
+    await (w as any).loadSettings();
+    const echo = () => new Error('no such key at OLDKEY0123456789.rpc.example');
+    const said: string = (w as any).scrubbed(echo());
+    expect(said).toContain('no such key');
+    expect(said).not.toContain('OLDKEY0123456789');
+    (w as any).chain = () => ({ check: async () => { throw echo(); } });
+    const { detail } = await (w as any).runCheck({ kind: 'rpc', chainId: 1 }, workerConfig({}, await store.settings()));
+    expect(detail.error).toContain('no such key');
+    expect(detail.error).not.toContain('OLDKEY0123456789');
   });
 });

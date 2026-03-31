@@ -218,6 +218,13 @@ export class Worker {
   private beatFailed = '';
   /** The console's settings as last read, kept when a read fails so a store hiccup changes no setting. */
   private settings: ReadonlyMap<string, string> = new Map();
+  /**
+   * Every secret of every config built in this process (see resolved): an
+   * old provider's error can arrive after its URL or key is replaced, and
+   * must lose that old secret too. Kept for the process's life, so a replaced
+   * RPC's host labels stay hidden too: over-redaction is the accepted cost.
+   */
+  private readonly seen = new Set<string>();
   /** The last settings read and sources report errors logged, so an outage is one line and not one a pass. */
   private readFailed = '';
   private reportFailed = '';
@@ -337,7 +344,7 @@ export class Worker {
    * start the chain is then read on from.
    */
   async ingest(): Promise<string> {
-    const { rpc } = this.config(this.settings);
+    const { rpc } = this.resolved();
     let collections = await this.store.collections();
     const manifest = await this.storedManifest();
     const restored = manifest === null ? 0 : await this.restore(collections, manifest);
@@ -568,7 +575,7 @@ export class Worker {
    * pass, or null when no key is set. One instance while the settings stay
    * the same, so every caller shares its pacing. Tests override it on the instance.
    */
-  etherscanClient(config: WorkerConfig = this.config(this.settings)): Etherscan | null {
+  etherscanClient(config: WorkerConfig = this.resolved()): Etherscan | null {
     const { etherscanKey, etherscanPerSecond, etherscanUrl } = config;
     if (etherscanKey === null) return null;
     const settings = `${etherscanKey} ${etherscanPerSecond} ${etherscanUrl}`;
@@ -581,7 +588,7 @@ export class Worker {
 
   /** Read the funding of wallets not yet read, collections taking turns, within the budget. */
   async fund(): Promise<string> {
-    const { followHops } = this.config(this.settings);
+    const { followHops } = this.resolved();
     const etherscan = this.etherscanClient();
     if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
@@ -622,7 +629,7 @@ export class Worker {
    * analysed once loaded, not twice), and one waiting out a failure.
    */
   async analyze(): Promise<string> {
-    const { etherscanKey } = this.config(this.settings);
+    const { etherscanKey } = this.resolved();
     const now = Date.now();
     const manifest = await this.storedManifest();
     const loading = new Set(manifest === null ? [] : (await this.store.collections())
@@ -751,7 +758,7 @@ export class Worker {
   async runChecks(): Promise<number> {
     const finished = await this.store.locked(CHECKS_LOCK, false, async () => {
       const settings = await this.store.settings().catch(() => this.settings);
-      const config = this.config(settings);
+      const config = this.resolved(settings);
       const n = await this.store.expireChecks(CHECK_EXPIRY_MS);
       // At once, so several Tests asked together do not add up their waits.
       // All settle before the lock goes: one that cannot be saved does not end the run under the rest.
@@ -788,7 +795,8 @@ export class Worker {
       if (url === undefined) return fail(`No RPC is set for chain ${c.chainId}`);
       return { ok: true, detail: await this.chain(c.chainId, url).check() };
     } catch (err) {
-      return fail(redact(briefOf(err), configSecrets(config)));
+      // Every secret seen, not only this config's: `config` was built by resolved, so its own are among them.
+      return fail(this.scrubbed(err));
     }
   }
 
@@ -807,7 +815,7 @@ export class Worker {
       this.readFailed = message;
     }
     try {
-      await this.store.reportSources(this.config(this.settings).sources);
+      await this.store.reportSources(this.resolved().sources);
     } catch (err) {
       const message = this.scrubbed(err);
       if (this.reportFailed !== message) console.warn('[washtrace] settings sources not reported: %s', message);
@@ -835,20 +843,27 @@ export class Worker {
     return chain;
   }
 
+  /** The config for `settings`, by default the settings read this pass, its secrets remembered for scrubbed. */
+  private resolved(settings: ReadonlyMap<string, string> = this.settings): WorkerConfig {
+    const config = this.config(settings);
+    for (const secret of configSecrets(config)) this.seen.add(secret);
+    return config;
+  }
+
   /**
    * An error as the console and the log may show it: brief, with every URL
-   * and every secret the worker knows (each RPC URL, the Etherscan key and
-   * URL, the store's URL) taken out. viem puts the RPC URL in its messages,
-   * and a collection's error reaches every visitor through the API.
+   * and every secret the worker has known in this process (each RPC URL, the
+   * Etherscan key and URL, the store's URL) taken out. viem puts the RPC URL
+   * in its messages, and a collection's error reaches every visitor through
+   * the API.
    */
   private scrubbed(err: unknown): string {
-    let secrets = urlSecrets(this.storeUrl);
     try {
-      secrets = [...secrets, ...configSecrets(this.config(this.settings))];
+      this.resolved();
     } catch {
-      // A config that cannot be read names no secret to add; every URL still goes.
+      // A config that cannot be read names no secret to add; every URL and every secret seen still go.
     }
-    return redact(briefOf(err), secrets);
+    return redact(briefOf(err), [...urlSecrets(this.storeUrl), ...this.seen]);
   }
 
   /** Say on the collection what went wrong, and log it once. `message` is already scrubbed: it reaches the API. */

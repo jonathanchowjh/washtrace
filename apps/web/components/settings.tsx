@@ -84,6 +84,8 @@ function sourceLine(f: FieldView, trailFunded: boolean): string {
   if (f.source === 'env') return `Set by the environment (${variableOf(f.key)}), so it can't be changed here.`;
   if (f.source === 'console') return 'Set here.';
   const fallback = FIELDS.find((x) => x.key === f.key)?.fallback;
+  // The Etherscan URL while the key is the environment's: only the environment can set it.
+  if (f.pinned !== null) return `${f.pinned} Not set in the environment (${variableOf(f.key)}), so the worker uses ${fallback ?? 'its default'}.`;
   return `Not set, ${unset(f.key, trailFunded) ?? (fallback ? `so the worker uses ${fallback}.` : 'so the worker uses its default.')}`;
 }
 
@@ -109,7 +111,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const id = `setting-${field.key}`;
   const labelId = `${id}-label`;
   const hintId = `${id}-hint`;
-  const lockedWhy = writable ? "Set by the environment, so it can't be changed here." : READ_ONLY;
+  const lockedWhy = writable ? (field.pinned ?? '') : READ_ONLY;
   /** A button's accessible name: what it does, then which field. */
   const named = (verb: string, after = '') => `${verb} ${field.label}${after}`;
 

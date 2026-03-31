@@ -95,6 +95,41 @@ describe('view', () => {
   });
 });
 
+describe('view, the Etherscan URL', () => {
+  const PINNED = 'The Etherscan key is set by the environment, so only the environment can change its URL.';
+  const envKey = { 'etherscan.key': src('env', null) };
+
+  it('locks the URL, saying why, while the key is from the environment, and shows no console URL the worker ignores', () => {
+    const url = field(view(new Map([['etherscan.url', 'https://attacker.example/api']]), envKey, true), 'etherscan.url');
+    expect(url).toMatchObject({ set: false, shown: null, source: null, locked: true, pinned: PINNED, invalid: null });
+  });
+
+  it('shows the environment URL, locked, when the environment set it beside the key', () => {
+    const url = field(view(new Map(), { ...envKey, 'etherscan.url': src('env', 'https://proxy.example/api') }, true), 'etherscan.url');
+    expect(url).toMatchObject({ set: true, shown: 'https://proxy.example/api', source: 'env', locked: true, pinned: "Set by the environment, so it can't be changed here." });
+  });
+
+  it('leaves the URL to the console while the key is from the console', () => {
+    const url = field(view(new Map([['etherscan.url', 'https://proxy.example/api']]), { 'etherscan.key': src('console', null) }, true), 'etherscan.url');
+    expect(url).toMatchObject({ set: true, shown: 'https://proxy.example/api', source: 'console', locked: false, pinned: null });
+  });
+
+  it('shows a URL with its credentials masked, wherever it came from', () => {
+    const fromConsole = field(view(new Map([['etherscan.url', 'https://ada:pw5678@x/api?apikey=SECRET1234']]), {}, true), 'etherscan.url');
+    expect(fromConsole.shown).toBe('https://••••@x/api?apikey=••••');
+    for (const url of ['https:ada:pw5678@x/api', 'https:/ada:pw5678@x/api', 'https:\\ada:pw5678@x/api']) {
+      expect(new URL(url).password).toBe('pw5678');
+      const shown = field(view(new Map([['etherscan.url', url]]), {}, true), 'etherscan.url').shown!;
+      expect(shown).not.toContain('pw5678');
+      expect(shown).not.toContain('ada');
+      expect(shown).toContain('••••@x/api');
+    }
+    // The worker masks it before reporting; masked again, it stays as it was.
+    const fromEnv = field(view(new Map(), { 'etherscan.url': src('env', 'https://x/api?apikey=••••') }, true), 'etherscan.url');
+    expect(fromEnv.shown).toBe('https://x/api?apikey=••••');
+  });
+});
+
 describe('configFromSources', () => {
   it('reads chains, funding and the numbers the worker reported', () => {
     const sources = { 'rpc.1': src('env', null), 'rpc.8453': src('env', null), 'etherscan.key': src('console', null), 'etherscan.rps': src('env', '2.5'), 'follow.hops': src('console', '5') };
@@ -171,6 +206,11 @@ describe('GET /api/settings', () => {
     expect(JSON.parse(text).trailFunded).toBe(false);
   });
 
+  it('answers no credential of the Etherscan URL', async () => {
+    fake.values = new Map([['etherscan.url', 'https://x/api?apikey=SECRET1234']]);
+    expect(await (await settingsRoute.GET()).text()).not.toContain('SECRET');
+  });
+
   it('says when a loaded money trail feeds the money lenses without a key', async () => {
     fake.collections.mockResolvedValueOnce([{ id: 3, trailImportedSha: null }, { id: 4, trailImportedSha: 'feed' }]);
     const body = await (await settingsRoute.GET()).json();
@@ -230,6 +270,23 @@ describe('POST /api/settings', () => {
   it('409s clearing a field the environment set', async () => {
     fake.reported = { 'etherscan.key': src('env', null) };
     expect((await settingsRoute.POST(post({ key: 'etherscan.key', value: null }))).status).toBe(409);
+  });
+
+  it('409s the Etherscan URL while the key is from the environment, saying why', async () => {
+    fake.reported = { 'etherscan.key': src('env', null) };
+    for (const value of ['https://attacker.example/api', null]) {
+      const res = await settingsRoute.POST(post({ key: 'etherscan.url', value }));
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe('The Etherscan key is set by the environment, so only the environment can change its URL.');
+    }
+    expect(fake.setSetting).not.toHaveBeenCalled();
+  });
+
+  it('400s a URL still holding the mask it was shown with', async () => {
+    const res = await settingsRoute.POST(post({ key: 'etherscan.url', value: 'https://x/api?apikey=••••' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('Type the whole URL: •••• stands for a part that is kept hidden.');
+    expect(fake.setSetting).not.toHaveBeenCalled();
   });
 
   it("400s with the validator's message", async () => {

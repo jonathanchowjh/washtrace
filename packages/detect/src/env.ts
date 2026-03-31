@@ -28,17 +28,22 @@ export function storeUrl(env: Env): string {
  * `WASHTRACE_RPC_<chainId>`, `etherscan.key` is `WASHTRACE_ETHERSCAN_KEY`, and
  * so on. `sources` says where each set value came from, never a secret's
  * value, for the console to lock what the environment pinned.
+ *
+ * The Etherscan URL follows its key: while the key comes from the
+ * environment, so does the URL (or the default), never from the console.
+ * Otherwise a console user could send the environment's key to an address
+ * of their own.
  */
 export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = new Map()): WorkerConfig {
   const sources: Record<string, SettingSource> = {};
-  const pick = (key: string, variable: string): string | undefined => {
-    const shown = (value: string) => (SECRET_KEYS(key) ? null : value);
+  const pick = (key: string, variable: string, envOnly = false): string | undefined => {
+    const shown = (value: string) => (SECRET_KEYS(key) ? null : key === 'etherscan.url' ? maskedUrl(value) : value);
     const fromEnv = env[variable]?.trim();
     if (fromEnv) {
       sources[key] = { source: 'env', value: shown(fromEnv) };
       return fromEnv;
     }
-    const fromConsole = settings.get(key)?.trim();
+    const fromConsole = envOnly ? undefined : settings.get(key)?.trim();
     if (fromConsole) {
       sources[key] = { source: 'console', value: shown(fromConsole) };
       return fromConsole;
@@ -55,14 +60,35 @@ export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = n
     if (url !== undefined) rpc.set(id, url);
   }
   const perSecond = Number(pick('etherscan.rps', 'WASHTRACE_ETHERSCAN_RPS') ?? '4');
+  const etherscanKey = pick('etherscan.key', 'WASHTRACE_ETHERSCAN_KEY') ?? null;
   return {
     rpc,
-    etherscanKey: pick('etherscan.key', 'WASHTRACE_ETHERSCAN_KEY') ?? null,
+    etherscanKey,
     etherscanPerSecond: Number.isFinite(perSecond) && perSecond > 0 ? perSecond : 4,
-    etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL') ?? ETHERSCAN_V2,
+    etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL', sources['etherscan.key']?.source === 'env') ?? ETHERSCAN_V2,
     followHops: hops(pick('follow.hops', 'WASHTRACE_FOLLOW_HOPS')),
     sources,
   };
+}
+
+/**
+ * `url` with its credentials as '••••': its userinfo and every query value,
+ * where a compatible API may take a key (urlSecrets in worker.ts). Its host
+ * and path stay, to say where it points. Kept as written, not re-serialised.
+ */
+function maskedUrl(url: string): string {
+  const q = url.indexOf('?');
+  // Up to the last @ before the host ends, after the scheme and any slashes: the URL parser also reads userinfo in
+  // `https:a:b@x`, `https:/a:b@x` and `https:\a:b@x`.
+  const head = (q < 0 ? url : url.slice(0, q)).replace(/^([^:\/\\?#]*:[\/\\]*)[^\/\\?#]*@/, '$1••••@');
+  if (q < 0) return head;
+  const query = url.slice(q + 1).split('&').map((kv) => {
+    const i = kv.indexOf('=');
+    // A value with no name is still a value: urlSecrets counts it.
+    if (i < 0) return kv === '' ? kv : '••••';
+    return kv.length > i + 1 ? `${kv.slice(0, i + 1)}••••` : kv;
+  });
+  return `${head}?${query.join('&')}`;
 }
 
 /** Default 3: enough for a payment back through three outside wallets, the demo's #113. */

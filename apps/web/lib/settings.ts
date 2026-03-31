@@ -21,6 +21,8 @@ export interface Field {
   used(v: string): boolean;
   /** What the worker uses while this is not set (env.ts), for the page to say. None for a source, which is off until set. */
   fallback?: string;
+  /** How a value is shown, when not as it is: the Etherscan URL without its credentials. */
+  show?(v: string): string;
 }
 
 /** A field as the API answers it: where its value came from and as much of it as may be shown. */
@@ -32,13 +34,35 @@ export interface FieldView {
   /** A secret is '••••', plus its last 4 for someone who may change it; anything else is its value. */
   shown: string | null;
   source: 'env' | 'console' | null;
-  /** True when this viewer can't change it: set by the environment, or basic auth is off. */
+  /** True when this viewer can't change it: `pinned`, or basic auth is off. */
   locked: boolean;
+  /** Why no one can change it here, whoever views it (see pinned), or null. */
+  pinned: string | null;
   /** Why the worker ignores this value and uses the default, or null when it uses it. Never said of a secret, whose value is not reported. */
   invalid: string | null;
 }
 
 const MASK = '••••';
+
+/**
+ * `url` with its credentials as '••••': its userinfo and every query value,
+ * where a compatible API may take a key. Its host and path stay, to say where
+ * it points. The same as the worker reports it (env.ts), and the same again
+ * on a URL already masked.
+ */
+function maskedUrl(url: string): string {
+  const q = url.indexOf('?');
+  // Up to the last @ before the host ends, after the scheme and any slashes: the URL parser also reads userinfo in
+  // `https:a:b@x`, `https:/a:b@x` and `https:\a:b@x`.
+  const head = (q < 0 ? url : url.slice(0, q)).replace(/^([^:\/\\?#]*:[\/\\]*)[^\/\\?#]*@/, `$1${MASK}@`);
+  if (q < 0) return head;
+  const query = url.slice(q + 1).split('&').map((kv) => {
+    const i = kv.indexOf('=');
+    if (i < 0) return kv === '' ? kv : MASK;
+    return kv.length > i + 1 ? `${kv.slice(0, i + 1)}${MASK}` : kv;
+  });
+  return `${head}?${query.join('&')}`;
+}
 
 /** An http(s) URL, or null. `new URL` alone accepts `eth.example:8545` as a URL with the scheme `eth.example:`. */
 function urlOf(v: string): URL | null {
@@ -78,10 +102,15 @@ export const FIELDS: readonly Field[] = [
     key: 'etherscan.url',
     label: 'Etherscan API URL',
     secret: false,
-    validate: (v) => (urlOf(v)?.protocol === 'https:' ? null : 'The Etherscan URL starts with https://.'),
+    validate: (v) => {
+      if (urlOf(v)?.protocol !== 'https:') return 'The Etherscan URL starts with https://.';
+      // Saved as shown, the URL would lose the key the mask stands for.
+      return v.includes(MASK) ? `Type the whole URL: ${MASK} stands for a part that is kept hidden.` : null;
+    },
     // The worker takes any value here; a bad one shows when Etherscan is tested.
     used: () => true,
     fallback: 'https://api.etherscan.io/v2/api',
+    show: maskedUrl,
   },
   {
     key: 'follow.hops',
@@ -94,6 +123,21 @@ export const FIELDS: readonly Field[] = [
   },
 ];
 
+/** The 409 for a value the environment set: the environment wins, so saving it would do nothing. */
+const ENV_SET = "Set by the environment, so it can't be changed here.";
+
+/**
+ * Why the console can't change `key`, whoever asks: the environment set it,
+ * or set the Etherscan key, whose URL then comes from the environment or the
+ * default only (env.ts), so a console URL can't receive the environment's
+ * key. Null when the console may. `sources` is the worker's last report.
+ */
+export function pinned(key: string, sources: Record<string, SettingSource>): string | null {
+  if (sources[key]?.source === 'env') return ENV_SET;
+  if (key === 'etherscan.url' && sources['etherscan.key']?.source === 'env') return 'The Etherscan key is set by the environment, so only the environment can change its URL.';
+  return null;
+}
+
 /**
  * Each field for the page. `settings` is what the console saved; `sources` is
  * where the worker last said each value came from. The environment wins, as
@@ -101,18 +145,23 @@ export const FIELDS: readonly Field[] = [
  * report. The API never reads the worker's environment, so a secret the
  * environment set is only known to be set, and shows no part of itself. A
  * console secret shows its last 4 only to someone who may change it, and only
- * when it is long enough that 4 characters are a small part of it.
+ * when it is long enough that 4 characters are a small part of it. A console
+ * Etherscan URL the worker ignores, as the key is the environment's, is not
+ * shown: the worker uses the default.
  */
 export function view(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
   return FIELDS.map((f) => {
     const reported = sources[f.key];
-    const saved = settings.get(f.key)?.trim() || null;
+    const why = pinned(f.key, sources);
+    // A console value only while the worker can use it: none while pinned.
+    const saved = (why === null && settings.get(f.key)?.trim()) || null;
     const source = reported?.source === 'env' ? 'env' : saved !== null ? 'console' : null;
     let shown: string | null = null;
     if (f.secret && source !== null) {
       shown = writable && source === 'console' && saved !== null && saved.length > 8 ? MASK + saved.slice(-4) : MASK;
     } else if (!f.secret) {
       shown = source === 'env' ? (reported?.value ?? null) : saved;
+      if (shown !== null && f.show) shown = f.show(shown);
     }
     return {
       key: f.key,
@@ -121,7 +170,8 @@ export function view(settings: ReadonlyMap<string, string>, sources: Record<stri
       set: source !== null,
       shown,
       source,
-      locked: !writable || source === 'env',
+      locked: !writable || why !== null,
+      pinned: why,
       invalid: !f.secret && shown !== null && !f.used(shown) ? f.validate(shown) : null,
     };
   });

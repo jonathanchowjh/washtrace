@@ -17,11 +17,11 @@ afterEach(() => {
 /** Every field as the API answers it with nothing set; `more` overrides by key. */
 function fields(more: Record<string, Partial<FieldView>> = {}, locked = false): FieldView[] {
   const base: FieldView[] = [
-    { key: 'rpc.1', label: 'Ethereum RPC URL', secret: true, set: false, shown: null, source: null, locked, invalid: null },
-    { key: 'etherscan.key', label: 'Etherscan API key', secret: true, set: false, shown: null, source: null, locked, invalid: null },
-    { key: 'etherscan.rps', label: 'Etherscan calls per second', secret: false, set: false, shown: null, source: null, locked, invalid: null },
-    { key: 'etherscan.url', label: 'Etherscan API URL', secret: false, set: false, shown: null, source: null, locked, invalid: null },
-    { key: 'follow.hops', label: 'Follow hops', secret: false, set: false, shown: null, source: null, locked, invalid: null },
+    { key: 'rpc.1', label: 'Ethereum RPC URL', secret: true, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.key', label: 'Etherscan API key', secret: true, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.rps', label: 'Etherscan calls per second', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.url', label: 'Etherscan API URL', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
+    { key: 'follow.hops', label: 'Follow hops', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
   ];
   return base.map((f) => ({ ...f, ...more[f.key] }));
 }
@@ -30,6 +30,8 @@ const box = (key: string) => document.getElementById(key)!;
 /** The field's one live region, always there so a screen reader announces what lands in it. */
 const live = (key: string) => box(key).querySelector('[role=status]')!;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+/** What the API says of a field the environment set. */
+const ENV_SET = "Set by the environment, so it can't be changed here.";
 const RPC_SET = { 'rpc.1': { set: true, shown: '••••a1b2', source: 'console' as const } };
 
 /** A fetch that answers the check request with id 7, then each poll with the next of `polls` (the last repeats). */
@@ -78,7 +80,7 @@ describe('Settings, each field', () => {
 
   it('says where each value came from', () => {
     render(<Settings writable fields={fields({
-      'etherscan.key': { set: true, shown: '••••', source: 'env', locked: true },
+      'etherscan.key': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET },
       'follow.hops': { set: true, shown: '2', source: 'console' },
     })} />);
     expect(box('etherscan.key').textContent).toContain('Set by the environment (WASHTRACE_ETHERSCAN_KEY)');
@@ -87,7 +89,7 @@ describe('Settings, each field', () => {
   });
 
   it('locks a field the environment set', () => {
-    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '5', source: 'env', locked: true } })} />);
+    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '5', source: 'env', locked: true, pinned: ENV_SET } })} />);
     const input = box('follow.hops').querySelector('input')!;
     expect(input.disabled).toBe(true);
     expect(input.value).toBe('5');
@@ -95,8 +97,21 @@ describe('Settings, each field', () => {
     expect((box('etherscan.rps').querySelector('input') as HTMLInputElement).disabled).toBe(false);
   });
 
+  it('locks the Etherscan URL while the key is from the environment, and says why and what the worker uses', () => {
+    const why = 'The Etherscan key is set by the environment, so only the environment can change its URL.';
+    render(<Settings writable fields={fields({
+      'etherscan.key': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET },
+      'etherscan.url': { locked: true, pinned: why },
+    })} />);
+    const input = box('etherscan.url').querySelector('input')!;
+    expect(input.disabled).toBe(true);
+    expect(input.title).toBe(why);
+    expect((box('etherscan.url').querySelector('button') as HTMLButtonElement).title).toBe(why);
+    expect(box('etherscan.url').textContent).toContain(`${why} Not set in the environment (WASHTRACE_ETHERSCAN_URL), so the worker uses https://api.etherscan.io/v2/api.`);
+  });
+
   it('says, as a fault, that the worker ignores an invalid value', () => {
-    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', locked: true, invalid: 'Follow hops must be a whole number from 0 to 10.' } })} />);
+    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', locked: true, pinned: ENV_SET, invalid: 'Follow hops must be a whole number from 0 to 10.' } })} />);
     const said = screen.getByText(/^Ignored:/);
     expect(said.textContent).toBe('Ignored: Follow hops must be a whole number from 0 to 10. The worker uses 3.');
     expect(said.closest('.text-fault')).toBeTruthy();
@@ -164,7 +179,7 @@ describe('Settings, secrets', () => {
   });
 
   it('offers no Clear for a secret the environment set', () => {
-    render(<Settings writable fields={fields({ 'rpc.1': { set: true, shown: '••••', source: 'env', locked: true } })} />);
+    render(<Settings writable fields={fields({ 'rpc.1': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET } })} />);
     expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull();
     expect((screen.getByRole('button', { name: 'Replace Ethereum RPC URL' }) as HTMLButtonElement).disabled).toBe(true);
   });

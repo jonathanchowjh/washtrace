@@ -1,6 +1,6 @@
 import { ACTOR_HEADER, authConfigured } from '@/lib/auth';
 import { bad, handle, json, readJson } from '@/lib/api';
-import { FIELDS, READ_ONLY } from '@/lib/settings';
+import { FIELDS, READ_ONLY, pinned } from '@/lib/settings';
 import { store } from '@/lib/store';
 import { settingsView } from '@/lib/views';
 
@@ -17,7 +17,7 @@ export async function GET(): Promise<Response> {
  * POST `{key, value}`: save a setting, or with `value: null` clear it so the
  * default applies. The worker picks it up on its next pass. Refused while
  * basic auth is off (anyone could change it), then for a value the
- * environment set (the environment wins, so saving it would do nothing),
+ * environment pins (it set the value, or the Etherscan key the URL follows),
  * then for a value the worker could not use.
  */
 export async function POST(req: Request): Promise<Response> {
@@ -29,7 +29,8 @@ export async function POST(req: Request): Promise<Response> {
     if (!field) return bad(`Unknown setting. Settings: ${FIELDS.map((f) => f.key).join(', ')}.`);
     if (body.value !== null && typeof body.value !== 'string') return bad('value must be a string, or null to clear it.');
     const s = store();
-    if ((await s.sources())[field.key]?.source === 'env') return bad("Set by the environment, so it can't be changed here.", 409);
+    const why = pinned(field.key, await s.sources());
+    if (why !== null) return bad(why, 409);
     const value = body.value === null ? null : body.value.trim();
     const invalid = value === null ? null : field.validate(value);
     if (invalid) return bad(invalid);
