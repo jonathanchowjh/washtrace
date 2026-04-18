@@ -69,6 +69,10 @@ export interface CollectionRow {
   restoreNoteKey: string | null;
   /** When a load the store failed is tried again, in ms. Null when none is waiting. */
   restoreRetryAt: number | null;
+  /** Why its last analysis failed, kept until one is saved: meanwhile `latest` is the last that was. Null when none failed since. */
+  analysisError: string | null;
+  /** When an analysis that failed is tried again, in ms. Null when none failed. */
+  analysisRetryAt: number | null;
   /** When the stored data it loaded stops, in ms. Null when none was loaded. */
   storedThroughTime: number | null;
   /** The block the stored data it loaded stops at. Null when none was loaded. */
@@ -305,6 +309,8 @@ export class Store {
    * Apply `change` in one statement, so two edits at once both land. `||`
    * merges the rules and `jsonb_strip_nulls` drops the ones set to null. The
    * version moves only when the rules did: a rename or a priority changes no flag.
+   * A rule change also ends the wait of an analysis that failed, which it may
+   * fix: tried on the next pass, the failure still said until a run succeeds.
    */
   async configure(chainId: number, address: string, change: Configure): Promise<CollectionRow | null> {
     const { rowCount } = await this.pool.query(
@@ -313,7 +319,8 @@ export class Store {
            priority = CASE WHEN $6::boolean IS NULL THEN priority ELSE $6 END,
            rules = jsonb_strip_nulls(rules || $5::jsonb),
            version = version + CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN 0 ELSE 1 END,
-           rules_at = CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN rules_at ELSE now() END
+           rules_at = CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN rules_at ELSE now() END,
+           analysis_retry_at = CASE WHEN jsonb_strip_nulls(rules || $5::jsonb) = rules THEN analysis_retry_at ELSE NULL END
        WHERE chain_id = $1 AND address = $2`,
       [chainId, address, change.name !== undefined, change.name ?? null, JSON.stringify(change.rules ?? {}), change.priority ?? null],
     );
@@ -748,14 +755,16 @@ export class Store {
    * When the latest analysis ran and how long it took come along, so the
    * worker can space out the reruns of a collection that is always changing,
    * and when its rules last changed, so a rule edit is not made to wait.
+   * `retryAt` is when one whose analysis failed may be tried again (see
+   * analysisFailed): null when none failed.
    */
   async stale(): Promise<{
     id: number; chainId: number; version: number; rules: Partial<Rules>; name: string | null;
-    ranAt: number | null; tookMs: number | null; rulesAt: number | null;
+    ranAt: number | null; tookMs: number | null; rulesAt: number | null; retryAt: number | null;
   }[]> {
     const { rows } = await this.pool.query(
       `SELECT c.id, c.chain_id, c.version, c.rules, c.name, a.took_ms, extract(epoch FROM a.ran_at)::float8 AS ran,
-              extract(epoch FROM c.rules_at)::float8 AS rules_changed
+              extract(epoch FROM c.rules_at)::float8 AS rules_changed, extract(epoch FROM c.analysis_retry_at)::float8 AS retry
        FROM washtrace.collections c
        LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
        WHERE c.version > c.analyzed_version AND c.paused_at IS NULL ORDER BY c.id`,
@@ -763,6 +772,7 @@ export class Store {
     return rows.map((r) => ({
       id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules, name: r.name,
       ranAt: r.ran === null ? null : r.ran * 1000, tookMs: r.took_ms, rulesAt: r.rules_changed === null ? null : r.rules_changed * 1000,
+      retryAt: r.retry === null ? null : r.retry * 1000,
     }));
   }
 
@@ -804,9 +814,10 @@ export class Store {
   }
 
   /**
-   * Record an analysis and replace the collection's flags with its own. A
-   * collection removed while its analysis ran has nowhere to keep it, so the
-   * analysis is dropped quietly: the removal was asked for, not a failure.
+   * Record an analysis and replace the collection's flags with its own, and
+   * forget any analysis that failed before it. A collection removed while
+   * its analysis ran has nowhere to keep it, so the analysis is dropped
+   * quietly: the removal was asked for, not a failure.
    */
   async saveAnalysis(id: number, version: number, analysis: Analysis, tookMs: number, through: number | null): Promise<void> {
     const c = await this.pool.connect();
@@ -843,7 +854,11 @@ export class Store {
           [id, batch.map((x) => x.method), batch.map((x) => x.txHash), batch.map((x) => x.logIndex), ws],
         );
       }
-      await c.query('UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2) WHERE id = $1', [id, version]);
+      await c.query(
+        `UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2), analysis_failures = 0, analysis_error = NULL, analysis_retry_at = NULL
+         WHERE id = $1`,
+        [id, version],
+      );
       await c.query('COMMIT');
     } catch (err) {
       await c.query('ROLLBACK').catch(() => {});
@@ -852,6 +867,25 @@ export class Store {
     } finally {
       c.release();
     }
+  }
+
+  /**
+   * Note on a collection that its analysis failed, and why (`error`, already
+   * scrubbed: it reaches the API), so the console says so until one is
+   * saved, and set when it is tried again: five minutes, doubling with each
+   * failure in a row, up to an hour. Meanwhile the others are analysed: a
+   * failure writes nothing else, so without the wait the same collection
+   * would stay first and be tried every pass. Here, not in the worker's
+   * memory, so a restarted worker waits too.
+   */
+  async analysisFailed(id: number, error: string): Promise<void> {
+    // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+    await this.pool.query(
+      `UPDATE washtrace.collections SET analysis_error = $2, analysis_failures = analysis_failures + 1,
+         analysis_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(analysis_failures, 4))))
+       WHERE id = $1`,
+      [id, error],
+    );
   }
 
   async history(id: number, limit = 100): Promise<AnalysisRow[]> {
@@ -1276,6 +1310,7 @@ const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
        extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served, extract(epoch FROM c.paused_at)::float8 AS paused,
        extract(epoch FROM c.stored_through_time)::float8 AS stored_through, extract(epoch FROM c.restore_retry_at)::float8 AS restore_retry,
+       extract(epoch FROM c.analysis_retry_at)::float8 AS analysis_retry,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -1334,6 +1369,7 @@ function toCollection(r: any): CollectionRow {
     pausedAt: r.paused === null ? null : r.paused * 1000,
     restoreProgress: num(r.restore_progress), restoreNote: r.restore_note, restoreNoteKey: r.restore_note_key,
     restoreRetryAt: r.restore_retry === null ? null : r.restore_retry * 1000,
+    analysisError: r.analysis_error, analysisRetryAt: r.analysis_retry === null ? null : r.analysis_retry * 1000,
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
     trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note,

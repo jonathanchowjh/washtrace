@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf, type CollectionRow as Collection, type PassRow } from '@washtrace/detect';
 import { Empty, Head, Problem } from '@/components/head';
@@ -12,6 +13,7 @@ import { short } from '@/lib/format';
 import { tabCounts, waiting } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
 import { store } from '@/lib/store';
+import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 export const metadata: Metadata = { title: 'Collections' };
 
@@ -51,6 +53,8 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   const shown = tab === 'all' ? rows : rows.filter((c) => (c.pausedAt !== null) === (tab === 'paused'));
   const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
   const now = Date.now();
+  // The reader's zone, for when a failed analysis is tried again. UTC until it is known.
+  const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   return (
     <>
       <Head title="Collections" sub="Each NFT collection being watched, and how much of its trading looks like wash trading.">
@@ -86,7 +90,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now)} rpcChains={rpcChains} funding={funding} now={now} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now, zone)} rpcChains={rpcChains} funding={funding} now={now} />)}</ul>
         </div>
       )}
     </>

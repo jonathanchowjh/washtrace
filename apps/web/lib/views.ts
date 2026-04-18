@@ -79,7 +79,7 @@ export async function workerView(zone = 'UTC') {
     collections: collections.map((c) => ({
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock,
       headBlock: c.headBlock, ingestedAt: c.ingestedAt, error: c.error, errorAt: c.errorAt, stale: c.stale,
-      analyzedAt: c.latest?.ranAt ?? null, analysisMs: c.latest?.tookMs ?? null,
+      analyzedAt: c.latest?.ranAt ?? null, analysisMs: c.latest?.tookMs ?? null, analysisError: c.analysisError, analysisRetryAt: c.analysisRetryAt,
       turn: report.collections.find((r) => r.chainId === c.chainId && r.address === c.address)?.turn ?? 'keeping-up',
       // Paused or not: its "No RPC" is no fault while its stored data is there.
       storedOnly: storedOnly(c, new Set(config.chains)),

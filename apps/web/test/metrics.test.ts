@@ -63,7 +63,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
     latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
     servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -253,6 +253,18 @@ describe('waiting', () => {
   it('says the next pass is near when none is running', () => {
     expect(waiting(fresh, undefined, names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
     expect(waiting(fresh, pass({ finishedAt: NOW - 1_000 }), names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+  });
+
+  it('says its analysis failed and when it is tried again, never that the next pass is near', () => {
+    const at = NOW + 20 * 60_000;
+    const failing = row({ latest: null, analysisError: 'out of memory', analysisRetryAt: at });
+    const said = `Its analysis failed: out of memory · it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}.`;
+    expect(waiting(failing, undefined, names, NOW, 'Asia/Tokyo')).toBe(said);
+    // Queued behind another collection, the failure is still what holds it.
+    expect(waiting(failing, pass({ subjectId: 7 }), names, NOW, 'Asia/Tokyo')).toBe(said);
+    expect(waiting(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
+    // Being tried again now.
+    expect(waiting(failing, pass(), names, NOW)).toBe('First analysis running · started 2 min ago.');
   });
 
   it('knows a pass is running only until it finishes', () => {

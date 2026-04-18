@@ -203,19 +203,32 @@ export function isRunning(p: PassRow): boolean {
 }
 
 /**
+ * When a collection whose last analysis failed is tried again, as the console
+ * says it: after a time in `zone`, or due once that has passed, when it waits
+ * only for the analysis thread. Text, so the locale is pinned.
+ */
+export function analysisRetry(c: Pick<CollectionRow, 'analysisRetryAt'>, now: number, zone = 'UTC'): string {
+  const at = c.analysisRetryAt ?? null;
+  return at !== null && at > now ? `it is tried again after ${localTime(at, 'time', zone, 'en-GB')}` : 'it is due to be tried again';
+}
+
+/**
  * Why a collection has no analysis yet, from what the worker is doing now.
  * Analysis runs one collection per pass, so a new one may be queued behind
- * another that takes a while.
+ * another that takes a while. One whose analysis failed waits out its back-off
+ * first, said in `zone`.
  */
-export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number): string {
+export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number, zone = 'UTC'): string {
   // Never analysed while paused, so promise nothing.
   if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
   // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
   if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
   if (c.transfers === 0) return 'Waiting for its first transfers.';
   const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
+  const min = running === null ? '' : `${Math.floor((now - running.startedAt) / 60_000)} min`;
+  if (running?.subjectId === c.id) return `First analysis running · started ${min} ago.`;
+  // Not the next pass: it waits out its back-off whatever runs now.
+  if (c.analysisError) return `Its analysis failed: ${c.analysisError} · ${analysisRetry(c, now, zone)}.`;
   if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
-  const min = `${Math.floor((now - running.startedAt) / 60_000)} min`;
-  if (running.subjectId === c.id) return `First analysis running · started ${min} ago.`;
   return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
 }

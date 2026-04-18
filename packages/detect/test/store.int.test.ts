@@ -40,10 +40,10 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(14);
-    expect(await store.migrate()).toBe(14);
+    expect(await store.migrate()).toBe(15);
+    expect(await store.migrate()).toBe(15);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 14 }]);
+    expect(rows).toEqual([{ version: 15 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -52,7 +52,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(14);
+      expect(await store.migrate()).toBe(15);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -69,7 +69,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(14);
+      expect(await store.migrate()).toBe(15);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -268,6 +268,46 @@ describe('Store', () => {
     await drop(1, w('90e'));
     await expect(store.saveAnalysis(id, due.version, analyze(input([])), 1, null)).resolves.toBeUndefined();
     expect(await store.history(id)).toEqual([]);
+  });
+
+  it('keeps a failed analysis on its collection, waiting five minutes doubling to an hour, until one is saved', async () => {
+    const coll = w('9a1');
+    const { id } = await store.addCollection(1, coll, 'Failing', 1);
+    const failures = async () => (await store.pool.query('SELECT analysis_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].analysis_failures;
+    const waits = async () => {
+      const c = (await store.collection(1, coll))!;
+      const due = (await store.stale()).find((s) => s.id === id)!;
+      expect(due.retryAt).toBe(c.analysisRetryAt);
+      return c.analysisRetryAt! - Date.now();
+    };
+    expect(await store.collection(1, coll)).toMatchObject({ analysisError: null, analysisRetryAt: null });
+    expect((await store.stale()).find((s) => s.id === id)!.retryAt).toBeNull();
+    await store.analysisFailed(id, 'out of memory');
+    expect(await store.collection(1, coll)).toMatchObject({ analysisError: 'out of memory' });
+    expect(await failures()).toBe(1);
+    expect(await waits()).toBeGreaterThan(5 * 60_000 - 5_000);
+    expect(await waits()).toBeLessThan(5 * 60_000 + 5_000);
+    await store.analysisFailed(id, 'out of memory again');
+    expect(await store.collection(1, coll)).toMatchObject({ analysisError: 'out of memory again' });
+    expect(await waits()).toBeGreaterThan(10 * 60_000 - 5_000);
+    expect(await waits()).toBeLessThan(10 * 60_000 + 5_000);
+    // However many in a row, an hour at most.
+    await store.pool.query('UPDATE washtrace.collections SET analysis_failures = 2000 WHERE id = $1', [id]);
+    await store.analysisFailed(id, 'out of memory');
+    expect(await waits()).toBeGreaterThan(60 * 60_000 - 5_000);
+    expect(await waits()).toBeLessThan(60 * 60_000 + 5_000);
+    // A rule edit may be the fix: tried on the next pass, the failure still said until a run succeeds.
+    await store.configure(1, coll, { name: 'Still failing' });
+    expect((await store.collection(1, coll))!.analysisRetryAt).not.toBeNull();
+    await store.configure(1, coll, { rules: { minCycles: 7 } });
+    expect(await store.collection(1, coll)).toMatchObject({ analysisError: 'out of memory', analysisRetryAt: null });
+    expect((await store.stale()).find((s) => s.id === id)!.retryAt).toBeNull();
+    expect(await failures()).toBe(2001);
+    const due = (await store.stale()).find((s) => s.id === id)!;
+    await store.saveAnalysis(id, due.version, analyze(input([])), 1, null);
+    expect(await store.collection(1, coll)).toMatchObject({ analysisError: null, analysisRetryAt: null });
+    expect(await failures()).toBe(0);
+    await drop(1, coll);
   });
 
   it('runs a job in one session only: a second is skipped, not queued', async () => {

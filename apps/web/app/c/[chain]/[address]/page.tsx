@@ -50,7 +50,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
-  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now());
+  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now(), zone);
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
   // The chains the worker can read: with none for this one, its stored data is all there is.
@@ -133,7 +133,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

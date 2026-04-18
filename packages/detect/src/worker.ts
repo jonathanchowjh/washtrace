@@ -161,28 +161,28 @@ export const ANALYZE_GAP_MS = 5 * 60_000;
 /**
  * Which stale collection to analyse next, or null when none is due. Never
  * analysed comes first, by id. Then one whose rules were edited since its
- * last analysis, oldest edit first: someone is waiting to see the flags the
- * new rules give. Otherwise a collection waits five minutes from its last
- * analysis, or twice that analysis's length if longer: one that changes
- * every minute and takes seventeen to analyse would otherwise keep the
- * analysis thread busy for it alone. Of those due, the one waiting longest goes.
+ * last analysis started, oldest edit first: someone is waiting to see the
+ * flags the new rules give. Otherwise a collection waits five minutes from
+ * its last analysis, or twice that analysis's length if longer: one that
+ * changes every minute and takes seventeen to analyse would otherwise keep
+ * the analysis thread busy for it alone. Of those due, the one waiting longest goes.
  */
 export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow | null {
   const fresh = stale.filter((s) => s.ranAt === null).sort((a, b) => a.id - b.id);
   if (fresh.length > 0) return fresh[0]!;
-  const edited = stale.filter((s) => s.rulesAt !== null && s.rulesAt > s.ranAt!).sort((a, b) => a.rulesAt! - b.rulesAt!);
+  // Against when the last run started, not when it was saved: it read the rules it started with.
+  const edited = stale.filter((s) => s.rulesAt !== null && s.rulesAt > s.ranAt! - (s.tookMs ?? 0)).sort((a, b) => a.rulesAt! - b.rulesAt!);
   if (edited.length > 0) return edited[0]!;
   const due = stale.filter((s) => now - s.ranAt! >= Math.max(ANALYZE_GAP_MS, 2 * (s.tookMs ?? 0)));
   return due.sort((a, b) => a.ranAt! - b.ranAt!)[0] ?? null;
 }
 
 /**
- * How long a collection whose analysis failed waits before it is tried
- * again: five minutes, doubling with each failure in a row, up to an hour.
- * Meanwhile the others are analysed: a failure writes nothing, so without
- * the wait the same collection would stay first and be tried every pass.
+ * How long a load of stored data the store failed waits before it is tried
+ * again, as Store.restore times it: five minutes, doubling with each failure
+ * in a row, up to an hour. For the worker's own copy of that wait (restoreFailed).
  */
-function analyzeRetryMs(failures: number): number {
+function retryMs(failures: number): number {
   return Math.min(60 * 60_000, 5 * 60_000 * 2 ** (failures - 1));
 }
 
@@ -258,12 +258,6 @@ export class Worker {
   private readonly trailShas = new Map<string, { file: string; sha: string }>();
   /** Trail files that could not be read, by path and the same key: not tried again until the file changes. */
   private readonly trailsFailed = new Map<string, string>();
-  /**
-   * Collections whose last analysis failed, by id: failures in a row, and
-   * when to try again (see analyzeRetryMs). In memory: a replica that
-   * restarts tries each once more, which is all a failure costs.
-   */
-  private readonly analyzeFailed = new Map<number, { failures: number; retryAt: number }>();
   /**
    * Loads of stored data the store failed, by collection, timed as the store
    * times them: kept here too, since the write that records a back-off can
@@ -462,7 +456,7 @@ export class Worker {
         if (err instanceof StoredDataError) this.restoreFailed.delete(c.id);
         else {
           const failures = (this.restoreFailed.get(c.id)?.failures ?? 0) + 1;
-          this.restoreFailed.set(c.id, { failures, retryAt: Date.now() + analyzeRetryMs(failures) });
+          this.restoreFailed.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
         }
       }
     }
@@ -692,7 +686,7 @@ export class Worker {
         if (this.restoreDue(r, entry, await this.noteKey(r, entry), now)) loading.add(r.id);
       }
     }
-    const due = (await this.store.stale()).filter((s) => !loading.has(s.id) && (this.analyzeFailed.get(s.id)?.retryAt ?? 0) <= now);
+    const due = (await this.store.stale()).filter((s) => !loading.has(s.id) && (s.retryAt ?? 0) <= now);
     const c = nextAnalysis(due, now);
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
@@ -713,12 +707,11 @@ export class Worker {
       });
       await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through);
     } catch (err) {
-      // The pass fails as before, and says so; the collection waits, so the others go first.
-      const failures = (this.analyzeFailed.get(c.id)?.failures ?? 0) + 1;
-      this.analyzeFailed.set(c.id, { failures, retryAt: Date.now() + analyzeRetryMs(failures) });
+      // The pass fails as before, and says so; the collection says why until one is saved, and waits, so the others go first.
+      await this.store.analysisFailed(c.id, this.scrubbed(err))
+        .catch((e) => console.error('[washtrace] collection %d: failed analysis not noted: %s', c.id, this.scrubbed(e)));
       throw err;
     }
-    this.analyzeFailed.delete(c.id);
     return `${name} analyzed`;
   }
 

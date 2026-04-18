@@ -100,6 +100,36 @@ describe('loading stored data', () => {
   });
 });
 
+describe('a collection whose latest analysis failed', () => {
+  beforeEach(() => { document.cookie = 'washtrace_tz=UTC; path=/'; });
+  const NOW = Date.UTC(2026, 9, 23, 14, 15);
+  const at = NOW + 20 * 60_000;
+  const analysed = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+  const step3 = (c: CollectionRow) => {
+    const el = render(<ReadingPanel c={c} cov={coverage(c, ON, NOW)} why="Waiting" rpcChains={ON} now={NOW} />).container;
+    return el.querySelectorAll('li')[2]!;
+  };
+  const failed = (el: Element) => [...el.querySelectorAll('p')].find((p) => /^(Latest analysis|Paused · latest analysis)/.test(p.textContent!))!;
+
+  it('says the numbers shown stand, that the latest run failed and why, and when it is tried again, as a fault', () => {
+    const li = step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at }));
+    expect(li.textContent).not.toContain('new data waiting for the next run');
+    expect(li.textContent).toContain('took 1 ms · still shown: the latest analysis failed');
+    const line = failed(li);
+    expect(line.textContent).toBe(`Latest analysis failed: out of memory · tried again after ${localTime(at, 'time', 'UTC')}.`);
+    expect(line.className).toContain('text-fault');
+  });
+
+  it('says it is due once its wait is over, and promises no retry while paused', () => {
+    expect(failed(step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }))).textContent)
+      .toBe('Latest analysis failed: out of memory · due to be tried again.');
+    cleanup();
+    const paused = failed(step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at, pausedAt: 5 })));
+    expect(paused.textContent).toBe('Paused · latest analysis before the pause failed: out of memory');
+    expect(paused.className).not.toContain('text-fault');
+  });
+});
+
 describe('bars', () => {
   it('are never green for a paused collection, whatever the share', () => {
     const c = row({ pausedAt: 5 });

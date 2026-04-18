@@ -253,4 +253,14 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_failures int 
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_retry_at timestamptz;
 UPDATE washtrace.collections SET restore_note = replace(restore_note, ' Reading from the chain instead.', '') WHERE restore_note LIKE '% Reading from the chain instead.';
 `,
+  `
+-- A failed analysis stays on its collection until one is saved, so the
+-- console says so between passes and after a restart, not only while the
+-- failed pass is the latest. analysis_error is why, scrubbed as every error
+-- the console shows. The worker tries it again from analysis_retry_at: five
+-- minutes, doubling with each of analysis_failures in a row, up to an hour.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_failures int NOT NULL DEFAULT 0;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_error text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_retry_at timestamptz;
+`,
 ];

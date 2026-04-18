@@ -63,6 +63,24 @@ export function RestoreNote({ c, rpcChains, className }: { c: CollectionRow; rpc
   );
 }
 
+/**
+ * That an analysed collection's latest analysis failed, and why: the numbers
+ * shown are from the one before. A fault while the worker keeps trying it,
+ * with when it does next in the reader's zone; information on a paused one,
+ * which nothing tries until it is resumed. Null when none failed.
+ */
+export function AnalysisFailed({ c, now, className }: { c: CollectionRow; now: number; className?: string }) {
+  if (!c.analysisError) return null;
+  if (c.pausedAt !== null) return <p className={cn('text-xs text-muted-foreground', className)}>Paused · latest analysis before the pause failed: {c.analysisError}</p>;
+  const at = c.analysisRetryAt ?? null;
+  return (
+    <p className={cn('flex items-start gap-1 text-xs text-fault', className)}>
+      <Warn className="size-3.5" />
+      <span>Latest analysis failed: {c.analysisError} · {at !== null && at > now ? <>tried again after <Time ms={at} style="time" />.</> : 'due to be tried again.'}</span>
+    </p>
+  );
+}
+
 /** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
 export function trust(c: CollectionRow, cov: Coverage): string | null {
   // No analysis yet means no shares on screen; the empty state says why instead.
@@ -177,10 +195,11 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
  * analysis has funding for the money lenses: a key, or this collection's
  * loaded trail with checked wallets (as the lens cards are told). `trail` is
  * the stored money trail's coverage, as the manifest gives it, when the trail
- * it describes is the one this collection loaded; else null.
+ * it describes is the one this collection loaded; else null. `now` says
+ * whether a failed analysis's wait is over.
  */
-export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, trail = null }: {
-  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null;
+export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, trail = null, now = Date.now() }: {
+  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null; now?: number;
 }) {
   const a = c.latest;
   const stored = cov.reading === 'stored-only';
@@ -238,9 +257,11 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
+        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
+        {/* With no analysis yet, `why` says it failed. */}
+        {a ? <AnalysisFailed c={c} now={now} /> : null}
         {a ? <p className="text-xs text-muted-foreground">Gaps in history: {(a.missingData * 100).toFixed(1)}% of changes of owner (skipped, never guessed).</p> : null}
       </Step>
     </ol>

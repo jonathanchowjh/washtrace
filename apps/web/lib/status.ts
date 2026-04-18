@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta, localTime } from './format';
-import { isRunning, progress, restoreText, storedOnly } from './metrics';
+import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -36,7 +36,8 @@ const WORKER_DOWN = 'Check the worker process is running: docker compose ps work
 const FAILED: Record<Job, [string, string?]> = {
   ingest: ['Check the chain RPC in Settings, and Test it there.', '/settings#rpc.1'],
   fund: ['Check the Etherscan key in Settings, and Test it there.', '/settings#etherscan.key'],
-  analyze: ['Open the collection and check its rules.'],
+  // One collection's failed analysis is said on it (analysisError); this is a pass that failed outside one.
+  analyze: ["Check the worker's log: docker compose logs worker"],
 };
 
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
@@ -68,14 +69,10 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       needsYou(`${job} has not run for ${minutes(now - p.startedAt)}.`, WORKER_DOWN);
     } else if (p.outcome === 'failed') {
       state = 'failed';
-      // An analysis fails for one collection, the one it was on: named, and linked to.
+      // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
+      // the pass failed before it took one, the collection is gone, or the failure could not be written to it.
       const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
-      if (on) {
-        const label = on.name ?? `${on.chainId}:${on.address}`;
-        needsYou(`Analysis of ${label} failed: ${p.detail}`, `Open ${label} and check its rules. It is tried again after a wait, and the other collections are analysed meanwhile.`, `/c/${on.chainId}/${on.address}`);
-      } else {
-        needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
-      }
+      if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
     } else {
       state = 'ok';
     }
@@ -121,9 +118,19 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     } else if (error) {
       needsYou(`${label}: ${error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
     }
+    // Kept on the collection until an analysis succeeds, so it is said between passes too. Paused, nothing tries it again.
+    if (c.analysisError && paused) notice('info', `${label}: Paused · its last analysis before the pause failed: ${c.analysisError}`);
+    else if (c.analysisError) {
+      needsYou(
+        `Analysis of ${label} failed: ${c.analysisError}`,
+        `Wait: ${analysisRetry(c, now, zone)}, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker`,
+        `/c/${c.chainId}/${c.address}`,
+      );
+    }
     return {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock, headBlock: c.headBlock,
       behind, turn: paused ? 'paused' as const : restoring ? 'restoring' as const : storedTurn ? 'stored-only' as const : backfilling ? 'backfilling' as const : 'keeping-up' as const, transfers: c.transfers, stale: c.stale, analyzedAt: c.latest?.ranAt ?? null, error: c.error,
+      analysisError: c.analysisError, analysisRetryAt: c.analysisRetryAt,
     };
   });
 

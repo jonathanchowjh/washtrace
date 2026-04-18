@@ -17,7 +17,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -653,7 +653,7 @@ describe('Worker settings', () => {
 
 describe('nextAnalysis', () => {
   const MIN = 60_000;
-  const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, rulesAt: null, ...more });
+  const s = (more: Partial<StaleRow> = {}): StaleRow => ({ id: 1, chainId: 1, version: 2, rules: {}, name: 'BAYC', ranAt: null, tookMs: null, rulesAt: null, retryAt: null, ...more });
 
   it('analyses a never-analysed collection first', () => {
     expect(nextAnalysis([s({ id: 2, ranAt: 0, tookMs: 1 }), s({ id: 9, ranAt: null, tookMs: null })], 10 * MIN)!.id).toBe(9);
@@ -669,6 +669,13 @@ describe('nextAnalysis', () => {
     expect(nextAnalysis([s({ ranAt: 0, tookMs: 1_000, rulesAt: MIN })], 2 * MIN)).not.toBeNull();
     // A rule edit older than the last run was already analysed: the gap applies.
     expect(nextAnalysis([s({ ranAt: MIN, tookMs: 1_000, rulesAt: 0 })], 2 * MIN)).toBeNull();
+  });
+
+  it('analyses a rule edited while the last run ran: that run read the rules it started with', () => {
+    // Ran from 2 to 10 minutes, so twice its length holds it to 26: the edit at 5 does not wait for that.
+    expect(nextAnalysis([s({ ranAt: 10 * MIN, tookMs: 8 * MIN, rulesAt: 5 * MIN })], 11 * MIN)).not.toBeNull();
+    // Edited before it started: that run had it.
+    expect(nextAnalysis([s({ ranAt: 10 * MIN, tookMs: 8 * MIN, rulesAt: MIN })], 11 * MIN)).toBeNull();
   });
 
   it('orders never analysed, then rule edits by oldest edit, then due by oldest run', () => {
@@ -765,72 +772,85 @@ describe('Worker.analyze', () => {
 describe('Worker.analyze when an analysis fails', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  const stale = (id: number, name: string): StaleRow => ({ id, chainId: 1, version: 1, rules: {}, name, ranAt: null, tookMs: null, rulesAt: null });
+  const stale = (id: number, name: string): StaleRow => ({ id, chainId: 1, version: 1, rules: {}, name, ranAt: null, tookMs: null, rulesAt: null, retryAt: null });
 
-  /** Two never-analysed collections on a fake clock; BAYC's analysis throws while `broken` says so. */
+  /**
+   * Two never-analysed collections on a fake clock; BAYC's analysis throws
+   * while `broken` says so. The store keeps a failure as Store.analysisFailed
+   * does, timed by the first wait only: the doubling is the store's, tested there.
+   */
   function setup() {
     let now = 1_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
     const waiting = new Map([[1, stale(1, 'BAYC')], [2, stale(2, 'Doodles')]]);
+    const failed: [number, string][] = [];
     const store: any = {
       stale: async () => [...waiting.values()],
       collections: async () => [row({ id: 1 }), row({ id: 2, address: '0xd00d' })],
       heartbeat: async () => {}, importedFunding: async () => false,
       saveAnalysis: async (id: number) => { waiting.delete(id); },
+      analysisFailed: async (id: number, error: string) => {
+        failed.push([id, error]);
+        waiting.set(id, { ...waiting.get(id)!, retryAt: now + 5 * 60_000 });
+      },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), 'postgres://washtrace:hunter2@db:5432/washtrace');
     (w as any).manifest = async () => ({ version: 1, collections: [] });
     const tried: number[] = [];
-    const state = { broken: true };
+    const state = { broken: true, error: 'out of memory' };
     w.analyzeOff = async (request) => {
       tried.push(request.id);
-      if (request.id === 1 && state.broken) throw new Error('out of memory');
+      if (request.id === 1 && state.broken) throw new Error(state.error);
       return { analysis: {} as Analysis, through: 7 };
     };
     const at = (ms: number) => { now = 1_000_000 + ms; };
-    return { w, tried, state, at, waiting };
+    return { w, tried, state, at, waiting, failed, store };
   }
 
-  it('analyses the others on the next pass, and retries the failing one only after its back-off', async () => {
-    const { w, tried, at } = setup();
+  it('keeps the failure on the collection, analyses the others meanwhile, and tries it again only once its wait is over', async () => {
+    const { w, tried, at, failed } = setup();
     await expect(w.analyze()).rejects.toThrow('out of memory');
+    expect(failed).toEqual([[1, 'out of memory']]);
     at(60_000);
     expect(await w.analyze()).toBe('Doodles analyzed');
-    at(4 * 60_000);
+    at(5 * 60_000 - 1);
     expect(await w.analyze()).toBe('nothing due');
     at(5 * 60_000);
     await expect(w.analyze()).rejects.toThrow('out of memory');
-    // Twice as long after a second failure in a row.
-    at(5 * 60_000 + 9 * 60_000);
-    expect(await w.analyze()).toBe('nothing due');
-    at(5 * 60_000 + 10 * 60_000);
-    await expect(w.analyze()).rejects.toThrow('out of memory');
-    expect(tried).toEqual([1, 2, 1, 1]);
+    expect(tried).toEqual([1, 2, 1]);
   });
 
-  it('never waits more than an hour between tries, and forgets the failures once one succeeds', async () => {
-    const { w, state, at, waiting } = setup();
+  it('waits out a failure written before this worker started: the wait is the store\'s, not held in memory', async () => {
+    const { w, tried, at, waiting } = setup();
+    waiting.set(1, { ...stale(1, 'BAYC'), retryAt: 1_000_000 + 10 * 60_000 });
+    expect(await w.analyze()).toBe('Doodles analyzed');
+    expect(await w.analyze()).toBe('nothing due');
+    at(10 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    expect(tried).toEqual([2, 1]);
+  });
+
+  it('saves a success, which is what clears the failure', async () => {
+    const { w, state, waiting, failed } = setup();
     waiting.delete(2);
-    await expect(w.analyze()).rejects.toThrow('out of memory');
-    let t = 0;
-    // 5, 10, 20, 40 minutes, then an hour each time: tried at each, and not a minute before.
-    for (const wait of [5, 10, 20, 40, 60, 60]) {
-      t += wait * 60_000;
-      at(t - 60_000);
-      expect(await w.analyze()).toBe('nothing due');
-      at(t);
-      await expect(w.analyze()).rejects.toThrow('out of memory');
-    }
     state.broken = false;
-    t += 60 * 60_000;
-    at(t);
     expect(await w.analyze()).toBe('BAYC analyzed');
-    // A failure after a success waits five minutes again, not an hour.
-    state.broken = true;
-    waiting.set(1, stale(1, 'BAYC'));
-    await expect(w.analyze()).rejects.toThrow('out of memory');
-    at(t + 5 * 60_000);
-    await expect(w.analyze()).rejects.toThrow('out of memory');
+    expect(waiting.size).toBe(0);
+    expect(failed).toEqual([]);
+  });
+
+  it('writes the failure scrubbed of the store\'s URL, and still fails the pass when the write fails too', async () => {
+    const { w, state, failed, store, at, waiting } = setup();
+    waiting.delete(2);
+    state.error = 'connect ECONNREFUSED postgres://washtrace:hunter2@db:5432/washtrace';
+    await expect(w.analyze()).rejects.toThrow('ECONNREFUSED');
+    expect(failed[0]![1]).not.toContain('hunter2');
+    expect(failed[0]![1]).not.toContain('postgres://');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store.analysisFailed = async () => { throw new Error('disk full'); };
+    at(5 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('ECONNREFUSED');
+    expect(logged.mock.calls.flat().join(' ')).toContain('disk full');
   });
 
   it('does not analyse a collection whose stored data is still to load, and analyses it once loaded', async () => {

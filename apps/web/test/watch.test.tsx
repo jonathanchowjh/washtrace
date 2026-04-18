@@ -295,6 +295,21 @@ describe('CollectionRow', () => {
     expect(busy.textContent).toContain('money lenses can still rise');
   });
 
+  it('says an analysed collection\'s latest analysis failed, and when it is tried again', () => {
+    document.cookie = 'washtrace_tz=UTC; path=/';
+    const at = 30 * 60_000;
+    const c = { ...base, latest: analysed(true), stale: true, analysisError: 'out of memory', analysisRetryAt: at } as unknown as typeof base;
+    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding now={0} />);
+    const line = [...container.querySelectorAll('p')].find((p) => p.textContent!.startsWith('Latest analysis failed'))!;
+    expect(line.textContent).toBe(`Latest analysis failed: out of memory · tried again after ${localTime(at, 'time', 'UTC')}.`);
+    expect(line.className).toContain('text-fault');
+    cleanup();
+    // Paused, nothing tries it: information from before the pause.
+    const paused = render(<CollectionRow c={{ ...c, pausedAt: 1 }} why="Paused" rpcChains={ON} funding now={0} />).container;
+    const said = [...paused.querySelectorAll('p')].find((p) => p.textContent!.includes('analysis before the pause failed'))!;
+    expect(said.className).not.toContain('text-fault');
+  });
+
   it('names one lens once when it holds the only share', () => {
     const c = { ...base, latest: analysed(false) } as unknown as typeof base;
     const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding now={0} />);

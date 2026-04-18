@@ -15,7 +15,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -74,16 +74,46 @@ describe('status', () => {
     expect(texts(s, 'needs-you')).toContain('fund failed: Etherscan answered HTTP 502');
   });
 
-  it('names and links the collection whose analysis failed', () => {
-    const s = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'out of memory', subjectId: 1 }), pass('fund', 2_000), pass('ingest', 10_000)] });
-    const n = status(s, NOW).notices.find((x) => x.severity === 'needs-you');
-    expect(n).toEqual({
+  it('names and links a collection whose analysis failed, while it does, even after a later pass went through', () => {
+    const at = NOW + 20 * MIN;
+    const failing = collection({ analysisError: 'out of memory', analysisRetryAt: at });
+    // The latest analyze pass was another collection's, and went through.
+    const s = snapshot({ collections: [failing] });
+    expect(status(s, NOW, 'Asia/Tokyo').notices.filter((n) => n.severity === 'needs-you')).toEqual([{
       severity: 'needs-you', text: 'Analysis of BAYC failed: out of memory',
-      doThis: 'Open BAYC and check its rules. It is tried again after a wait, and the other collections are analysed meanwhile.', href: '/c/1/0xbc4c',
+      doThis: `Wait: it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker`,
+      href: '/c/1/0xbc4c',
+    }]);
+    // No page shows a collection's rules: never sent to check them.
+    expect(JSON.stringify(status(s, NOW).notices)).not.toContain('rules');
+    // Its wait over, it is due, and waits only for the analysis thread.
+    const due = status(snapshot({ collections: [collection({ analysisError: 'out of memory', analysisRetryAt: NOW - MIN })] }), NOW).notices.find((n) => n.severity === 'needs-you')!;
+    expect(due).toMatchObject({ doThis: "Wait: it is due to be tried again, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker" });
+  });
+
+  it('says the failed analysis once, on the collection, when the failed pass was its own', () => {
+    const s = snapshot({
+      passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'out of memory', subjectId: 1 }), pass('fund', 2_000), pass('ingest', 10_000)],
+      collections: [collection({ analysisError: 'out of memory', analysisRetryAt: NOW + 5 * MIN })],
     });
-    // A collection no longer watched: the job's own words, as before.
-    const gone = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'out of memory', subjectId: 9 }), pass('fund', 2_000), pass('ingest', 10_000)] });
-    expect(texts(gone, 'needs-you')).toEqual(['analyze failed: out of memory']);
+    expect(stateOf(s, 'analyze')).toBe('failed');
+    expect(texts(s, 'needs-you')).toEqual(['Analysis of BAYC failed: out of memory']);
+  });
+
+  it('says an analyze pass that failed with no collection to show it on as the job\'s own failure, sent to the log', () => {
+    // Failed before it took a collection, or on one since removed.
+    for (const subjectId of [null, 9]) {
+      const s = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'connection lost', subjectId }), pass('fund', 2_000), pass('ingest', 10_000)] });
+      expect(status(s, NOW).notices.filter((n) => n.severity === 'needs-you')).toEqual([
+        { severity: 'needs-you', text: 'analyze failed: connection lost', doThis: "Check the worker's log: docker compose logs worker" },
+      ]);
+    }
+  });
+
+  it('says a paused collection\'s failed analysis as information: nothing tries it until it is resumed', () => {
+    const s = snapshot({ collections: [collection({ analysisError: 'out of memory', analysisRetryAt: NOW + 5 * MIN, pausedAt: NOW })] });
+    expect(texts(s, 'needs-you')).toEqual([]);
+    expect(texts(s, 'info')).toContain('BAYC: Paused · its last analysis before the pause failed: out of memory');
   });
 
   it('says a paused collection is paused, and does not call it behind or check its wallets', () => {
