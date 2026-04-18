@@ -20,11 +20,17 @@ const CURSOR_PAGE = 10_000;
 const RESTORE_CHECK_MS = 1_000;
 /** Wallets a load queues per statement, in address order. */
 const QUEUE_BATCH = 10_000;
-/** Why stored data could not be loaded, in the words the console shows. The full error goes to the log. */
-const RESTORE_NOTES: Readonly<Record<StoredDataFault, string>> = {
-  missing: 'Stored data could not be loaded: its file is missing. Reading from the chain instead.',
-  mismatch: 'Stored data could not be loaded: its file does not match the manifest. Reading from the chain instead.',
-  unreadable: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+/**
+ * Why stored data could not be loaded, in the words the console shows. Only
+ * why: what follows (the chain read instead, when the load is tried again)
+ * depends on the chain's RPC, which the console knows. The full error goes to
+ * the log.
+ */
+const RESTORE_NOTES: Readonly<Record<StoredDataFault | 'failed', string>> = {
+  missing: 'Stored data could not be loaded: its file is missing.',
+  mismatch: 'Stored data could not be loaded: its file does not match the manifest.',
+  unreadable: 'Stored data could not be loaded: its file could not be read.',
+  failed: 'Stored data could not be loaded.',
 };
 /** Thrown inside a load to stop it quietly: its collection was paused or deleted under it. */
 const STOPPED = Symbol('restore stopped');
@@ -57,8 +63,12 @@ export interface CollectionRow {
   pausedAt: number | null;
   /** How far a load of stored data has got, 0 to 1, while one runs. Null otherwise. */
   restoreProgress: number | null;
-  /** Why stored data could not be loaded. The worker reads the chain instead and does not try the stored data again. */
+  /** Why stored data could not be loaded. Meanwhile the collection is read from the chain, if it has an RPC, and analysed on what it has. */
   restoreNote: string | null;
+  /** What a load the data failed was about (storedKey). It is tried again once that changes. Null for any other failure. */
+  restoreNoteKey: string | null;
+  /** When a load the store failed is tried again, in ms. Null when none is waiting. */
+  restoreRetryAt: number | null;
   /** When the stored data it loaded stops, in ms. Null when none was loaded. */
   storedThroughTime: number | null;
   /** The block the stored data it loaded stops at. Null when none was loaded. */
@@ -423,12 +433,15 @@ export class Store {
    * Delete, allowed only once paused, waits at most that second, not the
    * whole load. Neither look ever waits on a lock.
    *
-   * On failure nothing is kept and the progress is cleared. Bad stored data
-   * (a StoredDataError) also leaves a note, and the worker reads the chain
-   * instead from then on. Any other error (a deadlock, a lost connection)
-   * leaves none, so the next pass tries again. Either way it is thrown on.
+   * On failure nothing is kept and the progress is cleared, and a note says
+   * so. Bad stored data (a StoredDataError) is noted with `key`, what the
+   * load was about (storedKey), and is not tried again until that changes.
+   * Any other error (a full disk, a lost connection) waits as a failed
+   * analysis does: five minutes, doubling with each failure in a row, up to
+   * an hour. Either way it is thrown on. A load that goes through clears all
+   * of it.
    */
-  async restore(id: number, chainId: number, entry: StoredEntry, batches: AsyncIterable<Transfer[]>): Promise<void> {
+  async restore(id: number, chainId: number, entry: StoredEntry, batches: AsyncIterable<Transfer[]>, key: string): Promise<void> {
     const c = await this.pool.connect();
     try {
       // Shown at once: the whole file is checked against its sha256 before the first batch.
@@ -452,7 +465,8 @@ export class Store {
       // LEAST and GREATEST skip a null, so a collection with no start yet takes the stored one.
       await c.query(
         `UPDATE washtrace.collections SET start_block = LEAST(start_block, $2::bigint), cursor_block = GREATEST(cursor_block, $3::bigint),
-           stored_through_time = to_timestamp($4::float8 / 1000), stored_through_block = $3::bigint, restore_progress = NULL, restore_note = NULL, version = version + 1
+           stored_through_time = to_timestamp($4::float8 / 1000), stored_through_block = $3::bigint, restore_progress = NULL,
+           restore_note = NULL, restore_note_key = NULL, restore_failures = 0, restore_retry_at = NULL, version = version + 1
          WHERE id = $1`,
         [id, entry.startBlock, entry.throughBlock, entry.throughTime],
       );
@@ -460,10 +474,25 @@ export class Store {
     } catch (err) {
       await c.query('ROLLBACK').catch(() => {});
       // After the rollback, so a Delete waiting on the load has gone through and this finds nothing to wait on.
-      const note = err instanceof StoredDataError ? RESTORE_NOTES[err.kind] : null;
-      await this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL, restore_note = coalesce($2, restore_note) WHERE id = $1', [id, note])
-        .catch(() => {});
-      if (err === STOPPED || (err as { code?: string }).code === FOREIGN_KEY_VIOLATION) return;
+      // A load stopped by a pause or a Delete is no failure: only its progress goes.
+      const stopped = err === STOPPED || (err as { code?: string }).code === FOREIGN_KEY_VIOLATION;
+      const write = stopped
+        ? this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL WHERE id = $1', [id])
+        : err instanceof StoredDataError
+          ? this.pool.query(
+            `UPDATE washtrace.collections SET restore_progress = NULL, restore_note = $2, restore_note_key = $3, restore_failures = 0, restore_retry_at = NULL
+             WHERE id = $1`,
+            [id, RESTORE_NOTES[err.kind], key],
+          )
+          // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+          : this.pool.query(
+            `UPDATE washtrace.collections SET restore_progress = NULL, restore_note = $2, restore_note_key = NULL, restore_failures = restore_failures + 1,
+               restore_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(restore_failures, 4))))
+             WHERE id = $1`,
+            [id, RESTORE_NOTES.failed],
+          );
+      await write.catch(() => {});
+      if (stopped) return;
       throw err;
     } finally {
       c.release();
@@ -487,6 +516,18 @@ export class Store {
       );
     }
     return true;
+  }
+
+  /**
+   * Forget why a collection's stored data was not loaded, and any wait: the
+   * worker found the stored data no longer applies (gone from the manifest,
+   * or read past), so nothing about it is true any more.
+   */
+  async clearRestoreNote(id: number): Promise<void> {
+    await this.pool.query(
+      'UPDATE washtrace.collections SET restore_note = NULL, restore_note_key = NULL, restore_failures = 0, restore_retry_at = NULL WHERE id = $1',
+      [id],
+    );
   }
 
   /**
@@ -1234,7 +1275,7 @@ export class Store {
 const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
        extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served, extract(epoch FROM c.paused_at)::float8 AS paused,
-       extract(epoch FROM c.stored_through_time)::float8 AS stored_through,
+       extract(epoch FROM c.stored_through_time)::float8 AS stored_through, extract(epoch FROM c.restore_retry_at)::float8 AS restore_retry,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -1291,7 +1332,8 @@ function toCollection(r: any): CollectionRow {
     latest: r.analysis_id === null ? null : toAnalysis(r),
     servedAt: r.served === null ? null : r.served * 1000, readRate: num(r.read_rate), priority: r.priority,
     pausedAt: r.paused === null ? null : r.paused * 1000,
-    restoreProgress: num(r.restore_progress), restoreNote: r.restore_note,
+    restoreProgress: num(r.restore_progress), restoreNote: r.restore_note, restoreNoteKey: r.restore_note_key,
+    restoreRetryAt: r.restore_retry === null ? null : r.restore_retry * 1000,
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
     trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note,

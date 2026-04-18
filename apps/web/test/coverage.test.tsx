@@ -71,12 +71,32 @@ describe('loading stored data', () => {
     expect(panel(c).textContent).toContain('Loading stored data · 42%');
   });
 
-  it('says why stored data was not loaded beside step 1, as information and not a fault', () => {
-    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
-    const el = panel(row({ restoreNote: note }));
-    const line = [...el.querySelectorAll('p')].find((p) => p.textContent === note)!;
-    expect(line).toBeTruthy();
+  const NOTE = 'Stored data could not be loaded: its file does not match the manifest.';
+  const said = (el: HTMLElement) => [...el.querySelectorAll('p')].find((p) => p.textContent!.startsWith(NOTE))!;
+
+  it('says why stored data was not loaded beside step 1, as information and not a fault, and that the chain is read meanwhile', () => {
+    const line = said(panel(row({ restoreNote: NOTE })));
+    expect(line.textContent).toBe(`${NOTE} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
     expect(line.className).not.toContain('text-fault');
+  });
+
+  it('never claims the chain is read when its chain has no RPC: says what will make the stored data load', () => {
+    const NONE = new Set<number>();
+    const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: NOTE });
+    const line = said(render(<ReadingPanel c={c} cov={coverage(c, NONE, 0)} why="Waiting" rpcChains={NONE} />).container);
+    expect(line.textContent).toBe(`${NOTE} It is tried again when its stored file or the manifest changes.`);
+    expect(line.textContent).not.toContain('chain');
+  });
+
+  it('says when a load the store failed is tried again, in the reader\'s zone', () => {
+    document.cookie = 'washtrace_tz=UTC; path=/';
+    const at = Date.UTC(2026, 9, 23, 14, 35);
+    const line = [...panel(row({ restoreNote: 'Stored data could not be loaded.', restoreRetryAt: at })).querySelectorAll('p')].find((p) => p.textContent!.startsWith('Stored data could not'))!;
+    expect(line.textContent).toBe(`Stored data could not be loaded. Reading from the chain instead; it is tried again after ${localTime(at, 'time', 'UTC')}.`);
+  });
+
+  it('says only why on a paused collection: nothing is read or tried until it is resumed', () => {
+    expect(said(panel(row({ restoreNote: NOTE, pausedAt: 5 }))).textContent).toBe(NOTE);
   });
 });
 

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { CollectionRow as Collection } from '@washtrace/detect';
-import { ReadingPill, RestoreProgress, StoredStop } from '@/components/coverage';
+import { ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/head';
 import { RangeBar } from '@/components/methods';
 import { Time } from '@/components/time';
@@ -51,8 +51,8 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
         {c.error && !storedOnly(c, rpcChains) ? c.pausedAt !== null
           ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
           : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
-        {/* Not a fault: the worker reads the chain instead, which only takes longer. */}
-        {c.restoreNote ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{c.restoreNote}</p> : null}
+        {/* Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again. */}
+        <RestoreNote c={c} rpcChains={rpcChains} className="mt-1 max-w-sm" />
       </div>
       {a === null ? (
         <p className="text-sm text-muted-foreground md:col-span-2">{why}</p>

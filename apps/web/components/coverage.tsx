@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { CollectionRow } from '@washtrace/detect';
 import { chainName } from '@/lib/chains';
 import { LENSES, lensList, plural } from '@/lib/format';
-import { progress, storedOnly, type Coverage } from '@/lib/metrics';
+import { progress, restoreNext, storedOnly, type Coverage } from '@/lib/metrics';
 import { Warn } from '@/components/head';
 import { FIELDS } from '@/lib/settings';
 import { cn } from '@/lib/utils';
@@ -46,6 +46,21 @@ export function StoredStop({ cov }: { cov: Coverage }) {
   if (cov.stops !== null) return <p className="text-xs text-muted-foreground">stops <Time ms={cov.stops} style="date" /></p>;
   if (cov.readTo !== null) return <p className="text-xs text-muted-foreground">read to block {cov.readTo.toLocaleString('en-US')}</p>;
   return null;
+}
+
+/**
+ * Why stored data was not loaded, and what follows (restoreNext): the time of
+ * a retry in the reader's zone, as every time in the console. Information,
+ * not a fault: the collection is analysed on what it has meanwhile.
+ */
+export function RestoreNote({ c, rpcChains, className }: { c: CollectionRow; rpcChains: ReadonlySet<number>; className?: string }) {
+  const n = restoreNext(c, rpcChains);
+  if (n === null) return null;
+  return (
+    <p className={cn('text-xs text-muted-foreground', className)}>
+      {n.note}{n.then === null ? null : <> {n.then}</>}{n.retryAt === null ? null : <> <Time ms={n.retryAt} style="time" />.</>}
+    </p>
+  );
 }
 
 /** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
@@ -196,7 +211,7 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
               : <>Set WASHTRACE_RPC_{c.chainId} for the worker to read on from here.</>}
           </p>
         ) : null}
-        {c.restoreNote ? <p className="text-xs text-muted-foreground">{c.restoreNote}</p> : null}
+        <RestoreNote c={c} rpcChains={rpcChains} />
       </Step>
       <Step
         n={2} title="Wallets checked for money"

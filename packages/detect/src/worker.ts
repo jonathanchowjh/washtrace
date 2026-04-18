@@ -8,7 +8,7 @@ import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
 import {
-  StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedDir, trailPath, type Manifest, type StoredEntry, type WalletRow,
+  StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedDir, storedKey, trailPath, type Manifest, type StoredEntry, type WalletRow,
 } from './stored.js';
 import type { Flow, Transfer } from './types.js';
 
@@ -78,17 +78,29 @@ export function ingestTurns(
 }
 
 /**
- * Whether to load a collection's stored data before reading its chain: it is
- * watched, there is stored data for it, no earlier load failed (the note
- * says why, and the chain is read instead), and the stored data reaches past
+ * Whether a collection's stored data is still worth loading: it reaches past
  * what was read. That covers a fresh watch and one that started reading from
  * the deploy block before stored data came. Not one whose reading stopped
- * short of where the stored data starts: the cursor would jump the blocks
- * in between, and they would never be read.
+ * short of where the stored data starts: the cursor would jump the blocks in
+ * between, and they would never be read.
  */
-export function needsRestore(c: CollectionRow, entry: StoredEntry | null): boolean {
-  if (c.pausedAt !== null || entry === null || c.restoreNote !== null) return false;
+function reaches(c: CollectionRow, entry: StoredEntry): boolean {
   return c.cursorBlock === null || (c.cursorBlock >= entry.startBlock - 1 && c.cursorBlock < entry.throughBlock);
+}
+
+/**
+ * Whether to load a collection's stored data before reading its chain: it is
+ * watched, its stored data reaches past what was read, and no earlier load
+ * failed in a way that would fail again now. A load the data failed is noted
+ * on what it was about, and skipped while `key` (storedKey, now) is the
+ * same; a load the store failed waits until its retry time. Meanwhile the
+ * collection is read from the chain, if it has an RPC, and analysed on what
+ * it has.
+ */
+export function needsRestore(c: CollectionRow, entry: StoredEntry | null, key: string | null, now = Date.now()): boolean {
+  if (c.pausedAt !== null || entry === null || !reaches(c, entry)) return false;
+  if (c.restoreRetryAt !== null && now < c.restoreRetryAt) return false;
+  return c.restoreNoteKey === null || c.restoreNoteKey !== key;
 }
 
 /**
@@ -252,6 +264,13 @@ export class Worker {
    * restarts tries each once more, which is all a failure costs.
    */
   private readonly analyzeFailed = new Map<number, { failures: number; retryAt: number }>();
+  /**
+   * Loads of stored data the store failed, by collection, timed as the store
+   * times them: kept here too, since the write that records a back-off can
+   * fail with the load (a full disk), and the next pass would load it all
+   * again.
+   */
+  private readonly restoreFailed = new Map<number, { failures: number; retryAt: number }>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -414,22 +433,55 @@ export class Worker {
    * needsRestore), one at a time, and say how many loaded. This runs in
    * the ingest pass, under its lock, so no span is read into a collection
    * while it loads. A load that fails has said why on the collection, and
-   * its chain is read as if there were no stored data.
+   * its chain is read as if there were no stored data. A note about stored
+   * data the collection no longer reaches for says nothing true, and goes.
    */
   private async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<number> {
     let loaded = 0;
     for (const c of collections) {
+      if (c.pausedAt !== null) continue;
       const entry = entryFor(manifest, c.chainId, c.address);
-      if (entry === null || !needsRestore(c, entry)) continue;
+      if (entry === null || !reaches(c, entry)) {
+        if (c.restoreNote !== null) {
+          await this.store.clearRestoreNote(c.id).catch((err) => console.error('[washtrace] collection %d: stored data note not cleared: %s', c.id, this.scrubbed(err)));
+        }
+        continue;
+      }
+      const noted = await this.noteKey(c, entry);
+      if (!this.restoreDue(c, entry, noted, Date.now())) continue;
+      // Taken before the load, so a file replaced while it runs is tried again.
+      const key = noted ?? await this.restoreKey(entry);
       await this.beat('ingest', `Loading stored data for ${c.name ?? entry.name}`, c.id);
       try {
-        await this.store.restore(c.id, c.chainId, entry, this.storedTransfers(entry));
+        await this.store.restore(c.id, c.chainId, entry, this.storedTransfers(entry), key);
+        this.restoreFailed.delete(c.id);
         loaded += 1;
       } catch (err) {
-        console.error('[washtrace] collection %d: stored data not loaded, reading the chain instead: %s', c.id, this.scrubbed(err));
+        console.error('[washtrace] collection %d: stored data not loaded: %s', c.id, this.scrubbed(err));
+        // Bad stored data is keyed on the file, not timed.
+        if (err instanceof StoredDataError) this.restoreFailed.delete(c.id);
+        else {
+          const failures = (this.restoreFailed.get(c.id)?.failures ?? 0) + 1;
+          this.restoreFailed.set(c.id, { failures, retryAt: Date.now() + analyzeRetryMs(failures) });
+        }
       }
     }
     return loaded;
+  }
+
+  /** Whether to load a collection's stored data now: needsRestore, and no back-off held here (restoreFailed) still running. */
+  private restoreDue(c: CollectionRow, entry: StoredEntry | null, key: string | null, now: number): boolean {
+    return (this.restoreFailed.get(c.id)?.retryAt ?? 0) <= now && needsRestore(c, entry, key, now);
+  }
+
+  /** What a collection's stored data is now (storedKey), for one whose last load the data failed; else null, and nothing is read. */
+  private async noteKey(c: CollectionRow, entry: StoredEntry | null): Promise<string | null> {
+    return c.restoreNoteKey === null || entry === null ? null : this.restoreKey(entry);
+  }
+
+  /** What a collection's stored data is now: the manifest's sha256 and its file's stat. Tests override it on the instance. */
+  restoreKey(entry: StoredEntry): Promise<string> {
+    return storedKey(join(this.stored, entry.transfers.file), entry.transfers.sha256);
   }
 
   /**
@@ -626,15 +678,20 @@ export class Worker {
    * analysis, the one `nextAnalysis` picks. One a pass, so a pass is never
    * longer than one analysis, and the next pass sees what changed meanwhile.
    * Left out: a collection whose stored data is still to load (it is
-   * analysed once loaded, not twice), and one waiting out a failure.
+   * analysed once loaded, not twice), and one waiting out a failure. One
+   * whose load failed and is not due again is analysed on what it has.
    */
   async analyze(): Promise<string> {
     const { etherscanKey } = this.resolved();
     const now = Date.now();
     const manifest = await this.storedManifest();
-    const loading = new Set(manifest === null ? [] : (await this.store.collections())
-      .filter((r) => needsRestore(r, entryFor(manifest, r.chainId, r.address)))
-      .map((r) => r.id));
+    const loading = new Set<number>();
+    if (manifest !== null) {
+      for (const r of await this.store.collections()) {
+        const entry = entryFor(manifest, r.chainId, r.address);
+        if (this.restoreDue(r, entry, await this.noteKey(r, entry), now)) loading.add(r.id);
+      }
+    }
     const due = (await this.store.stale()).filter((s) => !loading.has(s.id) && (this.analyzeFailed.get(s.id)?.retryAt ?? 0) <= now);
     const c = nextAnalysis(due, now);
     if (c === null) return 'nothing due';

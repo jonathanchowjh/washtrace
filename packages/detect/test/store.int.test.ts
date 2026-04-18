@@ -40,10 +40,23 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(13);
-    expect(await store.migrate()).toBe(13);
+    expect(await store.migrate()).toBe(14);
+    expect(await store.migrate()).toBe(14);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 13 }]);
+    expect(rows).toEqual([{ version: 14 }]);
+  });
+
+  it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
+    const id = (await store.addCollection(1, w('1ec1'), 'Noted', 1)).id;
+    await store.pool.query("UPDATE washtrace.collections SET restore_note = 'Stored data could not be loaded: its file is missing. Reading from the chain instead.' WHERE id = $1", [id]);
+    try {
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
+      expect(await store.migrate()).toBe(14);
+      expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
+    } finally {
+      await drop(1, w('1ec1'));
+    }
   });
 
   it('clears errors written before they were scrubbed, which may hold an RPC URL, and keeps the rest', async () => {
@@ -56,7 +69,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(13);
+      expect(await store.migrate()).toBe(14);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -744,6 +757,8 @@ describe('Store', () => {
     async function* batches(...bs: Transfer[][]): AsyncIterable<Transfer[]> {
       for (const b of bs) yield b;
     }
+    /** What a failed load is keyed on: the manifest's sha256 and the file as it stood (storedKey). */
+    const KEY = 'abc:10:1700000000000:1700000000000';
     const version = async (id: number) => Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
     const wallets = async (...addresses: string[]) => Object.fromEntries((await store.pool.query(
       'SELECT address, transfers FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2)', [chainId, addresses])).rows.map((r) => [r.address, r.transfers]));
@@ -755,7 +770,7 @@ describe('Store', () => {
       const ts = chain('1', p, q, r).map((t, i) => ({ ...t, blockNumber: 20 + i, blockTime: 1_700_000_000 + i }));
       await store.ingest(id, chainId, ts.slice(0, 1), 20, [p]);
       const before = await version(id);
-      await store.restore(id, chainId, entry(coll), batches(ts.slice(0, 2), ts.slice(2)));
+      await store.restore(id, chainId, entry(coll), batches(ts.slice(0, 2), ts.slice(2)), KEY);
       const c = (await store.collection(chainId, coll))!;
       expect(c).toMatchObject({
         transfers: 3, startBlock: 5, cursorBlock: 300, storedThroughTime: 1_700_000_100_000, storedThroughBlock: 300, restoreProgress: null, restoreNote: null,
@@ -770,11 +785,11 @@ describe('Store', () => {
     it('takes the stored start block when none is known, and never moves a start or a cursor the wrong way', async () => {
       const fresh = w('8e2'), ahead = w('8e3');
       const f = (await store.addCollection(chainId, fresh, null, null)).id;
-      await store.restore(f, chainId, entry(fresh), batches());
+      await store.restore(f, chainId, entry(fresh), batches(), KEY);
       expect(await store.collection(chainId, fresh)).toMatchObject({ startBlock: 5, cursorBlock: 300 });
       const a2 = (await store.addCollection(chainId, ahead, null, 2)).id;
       await store.pool.query('UPDATE washtrace.collections SET cursor_block = 500 WHERE id = $1', [a2]);
-      await store.restore(a2, chainId, entry(ahead), batches());
+      await store.restore(a2, chainId, entry(ahead), batches(), KEY);
       expect(await store.collection(chainId, ahead)).toMatchObject({ startBlock: 2, cursorBlock: 500 });
       await drop(chainId, fresh);
       await drop(chainId, ahead);
@@ -789,10 +804,10 @@ describe('Store', () => {
         yield read;
         throw new StoredDataError('/app/data/stored/8-x.transfers.csv.zst has a row of 3 fields, expected 10', 'unreadable');
       }
-      await expect(store.restore(id, chainId, entry(coll), broken())).rejects.toThrow('has a row of 3 fields');
+      await expect(store.restore(id, chainId, entry(coll), broken(), KEY)).rejects.toThrow('has a row of 3 fields');
       expect(await store.collection(chainId, coll)).toMatchObject({
         transfers: 1, startBlock: 10, cursorBlock: 20, restoreProgress: null, storedThroughTime: null,
-        restoreNote: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+        restoreNote: 'Stored data could not be loaded: its file could not be read.',
       });
       await drop(chainId, coll);
     });
@@ -801,10 +816,10 @@ describe('Store', () => {
       const coll = w('8e8');
       const { id } = await store.addCollection(chainId, coll, null, 10);
       const failing = (err: Error) => (async function* (): AsyncIterable<Transfer[]> { throw err; })();
-      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x is missing', 'missing')))).rejects.toThrow();
-      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file is missing. Reading from the chain instead.');
-      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x does not match', 'mismatch')))).rejects.toThrow();
-      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file does not match the manifest. Reading from the chain instead.');
+      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x is missing', 'missing')), KEY)).rejects.toThrow();
+      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file is missing.');
+      await expect(store.restore(id, chainId, entry(coll), failing(new StoredDataError('x does not match', 'mismatch')), KEY)).rejects.toThrow();
+      expect((await store.collection(chainId, coll))!.restoreNote).toBe('Stored data could not be loaded: its file does not match the manifest.');
       await drop(chainId, coll);
     });
 
@@ -813,14 +828,26 @@ describe('Store', () => {
       const { id } = await store.addCollection(chainId, coll, null, 10);
       // A token id that is no number: the file matched its sha256, but holds what the store will not take.
       const bad = chain('7', w('8b5')).map((t) => ({ ...t, tokenId: 'seven' }));
-      await expect(store.restore(id, chainId, entry(coll), batches(bad))).rejects.toBeInstanceOf(StoredDataError);
+      await expect(store.restore(id, chainId, entry(coll), batches(bad), KEY)).rejects.toBeInstanceOf(StoredDataError);
       expect(await store.collection(chainId, coll)).toMatchObject({
-        transfers: 0, restoreNote: 'Stored data could not be loaded: its file could not be read. Reading from the chain instead.',
+        transfers: 0, restoreNote: 'Stored data could not be loaded: its file could not be read.',
       });
       await drop(chainId, coll);
     });
 
-    it('leaves no note when the store, not the data, failed, so the next pass tries again', async () => {
+    it('notes bad stored data on what failed, so it is tried again once the manifest or the file changes', async () => {
+      const coll = w('8ed');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      const failing = (async function* (): AsyncIterable<Transfer[]> { throw new StoredDataError('x is missing', 'missing'); })();
+      await expect(store.restore(id, chainId, entry(coll), failing, KEY)).rejects.toThrow();
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: KEY, restoreRetryAt: null });
+      expect(needsRestore(c, entry(coll), KEY)).toBe(false);
+      expect(needsRestore(c, entry(coll), 'abc:absent')).toBe(true);
+      await drop(chainId, coll);
+    });
+
+    it('backs off when the store, not the data, failed: five minutes, doubling, and a load that goes through clears it all', async () => {
       const coll = w('8e9');
       const { id } = await store.addCollection(chainId, coll, null, 10);
       const deadlock = Object.assign(new Error('deadlock detected'), { code: '40P01' });
@@ -828,10 +855,46 @@ describe('Store', () => {
         yield chain('5', w('8b1'), w('8b2'));
         throw deadlock;
       }
-      await expect(store.restore(id, chainId, entry(coll), interrupted())).rejects.toThrow('deadlock detected');
+      const failures = async () => (await store.pool.query('SELECT restore_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].restore_failures;
+      const started = Date.now();
+      await expect(store.restore(id, chainId, entry(coll), interrupted(), KEY)).rejects.toThrow('deadlock detected');
       const c = (await store.collection(chainId, coll))!;
-      expect(c).toMatchObject({ transfers: 0, restoreProgress: null, restoreNote: null, cursorBlock: 9 });
-      expect(needsRestore(c, entry(coll))).toBe(true);
+      expect(c).toMatchObject({ transfers: 0, restoreProgress: null, restoreNote: 'Stored data could not be loaded.', restoreNoteKey: null, cursorBlock: 9 });
+      expect(await failures()).toBe(1);
+      expect(c.restoreRetryAt! - started).toBeGreaterThan(5 * 60_000 - 5_000);
+      expect(c.restoreRetryAt! - started).toBeLessThan(5 * 60_000 + 5_000);
+      // Not tried again until then; and meanwhile analysed on what it has (needsRestore is what holds analysis back).
+      expect(needsRestore(c, entry(coll), null)).toBe(false);
+      expect(needsRestore(c, entry(coll), null, c.restoreRetryAt!)).toBe(true);
+      await expect(store.restore(id, chainId, entry(coll), interrupted(), KEY)).rejects.toThrow('deadlock detected');
+      const again = (await store.collection(chainId, coll))!;
+      expect(await failures()).toBe(2);
+      expect(again.restoreRetryAt! - Date.now()).toBeGreaterThan(10 * 60_000 - 5_000);
+      await store.restore(id, chainId, entry(coll), batches(chain('5', w('8b1'), w('8b2'))), KEY);
+      expect(await store.collection(chainId, coll)).toMatchObject({ transfers: 2, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null });
+      expect(await failures()).toBe(0);
+      await drop(chainId, coll);
+    });
+
+    it('waits an hour at most, however many loads failed in a row', async () => {
+      const coll = w('8ee');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.pool.query('UPDATE washtrace.collections SET restore_failures = 2000 WHERE id = $1', [id]);
+      const lost = (async function* (): AsyncIterable<Transfer[]> { throw Object.assign(new Error('connection lost'), { code: '08006' }); })();
+      await expect(store.restore(id, chainId, entry(coll), lost, KEY)).rejects.toThrow('connection lost');
+      const c = (await store.collection(chainId, coll))!;
+      expect(c.restoreRetryAt! - Date.now()).toBeGreaterThan(60 * 60_000 - 5_000);
+      expect(c.restoreRetryAt! - Date.now()).toBeLessThan(60 * 60_000 + 5_000);
+      await drop(chainId, coll);
+    });
+
+    it('forgets a note, its key and any back-off, when the stored data no longer applies', async () => {
+      const coll = w('8ef');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.pool.query("UPDATE washtrace.collections SET restore_note = 'x', restore_note_key = 'k', restore_failures = 3, restore_retry_at = now() WHERE id = $1", [id]);
+      await store.clearRestoreNote(id);
+      expect(await store.collection(chainId, coll)).toMatchObject({ restoreNote: null, restoreNoteKey: null, restoreRetryAt: null });
+      expect((await store.pool.query('SELECT restore_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].restore_failures).toBe(0);
       await drop(chainId, coll);
     });
 
@@ -851,7 +914,7 @@ describe('Store', () => {
         yield [];
       }
       try {
-        await store.restore(id, chainId, entry(coll), loading());
+        await store.restore(id, chainId, entry(coll), loading(), KEY);
       } finally {
         probe.release();
       }
@@ -876,7 +939,7 @@ describe('Store', () => {
         throw new Error('read on after the pause');
       }
       try {
-        await expect(store.restore(id, chainId, entry(coll), paused())).resolves.toBeUndefined();
+        await expect(store.restore(id, chainId, entry(coll), paused(), KEY)).resolves.toBeUndefined();
       } finally {
         vi.restoreAllMocks();
       }
@@ -896,7 +959,7 @@ describe('Store', () => {
         yield chain('10', w('8ba'));
       }
       try {
-        await expect(store.restore(id, chainId, entry(coll), paused())).resolves.toBeUndefined();
+        await expect(store.restore(id, chainId, entry(coll), paused(), KEY)).resolves.toBeUndefined();
       } finally {
         vi.restoreAllMocks();
       }
@@ -921,7 +984,7 @@ describe('Store', () => {
         yield [];
       }
       try {
-        await store.restore(id, chainId, entry(coll, { transfers: { file: 'x', rows: 3, bytes: 0, sha256: '' } }), watched());
+        await store.restore(id, chainId, entry(coll, { transfers: { file: 'x', rows: 3, bytes: 0, sha256: '' } }), watched(), KEY);
       } finally {
         vi.restoreAllMocks();
       }
@@ -936,7 +999,7 @@ describe('Store', () => {
       const coll = w('8e6');
       const { id } = await store.addCollection(chainId, coll, null, 10);
       await drop(chainId, coll);
-      await expect(store.restore(id, chainId, entry(coll), batches(chain('4', w('8a8'))))).resolves.toBeUndefined();
+      await expect(store.restore(id, chainId, entry(coll), batches(chain('4', w('8a8'))), KEY)).resolves.toBeUndefined();
       expect(await store.collection(chainId, coll)).toBeNull();
     });
 

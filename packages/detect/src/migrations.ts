@@ -239,4 +239,18 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_note text;
 UPDATE washtrace.collections SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
 UPDATE washtrace.wallets SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
 `,
+  `
+-- A failed load of stored data is tried again once it can succeed, never
+-- every pass. restore_note_key is what a load the data failed was about (the
+-- manifest's sha256 and the file's stat, see storedKey): it is tried again
+-- once that changes. A load the store failed (a full disk, a lost
+-- connection) keeps no key and waits until restore_retry_at, five minutes
+-- doubling with each of restore_failures in a row, up to an hour. Notes from
+-- before lose "Reading from the chain instead": with no RPC nothing is, and
+-- the console now says what follows.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_note_key text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_failures int NOT NULL DEFAULT 0;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_retry_at timestamptz;
+UPDATE washtrace.collections SET restore_note = replace(restore_note, ' Reading from the chain instead.', '') WHERE restore_note LIKE '% Reading from the chain instead.';
+`,
 ];

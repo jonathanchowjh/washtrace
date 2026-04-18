@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta, localTime } from './format';
-import { isRunning, progress, storedOnly } from './metrics';
+import { isRunning, progress, restoreText, storedOnly } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -93,8 +93,9 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     const storedTurn = !paused && !restoring && stored;
     const backfilling = !paused && !restoring && !stored && behind !== null && behind > BEHIND_BLOCKS;
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
-    // Not a fault: the worker reads the chain from the deploy block instead, which only takes longer.
-    if (c.restoreNote) notice('info', `${label}: ${c.restoreNote}`);
+    // Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again.
+    const restore = restoreText(c, new Set(s.config.chains), zone);
+    if (restore !== null) notice('info', `${label}: ${restore}`);
     if (storedTurn) {
       // Past the stored data (read on while an RPC was set), it stops at its cursor, whose date is not known. Text, so the locale is pinned.
       const past = c.storedThroughBlock !== null && c.cursorBlock! > c.storedThroughBlock;

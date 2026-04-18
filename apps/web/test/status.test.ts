@@ -15,7 +15,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -109,10 +109,21 @@ describe('status', () => {
   });
 
   it('says why stored data was not loaded as information, not a fault: the worker reads the chain instead', () => {
-    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
+    const note = 'Stored data could not be loaded: its file does not match the manifest.';
     const s = snapshot({ collections: [collection({ restoreNote: note })] });
-    expect(texts(s, 'info')).toContain(`BAYC: ${note}`);
+    expect(texts(s, 'info')).toContain(`BAYC: ${note} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
     expect(texts(s, 'needs-you')).toEqual([]);
+  });
+
+  it('never says the chain is read when its chain has no RPC, and says when a load the store failed is tried again', () => {
+    const at = NOW + 5 * MIN;
+    const s = snapshot({
+      config: { ...CONFIG, chains: [] },
+      collections: [collection({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: 'Stored data could not be loaded.', restoreRetryAt: at })],
+    });
+    const said = texts(s, 'info').find((t) => t.startsWith('BAYC: Stored data could not'))!;
+    expect(said).toBe(`BAYC: Stored data could not be loaded. It is tried again after ${localTime(at, 'time', 'UTC', 'en-GB')}.`);
+    expect(said).not.toContain('chain');
   });
 
   it('calls a paused collection paused even with a load\'s progress left over', () => {

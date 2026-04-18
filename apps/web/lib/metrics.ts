@@ -92,6 +92,34 @@ export function storedOnly(c: Pick<CollectionRow, 'chainId' | 'startBlock' | 'cu
   return !rpcChains.has(c.chainId) && (c.storedThroughTime ?? null) !== null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock;
 }
 
+/**
+ * Why a collection's stored data was not loaded, and what follows, as the
+ * console says it. The worker writes only why (restoreNote); what follows
+ * depends on the chain's RPC. With one the chain is read meanwhile; with none
+ * nothing is, and the stored data is all the collection can have. Either way
+ * a load the data failed is tried again once the stored data changes, and
+ * one the store failed after its wait: then `then` ends in "after", and the
+ * caller says `retryAt` in the reader's zone. A paused collection is neither
+ * read nor tried, so it gets only why.
+ */
+export function restoreNext(
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt'> & Partial<Pick<CollectionRow, 'restoreNote' | 'restoreRetryAt'>>,
+  rpcChains: ReadonlySet<number>,
+): { note: string; then: string | null; retryAt: number | null } | null {
+  if (!c.restoreNote) return null;
+  if (c.pausedAt !== null) return { note: c.restoreNote, then: null, retryAt: null };
+  const retryAt = c.restoreRetryAt ?? null;
+  const read = rpcChains.has(c.chainId) ? 'Reading from the chain instead; it is' : 'It is';
+  return { note: c.restoreNote, then: retryAt === null ? `${read} tried again when its stored file or the manifest changes.` : `${read} tried again after`, retryAt };
+}
+
+/** restoreNext as one line of text, its time said in `zone`. Built on the server, so the locale is pinned. */
+export function restoreText(c: Parameters<typeof restoreNext>[0], rpcChains: ReadonlySet<number>, zone = 'UTC'): string | null {
+  const n = restoreNext(c, rpcChains);
+  if (n === null) return null;
+  return [n.note, n.then, n.retryAt === null ? null : `${localTime(n.retryAt, 'time', zone, 'en-GB')}.`].filter((x) => x !== null).join(' ');
+}
+
 /** How long stored data has gone unread, as the owner put it: "9 days unsynced". With no RPC there is no head to count blocks to, only time. */
 function unsyncedFor(ms: number): string {
   const hours = Math.floor(ms / 3_600_000);

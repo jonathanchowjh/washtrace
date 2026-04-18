@@ -266,9 +266,19 @@ describe('CollectionRow', () => {
   });
 
   it('says why stored data was not loaded as information, not a fault', () => {
-    const note = 'Stored data could not be loaded (checksum differs); reading from the chain instead.';
-    render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} funding now={0} />);
-    expect(screen.getByText(note).className).not.toContain('text-fault');
+    const note = 'Stored data could not be loaded: its file is missing.';
+    const { container } = render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} funding now={0} />);
+    const line = [...container.querySelectorAll('p')].find((p) => p.textContent!.startsWith(note))!;
+    expect(line.textContent).toBe(`${note} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
+    expect(line.className).not.toContain('text-fault');
+  });
+
+  it('never claims the chain is read when its chain has no RPC', () => {
+    const note = 'Stored data could not be loaded: its file is missing.';
+    const c = { ...base, cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: note } as typeof base;
+    const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} funding now={0} />);
+    const line = [...container.querySelectorAll('p')].find((p) => p.textContent!.startsWith(note))!;
+    expect(line.textContent).toBe(`${note} It is tried again when its stored file or the manifest changes.`);
   });
 
   const lens = (available: boolean, flaggedSales: number) => ({ available, transfers: 10, flagged: flaggedSales, sales: 10, flaggedSales, volumeWei: '10000000000000000000', flaggedVolumeWei: '1000000000000000000', wallets: 4, tokens: 2 });

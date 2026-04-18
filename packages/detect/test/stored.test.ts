@@ -1,9 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, trailPath, upsertEntry, writeTransfers, writeTrail,
+  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
   type Manifest, type StoredEntry, type WalletRow,
 } from '../src/stored.js';
 import type { Flow, Transfer } from '../src/types.js';
@@ -83,6 +83,55 @@ describe('stored transfers', () => {
       .rejects.toMatchObject({ constructor: StoredDataError, kind: 'missing' });
   });
 
+  it('calls a file it may not read, or a directory where the file should be, unreadable', async () => {
+    const locked = join(dir, 'locked.transfers.csv.zst');
+    await writeFile(locked, 'x');
+    await chmod(locked, 0o000);
+    try {
+      await expect(sha256File(locked)).rejects.toMatchObject({ constructor: StoredDataError, kind: 'unreadable' });
+    } finally {
+      await chmod(locked, 0o644);
+    }
+    const folder = join(dir, 'folder.transfers.csv.zst');
+    await mkdir(folder);
+    await expect(sha256File(folder)).rejects.toMatchObject({ constructor: StoredDataError, kind: 'unreadable' });
+    await expect(collect(readTransfers(folder, 'ab'.repeat(32)))).rejects.toMatchObject({ constructor: StoredDataError, kind: 'unreadable' });
+  });
+
+  it('leaves a fault of the process, not the file (out of descriptors or memory), as it is, so the load backs off instead of being noted', async () => {
+    const path = join(dir, 'busy.transfers.csv.zst');
+    const written = await writeTransfers(path, rows);
+    for (const code of ['EMFILE', 'ENFILE', 'EAGAIN', 'ENOMEM']) {
+      // Open fails at the `fail`th read: 1 is the hash, 2 the read after it.
+      for (const fail of [1, 2]) {
+        let opened = 0;
+        vi.resetModules();
+        vi.doMock('node:fs', async (original) => {
+          const fs = await original<typeof import('node:fs')>();
+          const { PassThrough } = await import('node:stream');
+          return {
+            ...fs,
+            createReadStream: (p: string) => {
+              if (++opened !== fail) return fs.createReadStream(p);
+              const s = new PassThrough();
+              queueMicrotask(() => s.destroy(Object.assign(new Error(`${code}: too many open files, open '${p}'`), { code })));
+              return s;
+            },
+          };
+        });
+        try {
+          const fresh = await import('../src/stored.js');
+          const err = await collect(fresh.readTransfers(path, written.sha256)).then(() => null, (e: unknown) => e);
+          expect(err).toMatchObject({ code });
+          expect(err).not.toBeInstanceOf(fresh.StoredDataError);
+        } finally {
+          vi.doUnmock('node:fs');
+          vi.resetModules();
+        }
+      }
+    }
+  });
+
   it('calls a file that matches its checksum but will not parse unreadable', async () => {
     const path = join(dir, 'garbled.transfers.csv.zst');
     await writeFile(path, 'not zstd');
@@ -131,6 +180,22 @@ describe('stored money trail', () => {
     const path = join(dir, 'comma.trail.csv.zst');
     await expect(writeTrail(path, { wallets, flows: [flow(a, b, { token: 'x,y' })] })).rejects.toBeInstanceOf(StoredDataError);
     expect((await readdir(dir)).filter((f) => f.startsWith('comma.trail'))).toEqual([]);
+  });
+});
+
+describe('storedKey', () => {
+  it('names the manifest\'s sha256 and the file as it stands, so a new cut, a file put back or fixed permissions change it', async () => {
+    const path = join(dir, 'keyed.transfers.csv.zst');
+    expect(await storedKey(path, 'abc')).toBe('abc:absent');
+    await writeFile(path, 'x');
+    const first = await storedKey(path, 'abc');
+    expect(first).toMatch(/^abc:1:[\d.]+:[\d.]+$/);
+    expect(await storedKey(path, 'abc')).toBe(first);
+    expect(await storedKey(path, 'def')).toBe(first.replace(/^abc/, 'def'));
+    // A chmod changes only the file's ctime: the permissions were fixed, so it is worth reading again.
+    await new Promise((r) => setTimeout(r, 10));
+    await chmod(path, 0o600);
+    expect(await storedKey(path, 'abc')).not.toBe(first);
   });
 });
 

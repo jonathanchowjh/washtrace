@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
@@ -85,6 +85,9 @@ const TRANSFER_COLUMNS = ['tx_hash', 'log_index', 'block_number', 'block_time', 
 const WALLET_COLUMNS = ['address', 'transfers', 'status', 'truncated', 'fetched_at', 'depth'];
 const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'value_wei', 'token', 'block_number', 'block_time'];
 
+/** Errors of the process, not of the file (out of descriptors or memory): a load that meets one backs off, and is not noted as bad stored data. */
+const PROCESS_FAULTS = new Set(['EMFILE', 'ENFILE', 'EAGAIN', 'ENOMEM']);
+
 /** The trail's two sections, each a marker line then its header. */
 const WALLETS = '#wallets';
 const FLOWS = '#flows';
@@ -141,16 +144,41 @@ export async function writeManifest(path: string, m: Manifest): Promise<void> {
   await rename(`${path}.part`, path);
 }
 
-/** The sha256 of a file, streamed. What the manifest records and every read checks first. */
+/**
+ * The sha256 of a file, streamed. What the manifest records and every read
+ * checks first. A file that is not there is missing; one the system will not
+ * read (its permissions, a directory in its place, a disk error) is
+ * unreadable: bad stored data either way, noted once, not a failure retried
+ * every pass. A fault of the process (PROCESS_FAULTS) is thrown as it is.
+ */
 export async function sha256File(path: string): Promise<string> {
   const hash = createHash('sha256');
   try {
     for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new StoredDataError(`${path} is missing`, 'missing');
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new StoredDataError(`${path} is missing`, 'missing');
+    if (typeof code === 'string' && !PROCESS_FAULTS.has(code)) throw new StoredDataError(`${path} could not be read: ${(err as Error).message}`, 'unreadable');
     throw err;
   }
   return hash.digest('hex');
+}
+
+/**
+ * What a load of stored data that failed on the data was about: the
+ * manifest's sha256 and the file as it stands (size, modified and changed
+ * times), or `absent` when there is no file to stat. A new cut, the file put
+ * back, or its permissions fixed (which moves only its ctime) changes it, so
+ * the load is tried again then and not every pass before.
+ */
+export async function storedKey(path: string, sha256: string): Promise<string> {
+  try {
+    const s = await stat(path);
+    return `${sha256}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+  } catch {
+    // Not there, or a folder above it that will not open: either way nothing to read, until it changes.
+    return `${sha256}:absent`;
+  }
 }
 
 /** Write a collection's transfers to `path`, compressed, and say what was written. */
@@ -340,7 +368,8 @@ async function* readLines(path: string, sha256: string): AsyncIterable<string> {
       if (text !== '') yield text;
     }
   } catch (err) {
-    throw err instanceof StoredDataError ? err : new StoredDataError(`${path} could not be read: ${(err as Error).message}`);
+    if (err instanceof StoredDataError || PROCESS_FAULTS.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+    throw new StoredDataError(`${path} could not be read: ${(err as Error).message}`);
   } finally {
     source.destroy();
     decompress.destroy();

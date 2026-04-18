@@ -17,7 +17,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
   };
 }
 
@@ -155,17 +155,36 @@ const ENTRY: StoredEntry = {
 
 describe('needsRestore', () => {
   it('restores a watched collection whose stored data reaches past its cursor, and nothing else', () => {
-    expect(needsRestore(row({ cursorBlock: null }), null)).toBe(false);
-    expect(needsRestore(row({ cursorBlock: null, pausedAt: 5 }), ENTRY)).toBe(false);
-    expect(needsRestore(row({ cursorBlock: null, restoreNote: 'Stored data could not be loaded (x); reading from the chain instead.' }), ENTRY)).toBe(false);
-    expect(needsRestore(row({ cursorBlock: 900 }), ENTRY)).toBe(false);
-    expect(needsRestore(row({ cursorBlock: 950 }), ENTRY)).toBe(false);
-    expect(needsRestore(row({ cursorBlock: null }), ENTRY)).toBe(true);
-    expect(needsRestore(row({ cursorBlock: 899 }), ENTRY)).toBe(true);
+    expect(needsRestore(row({ cursorBlock: null }), null, null)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: null, pausedAt: 5 }), ENTRY, null)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: 900 }), ENTRY, null)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: 950 }), ENTRY, null)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: null }), ENTRY, null)).toBe(true);
+    expect(needsRestore(row({ cursorBlock: 899 }), ENTRY, null)).toBe(true);
     // Read up to just before the stored start: the stored data carries on from there.
-    expect(needsRestore(row({ cursorBlock: 99 }), ENTRY)).toBe(true);
+    expect(needsRestore(row({ cursorBlock: 99 }), ENTRY, null)).toBe(true);
     // Stopped short of the stored start: loading would skip the blocks in between for good.
-    expect(needsRestore(row({ cursorBlock: 50 }), ENTRY)).toBe(false);
+    expect(needsRestore(row({ cursorBlock: 50 }), ENTRY, null)).toBe(false);
+  });
+
+  it('skips a load the stored data failed only while the manifest and the file are as they were', () => {
+    const noted = row({ cursorBlock: null, restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: 'abc:absent' });
+    expect(needsRestore(noted, ENTRY, 'abc:absent')).toBe(false);
+    // A new cut, the file put back, or its permissions fixed: tried again.
+    expect(needsRestore(noted, ENTRY, 'abc:10:1700000000000:1700000000000')).toBe(true);
+    // A note from before notes were keyed is tried once more.
+    expect(needsRestore(row({ cursorBlock: null, restoreNote: 'Stored data could not be loaded: its file is missing.' }), ENTRY, 'abc:absent')).toBe(true);
+  });
+
+  it('takes the key every time, so no caller can leave it out and retry a noted load on every call', () => {
+    // @ts-expect-error the key is required
+    needsRestore(row(), ENTRY);
+  });
+
+  it('waits out the back-off after the store failed a load, then tries again', () => {
+    const failed = row({ cursorBlock: null, restoreNote: 'Stored data could not be loaded.', restoreRetryAt: 2_000 });
+    expect(needsRestore(failed, ENTRY, null, 1_999)).toBe(false);
+    expect(needsRestore(failed, ENTRY, null, 2_000)).toBe(true);
   });
 });
 
@@ -222,6 +241,64 @@ describe('Worker.ingest restoring stored data', () => {
     expect(events).toContain('restore');
     expect(events).toContain('served 1');
     expect(logged.mock.calls.some((c) => c.join(' ').includes('checksum differs'))).toBe(true);
+  });
+
+  it('tries a load the stored data failed again once the file changes, keyed on the file it read, and not before', async () => {
+    const noted = row({ cursorBlock: null, startBlock: null, restoreNote: 'Stored data could not be loaded: its file does not match the manifest.', restoreNoteKey: 'abc:1:2:3' });
+    const { w, events, store } = setup([noted], [row({ cursorBlock: 900 })]);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const keys: string[] = [];
+    store.restore = async (_id: number, _chainId: number, _entry: StoredEntry, _batches: unknown, key: string) => { events.push('restore'); keys.push(key); };
+    let key = 'abc:1:2:3';
+    (w as any).restoreKey = async () => key;
+    await w.ingest();
+    expect(events).not.toContain('restore');
+    key = 'abc:1:2:4';
+    await w.ingest();
+    expect(keys).toEqual(['abc:1:2:4']);
+  });
+
+  it('holds a back-off itself when the store could not record it (a full disk), and forgets it once a load goes through', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The row never shows the back-off: the write that records it failed too.
+    const { w, events, store } = setup([row({ cursorBlock: null, startBlock: null })], [row({ cursorBlock: null, startBlock: null })]);
+    let fail = true;
+    store.restore = async () => { events.push('restore'); if (fail) throw Object.assign(new Error('could not extend file: No space left on device'), { code: '53100' }); };
+    const tries = () => events.filter((e) => e === 'restore').length;
+    await w.ingest();
+    expect(tries()).toBe(1);
+    await w.ingest();
+    expect(tries()).toBe(1);
+    // Analysed meanwhile on what it has, as a recorded back-off is.
+    expect((w as any).restoreFailed.has(1)).toBe(true);
+    now += 5 * 60_000;
+    await w.ingest();
+    expect(tries()).toBe(2);
+    // Doubling: ten minutes after the second failure.
+    now += 5 * 60_000;
+    await w.ingest();
+    expect(tries()).toBe(2);
+    now += 5 * 60_000;
+    fail = false;
+    await w.ingest();
+    expect(tries()).toBe(3);
+    expect((w as any).restoreFailed.has(1)).toBe(false);
+  });
+
+  it('clears a note about stored data the collection no longer reaches for: read past it, or gone from the manifest', async () => {
+    const cleared: number[] = [];
+    const past = setup([row({ id: 1, cursorBlock: 950, restoreNote: 'Stored data could not be loaded.' })], []);
+    past.store.clearRestoreNote = async (id: number) => { cleared.push(id); };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await past.w.ingest();
+    const gone = setup([row({ id: 2, cursorBlock: null, restoreNote: 'Stored data could not be loaded.' })], []);
+    gone.store.clearRestoreNote = async (id: number) => { cleared.push(id); };
+    (gone.w as any).manifest = async () => ({ version: 1, collections: [] });
+    await gone.w.ingest();
+    expect(cleared).toEqual([1, 2]);
+    expect([...past.events, ...gone.events].filter((e) => e.startsWith('restore'))).toEqual([]);
   });
 
   it('reads the chain as before when the manifest cannot be read', async () => {
@@ -767,6 +844,31 @@ describe('Worker.analyze when an analysis fails', () => {
     cursor = 900;
     expect(await w.analyze()).toBe('BAYC analyzed');
     expect(tried).toEqual([1]);
+  });
+
+  it('analyses a collection whose stored data failed to load on what it has, unless the load is due again', async () => {
+    const { w, tried, state, waiting } = setup();
+    state.broken = false;
+    waiting.delete(2);
+    let more: Partial<CollectionRow> = { restoreNote: 'Stored data could not be loaded.', restoreRetryAt: Date.now() + 60_000 };
+    (w as any).store.collections = async () => [row({ id: 1, cursorBlock: 100, ...more })];
+    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).restoreKey = async () => 'abc:absent';
+    // Due again (the file changed): held, so it is analysed once, after the load.
+    more = { restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: 'abc:1:2:3' };
+    expect(await w.analyze()).toBe('nothing due');
+    // Backing off, or noted on the file as it is: analysed on what it has.
+    more = { restoreNote: 'Stored data could not be loaded.', restoreRetryAt: Date.now() + 60_000 };
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    more = { restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: 'abc:absent' };
+    waiting.set(1, stale(1, 'BAYC'));
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    // A back-off held in memory, its write lost: analysed on what it has too.
+    more = {};
+    (w as any).restoreFailed.set(1, { failures: 1, retryAt: Date.now() + 60_000 });
+    waiting.set(1, stale(1, 'BAYC'));
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    expect(tried).toEqual([1, 1, 1]);
   });
 });
 
