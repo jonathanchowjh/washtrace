@@ -26,7 +26,7 @@ function snapshot(more: Partial<Snapshot> = {}): Snapshot {
   return {
     passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 10_000)],
     collections: [collection()],
-    funding: [{ chainId: 1, pending: 3, done: 4, failed: 0, truncated: 0, doneLastHour: 0 }],
+    funding: [{ chainId: 1, pending: 3, done: 4, failed: 0, stranded: 0, truncated: 0, doneLastHour: 0 }],
     config: CONFIG,
     trailFunded: false,
     ...more,
@@ -224,18 +224,29 @@ describe('status', () => {
   });
 
   it('reports wallets whose funding failed as needing a person once none is checked any more', () => {
-    const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0, doneLastHour: 0 }] });
+    const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, stranded: 0, truncated: 0, doneLastHour: 0 }] });
     expect(texts(s, 'needs-you')).toEqual(['Ethereum: 2 wallets could not be checked for money, and none was checked in the last hour.']);
     expect(status(s, NOW).notices[0]).toMatchObject({ href: '/settings#etherscan.key' });
   });
 
   it('reports a few failed wallets among wallets being checked as retrying on their own, not as a fault', () => {
-    const s = snapshot({ funding: [{ chainId: 1, pending: 10, done: 100, failed: 2, truncated: 0, doneLastHour: 50 }] });
+    const s = snapshot({ funding: [{ chainId: 1, pending: 10, done: 100, failed: 2, stranded: 0, truncated: 0, doneLastHour: 50 }] });
     expect(texts(s, 'needs-you')).toEqual([]);
     expect(texts(s, 'working')).toContain('Ethereum: 2 wallets could not be checked for money; they retry on their own after an hour.');
     // With funding off nothing retries them, and the funding-off notice says why.
-    const off = snapshot({ config: { ...CONFIG, funding: false }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, truncated: 0, doneLastHour: 0 }] });
+    const off = snapshot({ config: { ...CONFIG, funding: false }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 2, stranded: 0, truncated: 0, doneLastHour: 0 }] });
     expect(status(off, NOW).notices.some((n) => n.text.includes('could not be checked'))).toBe(false);
+  });
+
+  it('says wallets held back by paused collections as information, never as a key to check', () => {
+    // fundingBacklog counts a paused collection's failed wallets as stranded, not failed: no lane retries them.
+    const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 0, stranded: 3, truncated: 0, doneLastHour: 0 }] });
+    expect(texts(s, 'needs-you')).toEqual([]);
+    expect(texts(s, 'info')).toContain('Ethereum: 3 wallets are not checked while their collections are paused or removed.');
+    expect(status(s, NOW).funding[0]!.etaMs).toBeNull();
+    // With funding off no wallet is checked, and the funding-off notice says so.
+    const off = snapshot({ config: { ...CONFIG, funding: false }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 0, stranded: 3, truncated: 0, doneLastHour: 0 }] });
+    expect(status(off, NOW).notices.some((n) => n.text.includes('paused or removed'))).toBe(false);
   });
 
   it('says the error of a paused collection as information: the worker does not touch it until it resumes', () => {
@@ -295,7 +306,7 @@ describe('status', () => {
   });
 
   describe('checking wallets', () => {
-    const funding = (doneLastHour: number) => [{ chainId: 1, pending: 1_000, done: 1_000, failed: 0, truncated: 0, doneLastHour }];
+    const funding = (doneLastHour: number) => [{ chainId: 1, pending: 1_000, done: 1_000, failed: 0, stranded: 0, truncated: 0, doneLastHour }];
     const half = (more: Partial<CollectionRow> = {}) => collection({ wallets: 2_000, fundedWallets: 1_000, ...more });
 
     it('says how far along a collection is, with an ETA', () => {
@@ -322,7 +333,7 @@ describe('status', () => {
     const s = snapshot({
       passes: [pass('ingest', 10_000, { outcome: 'failed' }), pass('fund', 10_000, { outcome: 'failed' }), pass('analyze', 10_000, { outcome: 'failed' })],
       collections: [collection({ error: 'boom' })],
-      funding: [{ chainId: 1, pending: 3, done: 4, failed: 2, truncated: 0, doneLastHour: 0 }],
+      funding: [{ chainId: 1, pending: 3, done: 4, failed: 2, stranded: 0, truncated: 0, doneLastHour: 0 }],
     });
     const needs = status(s, NOW).notices.filter((n) => n.severity === 'needs-you');
     expect(needs).toHaveLength(5);
@@ -335,7 +346,7 @@ describe('status', () => {
   });
 
   it('estimates the funding wait from the last hour of work', () => {
-    const f = (doneLastHour: number, pending = 50) => status(snapshot({ funding: [{ chainId: 1, pending, done: 4, failed: 0, truncated: 0, doneLastHour }] }), NOW).funding[0]!.etaMs;
+    const f = (doneLastHour: number, pending = 50) => status(snapshot({ funding: [{ chainId: 1, pending, done: 4, failed: 0, stranded: 0, truncated: 0, doneLastHour }] }), NOW).funding[0]!.etaMs;
     expect(f(100)).toBe(30 * MIN);
     expect(f(0)).toBeNull();
     expect(f(100, 0)).toBeNull();

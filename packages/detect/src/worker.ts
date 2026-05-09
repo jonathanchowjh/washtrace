@@ -133,12 +133,14 @@ export const TRAIL_NOTES = {
 /**
  * The order to check wallets in: one from each lane in turn, so no collection
  * waits behind another's backlog. A wallet in two lanes is taken once; a lane
- * that meets one already taken moves on to its next. The prioritised
- * collection takes every other turn, and when it runs dry the rest go on.
+ * that meets one already taken moves on to its next. The lanes of the
+ * prioritised collections (`priorityIds`, as many as are flagged) take every
+ * other turn, sharing those turns among themselves in turn; when they all
+ * run dry the rest go on. A lane that has run dry gives its turn to the next.
  */
-export function interleave(lanes: readonly FundingLane[], priorityId: number | null): string[] {
-  const priority = lanes.find((l) => priorityId !== null && l.collectionId === priorityId);
-  const others = lanes.filter((l) => l !== priority);
+export function interleave(lanes: readonly FundingLane[], priorityIds: ReadonlySet<number>): string[] {
+  const priority = lanes.filter((l) => l.collectionId !== null && priorityIds.has(l.collectionId));
+  const others = lanes.filter((l) => !priority.includes(l));
   const next = new Map<FundingLane, number>(lanes.map((l) => [l, 0]));
   const taken = new Set<string>();
   const order: string[] = [];
@@ -151,15 +153,18 @@ export function interleave(lanes: readonly FundingLane[], priorityId: number | n
     order.push(lane.wallets[i]!);
     return true;
   };
-  let first = priority;
-  const live = [...others];
-  for (let turn = 0; first !== undefined || live.length > 0; turn++) {
-    if (first !== undefined && (turn % 2 === 0 || live.length === 0)) {
-      if (!take(first)) first = undefined;
-    } else {
-      const lane = live.shift()!;
-      if (take(lane)) live.push(lane);
+  // One wallet from the first lane of `queue` that still has one; that lane goes to the back, a dry one goes.
+  const turn = (queue: FundingLane[]): void => {
+    while (queue.length > 0) {
+      const lane = queue.shift()!;
+      if (take(lane)) {
+        queue.push(lane);
+        return;
+      }
     }
+  };
+  for (let n = 0; priority.length > 0 || others.length > 0; n++) {
+    turn(priority.length > 0 && (n % 2 === 0 || others.length === 0) ? priority : others);
   }
   return order;
 }
@@ -664,12 +669,12 @@ export class Worker {
     if (etherscan === null) return 'no funding source configured';
     const deadline = Date.now() + BUDGET_MS;
     const collections = await this.store.collections();
-    // A paused collection's lane is not served: its priority must not stand in for a live one's.
-    const priority = collections.find((c) => c.priority && c.pausedAt === null)?.id ?? null;
     let done = 0;
     let failed = 0;
     for (const chainId of new Set(collections.map((c) => c.chainId))) {
       const { lanes } = await this.store.fundingLanes(chainId, 20);
+      // Every collection flagged on this chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
+      const priority = new Set(collections.filter((c) => c.chainId === chainId && c.priority && c.pausedAt === null).map((c) => c.id));
       const whose = (wallet: string) => {
         const lane = lanes.find((l) => l.wallets.includes(wallet))!;
         const c = collections.find((c) => c.id === lane.collectionId);

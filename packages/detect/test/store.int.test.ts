@@ -172,6 +172,34 @@ describe('Store', () => {
     await drop(1, w('9c2'));
   });
 
+  it('counts as waiting only the wallets a lane serves, and the ones a paused collection holds back apart', async () => {
+    const chainId = 21, live = w('21c1'), held = w('21c2');
+    const l = w('21a1'), lf = w('21a2'), p = w('21a3'), pf = w('21a4'), m = w('21a5');
+    const c1 = (await store.addCollection(chainId, live, 'Live', 1)).id;
+    const c2 = (await store.addCollection(chainId, held, 'Held', 1)).id;
+    const row = async () => (await store.fundingBacklog()).find((r) => r.chainId === chainId)!;
+    try {
+      await store.ingest(c1, chainId, chain('21', l, lf), 10, [l, lf]);
+      await store.ingest(c2, chainId, chain('22', p, pf), 10, [p, pf]);
+      await store.fundingFailed(chainId, lf, 'timeout');
+      await store.fundingFailed(chainId, pf, 'timeout');
+      await store.pool.query('INSERT INTO washtrace.wallets (chain_id, address, depth) VALUES ($1, $2, 1)', [chainId, m]);
+      await store.pause(chainId, held);
+      // The live collection's trader and failed wallet, and the followed one while something on the chain is in sync.
+      expect(await row()).toMatchObject({ pending: 2, failed: 1, stranded: 2 });
+      await store.pause(chainId, live);
+      expect(await row()).toMatchObject({ pending: 0, failed: 0, stranded: 5 });
+      // Removed, its traders are named by no collection: still held back.
+      await store.removeCollection(chainId, held);
+      await store.resume(chainId, live);
+      expect(await row()).toMatchObject({ pending: 2, failed: 1, stranded: 2 });
+    } finally {
+      await drop(chainId, live);
+      await drop(chainId, held);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = $1', [chainId]);
+    }
+  });
+
   it('watching a paused collection again resumes it, data intact', async () => {
     const id = (await store.addCollection(1, w('9c3'), 'P3', 1)).id;
     await store.ingest(id, 1, chain('13', w('9a3'), w('9a4')), 10, []);

@@ -85,12 +85,13 @@ export default async function WorkerPage() {
                 {j.job === 'fund' && v.backlog.length > 0 ? (
                   <div className="border-t pt-2 text-xs">
                     {v.backlog.map((b) => {
-                      const all = b.done + b.pending + b.failed;
+                      // Held-back wallets are unchecked too: left out, the bar would read done while they wait for a resume.
+                      const all = b.done + b.pending + b.failed + b.stranded;
                       return (
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{b.done.toLocaleString()} of {all.toLocaleString()} checked</span></p>
                           <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-muted-foreground" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
-                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.stranded > 0 ? `${b.stranded.toLocaleString()} held back while their collections are paused or removed · ` : ''}{b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
                         </div>
                       );
                     })}

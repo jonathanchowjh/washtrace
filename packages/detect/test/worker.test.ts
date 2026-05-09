@@ -479,18 +479,28 @@ describe('Worker.ingest loading a money trail', () => {
 
 describe('interleave', () => {
   it('takes one wallet from each lane in turn and checks a shared one once', () => {
-    expect(interleave([{ collectionId: 1, wallets: ['a', 'b', 'c'] }, { collectionId: 2, wallets: ['b', 'd'] }, { collectionId: null, wallets: ['f'] }], null))
+    expect(interleave([{ collectionId: 1, wallets: ['a', 'b', 'c'] }, { collectionId: 2, wallets: ['b', 'd'] }, { collectionId: null, wallets: ['f'] }], new Set()))
       .toEqual(['a', 'b', 'f', 'c', 'd']);
   });
 
   it('gives the prioritised collection every other turn', () => {
-    expect(interleave([{ collectionId: 1, wallets: ['a1', 'a2', 'a3'] }, { collectionId: 2, wallets: ['b1', 'b2'] }], 2))
+    expect(interleave([{ collectionId: 1, wallets: ['a1', 'a2', 'a3'] }, { collectionId: 2, wallets: ['b1', 'b2'] }], new Set([2])))
       .toEqual(['b1', 'a1', 'b2', 'a2', 'a3']);
   });
 
   it('alternates the priority lane with each other lane in turn', () => {
-    expect(interleave([{ collectionId: 1, wallets: ['p1', 'p2', 'p3'] }, { collectionId: 2, wallets: ['x1', 'x2'] }, { collectionId: 3, wallets: ['y1'] }], 1))
+    expect(interleave([{ collectionId: 1, wallets: ['p1', 'p2', 'p3'] }, { collectionId: 2, wallets: ['x1', 'x2'] }, { collectionId: 3, wallets: ['y1'] }], new Set([1])))
       .toEqual(['p1', 'x1', 'p2', 'y1', 'p3', 'x2']);
+  });
+
+  it('shares the priority turns among every prioritised collection, and the rest go on once they run dry', () => {
+    expect(interleave([{ collectionId: 1, wallets: ['a1', 'a2', 'a3'] }, { collectionId: 2, wallets: ['b1', 'b2'] }, { collectionId: 3, wallets: ['c1', 'c2', 'c3', 'c4', 'c5'] }], new Set([1, 2])))
+      .toEqual(['a1', 'c1', 'b1', 'c2', 'a2', 'c3', 'b2', 'c4', 'a3', 'c5']);
+  });
+
+  it('lets a priority lane that meets a wallet already taken take its own next one in the same turn', () => {
+    expect(interleave([{ collectionId: 1, wallets: ['s', 'a2'] }, { collectionId: 2, wallets: ['s', 'b2'] }, { collectionId: 3, wallets: ['c1'] }], new Set([1, 2])))
+      .toEqual(['s', 'c1', 'b2', 'a2']);
   });
 });
 
@@ -516,6 +526,25 @@ describe('Worker.fund', () => {
 });
 
 describe('Worker.fund priority', () => {
+  it('boosts every prioritised collection on its own chain, not only the first one added', async () => {
+    const funded: string[] = [];
+    const lanes: Record<number, { collectionId: number; wallets: string[] }[]> = {
+      8453: [{ collectionId: 1, wallets: ['a1'] }],
+      1: [{ collectionId: 3, wallets: ['x1', 'x2'] }, { collectionId: 2, wallets: ['b1', 'b2'] }],
+    };
+    const store: any = {
+      // The earliest prioritised is on Base: Doodles, on Ethereum, still gets its priority turns there.
+      collections: async () => [row({ id: 1, chainId: 8453, name: 'Base one', priority: true }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
+      fundingLanes: async (chainId: number) => ({ lanes: lanes[chainId] }),
+      heartbeat: async () => {}, fundingFailed: async () => {},
+      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    await w.fund();
+    expect(funded).toEqual(['a1', 'b1', 'x1', 'b2', 'x2']);
+  });
+
   it('gives a paused collection\'s priority to no one, and a live prioritised one its turns', async () => {
     const funded: string[] = [];
     const store: any = {

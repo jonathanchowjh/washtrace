@@ -644,7 +644,8 @@ export class Store {
    * there only while some collection is in sync to read them for.
    * Each lane is at most `perLane` long: failed wallets last (they retry after
    * an hour), then the shallowest, then the busiest. A trader of two
-   * collections is in both lanes; `interleave` checks it once.
+   * collections is in both lanes; `interleave` checks it once. Which wallets
+   * a lane can hold is SERVED_*'s: fundingBacklog counts with them too.
    */
   async fundingLanes(chainId: number, perLane: number): Promise<{ lanes: FundingLane[] }> {
     const unchecked = `w.chain_id = $1 AND (w.status = 'pending' OR (w.status = 'failed' AND w.fetched_at < now() - interval '1 hour'))`;
@@ -659,12 +660,11 @@ export class Store {
        SELECT c.id, l.address FROM washtrace.collections c
        LEFT JOIN LATERAL (
          SELECT address, rn FROM (
-           SELECT t.address, row_number() OVER (ORDER BY t.status = 'failed', t.depth, t.transfers DESC) AS rn FROM todo t
-           WHERE EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.from_address = t.address)
-              OR EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.to_address = t.address)
+           SELECT w.address, row_number() OVER (ORDER BY w.status = 'failed', w.depth, w.transfers DESC) AS rn FROM todo w
+           WHERE ${SERVED_NAMES}
          ) ranked WHERE rn <= $2
        ) l ON true
-       WHERE c.chain_id = $1 AND c.paused_at IS NULL ORDER BY c.id, l.rn`,
+       WHERE c.chain_id = $1 AND ${SERVED_LIVE} ORDER BY c.id, l.rn`,
       [chainId, perLane],
     );
     const lanes: FundingLane[] = [];
@@ -738,14 +738,27 @@ export class Store {
     );
   }
 
-  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; truncated: number; followed: number; doneLastHour: number }[]> {
+  /**
+   * Each chain's wallets by funding state. `pending` and `failed` are the
+   * ones a lane will serve (SERVED_WALLET, from what fundingLanes builds on), so the wait
+   * drains to nothing; `stranded` are the unchecked rest, held back while every
+   * collection that names them is paused or removed, and no lane takes them.
+   */
+  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; followed: number; doneLastHour: number }[]> {
+    // CASE, so only the unchecked wallets (few) are probed: a checked one is never served.
     const { rows } = await this.pool.query(
-      `SELECT chain_id, count(*) FILTER (WHERE status = 'pending')::int AS pending, count(*) FILTER (WHERE status = 'done')::int AS done,
+      `SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending, count(*) FILTER (WHERE status = 'done')::int AS done,
               count(*) FILTER (WHERE status = 'done' AND fetched_at > now() - interval '1 hour')::int AS done_last_hour,
-              count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE truncated)::int AS truncated, count(*) FILTER (WHERE depth > 0)::int AS followed
-       FROM washtrace.wallets GROUP BY chain_id ORDER BY chain_id`,
+              count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE status <> 'done' AND NOT served)::int AS stranded,
+              count(*) FILTER (WHERE truncated)::int AS truncated, count(*) FILTER (WHERE depth > 0)::int AS followed
+       FROM (
+         SELECT w.chain_id, w.status, w.fetched_at, w.truncated, w.depth, CASE WHEN w.status = 'done' THEN false ELSE ${SERVED_WALLET} END AS served
+         FROM washtrace.wallets w
+       ) w GROUP BY chain_id ORDER BY chain_id`,
     );
-    return rows.map((r) => ({ chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour }));
+    return rows.map((r) => ({
+      chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, stranded: r.stranded, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour,
+    }));
   }
 
   // ---- analysis ------------------------------------------------------------
@@ -1321,6 +1334,18 @@ SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM 
        extract(epoch FROM a.ran_at)::float8 AS ran
 FROM washtrace.collections c
 LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true`;
+
+/**
+ * Which wallets funding serves, for fundingLanes and fundingBacklog alike, so
+ * what is counted waiting is what gets checked. SERVED_LIVE: collection c
+ * is not paused. SERVED_NAMES: c's transfers name wallet w, probed by index
+ * each way. SERVED_WALLET: w is a trader some live collection on its chain names, or a
+ * followed wallet (depth > 0) on a chain where some collection is live.
+ */
+const SERVED_LIVE = 'c.paused_at IS NULL';
+const SERVED_NAMES = `(EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.from_address = w.address)
+  OR EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.to_address = w.address))`;
+const SERVED_WALLET = `EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE} AND (w.depth > 0 OR ${SERVED_NAMES}))`;
 
 const TRANSFER_COLUMNS = `
 SELECT t.tx_hash, t.log_index, t.block_number, extract(epoch FROM t.block_time)::float8 AS bt, t.token_id::text AS token_id,
