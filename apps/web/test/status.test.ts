@@ -75,6 +75,8 @@ describe('status', () => {
     expect(texts(failed(30_000), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429']);
     expect(stateOf(failed(5 * MIN), 'ingest')).toBe('stalled');
     expect(texts(failed(5 * MIN), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429', 'ingest has not run for 5 min.']);
+    // The worker page colours what the pass said by how it ended, not by the job's state.
+    expect(status(failed(5 * MIN), NOW).jobs.find((j) => j.job === 'ingest')).toMatchObject({ outcome: 'failed', detail: 'RPC answered HTTP 429' });
   });
 
   it('calls a pass stuck once it has run past its job\'s ceiling, however fresh its heartbeat', () => {

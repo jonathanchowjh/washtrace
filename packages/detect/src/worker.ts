@@ -268,6 +268,8 @@ export class Worker {
   private checking: Promise<void> | null = null;
   private checkAgain = false;
   private checksFailed = '';
+  /** Whether the last checks run found another replica holding them: a check left pending is then theirs, not unheard. */
+  private checksSkipped = false;
   /** The last manifest read error logged, so a broken manifest is one line and not one a pass. */
   private manifestFailed = '';
   /**
@@ -766,12 +768,12 @@ export class Worker {
   /**
    * The timer's run of the checks, which answers and expires them though no
    * notification came. A check waiting longer than DEAF_MS while no run is
-   * in flight, and the last run went through, was not heard: the listener is
-   * connected again. Never rejects.
+   * in flight, and the last run went through here, was not heard: the
+   * listener is connected again. Never rejects, and runs nothing once stopped.
    */
   private async sweepChecks(): Promise<void> {
     const deaf = this.listener;
-    if (this.checking === null && this.checksFailed === '' && deaf !== null) {
+    if (this.checking === null && this.checksFailed === '' && !this.checksSkipped && deaf !== null) {
       const pending = await this.store.pendingChecks().catch(() => []);
       if (this.listener === deaf && this.listening && pending.some((c) => c.ageMs > DEAF_MS)) {
         console.warn('[washtrace] a Test request went unheard; listening again');
@@ -780,6 +782,8 @@ export class Worker {
         void this.connectListener();
       }
     }
+    // Stopped while it looked: the pool may be ending.
+    if (!this.listening) return;
     await this.checksSoon();
   }
 
@@ -868,6 +872,7 @@ export class Worker {
       if (failed !== undefined) throw failed.reason;
       return n + pending.length;
     });
+    this.checksSkipped = finished === 'skipped';
     return finished === 'skipped' ? 0 : finished;
   }
 

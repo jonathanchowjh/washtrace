@@ -79,7 +79,7 @@ export default async function WorkerPage() {
                 <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                   <dt className="text-muted-foreground">Every</dt><dd>{v.every[j.job] / 1000}s</dd>
                   <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && !inFlight ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
-                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-fault')}>{inFlight ? '…' : j.detail ?? '—'}</dd>
+                  <dt className="text-muted-foreground">Said</dt><dd className={cn(!inFlight && j.outcome === 'failed' && 'text-fault')}>{inFlight ? '…' : j.detail ?? '—'}</dd>
                   <dt className="text-muted-foreground">Feeds</dt><dd>{step.feeds}</dd>
                 </dl>
                 {j.job === 'fund' && v.backlog.length > 0 ? (

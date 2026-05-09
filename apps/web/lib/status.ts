@@ -87,7 +87,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       if (overdue) needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
       state = overdue ? 'stalled' : p.outcome === 'failed' ? 'failed' : 'ok';
     }
-    return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, detail: p?.detail ?? null };
+    return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, outcome: p?.outcome ?? null, detail: p?.detail ?? null };
   });
 
   const collections = s.collections.map((c) => {
