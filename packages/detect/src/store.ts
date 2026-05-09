@@ -201,7 +201,9 @@ export class Store {
   constructor(readonly pool: pg.Pool) {}
 
   static connect(url: string): Store {
-    const pool = new pg.Pool({ connectionString: url, max: 10, application_name: 'washtrace' });
+    // Keep-alive probes find a connection that died without a word (a NAT's idle timeout, a host gone), so a
+    // query on it errors instead of waiting forever. Probed after 30 seconds idle, not the OS's two hours.
+    const pool = new pg.Pool({ connectionString: url, max: 10, application_name: 'washtrace', keepAlive: true, keepAliveInitialDelayMillis: 30_000 });
     // An idle client's dropped connection is reported here; unheard, it ends the process.
     pool.on('error', (err) => console.error('[washtrace] store connection lost: %s', err.message));
     return new Store(pool);
@@ -1272,10 +1274,13 @@ export class Store {
     return Number(rows[0]!.id);
   }
 
-  /** Checks requested and not yet finished, oldest first. */
-  async pendingChecks(): Promise<{ id: number; kind: CheckKind; chainId: number | null }[]> {
-    const { rows } = await this.pool.query('SELECT id, kind, chain_id FROM washtrace.checks WHERE finished_at IS NULL ORDER BY id');
-    return rows.map((r) => ({ id: Number(r.id), kind: r.kind, chainId: r.chain_id }));
+  /** Checks requested and not yet finished, oldest first, each with how long ago it was asked for by the store's clock. */
+  async pendingChecks(): Promise<{ id: number; kind: CheckKind; chainId: number | null; ageMs: number }[]> {
+    const { rows } = await this.pool.query(
+      `SELECT id, kind, chain_id, extract(epoch FROM now() - requested_at)::float8 * 1000 AS age_ms
+       FROM washtrace.checks WHERE finished_at IS NULL ORDER BY id`,
+    );
+    return rows.map((r) => ({ id: Number(r.id), kind: r.kind, chainId: r.chain_id, ageMs: Number(r.age_ms) }));
   }
 
   /**

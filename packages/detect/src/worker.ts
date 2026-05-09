@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import pg from 'pg';
-import { analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
+import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Etherscan } from './etherscan.js';
 import { ZERO } from './graph.js';
@@ -47,6 +47,15 @@ export const HEARTBEAT_MS = 30_000;
 
 /** A pass stops starting new work after this long, so one collection's backfill cannot starve the rest. */
 export const BUDGET_MS = 45_000;
+
+/**
+ * A pass still running after this long is stuck, however fresh its heartbeat:
+ * the keep-alive beats while a step goes on, whether or not the step moves.
+ * Analyze sits above the thread's own ceiling (ANALYZE_TIMEOUT_MS), so a
+ * stopped analysis is said as its failure first. Ingest can load stored data
+ * or a money trail, which takes minutes; a funding pass keeps to its budget.
+ */
+export const STUCK_MS: Readonly<Record<Job, number>> = { ingest: 30 * 60_000, fund: 10 * 60_000, analyze: ANALYZE_TIMEOUT_MS + 10 * 60_000 };
 
 /**
  * Finalized blocks advance about five a minute and ingest reads every
@@ -204,6 +213,14 @@ const RELISTEN_MS = 5_000;
 const RELISTEN_MAX_MS = 60_000;
 
 /**
+ * How often the checks run with no request heard, and how long a check may
+ * wait before the listener is taken for deaf. A connection a NAT dropped can
+ * go quiet with no error; a notification arrives in milliseconds.
+ */
+const SWEEP_MS = 30_000;
+const DEAF_MS = 10_000;
+
+/**
  * The polling half of the service. Three jobs on intervals: ingest reads new
  * finalized transfers per collection, fund reads the money of each wallet
  * those transfers named, and analyze reruns the paper's methods over any
@@ -245,6 +262,8 @@ export class Worker {
   private listening = false;
   private relisten: ReturnType<typeof setTimeout> | null = null;
   private listenFailures = 0;
+  /** Runs the checks every SWEEP_MS while listening, for a request whose notification was lost. */
+  private sweep: ReturnType<typeof setInterval> | null = null;
   /** The checks run in flight, and whether a request came during it: runs never overlap, and none is missed. */
   private checking: Promise<void> | null = null;
   private checkAgain = false;
@@ -296,6 +315,8 @@ export class Worker {
     this.listening = false;
     if (this.relisten !== null) clearTimeout(this.relisten);
     this.relisten = null;
+    if (this.sweep !== null) clearInterval(this.sweep);
+    this.sweep = null;
     const listener = this.listener;
     this.listener = null;
     listener?.end().catch(() => {});
@@ -329,7 +350,9 @@ export class Worker {
     try {
       const outcome = await this.store.locked(LOCK[job], false, async () => {
         await this.loadSettings();
+        // passStarted is the first beat; with `current` set the keep-alive beats on, though the job's first call is slow.
         await this.store.passStarted(job);
+        this.current.set(job, { doing: null, subjectId: null });
         try {
           const detail = await this[job]();
           await this.store.passFinished(job, Date.now() - started, 'ok', detail);
@@ -729,18 +752,42 @@ export class Worker {
    * at once, not next pass: the page polls for about 20 seconds. Runs the
    * checks on connecting too, for any asked while no worker listened. A lost
    * connection is a log line and a retry, 5 seconds later and longer each
-   * time it fails in a row, up to a minute. Never rejects; `stop` ends it.
+   * time it fails in a row, up to a minute. The checks also run every
+   * SWEEP_MS, for a request not heard. Never rejects; `stop` ends it.
    */
   async listen(): Promise<void> {
     if (this.listening) return;
     this.listening = true;
+    this.sweep = setInterval(() => { void this.sweepChecks(); }, SWEEP_MS);
+    this.sweep.unref?.();
     await this.connectListener();
+  }
+
+  /**
+   * The timer's run of the checks, which answers and expires them though no
+   * notification came. A check waiting longer than DEAF_MS while no run is
+   * in flight, and the last run went through, was not heard: the listener is
+   * connected again. Never rejects.
+   */
+  private async sweepChecks(): Promise<void> {
+    const deaf = this.listener;
+    if (this.checking === null && this.checksFailed === '' && deaf !== null) {
+      const pending = await this.store.pendingChecks().catch(() => []);
+      if (this.listener === deaf && this.listening && pending.some((c) => c.ageMs > DEAF_MS)) {
+        console.warn('[washtrace] a Test request went unheard; listening again');
+        this.listener = null;
+        deaf.end().catch(() => {});
+        void this.connectListener();
+      }
+    }
+    await this.checksSoon();
   }
 
   private async connectListener(): Promise<void> {
     this.relisten = null;
     if (!this.listening) return;
-    const client = new pg.Client({ connectionString: this.storeUrl, application_name: 'washtrace-checks' });
+    // Kept alive as the store's pool is (Store.connect): an idle listener is what a NAT drops first.
+    const client = new pg.Client({ connectionString: this.storeUrl, application_name: 'washtrace-checks', keepAlive: true, keepAliveInitialDelayMillis: 30_000 });
     this.listener = client;
     const lose = (err: unknown) => {
       // Only the current listener retries: one ended by `stop`, or already lost, does not.

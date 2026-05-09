@@ -45,6 +45,13 @@ export async function analyzeStored(store: Store, request: AnalysisRequest): Pro
 }
 
 /**
+ * An analysis still going after this long is stopped. The biggest collection
+ * takes about 17 minutes; one past an hour is stuck (a read waiting on a dead
+ * connection), and would hold the analyze job's lock until the worker restarts.
+ */
+export const ANALYZE_TIMEOUT_MS = 60 * 60_000;
+
+/**
  * Run `analyzeStored` on a thread of its own and resolve with its result.
  *
  * `analyze` is synchronous and can run for many minutes on a big
@@ -59,11 +66,17 @@ export async function analyzeStored(store: Store, request: AnalysisRequest): Pro
  *
  * The thread runs this same file from `dist`, so it only works compiled: in
  * tests, `Worker.analyzeOff` is overridden instead. A throw or a crash in the
- * thread rejects, and the thread is ended either way.
+ * thread rejects, and so does running past ANALYZE_TIMEOUT_MS; the thread is
+ * ended either way.
  */
 export function analyzeInThread(request: AnalysisRequest): Promise<Analysed> {
   return new Promise((resolve, reject) => {
     const thread = new Thread(new URL('./analysis-thread.js', import.meta.url), { workerData: { [REQUEST]: request } });
+    const ceiling = setTimeout(() => {
+      reject(new Error(`Analysis took longer than ${ANALYZE_TIMEOUT_MS / 60_000} min and was stopped.`));
+      void thread.terminate();
+    }, ANALYZE_TIMEOUT_MS);
+    ceiling.unref?.();
     thread.once('message', (analysed: Analysed) => {
       resolve(analysed);
       void thread.terminate();
@@ -73,7 +86,10 @@ export function analyzeInThread(request: AnalysisRequest): Promise<Analysed> {
       void thread.terminate();
     });
     // After an answer this is a no-op; before one, the thread died without saying why.
-    thread.once('exit', (code) => reject(new Error(`The analysis thread exited with code ${code} before it answered.`)));
+    thread.once('exit', (code) => {
+      clearTimeout(ceiling);
+      reject(new Error(`The analysis thread exited with code ${code} before it answered.`));
+    });
   });
 }
 

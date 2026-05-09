@@ -55,10 +55,42 @@ describe('status', () => {
     expect(stateOf(snapshot({ passes: [pass('ingest', 5_000, { finishedAt: NOW - 70_000 })] }), 'ingest')).toBe('running');
   });
 
-  it('calls a job stalled once no pass has started in three intervals and a budget', () => {
-    const s = snapshot({ passes: [pass('ingest', 4 * MIN)] });
+  it('calls a job stalled once no pass has finished in three intervals and a budget', () => {
+    const s = snapshot({ passes: [pass('ingest', 4 * MIN + 1_000)] });
     expect(stateOf(s, 'ingest')).toBe('stalled');
     expect(texts(s, 'needs-you')).toContain('ingest has not run for 4 min.');
+  });
+
+  it('measures a finished pass from when it finished, so a long pass that has just ended is not stalled', () => {
+    const s = snapshot({ passes: [pass('analyze', 17 * MIN + 30_000, { finishedAt: NOW - 30_000, tookMs: 17 * MIN }), pass('fund', 2_000), pass('ingest', 10_000)] });
+    expect(stateOf(s, 'analyze')).toBe('ok');
+    expect(texts(s, 'needs-you')).toEqual([]);
+  });
+
+  it('shows a long pass\'s failure, and that it has not run since as well once it is overdue', () => {
+    const failed = (finishedAgo: number) => snapshot({
+      passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 17 * MIN + finishedAgo, { finishedAt: NOW - finishedAgo, tookMs: 17 * MIN, outcome: 'failed', detail: 'RPC answered HTTP 429' })],
+    });
+    expect(stateOf(failed(30_000), 'ingest')).toBe('failed');
+    expect(texts(failed(30_000), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429']);
+    expect(stateOf(failed(5 * MIN), 'ingest')).toBe('stalled');
+    expect(texts(failed(5 * MIN), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429', 'ingest has not run for 5 min.']);
+  });
+
+  it('calls a pass stuck once it has run past its job\'s ceiling, however fresh its heartbeat', () => {
+    const running = (job: string, ago: number) => snapshot({
+      passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 10_000)].map((p) => p.job === job ? pass(job, ago, { finishedAt: null, heartbeatAt: NOW - 10_000 }) : p),
+    });
+    const s = running('analyze', 75 * MIN);
+    expect(stateOf(s, 'analyze')).toBe('stalled');
+    expect(status(s, NOW).notices.filter((n) => n.severity === 'needs-you')).toEqual([
+      { severity: 'needs-you', text: 'analyze has been running for 75 min.', doThis: 'Restart the worker: docker compose restart worker' },
+    ]);
+    // An analysis can take most of an hour, a load of stored data many minutes, a funding pass not ten.
+    for (const [job, ceiling] of [['analyze', 70], ['ingest', 30], ['fund', 10]] as const) {
+      expect(stateOf(running(job, ceiling * MIN - 1_000), job)).toBe('running');
+      expect(stateOf(running(job, ceiling * MIN + 1_000), job)).toBe('stalled');
+    }
   });
 
   it('calls a long pass with a fresh heartbeat running', () => {

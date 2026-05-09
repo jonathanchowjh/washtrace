@@ -66,6 +66,8 @@ export default async function WorkerPage() {
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
             const state = STATE[j.state];
+            // In flight, running or stuck: what the row holds besides its start is the last pass's, not this one's.
+            const inFlight = j.startedAt !== null && (j.finishedAt === null || j.finishedAt < j.startedAt);
             return (
               <li key={j.job} className="relative flex flex-col gap-2 rounded-lg border bg-card p-4">
                 {i > 0 ? <span aria-hidden className="absolute top-1/2 -left-3 hidden -translate-y-1/2 text-muted-foreground lg:block">→</span> : null}
@@ -76,8 +78,8 @@ export default async function WorkerPage() {
                 <p className="text-sm text-muted-foreground">{step.does}</p>
                 <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                   <dt className="text-muted-foreground">Every</dt><dd>{v.every[j.job] / 1000}s</dd>
-                  <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && j.state !== 'running' ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
-                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-fault')}>{j.state === 'running' ? '…' : j.detail ?? '—'}</dd>
+                  <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && !inFlight ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
+                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-fault')}>{inFlight ? '…' : j.detail ?? '—'}</dd>
                   <dt className="text-muted-foreground">Feeds</dt><dd>{step.feeds}</dd>
                 </dl>
                 {j.job === 'fund' && v.backlog.length > 0 ? (

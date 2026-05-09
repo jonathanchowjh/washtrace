@@ -9,8 +9,25 @@ import { workerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan } from '../src/etherscan.js';
 import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
-import type { AnalysisRequest } from '../src/analysis-thread.js';
+import { ANALYZE_TIMEOUT_MS, analyzeInThread, type AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
+
+/**
+ * Every analysis thread made in this file, which never answers: the real one
+ * runs only compiled (see analyzeInThread). Every other test overrides
+ * analyzeOff, so none starts one.
+ */
+const threads = vi.hoisted(() => [] as { terminated: boolean }[]);
+vi.mock('node:worker_threads', async (original) => ({
+  ...(await original<typeof import('node:worker_threads')>()),
+  Worker: class {
+    terminated = false;
+    private readonly on = new Map<string, (arg: unknown) => void>();
+    constructor() { threads.push(this); }
+    once(event: string, fn: (arg: unknown) => void) { this.on.set(event, fn); return this; }
+    async terminate() { this.terminated = true; this.on.get('exit')?.(1); return 1; }
+  },
+}));
 
 function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
@@ -558,6 +575,23 @@ describe('Worker heartbeat', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(beats).toHaveLength(4);
   });
+
+  it('keeps a pass alive from its start, before the job says what it is doing', async () => {
+    vi.useFakeTimers();
+    const beats: [string, string | null, number | null][] = [];
+    const store: any = {
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<void>) => { await fn(); return 'ran'; },
+      passStarted: async () => {}, passFinished: async () => {}, settings: async () => new Map(), reportSources: async () => {},
+      heartbeat: async (job: string, doing: string | null, id: number | null) => { beats.push([job, doing, id]); },
+    };
+    const w = new Worker(store, config, '');
+    // A first RPC call that takes a minute and a half, before ingest has said anything.
+    (w as any).ingest = async () => { await new Promise((r) => setTimeout(r, 95_000)); return 'done'; };
+    const pass = w.run('ingest');
+    await vi.advanceTimersByTimeAsync(95_000);
+    await pass;
+    expect(beats).toEqual(Array(3).fill(['ingest', null, null]));
+  });
 });
 
 describe('Worker settings', () => {
@@ -889,6 +923,91 @@ describe('Worker.analyze when an analysis fails', () => {
     waiting.set(1, stale(1, 'BAYC'));
     expect(await w.analyze()).toBe('BAYC analyzed');
     expect(tried).toEqual([1, 1, 1]);
+  });
+});
+
+describe('an analysis that never ends', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  const request = { storeUrl: '', id: 1, chainId: 1, rules: {}, fundingAvailable: false, custodians: new Set(), contracts: new Set(), money: new Set() } as AnalysisRequest;
+  const STOPPED = 'Analysis took longer than 60 min and was stopped.';
+
+  it('is stopped after an hour: its thread is ended, and it rejects in words', async () => {
+    vi.useFakeTimers();
+    const outcome = analyzeInThread(request).then(() => 'answered', (err: Error) => err.message);
+    const thread = threads.at(-1)!;
+    await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS - 1);
+    expect(thread.terminated).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBe(STOPPED);
+    expect(thread.terminated).toBe(true);
+  });
+
+  it('counts as a failed analysis, kept on the collection', async () => {
+    vi.useFakeTimers();
+    const failed: [number, string][] = [];
+    const store: any = {
+      stale: async () => [{ id: 1, chainId: 1, version: 1, rules: {}, name: 'Terraforms', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }],
+      collections: async () => [], heartbeat: async () => {}, importedFunding: async () => false, saveAnalysis: async () => {},
+      analysisFailed: async (id: number, error: string) => { failed.push([id, error]); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    const outcome = w.analyze().then(() => 'saved', (err: Error) => err.message);
+    await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS);
+    expect(await outcome).toBe(STOPPED);
+    expect(failed).toEqual([[1, STOPPED]]);
+  });
+});
+
+describe('Worker checks with no notification', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  /** A worker whose listener connects to nothing: `pending` is what the store has waiting, `connects` counts each listen. */
+  function setup(pending: { id: number; kind: 'rpc'; chainId: number; ageMs: number }[]) {
+    const finished: number[] = [];
+    const store: any = {
+      locked: async (_key: number, _wait: boolean, fn: () => Promise<number>) => fn(),
+      settings: async () => new Map(), expireChecks: async () => 0,
+      pendingChecks: async () => pending.filter((c) => !finished.includes(c.id)),
+      finishCheck: async (id: number) => { finished.push(id); },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    (w as any).chain = () => ({ check: async () => ({ finalized: 1, archive: true, logs: true }) });
+    const connects = { n: 0 };
+    // Connected, and hearing nothing: as a socket a NAT dropped without a word.
+    (w as any).connectListener = async () => { connects.n += 1; (w as any).listener = { end: async () => {} }; };
+    return { w, finished, connects };
+  }
+
+  it('answers a pending check every 30 seconds, though no request was heard', async () => {
+    vi.useFakeTimers();
+    const { w, finished } = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 2_000 }]);
+    await w.listen();
+    expect(finished).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(finished).toEqual([1]);
+    w.stop();
+  });
+
+  it('listens again when a check waited longer than a notification takes, and not when none did', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fresh = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 2_000 }]);
+    await fresh.w.listen();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fresh.connects.n).toBe(1);
+    fresh.w.stop();
+    const deaf = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 25_000 }]);
+    await deaf.w.listen();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(deaf.connects.n).toBe(2);
+    expect(deaf.finished).toEqual([1]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    deaf.w.stop();
+    // Stopped, the timer is gone.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(deaf.connects.n).toBe(2);
   });
 });
 

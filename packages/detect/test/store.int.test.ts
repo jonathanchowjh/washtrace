@@ -32,6 +32,12 @@ afterAll(async () => {
   await pg?.stop();
 });
 
+describe('Store.connect', () => {
+  it('keeps its connections alive, so a dropped one errors instead of waiting forever', () => {
+    expect(store.pool.options).toMatchObject({ keepAlive: true });
+  });
+});
+
 /** Tests clean up with this: removeCollection only deletes what is paused. */
 async function drop(chainId: number, address: string): Promise<void> {
   await store.pause(chainId, address);
@@ -474,10 +480,16 @@ describe('Store', () => {
       const id = await store.requestCheck('rpc', 1);
       const other = await store.requestCheck('etherscan', null);
       expect(await store.check(id)).toEqual({ finished: false, ok: null, detail: null });
-      expect(await store.pendingChecks()).toEqual([{ id, kind: 'rpc', chainId: 1 }, { id: other, kind: 'etherscan', chainId: null }]);
+      const age = expect.any(Number);
+      expect(await store.pendingChecks()).toEqual([{ id, kind: 'rpc', chainId: 1, ageMs: age }, { id: other, kind: 'etherscan', chainId: null, ageMs: age }]);
+      // Aged by the store's clock, so the worker can tell a check no notification brought (see Worker.sweepChecks).
+      await store.pool.query(`UPDATE washtrace.checks SET requested_at = now() - interval '25 seconds' WHERE id = $1`, [id]);
+      const [first] = await store.pendingChecks();
+      expect(first!.ageMs).toBeGreaterThanOrEqual(25_000);
+      expect(first!.ageMs).toBeLessThan(35_000);
       await store.finishCheck(id, true, { finalized: 100, archive: true, logs: false });
       expect(await store.check(id)).toEqual({ finished: true, ok: true, detail: { finalized: 100, archive: true, logs: false } });
-      expect(await store.pendingChecks()).toEqual([{ id: other, kind: 'etherscan', chainId: null }]);
+      expect(await store.pendingChecks()).toEqual([{ id: other, kind: 'etherscan', chainId: null, ageMs: age }]);
       await store.finishCheck(other, false, { error: 'timed out' });
       expect(await store.pendingChecks()).toEqual([]);
       expect(await store.check(999_999)).toBeNull();

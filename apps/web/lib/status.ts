@@ -1,4 +1,4 @@
-import { BEHIND_BLOCKS, BUDGET_MS, EVERY, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
 import { eta, localTime } from './format';
 import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './metrics';
@@ -27,10 +27,13 @@ const SEVERITIES: readonly Severity[] = ['needs-you', 'working', 'info'];
 
 export type JobState = 'never' | 'running' | 'ok' | 'failed' | 'stalled';
 
-/** A running pass that has said nothing for this long is stalled. The worker beats every 30 seconds. */
+/** A running pass that has said nothing for this long is stalled. The worker beats every 30 seconds from the pass's start. */
 const SILENT_MS = 2 * 60_000;
 
 const WORKER_DOWN = 'Check the worker process is running: docker compose ps worker';
+
+/** A pass past its job's STUCK_MS ends with the process: a restart lets go of its lock, and the next pass starts fresh. */
+const RESTART = 'Restart the worker: docker compose restart worker';
 
 /** What to do when a job reports a failure, and where to do it. */
 const FAILED: Record<Job, [string, string?]> = {
@@ -61,20 +64,28 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       state = 'never';
       needsYou(`${job} has never run.`, WORKER_DOWN);
     } else if (isRunning(p)) {
+      // Silent: the worker stopped beating. Past its ceiling with a fresh beat: the worker is up, and this pass is stuck.
       const lastSign = p.heartbeatAt ?? p.startedAt;
-      state = now - lastSign > SILENT_MS ? 'stalled' : 'running';
-      if (state === 'stalled') needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
-    } else if (now - p.startedAt > 3 * EVERY[job] + BUDGET_MS) {
-      state = 'stalled';
-      needsYou(`${job} has not run for ${minutes(now - p.startedAt)}.`, WORKER_DOWN);
-    } else if (p.outcome === 'failed') {
-      state = 'failed';
-      // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
-      // the pass failed before it took one, the collection is gone, or the failure could not be written to it.
-      const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
-      if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
+      if (now - lastSign > SILENT_MS) {
+        state = 'stalled';
+        needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
+      } else if (now - p.startedAt > STUCK_MS[job]) {
+        state = 'stalled';
+        needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
+      } else {
+        state = 'running';
+      }
     } else {
-      state = 'ok';
+      // From when it finished, so a long pass is not overdue the moment it ends. A failure is said either way.
+      const overdue = now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS;
+      if (p.outcome === 'failed') {
+        // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
+        // the pass failed before it took one, the collection is gone, or the failure could not be written to it.
+        const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
+        if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
+      }
+      if (overdue) needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
+      state = overdue ? 'stalled' : p.outcome === 'failed' ? 'failed' : 'ok';
     }
     return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, detail: p?.detail ?? null };
   });
