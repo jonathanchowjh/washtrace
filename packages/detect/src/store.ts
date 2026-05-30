@@ -673,6 +673,7 @@ export class Store {
       if (lane?.collectionId !== r.id) lanes.push((lane = { collectionId: r.id, wallets: [] }));
       if (r.address !== null) lane.wallets.push(r.address);
     }
+    // Some collection on the chain is live: SERVED_WALLET's test for a followed wallet.
     if (lanes.length > 0) {
       const followed = await this.pool.query<{ address: string }>(
         `SELECT w.address FROM washtrace.wallets w WHERE ${unchecked} AND w.depth > 0 ${order} LIMIT $2`,
@@ -740,25 +741,48 @@ export class Store {
 
   /**
    * Each chain's wallets by funding state. `pending` and `failed` are the
-   * ones a lane will serve (SERVED_WALLET, from what fundingLanes builds on), so the wait
-   * drains to nothing; `stranded` are the unchecked rest, held back while every
-   * collection that names them is paused or removed, and no lane takes them.
+   * ones a lane will serve (SERVED_WALLET, from what fundingLanes builds on),
+   * so the wait drains to nothing; `stranded` are the unchecked rest, held
+   * back while every collection that names them is paused or removed, and no
+   * lane takes them. The status route and the Worker page read this every
+   * few seconds.
    */
   async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; followed: number; doneLastHour: number }[]> {
-    // CASE, so only the unchecked wallets (few) are probed: a checked one is never served.
-    const { rows } = await this.pool.query(
-      `SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending, count(*) FILTER (WHERE status = 'done')::int AS done,
-              count(*) FILTER (WHERE status = 'done' AND fetched_at > now() - interval '1 hour')::int AS done_last_hour,
-              count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE status <> 'done' AND NOT served)::int AS stranded,
-              count(*) FILTER (WHERE truncated)::int AS truncated, count(*) FILTER (WHERE depth > 0)::int AS followed
-       FROM (
-         SELECT w.chain_id, w.status, w.fetched_at, w.truncated, w.depth, CASE WHEN w.status = 'done' THEN false ELSE ${SERVED_WALLET} END AS served
-         FROM washtrace.wallets w
-       ) w GROUP BY chain_id ORDER BY chain_id`,
-    );
-    return rows.map((r) => ({
-      chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, stranded: r.stranded, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour,
-    }));
+    // Only the unchecked wallets are probed, each once (MATERIALIZED, so the
+    // probe is not repeated in every count that reads it). Stranded ones
+    // dominate the cost and are permanent: deleting a collection keeps its
+    // wallets, and no lane ever checks them. The planner's estimate for the
+    // probes is far above JIT's threshold, and compiling cost twice the query
+    // itself (430 ms against 150 at 26k stranded wallets), so JIT is off.
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL jit = off');
+      const { rows } = await c.query(
+        `WITH waiting AS MATERIALIZED (
+           SELECT w.chain_id, w.status, ${SERVED_WALLET} AS served FROM washtrace.wallets w WHERE w.status IN ('pending', 'failed')
+         ), unchecked AS (
+           SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending,
+                  count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE NOT served)::int AS stranded
+           FROM waiting GROUP BY chain_id
+         )
+         SELECT w.chain_id, coalesce(u.pending, 0) AS pending, coalesce(u.failed, 0) AS failed, coalesce(u.stranded, 0) AS stranded,
+                count(*) FILTER (WHERE w.status = 'done')::int AS done,
+                count(*) FILTER (WHERE w.status = 'done' AND w.fetched_at > now() - interval '1 hour')::int AS done_last_hour,
+                count(*) FILTER (WHERE w.truncated)::int AS truncated, count(*) FILTER (WHERE w.depth > 0)::int AS followed
+         FROM washtrace.wallets w LEFT JOIN unchecked u ON u.chain_id = w.chain_id
+         GROUP BY w.chain_id, u.pending, u.failed, u.stranded ORDER BY w.chain_id`,
+      );
+      await c.query('COMMIT');
+      return rows.map((r) => ({
+        chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, stranded: r.stranded, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour,
+      }));
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
   }
 
   // ---- analysis ------------------------------------------------------------
@@ -1337,15 +1361,25 @@ LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.
 
 /**
  * Which wallets funding serves, for fundingLanes and fundingBacklog alike, so
- * what is counted waiting is what gets checked. SERVED_LIVE: collection c
- * is not paused. SERVED_NAMES: c's transfers name wallet w, probed by index
- * each way. SERVED_WALLET: w is a trader some live collection on its chain names, or a
- * followed wallet (depth > 0) on a chain where some collection is live.
+ * what is counted waiting is what gets checked. SERVED_LIVE: collection c is
+ * not paused. SERVED_NAMES: c's transfers name wallet w, probed by index each
+ * way, for a lane of one collection. SERVED_WALLET: the same question per
+ * wallet, for the count: w is a trader some live collection on its chain
+ * names, or a followed wallet (depth > 0) on a chain where some collection
+ * is live, as fundingLanes gives followed wallets a lane only then.
  */
 const SERVED_LIVE = 'c.paused_at IS NULL';
 const SERVED_NAMES = `(EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.from_address = w.address)
   OR EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.to_address = w.address))`;
-const SERVED_WALLET = `EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE} AND (w.depth > 0 OR ${SERVED_NAMES}))`;
+// By the wallet's own address, one probe each way, and only then whose
+// transfers they are. Left to itself Postgres probes each live collection's
+// index in turn, one probe per collection each way for a wallet none of them
+// names: OFFSET 0 keeps it from folding the address lookup into that.
+const namedLive = (side: 'from_address' | 'to_address') =>
+  `EXISTS (SELECT 1 FROM (SELECT x.collection_id FROM washtrace.transfers x WHERE x.${side} = w.address OFFSET 0) x
+     JOIN washtrace.collections c ON c.id = x.collection_id WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})`;
+const SERVED_WALLET = `CASE WHEN w.depth > 0 THEN EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})
+  ELSE ${namedLive('from_address')} OR ${namedLive('to_address')} END`;
 
 const TRANSFER_COLUMNS = `
 SELECT t.tx_hash, t.log_index, t.block_number, extract(epoch FROM t.block_time)::float8 AS bt, t.token_id::text AS token_id,

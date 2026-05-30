@@ -167,7 +167,7 @@ settings writes and Tests answer 403 while basic auth is off.
 | `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null` so the default applies. 409 for a value the worker's environment pins, 400 for one the worker could not use. |
 | `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
 | `GET /api/settings/check/{id}` | That Test: `{finished, ok, detail}`. Poll until `finished`. |
-| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding.perSecond` and `followHops` are null while the worker runs on its defaults. |
+| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding` is null while there is no Etherscan key. Its `perSecond`, and `followHops`, are null while the worker runs on its defaults. |
 | `GET /api/status` | Each job's state (`never`, `running`, `ok`, `failed`, `stalled`) and last `outcome`, each collection's `turn` and lag, the funding backlog, and `notices` in plain sentences. |
 | `GET /api/health` | `{ok}`: whether the store answers. Unauthenticated, for the container's health check. |
 
