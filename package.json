@@ -9,7 +9,7 @@
     "apps/*"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15"
   },
   "scripts": {
     "test": "vitest run --project unit",
