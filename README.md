@@ -148,21 +148,38 @@ second worker gives failover, not double reads.
 
 JSON throughout. Every route except `/api/health` sits behind basic auth when
 auth is configured. A write needs `Content-Type: application/json` and gets 415
-without it, which closes the CSRF path basic auth would otherwise open.
+without it, which closes the CSRF path basic auth would otherwise open. The
+settings writes and Tests answer 403 while basic auth is off.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis. |
-| `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. |
+| `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
 | `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
-| `DELETE /api/collections/{chain}/{address}` | Stops watching and drops its transfers and analyses. |
-| `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection overrides: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. |
+| `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |
+| `POST /api/collections/{chain}/{address}/resume` | The worker serves it again. `{paused: false}`, and again if not paused. |
+| `DELETE /api/collections/{chain}/{address}` | Stops watching and drops its transfers and analyses: `{removed: true}`. 409 unless paused first. Funding read for its wallets is kept, as it is per chain. |
+| `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection settings: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}, priority?}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. `priority: true` checks its wallets' funding first, sharing those turns with any other prioritised collection. |
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses, and the money among its wallets. |
 | `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its counterparties and its transfers in every watched collection. |
 | `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, the `methods` that flag it, and the transfers. A transaction washtrace has not read is 404, never `false`. |
-| `GET /api/worker` | Each job's last pass, the funding backlog per chain, and which sources are configured (never their values). |
-| `GET /api/status` | Each job's state (`never`, `running`, `ok`, `failed`, `stalled`) and a `problems` list in plain sentences. |
+| `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4. |
+| `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null` so the default applies. 409 for a value the worker's environment pins, 400 for one the worker could not use. |
+| `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
+| `GET /api/settings/check/{id}` | That Test: `{finished, ok, detail}`. Poll until `finished`. |
+| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding.perSecond` and `followHops` are null while the worker runs on its defaults. |
+| `GET /api/status` | Each job's state (`never`, `running`, `ok`, `failed`, `stalled`) and last `outcome`, each collection's `turn` and lag, the funding backlog, and `notices` in plain sentences. |
 | `GET /api/health` | `{ok}`: whether the store answers. Unauthenticated, for the container's health check. |
+
+A notice is `{severity, text}`, its severity `needs-you`, `working` or `info`.
+A `needs-you` one also says what to do (`doThis`, maybe with an `href`); the
+others may carry an `action: {label, href}`. Working and info notices are there
+while all is well, so a monitor alerts on
+`notices.some(n => n.severity === 'needs-you')`. In the funding backlog,
+`pending` and `failed` count the wallets the worker will check, `etaMs` is how
+long the pending ones take at the last hour's rate (null until known), and
+`stranded` counts the ones held back while their collections are paused or
+removed.
 
 ## Pages
 
