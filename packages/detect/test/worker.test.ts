@@ -48,6 +48,11 @@ describe('ingestTurns', () => {
     expect(t.backfill.map((b) => [b.c.id, b.sliceMs])).toEqual([[3, 22_500], [2, 22_500]]);
   });
 
+  it('serves the collections at the head never served first, then the longest waiting, so one the pass ran out on goes first next time', () => {
+    const t = ingestTurns([row({ id: 1, servedAt: 30 }), row({ id: 2, servedAt: 10 }), row({ id: 3, servedAt: null }), row({ id: 4, servedAt: 20 })], 45_000);
+    expect(t.keepUp.map((c) => c.id)).toEqual([3, 2, 4, 1]);
+  });
+
   it('never slices thinner than MIN_SLICE_MS; the rest wait for the next pass', () => {
     const many = [1, 2, 3, 4, 5, 6].map((id) => row({ id, cursorBlock: 0, headBlock: 1_000, servedAt: id }));
     const slices = ingestTurns(many, 45_000).backfill.map((b) => b.sliceMs);
@@ -107,6 +112,12 @@ describe('Worker.ingest', () => {
     expect(started[0]?.id).toBe(1);
     expect(started.every((s) => s.at < t0 + BUDGET_MS)).toBe(true);
     expect(started.map((s) => s.id)).toEqual([1, 1]);
+  });
+
+  it('serves the keep-up collections longest waiting first, and leaves one the pass ran out on unserved, to go first next time', async () => {
+    const { w, served } = setup([at(1, { servedAt: 30 }), at(2, { servedAt: 20 }), at(3, { servedAt: null })], 30_000);
+    await w.ingest();
+    expect(served).toEqual([{ id: 3, blocks: 5 }, { id: 2, blocks: 5 }]);
   });
 
   it('still serves a failing collection, for the blocks it moved', async () => {

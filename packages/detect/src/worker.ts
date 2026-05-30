@@ -70,18 +70,20 @@ export const MIN_SLICE_MS = 10_000;
 /**
  * Who ingest serves this pass, and for how long. Collections at the head go
  * first and read to it: they cost a few spans and go stale if they wait. The
- * rest share the budget in equal slices, those never served first and then
- * the longest waiting, so a big backfill cannot take every pass. With more
- * backfills than slices of MIN_SLICE_MS, the last wait for the next pass.
+ * rest share the budget in equal slices, so a big backfill cannot take every
+ * pass. With more backfills than slices of MIN_SLICE_MS, the last wait for
+ * the next pass. Both go never served first and then the longest waiting: a
+ * collection at the head the pass ran out of time for is first the next.
  */
 export function ingestTurns(
   cs: readonly CollectionRow[],
   budgetMs: number,
 ): { keepUp: CollectionRow[]; backfill: { c: CollectionRow; sliceMs: number }[] } {
   const atHead = (c: CollectionRow) => c.startBlock !== null && c.cursorBlock !== null && c.headBlock !== null && c.headBlock - c.cursorBlock <= BEHIND_BLOCKS;
+  const waiting = (a: CollectionRow, b: CollectionRow) => (a.servedAt ?? -1) - (b.servedAt ?? -1);
   const live = cs.filter((c) => c.pausedAt === null);
-  const keepUp = live.filter(atHead);
-  const rest = live.filter((c) => !atHead(c)).sort((a, b) => (a.servedAt ?? -1) - (b.servedAt ?? -1));
+  const keepUp = live.filter(atHead).sort(waiting);
+  const rest = live.filter((c) => !atHead(c)).sort(waiting);
   const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
   return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
 }
