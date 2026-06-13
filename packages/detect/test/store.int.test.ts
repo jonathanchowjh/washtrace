@@ -74,6 +74,21 @@ describe('Store', () => {
     await store.removeCollection(1, w('de5c'));
   });
 
+  it('reads analysis one flow per pair, the earliest, leaving out payments inside the collection\'s own sales', async () => {
+    const d1 = w('d1'), d2 = w('d2'), d3 = w('d3');
+    const { id } = await store.addCollection(1, w('dedu'), null, 1);
+    const ts = chain('5', d1, d2);
+    await store.ingest(id, 1, ts, 10, []);
+    const saleTx = ts[1]!.txHash;
+    await store.fund(1, d1, [
+      flow(d1, d3, { blockNumber: 900 }), flow(d1, d3, { blockNumber: 800 }),
+      flow(d1, d2, { txHash: saleTx }), flow(d1, d1), flow(d3, d1, { valueWei: '0' }),
+    ], false);
+    const { flows } = await store.analysisInput(id, 1);
+    expect(flows.map((f) => [f.from, f.to, f.blockNumber])).toEqual([[d1, d3, 800]]);
+    await store.removeCollection(1, w('dedu'));
+  });
+
   it('stores funding and takes the wallet off the queue', async () => {
     await store.fund(1, x, [flow(x, a), flow(x, b)], false);
     expect(await store.fundingQueue(1, 10)).toEqual([a, b]);

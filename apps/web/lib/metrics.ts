@@ -60,7 +60,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'starting' | 'catching-up' | 'checking' | 'complete';
+export type Reading = 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete';
 
 export interface Coverage {
   reading: Reading;
@@ -92,6 +92,8 @@ export function coverage(c: Pick<CollectionRow, 'startBlock' | 'cursorBlock' | '
   const base = { blocks, behind, wallets, money, floor };
   if (c.cursorBlock === null || c.startBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
+  // The wallet counts come from an analysis, so until the first one they are not zero but unknown.
+  if (c.latest === null) return { ...base, reading: 'analyzing', label: 'Analyzing' };
   if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
 }

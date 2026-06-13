@@ -9,6 +9,7 @@ const PILL = {
   complete: 'bg-ok/12 text-ok',
   checking: 'bg-money/12 text-money',
   'catching-up': 'bg-money/12 text-money',
+  analyzing: 'bg-money/12 text-money',
   starting: 'bg-muted text-muted-foreground',
 } as const;
 
@@ -26,6 +27,7 @@ export function ReadingPill({ cov }: { cov: Coverage }) {
 export function trust(cov: Coverage): string {
   if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
+  if (cov.reading === 'analyzing') return 'Every transfer is read. The first analysis is running; the shares, and how many wallets need checking for money, come from it.';
   if (cov.floor.length > 0) return `${progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
   if (!cov.money) return 'Every transfer is read. Money links were not checked, so only Round trips ran.';
   return 'Every transfer to the finalized head is read, and every trading wallet checked for money.';
@@ -40,20 +42,21 @@ export function trust(cov: Coverage): string {
  */
 export function ReadingSummary({ cov, href }: { cov: Coverage; href: string }) {
   const stage = cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
+    : cov.reading === 'analyzing' ? null
     : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
     : cov.reading === 'complete' ? { share: 1, of: 'read: every transfer, and every wallet the lenses need' }
     : null;
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-card px-4 py-3">
       <div className="flex min-w-[14rem] flex-1 flex-wrap items-center gap-3">
-        {cov.reading === 'checking' ? (
+        {cov.reading === 'checking' || cov.reading === 'analyzing' ? (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-ok/12 px-2 py-0.5 text-xs font-medium text-ok">
             <span aria-hidden>✓</span>Transfers read<span aria-hidden className="ml-1 text-muted-foreground">→</span>
           </span>
         ) : null}
-        <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : progress(stage.share)}</span>
+        <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? (cov.reading === 'analyzing' ? 'Analyzing' : '…') : progress(stage.share)}</span>
         <div className="min-w-[11rem] flex-1">
-          <p className="text-xs text-muted-foreground">{stage === null ? 'Finding where the collection begins' : stage.of}</p>
+          <p className="text-xs text-muted-foreground">{stage !== null ? stage.of : cov.reading === 'analyzing' ? 'the first analysis of every transfer read' : 'Finding where the collection begins'}</p>
           <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} /></div>
         </div>
       </div>
@@ -108,9 +111,11 @@ export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
       </Step>
       <Step
         n={2} title="Wallets checked for money"
-        figure={cov.money ? progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of) : 'Off'}
-        bar={cov.money ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
-        value={cov.money ? `${cov.wallets.checked.toLocaleString()} of ${cov.wallets.of.toLocaleString()} trading wallets, busiest first` : 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'}
+        figure={!cov.money ? 'Off' : a === null ? '…' : progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)}
+        bar={cov.money && a !== null ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
+        value={!cov.money ? 'No funding source is set (WASHTRACE_ETHERSCAN_KEY).'
+          : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
+          : `${cov.wallets.checked.toLocaleString()} of ${cov.wallets.of.toLocaleString()} trading wallets, busiest first`}
         affects={<>{LENSES.AU.name} and {LENSES.AC.name}. An unchecked wallet hides its links, so their shares can only rise.</>}
       >
         {a && a.truncatedSearches > 0 ? <p className="text-xs text-money">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
@@ -118,7 +123,7 @@ export function ReadingPanel({ c, cov }: { c: CollectionRow; cov: Coverage }) {
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? 'It runs once the first transfers are read.' : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-money"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
+        value={a === null ? (cov.reading === 'analyzing' ? 'Running now, over every transfer read.' : 'It runs once the first transfers are read.') : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.stale ? <span className="text-money"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
         {a ? <p className="text-xs text-muted-foreground">Gaps in history: {(a.missingData * 100).toFixed(1)}% of changes of owner (skipped, never guessed).</p> : null}

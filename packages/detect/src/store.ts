@@ -414,12 +414,27 @@ export class Store {
     const transfers = (await this.pool.query(`${TRANSFER_SELECT} WHERE t.collection_id = $1`, [id])).rows.map(toTransfer);
     const wallets = `(SELECT from_address AS a FROM washtrace.transfers WHERE collection_id = $1
                       UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1)`;
+    // One flow per pair of wallets, the earliest: the money graph keeps no
+    // more than that, so the rest would be read only to be dropped. So are
+    // the flows it skips anyway: payments inside the collection's own sales,
+    // zero values, a wallet paying itself, and mints and burns. A trader's
+    // history runs to thousands of flows, and reading them all ran the
+    // worker out of memory at 6.7M flows for 1.3M pairs.
     const flows = (await this.pool.query(
-      `SELECT f.* , extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-       WHERE f.chain_id = $2 AND (f.from_address IN ${wallets} OR f.to_address IN ${wallets}
+      `WITH w AS ${wallets},
+       touching AS (
+         SELECT f.* FROM washtrace.flows f JOIN w ON f.from_address = w.a WHERE f.chain_id = $2
+         UNION SELECT f.* FROM washtrace.flows f JOIN w ON f.to_address = w.a WHERE f.chain_id = $2
          -- Followed wallets' payments onward: the middle of a path SCC AU follows back.
-         OR f.from_address IN (SELECT address FROM washtrace.wallets WHERE chain_id = $2 AND depth > 0 AND status = 'done'))`,
-      [id, chainId],
+         UNION SELECT f.* FROM washtrace.flows f JOIN washtrace.wallets x ON x.chain_id = $2 AND x.address = f.from_address
+           WHERE f.chain_id = $2 AND x.depth > 0 AND x.status = 'done'
+       )
+       SELECT DISTINCT ON (t.from_address, t.to_address) t.*, extract(epoch FROM t.block_time)::float8 AS bt
+       FROM touching t
+       WHERE t.value_wei > 0 AND t.from_address <> t.to_address AND t.from_address <> $3 AND t.to_address <> $3
+         AND NOT EXISTS (SELECT 1 FROM washtrace.transfers s WHERE s.collection_id = $1 AND s.tx_hash = t.tx_hash)
+       ORDER BY t.from_address, t.to_address, t.block_number, t.tx_hash`,
+      [id, chainId, ZERO],
     )).rows.map(toFlow);
     const state = (await this.pool.query<{ address: string; truncated: boolean }>(
       `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $2 AND status = 'done' AND (address IN ${wallets} OR depth > 0)`,

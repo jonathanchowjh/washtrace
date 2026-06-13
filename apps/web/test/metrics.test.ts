@@ -82,6 +82,11 @@ describe('coverage', () => {
     expect(coverage(row({ cursorBlock: 500, fundedWallets: 20 })).reading).toBe('catching-up');
   });
 
+  it('is analyzing, not up to date, once every transfer is read but before the first analysis counts the wallets', () => {
+    const c = coverage(row({ latest: null, wallets: 0, fundedWallets: 0 }));
+    expect([c.reading, c.label, c.floor]).toEqual(['analyzing', 'Analyzing', []]);
+  });
+
   it('does not wait on wallets when no funding source is configured', () => {
     const c = coverage(row({ fundedWallets: 0, latest: { ...row().latest!, totals: OFF } }));
     expect(c.reading).toBe('complete');
