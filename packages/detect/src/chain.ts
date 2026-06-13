@@ -2,6 +2,7 @@ import {
   AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
   createPublicClient, http, toEventSelector, parseAbi, parseAbiItem, type Log, type PublicClient,
 } from 'viem';
+import { ZERO } from './graph.js';
 import { tagSales } from './marketplaces.js';
 import type { Transfer } from './types.js';
 
@@ -19,6 +20,21 @@ const NO_ANSWER = [ContractFunctionRevertedError, ContractFunctionZeroDataError,
  */
 export const START_SPAN = 2_000;
 const MAX_SPAN = 50_000;
+
+/**
+ * Terraforms, the collection a Test reads logs of. Its filter keeps a
+ * 50,000-block query small on Ethereum, and on a chain where it was never
+ * deployed the query answers empty, which still tests the range limit.
+ */
+export const TERRAFORMS = '0x4e1f41613c9084fdb9e34e11fae9412427480e56';
+/** How far back a Test reads a balance: far enough that only an archive node still holds the state. */
+const ARCHIVE_DEPTH = 1_000_000;
+/**
+ * How long a Test waits for each read, tried once. The finalized read and
+ * then the other two at once make about 12 seconds at worst, inside the
+ * 20 seconds the console polls for.
+ */
+export const CHECK_TIMEOUT_MS = 6_000;
 /** Receipts requested at once. The transport batches them into one HTTP request. */
 const RECEIPT_WIDTH = 50;
 
@@ -31,10 +47,17 @@ const RECEIPT_WIDTH = 50;
  */
 export class Chain {
   readonly client: PublicClient;
+  /**
+   * The client a Test reads through: one try, a short timeout, and no
+   * batching, so a slow log query cannot hold the archive read in the same
+   * HTTP request and fail it.
+   */
+  private readonly checkClient: PublicClient;
   private span = START_SPAN;
 
   constructor(readonly chainId: number, url: string) {
     this.client = createPublicClient({ transport: http(url, { batch: { batchSize: RECEIPT_WIDTH }, retryCount: 3, timeout: 30_000 }) });
+    this.checkClient = createPublicClient({ transport: http(url, { batch: false, retryCount: 0, timeout: CHECK_TIMEOUT_MS }) });
   }
 
   /**
@@ -45,6 +68,28 @@ export class Chain {
   async finalized(): Promise<number> {
     const block = await this.client.getBlock({ blockTag: 'finalized' });
     return Number(block.number);
+  }
+
+  /**
+   * The three things ingest needs, for the console's Test: the finalized
+   * block, an archive read (a balance a million blocks back, as finding a
+   * deployment block needs) and one log query as wide as ingest's widest
+   * span. A part that fails is false; only an unreadable finalized block
+   * throws, since without it nothing else can be asked. Each read is tried
+   * once within CHECK_TIMEOUT_MS: a Test must answer while the page polls.
+   */
+  async check(): Promise<{ finalized: number; archive: boolean; logs: boolean }> {
+    const finalized = Number((await this.checkClient.getBlock({ blockTag: 'finalized' })).number);
+    const yes = () => true;
+    const no = () => false;
+    const [archive, logs] = await Promise.all([
+      this.checkClient.getBalance({ address: ZERO, blockNumber: BigInt(Math.max(0, finalized - ARCHIVE_DEPTH)) }).then(yes, no),
+      this.checkClient.request({
+        method: 'eth_getLogs',
+        params: [{ address: TERRAFORMS, topics: [TRANSFER], fromBlock: hex(Math.max(0, finalized - MAX_SPAN + 1)), toBlock: hex(finalized) }],
+      }).then(yes, no),
+    ]);
+    return { finalized, archive, logs };
   }
 
   /** The first block with code at `address`, by binary search. Needs archive state. */

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { Warn } from '@/components/head';
 import { CHAINS } from '@/lib/chains';
 
 const FIELD = 'rounded-[5px] border bg-card px-2 py-1 text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none';
@@ -85,7 +86,7 @@ export function Suggested({ watched }: { watched: string[] }) {
           );
         })}
       </ul>
-      {said ? <p role="status" className={said.ok ? 'mt-1 text-xs text-ok' : 'mt-1 text-xs text-cycle'}>{said.text}</p> : null}
+      {said ? <p role="status" className={said.ok ? 'mt-1 text-xs text-ok' : 'mt-1 text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
     </div>
   );
 }
@@ -128,29 +129,72 @@ export function AddCollection() {
         <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className={`${FIELD} w-28 font-mono text-xs`} />
       </label>
       <button type="submit" disabled={busy} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
-      {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-cycle'}>{said.text}</p> : null}
+      {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
     </form>
   );
 }
 
-/** Stop watching, with the confirmation inline: one press arms it, a second within the row does it. */
-export function StopWatching({ chainId, address }: { chainId: number; address: string }) {
+/** POST a JSON body to a collection's route. `{}` still counts: the routes refuse anything that is not JSON. */
+async function send(method: string, path: string, body: unknown = {}): Promise<string | null> {
+  const res = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+  if (res?.ok) return null;
+  const said = res ? await res.json().catch(() => ({})) : {};
+  return said.error ?? 'The service did not answer.';
+}
+
+/**
+ * What can be done with one watched collection. In sync: pause it (the worker
+ * stops reading new blocks, its data stays) or move it up the worker's queue.
+ * Paused: resume it, or delete its data, which asks inline first and is only
+ * offered here because the API refuses to delete a collection still in sync.
+ * `compact` is for a list row: no Prioritize, which lives on the collection's page.
+ */
+export function CollectionControls({ chainId, address, paused, priority, compact = false }: { chainId: number; address: string; paused: boolean; priority: boolean; compact?: boolean }) {
   const router = useRouter();
   const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  async function stop() {
-    const res = await fetch(`/api/collections/${chainId}/${address}`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(() => null);
-    if (!res?.ok) { setError('Could not stop watching.'); return; }
-    router.push('/');
-    router.refresh();
+  const path = `/api/collections/${chainId}/${address}`;
+
+  async function run(method: string, to: string, body?: unknown, after?: () => void) {
+    setBusy(true);
+    setError(null);
+    const failed = await send(method, to, body);
+    setBusy(false);
+    if (failed) { setError(failed); return; }
+    if (after) after(); else router.refresh();
   }
-  if (!armed) return <button type="button" onClick={() => setArmed(true)} className={BUTTON}>Stop watching</button>;
+
+  const fail = error ? <span role="alert" className="text-fault"><Warn className="mr-1 size-3.5 align-text-bottom" />{error}</span> : null;
+
+  if (!paused) {
+    return (
+      <span className="flex flex-wrap items-center gap-2 text-xs">
+        <button type="button" disabled={busy} onClick={() => run('POST', `${path}/pause`)} className={BUTTON}
+          title="Stop reading new blocks for this collection; keeps its data">Pause</button>
+        {compact ? null : <button type="button" disabled={busy} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className={BUTTON}
+          title={priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
+        {fail}
+      </span>
+    );
+  }
+  if (!armed) {
+    return (
+      <span className="flex flex-wrap items-center gap-2 text-xs">
+        <button type="button" disabled={busy} onClick={() => run('POST', `${path}/resume`)} className={BUTTON}
+          title="Start reading new blocks for this collection again, from where it stopped">Resume</button>
+        <button type="button" onClick={() => setArmed(true)} className={`${BUTTON} border-foreground`}
+          title="Remove this collection's transfers and analyses from the store. Asks first.">Delete data…</button>
+        {fail}
+      </span>
+    );
+  }
   return (
-    <span className="flex items-center gap-2 text-xs">
-      <span>Drops its transfers and analyses.</span>
-      <button type="button" onClick={stop} className={`${BUTTON} border-cycle text-cycle`}>Stop watching</button>
-      <button type="button" onClick={() => setArmed(false)} className={BUTTON}>Keep</button>
-      {error ? <span className="text-cycle">{error}</span> : null}
+    <span className="flex flex-wrap items-center gap-2 text-xs">
+      <span>Delete its transfers and analyses? Wallet funding is kept. Watching it again starts over (or restores stored data).</span>
+      <button type="button" disabled={busy} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className={`${BUTTON} border-foreground`}>Delete</button>
+      <button type="button" onClick={() => { setArmed(false); setError(null); }} className={BUTTON}>Keep</button>
+      {fail}
     </span>
   );
 }

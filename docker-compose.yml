@@ -37,6 +37,12 @@ services:
         required: false
     environment:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
+    # Stored data from the host, over the copy in the image: a money trail is
+    # too big to bake in (.dockerignore), so a trail file put in data/stored
+    # loads from here. /app/data/stored is where the worker looks, unless
+    # WASHTRACE_STORED_DIR says otherwise. Read only: the worker never writes it.
+    volumes:
+      - ./data/stored:/app/data/stored:ro
     restart: unless-stopped
 
   api:
@@ -51,6 +57,9 @@ services:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
     ports:
       - "8080:8080"
+    # The same stored data as the worker's, so the console describes the manifest the worker loads from.
+    volumes:
+      - ./data/stored:/app/data/stored:ro
     restart: unless-stopped
 
 volumes:

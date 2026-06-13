@@ -10,14 +10,15 @@ import { History, LensCards, RangeBar, RangeKey, Ranked, Trend } from '@/compone
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
-import { StopWatching } from '@/components/watch';
+import { CollectionControls } from '@/components/watch';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { coverage, range, rangeText, summary, type Range } from '@/lib/metrics';
-import { store } from '@/lib/store';
+import { coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { configFromSources } from '@/lib/settings';
+import { store, storedEntry } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 /** Rows of each ranking shown in the lens panel; the rest are a page away. */
@@ -48,10 +49,19 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const method = methodOf((await searchParams).method);
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
-  const [history, timeline, tokens, wallets, profile] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id)]);
+  const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
+  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now(), zone);
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
-  const cov = coverage(c);
+  // The chains the worker can read: with none for this one, its stored data is all there is.
+  const config = configFromSources(sources, settings);
+  const rpcChains = new Set(config.chains);
+  // How many traders the loaded money trail checked, from the manifest, when the trail it describes is the one loaded.
+  const entry = c.trailImportedSha === null ? null : await storedEntry(chainId, address);
+  const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
+  // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
+  const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
+  const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
   const name = c.name ?? short(address);
   const lens = LENSES[method];
   const t = a?.totals[method];
@@ -68,10 +78,10 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       <About c={c} profile={profile} />
 
-      <div className="mb-4"><ReadingSummary cov={cov} href="#reading" /></div>
+      <div className="mb-4"><ReadingSummary c={c} cov={cov} href="#reading" /></div>
 
       {a === null ? (
-        <Empty>The worker has not analyzed this collection yet. It does once its first transfers are read.</Empty>
+        <Empty>{why}</Empty>
       ) : (
         <section aria-label="The answer" className="rounded-lg border bg-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -89,7 +99,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       {a ? (
         <Section id="evidence" title="How was it found?" lead="Three lenses, strictest first; each is one end, or the middle, of the range above. Choose one to see the tokens and wallets it flags.">
-          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor}>
+          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null} funded={funded}>
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available
                 ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
@@ -116,14 +126,14 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       {a && timeline && timeline.points.length > 0 ? (
         <Section
           title="When did it happen?"
-          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{cov.reading === 'catching-up' ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
+          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: cov.reading === 'catching-up' ? timeline.readThrough : null }} totals={a.totals} floor={cov.floor} now={Date.now()} zone={zone} />
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} floor={cov.floor} now={Date.now()} zone={zone} />
         </Section>
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>
@@ -132,8 +142,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         ) : null}
       </Section>
 
-      <Section title="Stop watching" lead="The worker stops reading it, and its transfers and analyses are dropped from the store.">
-        <StopWatching chainId={chainId} address={address} />
+      <Section title="Reading this collection" lead={c.pausedAt === null ? 'Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
+        <CollectionControls chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>
     </>
   );

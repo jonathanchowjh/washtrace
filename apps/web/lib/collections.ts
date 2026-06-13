@@ -9,12 +9,16 @@ const RULE_NAMES = Object.keys(RULES) as (keyof Rules)[];
 
 /** A key left out is left alone; a rule set to null goes back to its default. */
 export function configChange(body: Record<string, unknown>): Configure | string {
-  const unknown = Object.keys(body).find((k) => k !== 'name' && k !== 'rules');
-  if (unknown) return `Unknown field '${unknown}'. Send name, rules, or both.`;
+  const unknown = Object.keys(body).find((k) => k !== 'name' && k !== 'rules' && k !== 'priority');
+  if (unknown) return `Unknown field '${unknown}'. Send name, rules, priority, or any of them.`;
   const change: Configure = {};
   if ('name' in body) {
     if (body.name !== null && typeof body.name !== 'string') return 'name must be a string, or null to clear it.';
     change.name = body.name;
+  }
+  if ('priority' in body) {
+    if (typeof body.priority !== 'boolean') return 'priority must be true or false.';
+    change.priority = body.priority;
   }
   if ('rules' in body) {
     const rules = body.rules;

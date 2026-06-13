@@ -1,17 +1,26 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
-import { Answer, Head, Problem, Section } from '@/components/head';
+import { Head, Notices, Problem, Section, Warn } from '@/components/head';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
-import { LENSES, plural, short } from '@/lib/format';
+import { LENSES, eta, plural, short, withoutKey } from '@/lib/format';
+import { FIELDS } from '@/lib/settings';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
+import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 import { Time } from '@/components/time';
 
 export const metadata: Metadata = { title: 'Worker' };
+
+/** What the worker uses for a number it has no value for, or one it ignores (env.ts, mirrored in FIELDS). */
+const DEFAULT = {
+  rps: Number(FIELDS.find((f) => f.key === 'etherscan.rps')!.fallback),
+  hops: Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback),
+};
 
 /** The three jobs in the order data flows through them, each with what it feeds. */
 const STEPS = {
@@ -23,8 +32,8 @@ const STEPS = {
 const STATE: Record<JobState, { label: string; className: string }> = {
   ok: { label: 'OK', className: 'bg-ok/12 text-ok' },
   running: { label: 'Running', className: 'bg-focus/12 text-focus' },
-  failed: { label: 'Failed', className: 'bg-cycle/12 text-cycle' },
-  stalled: { label: 'Stalled', className: 'bg-cycle/12 text-cycle' },
+  failed: { label: 'Failed', className: 'bg-fault/12 text-fault' },
+  stalled: { label: 'Stalled', className: 'bg-fault/12 text-fault' },
   never: { label: 'Never run', className: 'bg-muted text-muted-foreground' },
 };
 
@@ -33,27 +42,32 @@ export default async function WorkerPage() {
   await connection();
   let v: Awaited<ReturnType<typeof workerView>>;
   try {
-    v = await workerView();
+    // The reader's zone, for the dates in the notices.
+    v = await workerView(parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone);
   } catch (err) {
     return <><Head title="Worker" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
   }
+  // A pass that started and has not finished is running; its `doing` says what, and for which collection.
+  const now = v.passes.filter((p) => (p.finishedAt === null || p.finishedAt < p.startedAt) && p.doing);
   return (
     <>
       <Head title="Worker" sub="The service that reads the chain and fills the store. It runs as its own process; this page reads what it recorded.">
         <Refresh everyMs={5_000} />
       </Head>
 
-      <Answer tone={v.problems.length === 0 ? 'clean' : 'cycle'} title={v.problems.length === 0 ? 'Nothing needs attention' : `${plural(v.problems.length, 'thing')} need${v.problems.length === 1 ? 's' : ''} attention`}>
-        {v.problems.length === 0 ? 'Every job ran on time and every collection is keeping up.' : (
-          <ul className="list-disc space-y-0.5 pl-4">{v.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>
-        )}
-      </Answer>
+      <Notices notices={v.notices} />
+      <p className="mt-3 text-sm text-muted-foreground">
+        <b className="font-medium text-foreground">Now</b>{' '}
+        {now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')}
+      </p>
 
       <Section title="What it does" lead="Three jobs, in the order data flows through them. Each feeds the next, and the last feeds the console.">
         <ol className="grid gap-3 lg:grid-cols-3">
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
             const state = STATE[j.state];
+            // In flight, running or stuck: what the row holds besides its start is the last pass's, not this one's.
+            const inFlight = j.startedAt !== null && (j.finishedAt === null || j.finishedAt < j.startedAt);
             return (
               <li key={j.job} className="relative flex flex-col gap-2 rounded-lg border bg-card p-4">
                 {i > 0 ? <span aria-hidden className="absolute top-1/2 -left-3 hidden -translate-y-1/2 text-muted-foreground lg:block">→</span> : null}
@@ -64,19 +78,20 @@ export default async function WorkerPage() {
                 <p className="text-sm text-muted-foreground">{step.does}</p>
                 <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                   <dt className="text-muted-foreground">Every</dt><dd>{v.every[j.job] / 1000}s</dd>
-                  <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && j.state !== 'running' ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
-                  <dt className="text-muted-foreground">Said</dt><dd className={cn(j.state === 'failed' && 'text-cycle')}>{j.state === 'running' ? '…' : j.detail ?? '—'}</dd>
+                  <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && !inFlight ? `, took ${(j.tookMs / 1000).toFixed(1)}s` : ''}</dd>
+                  <dt className="text-muted-foreground">Said</dt><dd className={cn(!inFlight && j.outcome === 'failed' && 'text-fault')}>{inFlight ? '…' : j.detail ?? '—'}</dd>
                   <dt className="text-muted-foreground">Feeds</dt><dd>{step.feeds}</dd>
                 </dl>
                 {j.job === 'fund' && v.backlog.length > 0 ? (
                   <div className="border-t pt-2 text-xs">
                     {v.backlog.map((b) => {
-                      const all = b.done + b.pending + b.failed;
+                      // Held-back wallets are unchecked too: left out, the bar would read done while they wait for a resume.
+                      const all = b.done + b.pending + b.failed + b.stranded;
                       return (
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{b.done.toLocaleString()} of {all.toLocaleString()} checked</span></p>
-                          <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-money" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
-                          <p className="mt-0.5 text-muted-foreground">{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
+                          <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-muted-foreground" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.stranded > 0 ? `${b.stranded.toLocaleString()} held back while their collections are paused or removed · ` : ''}{b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
                         </div>
                       );
                     })}
@@ -88,17 +103,19 @@ export default async function WorkerPage() {
         </ol>
       </Section>
 
-      <Section title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%.">
+      <Section id="sources" title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%. Each one is set in Settings.">
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ step 1</span></span>
-            {v.rpcChains.length === 0 ? <span className="text-cycle">None. Set WASHTRACE_RPC_1 to an Ethereum JSON-RPC URL.</span> : <span>{v.rpcChains.map(chainName).join(', ')}</span>}
+            {v.rpcChains.length === 0
+              ? <Link href="/settings#rpc.1" className="flex items-start gap-1 text-fault underline"><Warn className="mt-0.5 size-3.5" />None. Set an Ethereum RPC URL in Settings.</Link>
+              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
             {v.funding === null
-              ? <span className="text-money">None, so {LENSES.AU.name} and {LENSES.AC.name} do not run. Set WASHTRACE_ETHERSCAN_KEY.</span>
-              : <span>Etherscan API V2, {v.funding.perSecond} calls a second, following money {plural(v.followHops, 'hop')} out of traders</span>}
+              ? <span className="text-muted-foreground">{v.trailFunded ? `None: ${withoutKey(true)}.` : `None, so ${withoutKey(false)}.`} <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings</Link>.</span>
+              : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'hop')}</Link> out of traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>
       </Section>
@@ -109,10 +126,15 @@ export default async function WorkerPage() {
             <li key={`${c.chainId}/${c.address}`} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
               <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
               <span className="text-xs text-muted-foreground">
-                {c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
-                {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale ? ' · new data waiting' : ''}
+                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.turn === 'stored-only' ? 'no RPC for its chain, stored data loaded' : c.headBlock === null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock ? `read to block ${c.cursorBlock.toLocaleString('en-US')}, head not known` : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
+                {c.turn === 'paused' || c.turn === 'restoring' || c.turn === 'stored-only' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
+                {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale && c.turn !== 'paused' ? ' · new data waiting' : ''}
               </span>
-              {c.error ? <p className="basis-full text-xs text-cycle">{c.error}</p> : null}
+              {/* A "No RPC" left from before stored data loaded is no fault, paused or not; the notice above says how to read on. */}
+              {/* Nor an error on a paused collection: the worker leaves it alone, so it is from before the pause. */}
+              {c.error && !c.storedOnly ? c.turn === 'paused'
+                ? <p className="basis-full text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
+                : <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
             </li>
           ))}
         </ul>

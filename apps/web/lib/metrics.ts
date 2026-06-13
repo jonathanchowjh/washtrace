@@ -1,6 +1,5 @@
-import { METHODS, type CollectionRow, type Method, type MethodTotals } from '@washtrace/detect';
-import { BEHIND_BLOCKS } from './status';
-import { pct } from './format';
+import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals, type PassRow } from '@washtrace/detect';
+import { localTime, pct, plural } from './format';
 
 /**
  * The analysis, said the way a reader asks it. The three methods are three
@@ -60,7 +59,7 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete';
+export type Reading = 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -72,28 +71,166 @@ export interface Coverage {
   money: boolean;
   /** Lenses whose shares can only rise as the reading completes. */
   floor: Method[];
+  /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
+  restore: number | null;
+  /** When the stored data stops, while it is all there is (stored-only, not read past it); else null. */
+  stops: number | null;
+  /** How long ago that was, "9 days unsynced", whenever `stops` is set; else null. */
+  unsynced: string | null;
+  /** Stored-only but read past the stored data before the RPC went: the block it was read to. Else null. */
+  readTo: number | null;
   label: string;
+}
+
+/**
+ * Whether a collection shows stored data only: its stored data has loaded
+ * (the cursor sits past its start), and its chain has no RPC to read on
+ * from there. Not a fault, and not starting: the numbers are all there, they
+ * just stop where the stored data was cut.
+ */
+export function storedOnly(c: Pick<CollectionRow, 'chainId' | 'startBlock' | 'cursorBlock'> & Partial<Pick<CollectionRow, 'storedThroughTime'>>, rpcChains: ReadonlySet<number>): boolean {
+  return !rpcChains.has(c.chainId) && (c.storedThroughTime ?? null) !== null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock;
+}
+
+/**
+ * Why a collection's stored data was not loaded, and what follows, as the
+ * console says it. The worker writes only why (restoreNote); what follows
+ * depends on the chain's RPC. With one the chain is read meanwhile; with none
+ * nothing is, and the stored data is all the collection can have. Either way
+ * a load the data failed is tried again once the stored data changes, and
+ * one the store failed after its wait: then `then` ends in "after", and the
+ * caller says `retryAt` in the reader's zone. A paused collection is neither
+ * read nor tried, so it gets only why.
+ */
+export function restoreNext(
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt'> & Partial<Pick<CollectionRow, 'restoreNote' | 'restoreRetryAt'>>,
+  rpcChains: ReadonlySet<number>,
+): { note: string; then: string | null; retryAt: number | null } | null {
+  if (!c.restoreNote) return null;
+  if (c.pausedAt !== null) return { note: c.restoreNote, then: null, retryAt: null };
+  const retryAt = c.restoreRetryAt ?? null;
+  const read = rpcChains.has(c.chainId) ? 'Reading from the chain instead; it is' : 'It is';
+  return { note: c.restoreNote, then: retryAt === null ? `${read} tried again when its stored file or the manifest changes.` : `${read} tried again after`, retryAt };
+}
+
+/** restoreNext as one line of text, its time said in `zone`. Built on the server, so the locale is pinned. */
+export function restoreText(c: Parameters<typeof restoreNext>[0], rpcChains: ReadonlySet<number>, zone = 'UTC'): string | null {
+  const n = restoreNext(c, rpcChains);
+  if (n === null) return null;
+  return [n.note, n.then, n.retryAt === null ? null : `${localTime(n.retryAt, 'time', zone, 'en-GB')}.`].filter((x) => x !== null).join(' ');
+}
+
+/** How long stored data has gone unread, as the owner put it: "9 days unsynced". With no RPC there is no head to count blocks to, only time. */
+function unsyncedFor(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 1) return 'up to date with its stored data';
+  return hours < 24 ? `${plural(hours, 'hour')} unsynced` : `${plural(Math.floor(hours / 24), 'day')} unsynced`;
 }
 
 /**
  * How far the reading the numbers rest on has got. History comes first: with
  * blocks unread, any share can still move either way. Then wallets: with
  * money unread, the money lenses have missed links but not invented any, so
- * their shares are floors.
+ * their shares are floors. Before either, stored data may be loading: the
+ * history it holds arrives at once, when the load commits. A paused
+ * collection is none of these: its head stops moving, so "up to date" would
+ * be a claim nobody is keeping true. Nor is one showing stored data with no
+ * RPC: its numbers stop at the stored date, said in `zone` (the reader's;
+ * the console draws that date with Time). Nor one read before whose chain's
+ * head is not known now: its RPC failed before saying (the collection's
+ * error says why), and what was read stands.
+ *
+ * `funding` is whether an Etherscan key is set (SourcesConfig.funding, as the
+ * status report reads it). Without one nothing checks wallets, so unchecked
+ * wallets leave the money lenses as floors but are not a step in progress.
  */
-export function coverage(c: Pick<CollectionRow, 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'>): Coverage {
+export function coverage(
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers' | 'analysisError'>>,
+  rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', funding = true,
+): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
   const wallets = { checked: c.fundedWallets, of: c.wallets };
   const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
   const span = c.headBlock === null || c.startBlock === null ? null : c.headBlock - c.startBlock;
-  const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.min(1, (c.cursorBlock - c.startBlock) / span);
+  const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.max(0, Math.min(1, (c.cursorBlock - c.startBlock) / span));
   const unchecked = money && wallets.checked < wallets.of;
   const floor: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
-  const base = { blocks, behind, wallets, money, floor };
-  if (c.cursorBlock === null || c.startBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
+  // A load is never resumed after a pause, so progress left on a paused collection is stale.
+  // Never shown as done: the data is not there until the load commits, and then the progress is gone.
+  const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
+  const noRpc = c.pausedAt === null && restore === null && storedOnly(c, rpcChains);
+  // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
+  const past = noRpc && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
+  const stops = noRpc && !past ? c.storedThroughTime! : null;
+  const unsynced = stops === null ? null : unsyncedFor(now - stops);
+  const readTo = past ? c.cursorBlock : null;
+  const base = { blocks, behind, wallets, money, floor, restore, stops, unsynced, readTo };
+  if (restore !== null) return { ...base, reading: 'restoring', label: `Loading stored data · ${progress(restore)}` };
+  if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
+  // Before 'starting': with no RPC the head is never known, and the stored numbers are all there is.
+  // Built on the server, so the locale is pinned; the console draws its own date with Time.
+  if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone, 'en-GB')} · ${unsynced}` };
+  if (readTo !== null) return { ...base, reading: 'stored-only', label: `Read to block ${readTo.toLocaleString('en-US')} · no RPC for its chain` };
+  // Read before, but no head now: an RPC that fails (a typo, a rate limit) never said it. The numbers are there; how far behind is not known.
+  const read = c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && ((c.storedThroughTime ?? null) !== null || (c.transfers ?? 0) > 0);
+  if (c.headBlock === null && read) return { ...base, reading: 'head-unknown', label: `Read to block ${c.cursorBlock!.toLocaleString('en-US')}` };
+  // An unknown head cannot be caught up to.
+  if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return { ...base, reading: 'starting', label: 'Starting' };
   if (behind !== null && behind > BEHIND_BLOCKS) return { ...base, reading: 'catching-up', label: `Reading history · ${blocks === null ? '…' : progress(blocks)}` };
   // The wallet counts come from an analysis, so until the first one they are not zero but unknown.
-  if (c.latest === null) return { ...base, reading: 'analyzing', label: 'Analyzing' };
-  if (unchecked) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
+  if (c.latest === null) return { ...base, reading: 'analyzing', label: c.analysisError ? 'First analysis failed' : 'Analyzing' };
+  // Only a key checks wallets: without one (a loaded money trail, or a key just removed) nothing is in progress.
+  if (unchecked && funding) return { ...base, reading: 'checking', label: `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}` };
   return { ...base, reading: 'complete', label: 'Up to date' };
+}
+
+/**
+ * The collections tabs' counts. "Behind" is the In sync collections showing
+ * stored data only: in sync by choice, but nothing reads them on until their
+ * chain has an RPC.
+ */
+export function tabCounts(rows: readonly CollectionRow[], rpcChains: ReadonlySet<number>): { sync: number; paused: number; all: number; behind: number } {
+  const sync = rows.filter((c) => c.pausedAt === null);
+  return { sync: sync.length, paused: rows.length - sync.length, all: rows.length, behind: sync.filter((c) => storedOnly(c, rpcChains)).length };
+}
+
+/** Whether history is still unread, paused or not: a pause does not read what was left. The history chart shades that stretch. */
+export function unread(cov: Pick<Coverage, 'behind'>): boolean {
+  return cov.behind !== null && cov.behind > BEHIND_BLOCKS;
+}
+
+/** A pass is running from when it starts until it finishes. The status route and the pages both decide it here. */
+export function isRunning(p: PassRow): boolean {
+  return p.finishedAt === null || p.finishedAt < p.startedAt;
+}
+
+/**
+ * When a collection whose last analysis failed is tried again, as the console
+ * says it: after a time in `zone`, or due once that has passed, when it waits
+ * only for the analysis thread. Text, so the locale is pinned.
+ */
+export function analysisRetry(c: Pick<CollectionRow, 'analysisRetryAt'>, now: number, zone = 'UTC'): string {
+  const at = c.analysisRetryAt ?? null;
+  return at !== null && at > now ? `it is tried again after ${localTime(at, 'time', zone, 'en-GB')}` : 'it is due to be tried again';
+}
+
+/**
+ * Why a collection has no analysis yet, from what the worker is doing now.
+ * Analysis runs one collection per pass, so a new one may be queued behind
+ * another that takes a while. One whose analysis failed waits out its back-off
+ * first, said in `zone`.
+ */
+export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number, zone = 'UTC'): string {
+  // Never analysed while paused, so promise nothing.
+  if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
+  // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
+  if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
+  if (c.transfers === 0) return 'Waiting for its first transfers.';
+  const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
+  const min = running === null ? '' : `${Math.floor((now - running.startedAt) / 60_000)} min`;
+  if (running?.subjectId === c.id) return `First analysis running · started ${min} ago.`;
+  // Not the next pass: it waits out its back-off whatever runs now.
+  if (c.analysisError) return `Its analysis failed: ${c.analysisError} · ${analysisRetry(c, now, zone)}.`;
+  if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
+  return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
 }

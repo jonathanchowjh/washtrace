@@ -77,9 +77,9 @@ export default async function WalletPage({ params }: Props) {
               </thead>
               <tbody>
                 {counterparties.map((c) => (
-                  <tr key={c.address} className={c.watched ? 'border-b bg-money-surface/60 last:border-b-0' : 'border-b last:border-b-0'}>
+                  <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
                     <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
-                    <td className="px-3 py-1.5">{c.watched ? <span className="font-medium text-money">yes</span> : <span className="text-muted-foreground">no</span>}</td>
+                    <td className="px-3 py-1.5">{c.watched ? <span className="font-medium text-foreground">yes</span> : <span className="text-muted-foreground">no</span>}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{c.sent}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{c.received}</td>
                   </tr>

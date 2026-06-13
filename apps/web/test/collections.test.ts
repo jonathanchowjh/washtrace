@@ -11,6 +11,15 @@ describe('configChange', () => {
     expect(configChange({ name: 'BAYC' })).toEqual({ name: 'BAYC' });
   });
 
+  it('accepts priority as a boolean', () => {
+    expect(configChange({ priority: true })).toEqual({ priority: true });
+    expect(configChange({ priority: false })).toEqual({ priority: false });
+  });
+
+  it('refuses a priority that is not a boolean', () => {
+    expect(configChange({ priority: 'yes' })).toBe('priority must be true or false.');
+  });
+
   it.each([
     [{ rules: { minCycle: 3 } }, 'minCycle'],
     [{ rules: { minCycles: 0 } }, 'minCycles'],
