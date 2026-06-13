@@ -1,6 +1,6 @@
 import { ACTOR_HEADER } from '@/lib/auth';
 import { addressOf, bad, handle, json, readJson } from '@/lib/api';
-import { rpcUrls } from '@/lib/config';
+import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
 
 /** GET: every watched collection, its ingest and funding progress, and its latest analysis. */
@@ -25,10 +25,15 @@ export async function POST(req: Request): Promise<Response> {
     if (chainId === null) return bad('chainId must be a positive integer, such as 1 for Ethereum.');
     if (address === null) return bad('address must be a contract address: 0x and 40 hex digits.');
     if (fromBlock === undefined) return bad('fromBlock must be a block number, or left out to start at deployment.');
-    const { id, created } = await store().addCollection(chainId, address, name, fromBlock);
+    const s = store();
+    const { id, created } = await s.addCollection(chainId, address, name, fromBlock);
     const actor = decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous');
     if (created) console.info('[washtrace] %s is watching %d/%s', actor, chainId, address);
-    const warning = rpcUrls(process.env).has(chainId) ? undefined : `No RPC is configured for chain ${chainId}; set WASHTRACE_RPC_${chainId} or nothing will be read.`;
+    // The worker's report, not this process's environment: only the worker reads the chain.
+    // A console value counts too, so a URL saved a moment ago doesn't warn before the worker's next report.
+    const hasRpc = (await s.sources())[`rpc.${chainId}`] !== undefined || Boolean((await s.settings()).get(`rpc.${chainId}`)?.trim());
+    const where = FIELDS.some((f) => f.key === `rpc.${chainId}`) ? 'Set one in Settings' : `Set WASHTRACE_RPC_${chainId} for the worker`;
+    const warning = hasRpc ? undefined : `No RPC is configured for chain ${chainId}, so nothing will be read. ${where}.`;
     return json({ id, chainId, address, created, warning }, created ? 201 : 200);
   });
 }

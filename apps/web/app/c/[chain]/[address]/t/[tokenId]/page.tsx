@@ -62,6 +62,14 @@ export default async function TokenPage({ params }: Props) {
             They count toward <Link href={`${base}?method=${by[0]}`} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.
           </>
         )}
+        {by.length > 0 ? (
+          <p className="mt-2 text-muted-foreground">
+            <b className="font-medium text-foreground">What this means:</b>{' '}
+            {by.includes('A')
+              ? 'This is the strictest lens: its trades return to a wallet that sold it. The loop is drawn below.'
+              : `${lensList(by)} found this: a buyer and a seller of the token are linked by money. The money paths are the dashed arrows below.`}
+          </p>
+        ) : null}
       </Answer>
 
       <div className="grid gap-x-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

@@ -5,7 +5,7 @@ This is the guide for working on the code. To *run* washtrace, read the
 
 ## Setup
 
-You need **Node 22 or newer**, **npm** and **Docker**. Docker runs the dev
+You need **Node 22.15 or newer**, **npm** and **Docker**. Docker runs the dev
 Postgres and the integration tests. Unit and component tests run without it.
 
 ```sh

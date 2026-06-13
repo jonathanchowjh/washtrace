@@ -4,18 +4,20 @@
  * the worker service's (apps/worker); this process never reads a chain.
  *
  * Next calls `register()` once per server, for the edge runtime as well as
- * Node, so the guard is required and the imports stay inside it: `pg` must
- * never reach an edge bundle. Not awaited past the first line: a store still
- * starting must not hold the API down. Migrations are idempotent and run
+ * Node, so the guard is required and the imports stay inside its branch:
+ * `pg` and `worker_threads` must never reach an edge bundle, and the bundler
+ * drops only an import written inside the branch itself. Not awaited past the
+ * imports: a store still starting must not hold the API down. Migrations are idempotent and run
  * under a lock, so the api and worker services migrating together is safe.
  */
 export async function register(): Promise<void> {
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
-  void migrate();
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const [{ messageOf }, { store }] = await Promise.all([import('@washtrace/detect'), import('./lib/store')]);
+    void migrate(store, messageOf);
+  }
 }
 
-async function migrate(): Promise<void> {
-  const [{ messageOf }, { store }] = await Promise.all([import('@washtrace/detect'), import('./lib/store')]);
+async function migrate(store: typeof import('./lib/store').store, messageOf: (err: unknown) => string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await store().migrate();

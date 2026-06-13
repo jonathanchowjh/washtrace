@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
-import { EVERY, Store, Worker, messageOf, storeUrl, workerConfig } from '@washtrace/detect';
+import { fileURLToPath } from 'node:url';
+import { EVERY, Store, Worker, messageOf, storeUrl, storedDir, workerConfig } from '@washtrace/detect';
 
 /**
  * The worker service: the polling half of washtrace, as its own process.
  *
- * It reads chains and Etherscan on timers and writes the store. It serves no
- * API; the api service reads what it wrote. Run one, or several: each pass
+ * It reads chains and Etherscan on timers and writes the store, and runs the
+ * console's Tests of an RPC or a key when asked. It serves no API; the api
+ * service reads what it wrote. Run one, or several: each pass
  * takes its job's advisory lock without waiting, so N replicas do one
  * worker's work, and a replica that dies mid-pass leaves the lock to the next.
  *
@@ -14,7 +16,8 @@ import { EVERY, Store, Worker, messageOf, storeUrl, workerConfig } from '@washtr
 
 const PORT = Number(process.env.WASHTRACE_WORKER_PORT ?? 8081);
 
-const store = Store.connect(storeUrl(process.env));
+const url = storeUrl(process.env);
+const store = Store.connect(url);
 
 // The store may still be starting (an ordinary compose or k8s ordering):
 // keep trying rather than crash-looping.
@@ -28,15 +31,29 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-const worker = new Worker(store, () => workerConfig(process.env));
-worker.start();
+// A load of stored data that was running when the last worker died rolled
+// back, but the progress it showed was written outside it: clear it, or the
+// console says "Loading stored data" for ever. Before the first pass, which
+// may start a load of its own.
+await store.clearRestoreProgress().catch((err) => console.warn('[worker] stale stored-data progress not cleared: %s', messageOf(err)));
 
-const config = workerConfig(process.env);
+// Stored data is data/stored at the repo root (/app in the image), wherever
+// the process was started from: `npm run worker` starts it in apps/worker.
+const root = fileURLToPath(new URL('../../..', import.meta.url));
+
+// The environment wins over the console's settings, which each pass re-reads.
+const worker = new Worker(store, (s) => workerConfig(process.env, s), url, storedDir(process.env, root));
+worker.start();
+// A Test asked for in the console is heard at once over LISTEN, not next pass.
+void worker.listen();
+
+// Chain ids and on/off only: never an RPC URL or the key.
+const config = workerConfig(process.env, await store.settings().catch(() => new Map<string, string>()));
 console.info(
   '[worker] started: ingest every %ds, fund every %ds, analyze every %ds; RPC for %s; funding %s; following money %d hops out.',
   EVERY.ingest / 1000, EVERY.fund / 1000, EVERY.analyze / 1000,
-  config.rpc.size === 0 ? 'no chain (set WASHTRACE_RPC_<chainId>)' : `chain ${[...config.rpc.keys()].join(', ')}`,
-  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY), so SCC AU and AC are unavailable' : 'from Etherscan',
+  config.rpc.size === 0 ? 'no chain (set WASHTRACE_RPC_<chainId> or an RPC in Settings)' : `chain ${[...config.rpc.keys()].join(', ')}`,
+  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY or the key in Settings), so SCC AU and AC are unavailable' : 'from Etherscan',
   config.followHops,
 );
 

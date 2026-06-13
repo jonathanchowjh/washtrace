@@ -28,6 +28,14 @@ export function plural(n: number, word: string): string {
   return `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** How long a wait will take, roughly: a guess is never shown to the minute. "about 40 min left". */
+export function eta(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  if (min < 60) return `about ${min} min left`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `about ${h} h left` : `about ${plural(Math.round(h / 24), 'day')} left`;
+}
+
 export type TimeStyle = 'datetime' | 'date' | 'time' | 'month';
 
 const STYLES: Record<TimeStyle, Intl.DateTimeFormatOptions> = {
@@ -42,13 +50,15 @@ const STYLES: Record<TimeStyle, Intl.DateTimeFormatOptions> = {
  * say when, not how long before some other moment. The zone is the reader's,
  * detected or chosen; called without one it is whatever zone runs it, which
  * on the server is the container's, so the console calls it in the browser.
+ * `locale` is the reader's when left out, which on the server is whatever
+ * the container has (often none); text built there pins one instead.
  */
-export function localTime(ms: number, style: TimeStyle = 'datetime', zone?: string): string {
-  const key = `${style}|${zone ?? ''}`;
+export function localTime(ms: number, style: TimeStyle = 'datetime', zone?: string, locale?: string): string {
+  const key = `${style}|${zone ?? ''}|${locale ?? ''}`;
   let f = formatters.get(key);
   // One formatter per style and zone: a chart asks for hundreds of labels on every hover.
   if (!f) {
-    f = new Intl.DateTimeFormat(undefined, zone ? { ...STYLES[style], timeZone: zone } : STYLES[style]);
+    f = new Intl.DateTimeFormat(locale, zone ? { ...STYLES[style], timeZone: zone } : STYLES[style]);
     formatters.set(key, f);
   }
   return f.format(ms);
@@ -71,6 +81,16 @@ export const LENSES = {
 export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
   const names = methods.map((m) => LENSES[m].name);
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What having no Etherscan key means for the money lenses: they do not run,
+ * or, while a collection's loaded money trail feeds them, they run on the
+ * stored trails alone and newer wallets go unchecked.
+ */
+export function withoutKey(trailFunded: boolean): string {
+  const money = `${LENSES.AU.name} and ${LENSES.AC.name}`;
+  return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
 }
 
 export function explorer(chainId: number): string {

@@ -1,4 +1,5 @@
 import { decodeEventLog, parseAbi, toEventSelector, type Log } from 'viem';
+import { ZERO } from './graph.js';
 import type { Transfer } from './types.js';
 
 /**
@@ -54,6 +55,17 @@ export function contractsFor(chainId: number): Set<string> {
 
 export function moneyFor(chainId: number): Set<string> {
   return new Set(['', ...(WRAPPED[chainId] ?? [])]);
+}
+
+/**
+ * The wallets some transfers queue for a funding check: every sender and
+ * receiver, once per transfer, but the zero address and the chain's
+ * contracts, which are not traders. Reading the chain and loading stored
+ * data queue the same.
+ */
+export function traders(chainId: number, transfers: readonly Pick<Transfer, 'from' | 'to'>[]): string[] {
+  const contracts = contractsFor(chainId);
+  return transfers.flatMap((t) => [t.from, t.to]).filter((a) => a !== ZERO && !contracts.has(a));
 }
 
 const SEAPORT = parseAbi([

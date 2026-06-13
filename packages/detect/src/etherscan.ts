@@ -6,6 +6,8 @@ export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
 const PAGE = 1_000;
 const PAGES = 10;
 const RETRIES = 4;
+/** A Test's one try waits this long, so it answers inside the 20 seconds the console polls for. */
+const PING_TIMEOUT_MS = 6_000;
 
 interface Row {
   hash: string;
@@ -83,10 +85,26 @@ export class Etherscan {
     return row?.contractCreator && row.txHash ? { creator: row.contractCreator.toLowerCase(), txHash: row.txHash.toLowerCase() } : null;
   }
 
+  /**
+   * One cheap call, for the console's Test: the latest block number through
+   * Etherscan's proxy module. Resolves when the key, the URL and the chain
+   * are all accepted. Proxy answers are JSON-RPC shaped, not the account
+   * module's status and result, so this does not go through `call`. Tried
+   * once with a short timeout, a rate-limit refusal included.
+   */
+  async ping(chainId: number): Promise<void> {
+    await this.pace();
+    const res = await this.fetch(this.url(chainId, { module: 'proxy', action: 'eth_blockNumber' }), PING_TIMEOUT_MS);
+    if (!res.ok) throw new Error(`Etherscan answered HTTP ${res.status}`);
+    const body = await res.json() as { result?: unknown; message?: string; error?: { message?: string } };
+    if (typeof body.result === 'string' && /^0x[0-9a-f]+$/i.test(body.result)) return;
+    const reason = body.error?.message ?? (typeof body.result === 'string' ? body.result : body.message ?? 'no block number');
+    throw new Error(`Etherscan refused eth_blockNumber: ${reason}`);
+  }
+
   /** One request, paced, with rate-limit refusals retried. "No transactions found" is an empty list, not an error. */
   async call(chainId: number, params: Record<string, string>): Promise<Row[]> {
-    const url = new URL(this.base);
-    url.search = new URLSearchParams({ chainid: String(chainId), ...params, apikey: this.key }).toString();
+    const url = this.url(chainId, params);
     for (let attempt = 0; ; attempt++) {
       await this.pace();
       const res = await this.fetch(url);
@@ -104,9 +122,16 @@ export class Etherscan {
     }
   }
 
+  /** The request URL. It carries the key: never logged, never in an error. */
+  private url(chainId: number, params: Record<string, string>): URL {
+    const url = new URL(this.base);
+    url.search = new URLSearchParams({ chainid: String(chainId), ...params, apikey: this.key }).toString();
+    return url;
+  }
+
   /** The network seam; tests override it on the instance. */
-  fetch(url: URL): Promise<Response> {
-    return fetch(url, { signal: AbortSignal.timeout(30_000) });
+  fetch(url: URL, timeoutMs = 30_000): Promise<Response> {
+    return fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   }
 
   /** Waits for this call's slot. The slot is taken before the wait, so callers at once (the ingest and fund jobs) queue a gap apart. */

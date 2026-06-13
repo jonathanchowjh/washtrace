@@ -9,7 +9,7 @@
     "apps/*"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15"
   },
   "scripts": {
     "test": "vitest run --project unit",
@@ -19,6 +19,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "dev": "npm run --workspace @washtrace/web dev",
     "worker": "npm run --workspace @washtrace/worker dev",
+    "stored": "npm run --workspace @washtrace/worker build && node apps/worker/dist/stored.js",
     "db:up": "./scripts/dev-db.sh up",
     "db:down": "./scripts/dev-db.sh down",
     "db:psql": "./scripts/dev-db.sh psql"

@@ -143,4 +143,124 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creator text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS creation_tx text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS described_at timestamptz;
 `,
+  `
+-- The worker takes turns across collections. served_at is when a collection
+-- last had the worker's attention and read_rate how fast its chain was read
+-- (blocks a second, smoothed), so the next turn goes to whoever waited
+-- longest and a turn is sized to the time it should take. priority moves a
+-- collection to the front. A pass says when it last proved it was alive,
+-- what it is doing, and which collection that is.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS served_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS read_rate double precision;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS priority boolean NOT NULL DEFAULT false;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS doing text;
+ALTER TABLE washtrace.passes ADD COLUMN IF NOT EXISTS subject_id int;
+`,  `
+-- Funding lanes ask, for each unchecked wallet, whether a collection's
+-- transfers name it. These make that two index probes, not a scan.
+CREATE INDEX IF NOT EXISTS transfers_coll_from_idx ON washtrace.transfers (collection_id, from_address);
+CREATE INDEX IF NOT EXISTS transfers_coll_to_idx ON washtrace.transfers (collection_id, to_address);
+`,
+  `
+-- When a collection's rules last changed. Analyses are spaced out, but a
+-- rule edited since the last one is analysed on the next pass: whoever
+-- edited it is waiting to see the flags it gives.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS rules_at timestamptz;
+`,
+  `
+-- A paused collection keeps its data and is left alone: the worker neither
+-- reads it, analyses it nor checks its wallets until it is watched again.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS paused_at timestamptz;
+`,
+  `
+-- Settings saved from the console. The worker reads them each pass; an
+-- environment variable for the same key wins over them.
+CREATE TABLE IF NOT EXISTS washtrace.settings (
+  key        text PRIMARY KEY,
+  value      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text
+);
+
+-- Where each setting the worker uses came from, as the worker last said.
+-- Only the worker knows its own environment, and the console locks a field
+-- the environment sets. value is null for a secret: never kept here.
+CREATE TABLE IF NOT EXISTS washtrace.setting_sources (
+  key         text PRIMARY KEY,
+  source      text NOT NULL CHECK (source IN ('env', 'console')),
+  value       text,
+  reported_at timestamptz NOT NULL
+);
+
+-- A Test pressed in the console. The API writes the request and notifies;
+-- the worker, which alone calls chains, runs it and writes the result.
+CREATE TABLE IF NOT EXISTS washtrace.checks (
+  id           bigserial PRIMARY KEY,
+  kind         text NOT NULL CHECK (kind IN ('rpc', 'etherscan')),
+  chain_id     int,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  finished_at  timestamptz,
+  ok           bool,
+  detail       jsonb
+);
+`,
+  `
+-- Stored data (data/stored), loaded before the chain is read. While a load
+-- runs, restore_progress says how far it has got (0 to 1), written outside
+-- the load's transaction so the console sees it; null otherwise. A worker
+-- that dies mid-load leaves it set, and the next worker to start clears it.
+-- restore_note says why stored data could not be loaded: the worker reads
+-- the chain instead, and does not try the stored data again. stored_through_time
+-- is when the loaded data stops: how long a collection with no RPC is unsynced.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_progress real;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_note text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_time timestamptz;
+`,
+  `
+-- The block the loaded stored data stops at. Once the cursor is past it the
+-- chain was read on from there, so with no RPC the collection stops at its
+-- cursor, not at stored_through_time.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS stored_through_block bigint;
+`,
+  `
+-- A money trail on disk loads by itself once its sha256 matches the manifest.
+-- trail_imported_sha is the sha of the trail loaded for this collection, so a
+-- file loads once, and a trail cut again loads again. trail_note says why a
+-- trail on disk was not loaded; it is not tried again until the file changes.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_imported_sha text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_note text;
+`,
+  `
+-- Errors written before the worker scrubbed them may hold an RPC URL with its
+-- key, and the console shows them to every visitor; a paused collection's is
+-- never overwritten. Any error with a URL in it goes: the next failure, if
+-- any, says it again without one.
+UPDATE washtrace.collections SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
+UPDATE washtrace.wallets SET error = NULL WHERE error ~* '[a-z][a-z0-9+.-]*://';
+`,
+  `
+-- A failed load of stored data is tried again once it can succeed, never
+-- every pass. restore_note_key is what a load the data failed was about (the
+-- manifest's sha256 and the file's stat, see storedKey): it is tried again
+-- once that changes. A load the store failed (a full disk, a lost
+-- connection) keeps no key and waits until restore_retry_at, five minutes
+-- doubling with each of restore_failures in a row, up to an hour. Notes from
+-- before lose "Reading from the chain instead": with no RPC nothing is, and
+-- the console now says what follows.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_note_key text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_failures int NOT NULL DEFAULT 0;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS restore_retry_at timestamptz;
+UPDATE washtrace.collections SET restore_note = replace(restore_note, ' Reading from the chain instead.', '') WHERE restore_note LIKE '% Reading from the chain instead.';
+`,
+  `
+-- A failed analysis stays on its collection until one is saved, so the
+-- console says so between passes and after a restart, not only while the
+-- failed pass is the latest. analysis_error is why, scrubbed as every error
+-- the console shows. The worker tries it again from analysis_retry_at: five
+-- minutes, doubling with each of analysis_failures in a row, up to an hour.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_failures int NOT NULL DEFAULT 0;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_error text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_retry_at timestamptz;
+`,
 ];
