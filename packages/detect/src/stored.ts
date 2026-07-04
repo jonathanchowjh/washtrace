@@ -49,7 +49,7 @@ export interface StoredEntry {
 export interface Manifest {
   /** 2: the trail carries chain data only. A version 1 manifest (wallet bookkeeping in the trail) is not read. */
   version: 2;
-  /** The Hub commit this manifest was fetched at, so what is fetched next stays on it. Absent in a manifest cut here. */
+  /** The Hub commit (a 40-hex sha, as it goes into download URLs) this manifest was fetched at, so what is fetched next stays on it. Absent in a manifest cut here. */
   revision?: string;
   collections: StoredEntry[];
 }
@@ -154,7 +154,7 @@ export function parseManifest(text: string): Manifest {
     return bad('it is not JSON');
   }
   if (raw === null || typeof raw !== 'object' || raw.version !== 2 || !Array.isArray(raw.collections)) return bad('its version is not 2');
-  if (raw.revision !== undefined && (typeof raw.revision !== 'string' || raw.revision === '')) bad('its revision is not a name');
+  if (raw.revision !== undefined && (typeof raw.revision !== 'string' || !/^[0-9a-f]{40}$/.test(raw.revision))) bad('its revision is not a commit sha');
   const count = (v: unknown, what: string): number => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : bad(what));
   const sha = (v: unknown, what: string): string => (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : bad(what));
   const collections = raw.collections.map((e: any): StoredEntry => {

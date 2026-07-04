@@ -248,12 +248,16 @@ describe('the manifest', () => {
     expect(() => parseManifest(good({}, { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 1, sha256: 'xyz' }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
   });
 
-  it('keeps the revision a manifest was fetched at, and refuses an empty one', async () => {
-    expect(parseManifest('{"version":2,"revision":"abc123","collections":[]}')).toEqual({ version: 2, revision: 'abc123', collections: [] });
+  it('keeps the revision a manifest was fetched at, and refuses one that is not a commit sha', async () => {
+    const rev = 'c0ffee'.padEnd(40, '0');
+    expect(parseManifest(`{"version":2,"revision":"${rev}","collections":[]}`)).toEqual({ version: 2, revision: rev, collections: [] });
     const path = join(dir, 'revised.json');
-    await writeManifest(path, { version: 2, revision: 'abc123', collections: [] });
-    expect(await readManifest(path)).toEqual({ version: 2, revision: 'abc123', collections: [] });
-    expect(() => parseManifest('{"version":2,"revision":"","collections":[]}')).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    await writeManifest(path, { version: 2, revision: rev, collections: [] });
+    expect(await readManifest(path)).toEqual({ version: 2, revision: rev, collections: [] });
+    // The revision goes into download URLs, so a branch name or a path is no revision.
+    for (const bad of ['', 'main', 'abc123', '../x', rev.toUpperCase(), `${rev}0`]) {
+      expect(() => parseManifest(`{"version":2,"revision":"${bad}","collections":[]}`)).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    }
   });
 
   it('names files by chain and lowercase address', () => {

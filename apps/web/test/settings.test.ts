@@ -160,7 +160,17 @@ describe('configFromSources', () => {
 
 describe('variableOf', () => {
   it('names the environment variable that pins each setting', () => {
-    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS']);
+    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS', 'WASHTRACE_STORED_REPO']);
+  });
+});
+
+describe('stored.repo', () => {
+  it('stored.repo is a field, validated as owner/name', () => {
+    const f = FIELDS.find((x) => x.key === 'stored.repo')!;
+    expect(f.secret).toBe(false);
+    expect(f.validate('jonathanmiro97/washtrace-data')).toBeNull();
+    expect(f.validate('a.b/c_d-e')).toBeNull();
+    for (const bad of ['', 'nodash', 'a/b/c', 'a b/c', '/c', 'a/']) expect(f.validate(bad)).toMatch(/owner\/name/);
   });
 });
 

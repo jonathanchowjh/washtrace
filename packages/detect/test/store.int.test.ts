@@ -424,7 +424,7 @@ describe('Store', () => {
   });
 
   it('analyzes a collection with its own rules', async () => {
-    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri());
+    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri());
     // The thread's own body, in-process: the TS sources cannot start the thread.
     worker.analyzeOff = (request) => analyzeStored(store, request);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
@@ -1312,7 +1312,7 @@ describe('Store', () => {
         trail: { rows: 3, wallets: 3, checked: 2, of: 2, bytes: 0, sha256 },
       });
       const worker = (key: string | null) => new Worker(
-        store, () => ({ rpc: new Map(), etherscanKey: key, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir,
+        store, () => ({ rpc: new Map(), etherscanKey: key, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir,
       );
       const written = async (e: StoredEntry) => writeTrail(trailPath(dir, e), {
         checked: trail.flatMap((b) => b.checked).sort(),
@@ -1344,7 +1344,7 @@ describe('Store', () => {
         // No key, but checked wallets from the trail: the money lenses run.
         const analyse = async (which: number) => {
           const only = Object.assign(Object.create(store), { stale: async () => (await store.stale()).filter((s) => s.id === which) });
-          const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir);
+          const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir);
           analyst.analyzeOff = (request) => analyzeStored(store, request);
           await analyst.analyze();
         };

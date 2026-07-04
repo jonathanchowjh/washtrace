@@ -21,6 +21,8 @@ export interface WorkerConfig {
   etherscanUrl: string;
   /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
   followHops: number;
+  /** The Hugging Face dataset (owner/name) stored data is downloaded from. */
+  storedRepo: string;
   /** Where each set value came from, keyed by setting key. Never a secret's value: the store publishes this. */
   sources: Record<string, SettingSource>;
 }

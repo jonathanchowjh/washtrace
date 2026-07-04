@@ -74,7 +74,7 @@ describe('ingestTurns', () => {
 describe('Worker.ingest', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  const config: WorkerConfig = { rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} };
+  const config: WorkerConfig = { rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' };
 
   /** A worker on a stub store and a chain whose every span takes `spanMs` of a fake clock. */
   function setup(rows: CollectionRow[], spanMs: number) {
@@ -235,7 +235,7 @@ describe('Worker.ingest restoring stored data', () => {
       setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
       served: async (id: number) => { events.push(`served ${id}`); },
     };
-    const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     (w as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
     return { w, events, store };
@@ -264,7 +264,7 @@ describe('Worker.ingest restoring stored data', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     (w as any).chain = () => ({ finalized: async () => 1_000, transfers: async () => ({ transfers: [], through: 1_000 }) });
-    (w as any).config = () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} });
+    (w as any).config = () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' });
     await w.ingest();
     expect(events).toContain('restore');
     expect(events).toContain('served 1');
@@ -383,7 +383,7 @@ describe('Worker.ingest loading a money trail', () => {
       heartbeat: async (_job: string, doing: string | null) => { events.push(`beat ${doing}`); },
       setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {}, served: async () => {},
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '', dir);
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', dir);
     (w as any).manifest = async () => ({ version: 2, collections: [TRAILED] });
     (w as any).storedTransfers = async function* () { yield []; };
     const hashed: string[] = [];
@@ -528,7 +528,7 @@ describe('Worker.fund', () => {
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
       fundingFailed: async () => {},
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
     expect(funded).toEqual(['c', 'a', 'f', 'b']);
@@ -550,7 +550,7 @@ describe('Worker.fund priority', () => {
       heartbeat: async () => {}, fundingFailed: async () => {},
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     await w.fund();
     expect(funded).toEqual(['a1', 'b1', 'x1', 'b2', 'x2']);
@@ -565,7 +565,7 @@ describe('Worker.fund priority', () => {
       heartbeat: async () => {}, fundingFailed: async () => {},
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     await w.fund();
     expect(funded).toEqual(['c1', 'x1', 'c2', 'x2']);
@@ -575,7 +575,7 @@ describe('Worker.fund priority', () => {
 describe('Worker heartbeat', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} });
+  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' });
 
   it('does not fail a funding pass when the heartbeat write throws, and says so once', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -657,7 +657,7 @@ describe('Worker settings', () => {
     const sources = { 'follow.hops': { source: 'console' as const, value: '2' } };
     const w = new Worker(store, (s) => {
       seen.push(s);
-      return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: Number(s.get('follow.hops') ?? 0), sources };
+      return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: Number(s.get('follow.hops') ?? 0), sources, storedRepo: 'u/d' };
     }, '');
     let hops = -1;
     (w as any).analyze = async () => { hops = (w as any).config((w as any).settings).followHops; return 'done'; };
@@ -680,7 +680,7 @@ describe('Worker settings', () => {
       passFinished: async (_job: string, _ms: number, outcome: string) => { finished.push(outcome); },
     });
     const seen: ReadonlyMap<string, string>[] = [];
-    const w = new Worker(store, (s) => { seen.push(s); return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }; }, '');
+    const w = new Worker(store, (s) => { seen.push(s); return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }; }, '');
     (w as any).analyze = async () => { (w as any).config((w as any).settings); return 'done'; };
     expect(await w.run('analyze')).toBe('ran');
     seen.length = 0;
@@ -715,7 +715,7 @@ describe('Worker settings', () => {
       reportSources: async () => { throw new Error('db down'); },
       passFinished: async (_job: string, _ms: number, outcome: string) => { finished.push(outcome); },
     });
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).analyze = async () => 'done';
     expect(await w.run('analyze')).toBe('ran');
     expect(await w.run('analyze')).toBe('ran');
@@ -787,7 +787,7 @@ describe('Worker.analyze', () => {
       importedFunding: async () => false,
       collections: async () => [],
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     const off: number[] = [];
     w.analyzeOff = async (request) => { off.push(request.id); return { analysis: {} as Analysis, through: 7 }; };
     expect(await w.analyze()).toBe('Doodles analyzed');
@@ -808,7 +808,7 @@ describe('Worker.analyze', () => {
       importedFunding: async (id: number) => { asked.push(id); return imported; },
       collections: async () => [],
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     const sent: AnalysisRequest[] = [];
     w.analyzeOff = async (request) => { sent.push(request); return { analysis: {} as Analysis, through: 7 }; };
     await w.analyze();
@@ -829,7 +829,7 @@ describe('Worker.analyze', () => {
       collections: async () => [],
     };
     const url = 'postgres://washtrace:secret@db:5432/washtrace';
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), url);
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), url);
     const sent: AnalysisRequest[] = [];
     w.analyzeOff = async (request) => { sent.push(request); return { analysis: {} as Analysis, through: 7 }; };
     await w.analyze();
@@ -868,7 +868,7 @@ describe('Worker.analyze when an analysis fails', () => {
         waiting.set(id, { ...waiting.get(id)!, retryAt: now + 5 * 60_000 });
       },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), 'postgres://washtrace:hunter2@db:5432/washtrace');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), 'postgres://washtrace:hunter2@db:5432/washtrace');
     (w as any).manifest = async () => ({ version: 2, collections: [] });
     const tried: number[] = [];
     const state = { broken: true, error: 'out of memory' };
@@ -991,7 +991,7 @@ describe('an analysis that never ends', () => {
       collections: async () => [], heartbeat: async () => {}, importedFunding: async () => false, saveAnalysis: async () => {},
       analysisFailed: async (id: number, error: string) => { failed.push([id, error]); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).manifest = async () => ({ version: 2, collections: [] });
     const outcome = w.analyze().then(() => 'saved', (err: Error) => err.message);
     await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS);
@@ -1012,7 +1012,7 @@ describe('Worker checks with no notification', () => {
       pendingChecks: async () => pending.filter((c) => !finished.includes(c.id)),
       finishCheck: async (id: number) => { finished.push(id); },
     };
-    const w = new Worker(store, () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
+    const w = new Worker(store, () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).chain = () => ({ check: async () => ({ finalized: 1, archive: true, logs: true }) });
     const connects = { n: 0 };
     // Connected, and hearing nothing: as a socket a NAT dropped without a word.
@@ -1093,7 +1093,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
   const ES_URL = 'https://explorer.example/api?apikey=URLKEY0123456789';
   const ES_KEY = 'ESKEY0123456789';
   const ES_LEAKS = ['URLKEY0123456789', ES_KEY];
-  const config = (): WorkerConfig => ({ rpc: new Map([[1, RPC]]), etherscanKey: ES_KEY, etherscanPerSecond: 1_000, etherscanUrl: ES_URL, followHops: 0, sources: {} });
+  const config = (): WorkerConfig => ({ rpc: new Map([[1, RPC]]), etherscanKey: ES_KEY, etherscanPerSecond: 1_000, etherscanUrl: ES_URL, followHops: 0, sources: {}, storedRepo: 'u/d' });
 
   /** Everything the console was asked to print, as text. */
   const printed = (...spies: { mock: { calls: unknown[][] } }[]) => spies.flatMap((s) => s.mock.calls.map((c) => c.map(String).join(' '))).join('\n');

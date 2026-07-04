@@ -13,3 +13,4 @@ export {
   StoredDataError, type StoredDataFault, storedDir, storedFile, trailPath, entryFor, upsertEntry, readManifest, parseManifest, writeManifest, sha256File,
   writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type Written,
 } from './stored.js';
+export { HUB, STORED_REPO, hubUrl, fetchManifest, partPath, download } from './hub.js';
