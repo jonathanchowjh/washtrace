@@ -89,7 +89,7 @@ describe('Worker.ingest', () => {
       served: async (id: number, blocks: number) => { served.push({ id, blocks }); },
     };
     const w = new Worker(store, () => config, '');
-    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).manifest = async () => ({ version: 2, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       transfers: async (address: string, from: number) => {
@@ -236,7 +236,7 @@ describe('Worker.ingest restoring stored data', () => {
       served: async (id: number) => { events.push(`served ${id}`); },
     };
     const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
-    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     (w as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
     return { w, events, store };
   }
@@ -323,7 +323,7 @@ describe('Worker.ingest restoring stored data', () => {
     await past.w.ingest();
     const gone = setup([row({ id: 2, cursorBlock: null, restoreNote: 'Stored data could not be loaded.' })], []);
     gone.store.clearRestoreNote = async (id: number) => { cleared.push(id); };
-    (gone.w as any).manifest = async () => ({ version: 1, collections: [] });
+    (gone.w as any).manifest = async () => ({ version: 2, collections: [] });
     await gone.w.ingest();
     expect(cleared).toEqual([1, 2]);
     expect([...past.events, ...gone.events].filter((e) => e.startsWith('restore'))).toEqual([]);
@@ -384,11 +384,11 @@ describe('Worker.ingest loading a money trail', () => {
       setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {}, served: async () => {},
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '', dir);
-    (w as any).manifest = async () => ({ version: 1, collections: [TRAILED] });
+    (w as any).manifest = async () => ({ version: 2, collections: [TRAILED] });
     (w as any).storedTransfers = async function* () { yield []; };
     const hashed: string[] = [];
     w.fileSha = async (path: string) => { hashed.push(path); return sha; };
-    (w as any).storedTrail = async function* (path: string, sha256: string) { events.push(`read ${path.slice(dir.length + 1)} ${sha256}`); yield { wallets: [], flows: [] }; };
+    (w as any).storedTrail = async function* (path: string, sha256: string) { events.push(`read ${path.slice(dir.length + 1)} ${sha256}`); yield { checked: [], flows: [] }; };
     return { w, events, store, hashed };
   }
 
@@ -441,12 +441,12 @@ describe('Worker.ingest loading a money trail', () => {
 
   it('clears a note once the manifest has no trail for the collection', async () => {
     const { w, events } = await setup([row({ trailNote: 'Money trail on disk could not be read, so it was not loaded.' })], 'feed');
-    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     await w.ingest();
     expect(events).toContain('note 1 null');
     // And none to clear: nothing written.
     const clean = await setup([row()], 'feed');
-    (clean.w as any).manifest = async () => ({ version: 1, collections: [] });
+    (clean.w as any).manifest = async () => ({ version: 2, collections: [] });
     await clean.w.ingest();
     expect(clean.events.some((e) => e.startsWith('note'))).toBe(false);
   });
@@ -869,7 +869,7 @@ describe('Worker.analyze when an analysis fails', () => {
       },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), 'postgres://washtrace:hunter2@db:5432/washtrace');
-    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).manifest = async () => ({ version: 2, collections: [] });
     const tried: number[] = [];
     const state = { broken: true, error: 'out of memory' };
     w.analyzeOff = async (request) => {
@@ -933,7 +933,7 @@ describe('Worker.analyze when an analysis fails', () => {
     waiting.delete(2);
     let cursor: number | null = null;
     (w as any).store.collections = async () => [row({ id: 1, cursorBlock: cursor, startBlock: cursor === null ? null : 100 })];
-    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     expect(await w.analyze()).toBe('nothing due');
     cursor = 900;
     expect(await w.analyze()).toBe('BAYC analyzed');
@@ -946,7 +946,7 @@ describe('Worker.analyze when an analysis fails', () => {
     waiting.delete(2);
     let more: Partial<CollectionRow> = { restoreNote: 'Stored data could not be loaded.', restoreRetryAt: Date.now() + 60_000 };
     (w as any).store.collections = async () => [row({ id: 1, cursorBlock: 100, ...more })];
-    (w as any).manifest = async () => ({ version: 1, collections: [ENTRY] });
+    (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     (w as any).restoreKey = async () => 'abc:absent';
     // Due again (the file changed): held, so it is analysed once, after the load.
     more = { restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: 'abc:1:2:3' };
@@ -992,7 +992,7 @@ describe('an analysis that never ends', () => {
       analysisFailed: async (id: number, error: string) => { failed.push([id, error]); },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), '');
-    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).manifest = async () => ({ version: 2, collections: [] });
     const outcome = w.analyze().then(() => 'saved', (err: Error) => err.message);
     await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS);
     expect(await outcome).toBe(STOPPED);
@@ -1106,7 +1106,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
     const w = new Worker(store, config, '');
-    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).manifest = async () => ({ version: 2, collections: [] });
     // The real chain client, whose provider refuses: viem puts "URL: <the RPC URL>" in the message.
     (w as any).chain = (chainId: number, url: string) => {
       const c = new Chain(chainId, url);
@@ -1130,7 +1130,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       setError: async () => {}, setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
     const w = new Worker(store, config, '');
-    (w as any).manifest = async () => ({ version: 1, collections: [] });
+    (w as any).manifest = async () => ({ version: 2, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       describe: async () => { throw new HttpRequestError({ url: RPC, status: 429, details: `rate limited: ${RPC}` }); },

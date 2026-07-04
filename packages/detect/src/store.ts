@@ -3,7 +3,7 @@ import { ZERO } from './graph.js';
 import { traders } from './marketplaces.js';
 import { MIGRATIONS } from './migrations.js';
 import type { Rules } from './methods.js';
-import { StoredDataError, type StoredDataFault, type StoredEntry, type WalletRow } from './stored.js';
+import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
@@ -30,6 +30,7 @@ const RESTORE_NOTES: Readonly<Record<StoredDataFault | 'failed', string>> = {
   missing: 'Stored data could not be loaded: its file is missing.',
   mismatch: 'Stored data could not be loaded: its file does not match the manifest.',
   unreadable: 'Stored data could not be loaded: its file could not be read.',
+  disk: 'Stored data could not be loaded: its file could not be read.',
   failed: 'Stored data could not be loaded.',
 };
 /** Thrown inside a load to stop it quietly: its collection was paused or deleted under it. */
@@ -550,8 +551,9 @@ export class Store {
 
   /**
    * Load a money trail another store cut (see trail): its flows, then its
-   * wallets, then the mark that this collection has it. `open` reads the
-   * trail from its start, wallets first, as readTrail does; it is read twice.
+   * checked wallets, then the mark that this collection has it. `open` reads
+   * the trail from its start, checked addresses first, as readTrail does; it
+   * is read twice.
    *
    * Every flow goes in before any wallet is marked done. A done wallet is
    * never read again, so one marked done before its flows were in, with the
@@ -560,20 +562,24 @@ export class Store {
    *
    * Then the wallets, one short statement a batch, in address order as
    * queueWallets writes them: held for a whole load, their rows kept funding
-   * waiting and deadlocked with it, as a load of stored data once did. A
-   * wallet this store already checked keeps its own check. One still to
-   * check here takes the trail's check, if it has one. Either way it keeps
-   * its own transfer count (the trail's counts the other store's
-   * collections) and takes the nearer of the two depths. A wallet new here
-   * comes in done or still to check, as the trail has it, with no transfer
-   * counted: this store counts its own as it reads them.
+   * waiting and deadlocked with it, as a load of stored data once did. The
+   * trail says only that an address was checked to the end, so it comes in
+   * done, not truncated, with no time it was read and no transfer counted
+   * (this store counts its own as it reads them). Its depth is 0 if it
+   * trades in this collection's transfers, else 1: a done wallet is only ever
+   * read as depth 0 against depth above 0, so how far out a followed wallet
+   * was needs no working out. A wallet this store already checked keeps its
+   * own check; one still to check here takes the trail's. Either way it takes
+   * the nearer of the two depths. Only the checked addresses come in: a wallet
+   * that is merely an end of a flow does not, and is queued when something
+   * follows it.
    *
    * Only then is the trail's sha recorded and every collection on the chain
    * queued for analysis, in one statement. A load cut off anywhere is safe
    * to run again from the start, and ends as one clean run does. Returns
    * how many wallets and flows the trail held.
    */
-  async importTrail(id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }>): Promise<{ wallets: number; flows: number }> {
+  async importTrail(id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ checked: string[]; flows: Flow[] }>): Promise<{ wallets: number; flows: number }> {
     let flows = 0;
     for await (const batch of open()) {
       await insertFlows(this.pool, chainId, batch.flows).catch((err) => { throw asDataFault(err); });
@@ -581,28 +587,25 @@ export class Store {
     }
     let wallets = 0;
     for await (const batch of open()) {
-      // The wallets come first; past them are only flows, all in already.
-      if (batch.wallets.length === 0) break;
-      const rows = [...batch.wallets].sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
-      const done = rows.map((r) => r.status === 'done');
+      // The checked addresses come first; past them are only flows, all in already.
+      if (batch.checked.length === 0) break;
+      const addresses = [...batch.checked].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
       // Funding locks a wallet and then collections, so this can still deadlock with it, rarely: Postgres ends one, and it is retried.
       await this.pool.query(
         `INSERT INTO washtrace.wallets (chain_id, address, transfers, status, truncated, fetched_at, depth)
-         SELECT $1, a, 0, s, tr, to_timestamp(fa / 1000), d FROM unnest($2::text[], $3::text[], $4::bool[], $5::float8[], $6::int[]) AS u(a, s, tr, fa, d)
+         SELECT $1, a, 0, 'done', false, NULL,
+                CASE WHEN EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $3 AND (t.from_address = a OR t.to_address = a)) THEN 0 ELSE 1 END
+         FROM unnest($2::text[]) AS u(a)
          ORDER BY a
          ON CONFLICT (chain_id, address) DO UPDATE SET
-           status = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN 'done' ELSE washtrace.wallets.status END,
-           truncated = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN EXCLUDED.truncated ELSE washtrace.wallets.truncated END,
-           fetched_at = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN EXCLUDED.fetched_at ELSE washtrace.wallets.fetched_at END,
-           error = CASE WHEN washtrace.wallets.status <> 'done' AND EXCLUDED.status = 'done' THEN NULL ELSE washtrace.wallets.error END,
+           status = CASE WHEN washtrace.wallets.status <> 'done' THEN 'done' ELSE washtrace.wallets.status END,
+           truncated = CASE WHEN washtrace.wallets.status <> 'done' THEN false ELSE washtrace.wallets.truncated END,
+           fetched_at = CASE WHEN washtrace.wallets.status <> 'done' THEN NULL ELSE washtrace.wallets.fetched_at END,
+           error = CASE WHEN washtrace.wallets.status <> 'done' THEN NULL ELSE washtrace.wallets.error END,
            depth = LEAST(washtrace.wallets.depth, EXCLUDED.depth)`,
-        [
-          // A wallet the trail has failed is one to check here: 'failed' says this store tried.
-          chainId, rows.map((r) => r.address), done.map((d) => (d ? 'done' : 'pending')), rows.map((r, i) => done[i] && r.truncated),
-          rows.map((r, i) => (done[i] ? r.fetchedAt : null)), rows.map((r) => r.depth),
-        ],
+        [chainId, addresses, id],
       ).catch((err) => { throw asDataFault(err); });
-      wallets += rows.length;
+      wallets += addresses.length;
     }
     // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
     await this.pool.query(
@@ -952,13 +955,15 @@ export class Store {
    * What a stored-data cut of a collection starts from: where its data
    * begins and ends. The snapshot stops at the cursor, and its time is that
    * of the latest transfer at or below it. Null when it is not watched; the
-   * blocks and time are null until it has read some.
+   * blocks and time are null until it has read some. `name` is the console's
+   * label; `contractName` is what the contract's own name() said, which is
+   * what a published copy should carry, and is null until it is described.
    */
   async storedHeader(chainId: number, address: string): Promise<{
-    id: number; name: string; startBlock: number | null; throughBlock: number | null; throughTime: number | null;
+    id: number; name: string; contractName: string | null; startBlock: number | null; throughBlock: number | null; throughTime: number | null;
   } | null> {
     const { rows } = await this.pool.query(
-      `SELECT c.id, COALESCE(c.name, c.contract_name, c.address) AS name, c.start_block, c.cursor_block,
+      `SELECT c.id, COALESCE(c.name, c.contract_name, c.address) AS name, c.contract_name, c.start_block, c.cursor_block,
               (SELECT extract(epoch FROM max(t.block_time))::float8 FROM washtrace.transfers t
                WHERE t.collection_id = c.id AND t.block_number <= c.cursor_block) AS through
        FROM washtrace.collections c WHERE c.chain_id = $1 AND c.address = lower($2)`,
@@ -967,7 +972,7 @@ export class Store {
     const r = rows[0];
     if (!r) return null;
     return {
-      id: r.id, name: r.name, startBlock: r.start_block === null ? null : Number(r.start_block),
+      id: r.id, name: r.name, contractName: r.contract_name, startBlock: r.start_block === null ? null : Number(r.start_block),
       throughBlock: r.cursor_block === null ? null : Number(r.cursor_block), throughTime: r.through === null ? null : r.through * 1000,
     };
   }
@@ -981,26 +986,26 @@ export class Store {
   }
 
   /**
-   * A collection's money trail: the wallets checked so far and the flows they
-   * found. The same wallets and flows `analysisInput` reads, so a store that
-   * imports the trail analyses the collection as this one does: its traders,
-   * and every followed wallet on the chain. `checked` of `of` is how many of
-   * its traders have been read. The rows stream; nothing is read until they
-   * are iterated, wallets before flows.
+   * A collection's money trail: the addresses checked to the end and the
+   * flows they found. The same wallets and flows `analysisInput` reads, so a
+   * store that imports the trail analyses the collection as this one does:
+   * its traders, and every followed wallet on the chain. Only chain data goes
+   * in: an address, never how or when it was read. `checked` of `of` is how
+   * many of the collection's traders are on the list. The rows stream;
+   * nothing is read until they are iterated, addresses before flows.
    *
-   * An importing install never reads a done wallet again, so every done
-   * wallet in the file carries all of its flows, in and out. The followed
-   * wallets are fixed when the trail is begun, and both streams use that
-   * list: one checked later is left out, not written done without the flows
-   * nobody looked for. Traders need no such care, since flows to or from
-   * them are all read, and only grow between the two streams.
-   *
-   * The followed wallets not yet checked (pending, or failed here) go in
-   * too, as pending: the frontier this store would have read next. An
-   * importing install with a key follows on from there, rather than from
-   * the traders alone. Wallets are in address order, as importTrail writes them.
+   * An importing install never reads a done wallet again, so every address in
+   * the file carries all of its flows, in and out. The followed wallets are
+   * fixed when the trail is begun, and both streams use that list: one
+   * checked later is left out, not written down without the flows nobody
+   * looked for. Traders need no such care, since flows to or from them are
+   * all read, and only grow between the two streams. A wallet that is
+   * truncated (more history than Etherscan pages through) is left out: its
+   * flows are not all there, so claiming it checked would be false. Nor are
+   * the wallets still to check: the importing install queues what it needs.
+   * Addresses are in address order, as importTrail writes them.
    */
-  async trail(id: number, chainId: number): Promise<{ checked: number; of: number; wallets: AsyncGenerator<WalletRow>; flows: AsyncGenerator<Flow> }> {
+  async trail(id: number, chainId: number): Promise<{ checked: number; of: number; addresses: AsyncGenerator<string>; flows: AsyncGenerator<Flow> }> {
     // Arrays, not subqueries, for the reason analysisInput gives.
     const traders = (await this.pool.query<{ address: string }>(
       `SELECT from_address AS address FROM washtrace.transfers WHERE collection_id = $1
@@ -1011,27 +1016,20 @@ export class Store {
       `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
       [chainId],
     )).rows.map((r) => r.address);
-    // A followed wallet still to check: written as pending, whether it is pending or failed here.
-    const frontier = `(depth > 0 AND status <> 'done')`;
     const { rows } = await this.pool.query<{ checked: number; of: number }>(
-      `SELECT count(*) FILTER (WHERE status = 'done')::int AS checked, count(*)::int AS of
+      `SELECT count(*) FILTER (WHERE status = 'done' AND NOT truncated)::int AS checked, count(*)::int AS of
        FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2::text[])`,
       [chainId, traders],
     );
     return {
       checked: rows[0]!.checked,
       of: rows[0]!.of,
-      wallets: this.cursor(
-        `SELECT address, transfers, CASE WHEN ${frontier} THEN 'pending' ELSE status END AS status,
-                truncated AND NOT ${frontier} AS truncated, CASE WHEN ${frontier} THEN NULL ELSE extract(epoch FROM fetched_at)::float8 END AS fetched, depth
-         FROM washtrace.wallets
-         WHERE chain_id = $1 AND ((status <> 'pending' AND (address = ANY($2::text[]) OR address = ANY($3::text[]))) OR ${frontier})
+      addresses: this.cursor(
+        `SELECT address FROM washtrace.wallets
+         WHERE chain_id = $1 AND status = 'done' AND NOT truncated AND (address = ANY($2::text[]) OR address = ANY($3::text[]))
          ORDER BY address`,
         [chainId, traders, followed],
-        (r): WalletRow => ({
-          address: r.address, transfers: r.transfers, status: r.status, truncated: r.truncated, depth: r.depth,
-          fetchedAt: r.fetched === null ? null : r.fetched * 1000,
-        }),
+        (r): string => r.address,
       ),
       flows: this.cursor(
         `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,

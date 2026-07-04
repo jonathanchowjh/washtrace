@@ -8,7 +8,7 @@ import { ZERO } from './graph.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
 import {
-  StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedDir, storedKey, trailPath, type Manifest, type StoredEntry, type WalletRow,
+  StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedDir, storedKey, trailPath, type Manifest, type StoredEntry,
 } from './stored.js';
 import type { Flow, Transfer } from './types.js';
 
@@ -596,7 +596,7 @@ export class Worker {
   }
 
   /** A money trail, checked against `sha256` first, as each read of it is. Tests override it on the instance. */
-  storedTrail(path: string, sha256: string): AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }> {
+  storedTrail(path: string, sha256: string): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
     return readTrail(path, sha256);
   }
 

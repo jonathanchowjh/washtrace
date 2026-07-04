@@ -51,8 +51,8 @@ try {
   if (withTrail) {
     const trailFile = storedFile(chainId, address, 'trail');
     const begun = Date.now();
-    const { checked, of, wallets, flows } = await store.trail(head.id, chainId);
-    const written = await writeTrail(join(dir, trailFile), { wallets, flows });
+    const { checked, of, addresses, flows } = await store.trail(head.id, chainId);
+    const written = await writeTrail(join(dir, trailFile), { checked: addresses, flows });
     trail = { rows: written.rows, wallets: written.wallets, checked, of, bytes: written.bytes, sha256: written.sha256 };
     console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, size(written.bytes), seconds(begun));
   }
