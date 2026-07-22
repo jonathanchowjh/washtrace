@@ -46,10 +46,10 @@ async function drop(chainId: number, address: string): Promise<void> {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(15);
-    expect(await store.migrate()).toBe(15);
+    expect(await store.migrate()).toBe(16);
+    expect(await store.migrate()).toBe(16);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 15 }]);
+    expect(rows).toEqual([{ version: 16 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -58,7 +58,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(15);
+      expect(await store.migrate()).toBe(16);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -75,7 +75,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(15);
+      expect(await store.migrate()).toBe(16);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -1106,6 +1106,60 @@ describe('Store', () => {
       await store.pool.query("UPDATE washtrace.collections SET restore_progress = 0.5, restore_note = 'kept' WHERE id = $1", [id]);
       await store.clearRestoreProgress();
       expect(await store.collection(chainId, coll)).toMatchObject({ restoreProgress: null, restoreNote: 'kept' });
+      await drop(chainId, coll);
+    });
+  });
+
+  describe('downloading stored data', () => {
+    const chainId = 9;
+    const failures = async (id: number) => (await store.pool.query('SELECT download_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].download_failures;
+
+    it('downloadFailed backs off on the restore curve, and downloadDone clears it', async () => {
+      const coll = w('9d1');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      expect(await store.setDownload(id, 'transfers', 0.25)).toBe(true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: 'transfers', downloadProgress: 0.25, downloadNote: null, downloadRetryAt: null });
+      const started = Date.now();
+      await store.downloadFailed(id, 'could not');
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: 'could not' });
+      expect(await failures(id)).toBe(1);
+      expect(c.downloadRetryAt! - started).toBeGreaterThan(5 * 60_000 - 5_000);
+      expect(c.downloadRetryAt! - started).toBeLessThan(5 * 60_000 + 5_000);
+      await store.downloadFailed(id, 'could not');
+      expect((await store.collection(chainId, coll))!.downloadRetryAt! - Date.now()).toBeGreaterThan(10 * 60_000 - 5_000);
+      // An hour at most, however many in a row.
+      await store.pool.query('UPDATE washtrace.collections SET download_failures = 2000 WHERE id = $1', [id]);
+      await store.downloadFailed(id, 'could not');
+      const capped = (await store.collection(chainId, coll))!.downloadRetryAt! - Date.now();
+      expect(capped).toBeGreaterThan(60 * 60_000 - 5_000);
+      expect(capped).toBeLessThan(60 * 60_000 + 5_000);
+      await store.setDownload(id, 'trail', 0.5);
+      await store.downloadDone(id);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null });
+      expect(await failures(id)).toBe(0);
+      await drop(chainId, coll);
+    });
+
+    it('writes no progress for a collection paused or deleted, and says the download should stop', async () => {
+      const coll = w('9d2');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.pause(chainId, coll);
+      expect(await store.setDownload(id, 'transfers', 0.25)).toBe(false);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null });
+      await store.removeCollection(chainId, coll);
+      expect(await store.setDownload(id, 'transfers', 0.5)).toBe(false);
+    });
+
+    it('clearDownloads clears what a restart left', async () => {
+      const coll = w('9d3');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.setDownload(id, 'transfers', 0.4);
+      await store.pool.query("UPDATE washtrace.collections SET download_note = 'kept', download_retry_at = now() + interval '1 hour' WHERE id = $1", [id]);
+      await store.clearDownloads();
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: 'kept' });
+      expect(c.downloadRetryAt).not.toBeNull();
       await drop(chainId, coll);
     });
   });

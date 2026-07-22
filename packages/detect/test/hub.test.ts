@@ -79,6 +79,14 @@ describe('fetchManifest', () => {
     handler = (_req, res) => void res.writeHead(200, { 'x-repo-commit': '../main' }).end(MANIFEST);
     await expect(fetchManifest('u/d', base)).rejects.toThrow('Hugging Face gave no revision for u/d');
   });
+
+  it('gives up when its signal aborts, though the Hub never answers', async () => {
+    handler = () => {};
+    const ac = new AbortController();
+    const run = fetchManifest('u/d', base, ac.signal);
+    ac.abort();
+    await expect(run).rejects.toThrow();
+  });
 });
 
 describe('download', () => {

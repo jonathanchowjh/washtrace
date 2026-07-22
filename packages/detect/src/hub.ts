@@ -27,9 +27,10 @@ export function hubUrl(repo: string, revision: string, file: string, endpoint = 
  * the same publish as the manifest. Null when the repo or its manifest does
  * not exist. An answer without a commit sha is refused, not fetched
  * unpinned: the revision goes into URLs, so it must be a sha, never a name.
+ * `signal` gives up on a Hub that never answers.
  */
-export async function fetchManifest(repo: string, endpoint = HUB): Promise<Manifest | null> {
-  const res = await fetch(hubUrl(repo, 'main', 'manifest.json', endpoint));
+export async function fetchManifest(repo: string, endpoint = HUB, signal?: AbortSignal): Promise<Manifest | null> {
+  const res = await fetch(hubUrl(repo, 'main', 'manifest.json', endpoint), { signal });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Hugging Face answered ${res.status} for ${repo}`);
   const revision = res.headers.get('x-repo-commit');

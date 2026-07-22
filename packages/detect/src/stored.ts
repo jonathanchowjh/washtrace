@@ -61,6 +61,17 @@ export interface Manifest {
  */
 export type StoredDataFault = 'missing' | 'mismatch' | 'unreadable' | 'disk';
 
+/**
+ * Why a collection's stored data was not downloaded, in the words the console
+ * shows. Only why, and that the download is tried again: what happens
+ * meanwhile (the chain read, or nothing) depends on the chain's RPC, which
+ * the console knows. The full error goes to the log.
+ */
+export const DOWNLOAD_NOTES = {
+  failed: 'Stored data could not be downloaded. Tried again later.',
+  disk: 'Not enough disk space to download its stored data. Tried again later.',
+} as const;
+
 /** Stored data that is missing, changed or malformed. Callers fall back to reading the chain. */
 export class StoredDataError extends Error {
   constructor(message: string, readonly kind: StoredDataFault = 'unreadable') {

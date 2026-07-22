@@ -1,13 +1,15 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
 import { workerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan } from '../src/etherscan.js';
-import { StoredDataError, trailPath, type StoredEntry } from '../src/stored.js';
+import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPath, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
+import { hubUrl, partPath } from '../src/hub.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
@@ -29,12 +31,25 @@ vi.mock('node:worker_threads', async (original) => ({
   },
 }));
 
+// No test reaches the Hub: one that forgets to say what the Hub answers finds it unreachable, and downloads nothing.
+beforeEach(() => {
+  vi.spyOn(Worker.prototype, 'fetchHubManifest').mockRejectedValue(new Error('tests never reach the Hub'));
+  vi.spyOn(Worker.prototype, 'downloadFile').mockRejectedValue(new Error('tests never reach the Hub'));
+});
+
+/** The Hub was asked a moment ago, so a pass reads the manifest on disk (`manifest`, as the test overrides it) and asks nothing. */
+function askedHub(w: Worker): Worker {
+  (w as any).hubAskedAt = Date.now();
+  return w;
+}
+
 function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
   };
 }
 
@@ -88,7 +103,7 @@ describe('Worker.ingest', () => {
       ingest: async () => {},
       served: async (id: number, blocks: number) => { served.push({ id, blocks }); },
     };
-    const w = new Worker(store, () => config, '');
+    const w = askedHub(new Worker(store, () => config, ''));
     (w as any).manifest = async () => ({ version: 2, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
@@ -235,7 +250,7 @@ describe('Worker.ingest restoring stored data', () => {
       setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
       served: async (id: number) => { events.push(`served ${id}`); },
     };
-    const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
+    const w = askedHub(new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), ''));
     (w as any).manifest = async () => ({ version: 2, collections: [ENTRY] });
     (w as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
     return { w, events, store };
@@ -383,7 +398,7 @@ describe('Worker.ingest loading a money trail', () => {
       heartbeat: async (_job: string, doing: string | null) => { events.push(`beat ${doing}`); },
       setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {}, served: async () => {},
     };
-    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', dir);
+    const w = askedHub(new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', dir));
     (w as any).manifest = async () => ({ version: 2, collections: [TRAILED] });
     (w as any).storedTransfers = async function* () { yield []; };
     const hashed: string[] = [];
@@ -485,6 +500,446 @@ describe('Worker.ingest loading a money trail', () => {
     expect(events.filter((e) => e === 'import')).toHaveLength(2);
     expect(events.some((e) => e.startsWith('note'))).toBe(false);
     expect(logged.mock.calls.some((c) => c.join(' ').includes('deadlock detected'))).toBe(true);
+  });
+});
+
+describe('Worker downloading stored data', () => {
+  const REV = 'c0ffee'.padEnd(40, '0');
+  const A = `0x${'a1'.repeat(20)}`, B = `0x${'b2'.repeat(20)}`, C = `0x${'c3'.repeat(20)}`;
+  const RPC = new Map([[1, 'http://rpc']]);
+  const sha = (c: string) => c.repeat(64);
+  /** A manifest entry for `address`: its transfers' sha256 is sha(t), and with `r` it has a trail whose sha256 is sha(r). */
+  const stored = (address: string, t: string, r: string | null = null): StoredEntry => ({
+    chainId: 1, address, name: 'BAYC', startBlock: 100, throughBlock: 900, throughTime: 1_700_000_000_000,
+    transfers: { file: storedFile(1, address, 'transfers'), rows: 3, bytes: 10, sha256: sha(t) },
+    trail: r === null ? null : { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 10, sha256: sha(r) },
+  });
+  /** A watched collection read up to just before where its stored data starts, so the stored data would load. */
+  const watched = (id: number, address: string, more: Partial<CollectionRow> = {}) => row({ id, address, startBlock: 100, cursorBlock: 99, contract: {} as any, ...more });
+
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'washtrace-download-')); });
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** One call of downloadFile, held until the test ends it. An abort rejects it, as download does. */
+  interface Call {
+    url: string; dest: string; sha: string; onProgress: (share: number) => void; signal: AbortSignal;
+    /** Writes the file (its content is its sha256, see fileSha) and resolves, then waits for the worker to finish with it. */
+    finish(): Promise<void>;
+    fail(err: unknown): Promise<void>;
+  }
+
+  /**
+   * A worker over a stub store that says what happened and keeps `rows` as
+   * the store would, with a Hub that answers `entries` at REV. A file on
+   * disk says its own sha256, as a finished download writes it.
+   */
+  function setup(rows: CollectionRow[], entries: StoredEntry[], rpc: ReadonlyMap<number, string> = new Map()) {
+    const events: string[] = [];
+    const calls: Call[] = [];
+    const hub = { asked: 0, lock: true, repo: 'u/d', answer: async (): Promise<Manifest | null> => ({ version: 2, revision: REV, collections: entries }) };
+    const find = (id: number) => rows.find((r) => r.id === id);
+    /** The connection the lock is held on, as pg's: it emits 'error' when lost, and answers a query while alive. */
+    const client = Object.assign(new EventEmitter(), { alive: true, query: async () => { if (!client.alive) throw new Error('Connection terminated unexpectedly'); return { rows: [] }; } });
+    const store: any = {
+      collections: async () => rows.map((r) => ({ ...r })),
+      locked: async (key: number, _wait: boolean, fn: (c: unknown) => Promise<unknown>) => { events.push(`lock ${key}`); return hub.lock ? fn(client) : 'skipped'; },
+      restore: async (id: number, _chainId: number, e: StoredEntry) => {
+        events.push(`restore ${id}`);
+        Object.assign(find(id)!, { startBlock: e.startBlock, cursorBlock: e.throughBlock, storedThroughTime: e.throughTime, restoreNote: null, restoreNoteKey: null });
+      },
+      importTrail: async (id: number, _chainId: number, sha256: string) => { events.push(`import ${id}`); find(id)!.trailImportedSha = sha256; return { wallets: 1, flows: 1 }; },
+      setDownload: async (id: number, file: string | null, share: number | null) => {
+        events.push(`progress ${id} ${file} ${share}`);
+        const r = find(id);
+        if (r === undefined) return false;
+        Object.assign(r, { downloadFile: file, downloadProgress: share });
+        return r.pausedAt === null;
+      },
+      downloadFailed: async (id: number, note: string) => {
+        events.push(`failed ${id} ${note}`);
+        Object.assign(find(id)!, { downloadFile: null, downloadProgress: null, downloadNote: note, downloadRetryAt: Date.now() + 5 * 60_000 });
+      },
+      downloadDone: async (id: number) => {
+        events.push(`done ${id}`);
+        Object.assign(find(id)!, { downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null });
+      },
+      setError: async (id: number, message: string | null) => { events.push(message === null ? `cleared ${id}` : `error ${id} ${message}`); },
+      served: async (id: number) => { events.push(`served ${id}`); },
+      heartbeat: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
+      clearRestoreNote: async () => {}, setTrailNote: async () => {},
+      stale: async () => rows.map((r) => ({ id: r.id, chainId: 1, version: 1, rules: {}, name: r.name, ranAt: null, tookMs: null, rulesAt: null, retryAt: null })),
+      importedFunding: async () => false, saveAnalysis: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: hub.repo }), '', dir);
+    /** Waits for the download running in the background, if any, to end. */
+    const settle = async () => { await (w as any).downloading?.done; };
+    w.fetchHubManifest = async () => { hub.asked += 1; return hub.answer(); };
+    w.fileSha = (path: string) => readFile(path, 'utf8');
+    w.downloadFile = (url, dest, sha256, onProgress, signal) => new Promise<void>((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('This operation was aborted')));
+      calls.push({
+        url, dest, sha: sha256, onProgress, signal,
+        finish: async () => { await writeFile(dest, sha256); resolve(); await settle(); },
+        fail: async (err) => { reject(err); await settle(); },
+      });
+    });
+    w.analyzeOff = async () => ({ analysis: {} as Analysis, through: 7 });
+    (w as any).chain = () => ({ finalized: async () => 1_000, transfers: async () => ({ transfers: [], through: 1_000 }) });
+    return { w, events, calls, hub, settle, store, client };
+  }
+
+  it('downloads the transfers of a watched collection that would load them, then loads them on a later pass', async () => {
+    // Noted from before downloads: the file was missing. The download is what puts it there.
+    const noted = watched(1, A, { restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: `${sha('a')}:absent` });
+    const { w, events, calls } = setup([noted], [stored(A, 'a')]);
+    await w.ingest();
+    expect(calls.map((c) => [c.url, c.dest, c.sha])).toEqual([[hubUrl('u/d', REV, storedFile(1, A, 'transfers')), join(dir, storedFile(1, A, 'transfers')), sha('a')]]);
+    // Fetched, and kept on disk for what reads it between fetches.
+    expect(await readManifest(join(dir, 'manifest.json'))).toEqual({ version: 2, revision: REV, collections: [stored(A, 'a')] });
+    // Not tried from disk meanwhile, which would only note it missing again.
+    expect(events).not.toContain('restore 1');
+    // Progress at most once per 1%.
+    for (const share of [0.001, 0.004, 0.011, 0.0115, 0.5]) calls[0]!.onProgress(share);
+    await calls[0]!.finish();
+    expect(events.filter((e) => /^(progress|done)/.test(e))).toEqual(['progress 1 transfers 0', 'progress 1 transfers 0.011', 'progress 1 transfers 0.5', 'done 1']);
+    await w.ingest();
+    expect(events).toContain('restore 1');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('downloads nothing for a collection already read past its stored data', async () => {
+    const { w, events, calls } = setup([watched(1, A, { cursorBlock: 950 })], [stored(A, 'a')], RPC);
+    await w.ingest();
+    expect(calls).toEqual([]);
+    expect(events.some((e) => e.startsWith('lock'))).toBe(false);
+    expect(events).toContain('served 1');
+  });
+
+  it('downloads nothing when the file on disk already matches', async () => {
+    const e = stored(A, 'a', 'b');
+    await writeFile(join(dir, e.transfers.file), sha('a'));
+    await writeFile(trailPath(dir, e), sha('b'));
+    const { w, events, calls } = setup([watched(1, A)], [e]);
+    await w.ingest();
+    await w.ingest();
+    expect(calls).toEqual([]);
+    expect(events).toContain('restore 1');
+    expect(events).toContain('import 1');
+  });
+
+  it('holds the collection\'s chain reading while its transfers download, and no other collection\'s', async () => {
+    const { w, events, calls } = setup([watched(1, A), watched(2, B)], [stored(A, 'a')], RPC);
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    expect(events).toContain('served 2');
+    expect(events).not.toContain('served 1');
+    // Still downloading next pass: still held, and not started twice.
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    expect(events).not.toContain('served 1');
+    await calls[0]!.finish();
+    await w.ingest();
+    expect(events).toContain('restore 1');
+    expect(events).toContain('served 1');
+  });
+
+  it('says no "No RPC" fault for a collection whose stored data is downloading', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const NO_RPC = 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.';
+    // A said the fault before its download started (a back-off, or before downloads were): cleared while it is on the way.
+    const { w, events, calls } = setup([watched(1, A, { error: NO_RPC }), watched(2, B)], [stored(A, 'a')]);
+    await w.ingest();
+    expect(events.filter((e) => /^(error|cleared)/.test(e))).toEqual(['cleared 1', `error 2 ${NO_RPC}`]);
+    await calls[0]!.finish();
+  });
+
+  it('runs one download at a time, every transfers file before any trail', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The first watched has only a trail to download, the second its transfers: the transfers go first.
+    const { w, calls } = setup([watched(1, A, { cursorBlock: 950 }), watched(2, B)], [stored(A, 'a', 'b'), stored(B, 'c')]);
+    await w.ingest();
+    await w.ingest();
+    expect(calls.map((c) => c.dest)).toEqual([join(dir, storedFile(1, B, 'transfers'))]);
+    await calls[0]!.finish();
+    await w.ingest();
+    expect(calls.map((c) => c.url)).toEqual([hubUrl('u/d', REV, storedFile(1, B, 'transfers')), hubUrl('u/d', REV, storedFile(1, A, 'trail'))]);
+    expect(calls[1]!.dest).toBe(trailPath(dir, stored(A, 'a', 'b')));
+    await calls[1]!.finish();
+  });
+
+  it('a transfers download that comes due stops a running trail download', async () => {
+    const rows = [watched(1, A, { cursorBlock: 950 })];
+    const { w, events, calls, settle } = setup(rows, [stored(A, 'a', 'b'), stored(B, 'c')], RPC);
+    await w.ingest();
+    expect(calls.map((c) => c.dest)).toEqual([trailPath(dir, stored(A, 'a', 'b'))]);
+    // A trail download holds nothing: its collection's chain is read.
+    expect(events).toContain('served 1');
+    rows.push(watched(2, B, { addedAt: Date.now() }));
+    await w.ingest();
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await settle();
+    // Stopped, not failed: no back-off, and its progress goes.
+    expect(events).toContain('progress 1 null null');
+    expect(events.some((e) => e.startsWith('failed'))).toBe(false);
+    expect(events).not.toContain('served 2');
+    // The transfers start the pass after.
+    expect(calls).toHaveLength(1);
+    await w.ingest();
+    expect(calls.map((c) => c.dest)).toEqual([trailPath(dir, stored(A, 'a', 'b')), join(dir, storedFile(1, B, 'transfers'))]);
+    await calls[1]!.finish();
+  });
+
+  it('starts no download while another replica holds the download lock', async () => {
+    // B is backed off here, so only its row, which says another replica is downloading it, holds it.
+    const other = watched(2, B, { downloadFile: 'transfers', downloadRetryAt: Date.now() + 60 * 60_000 });
+    const { w, events, calls, hub, settle } = setup([watched(1, A), other], [stored(A, 'a'), stored(B, 'c')], RPC);
+    hub.lock = false;
+    await w.ingest();
+    await settle();
+    await w.ingest();
+    await settle();
+    expect(events.filter((e) => e === 'lock 5')).toHaveLength(2);
+    expect(calls).toEqual([]);
+    // The other replica's download holds the chain reading here too.
+    expect(events).not.toContain('served 2');
+    expect(events).not.toContain('served 1');
+  });
+
+  it('aborts the download of a collection paused mid-way, and clears its progress', async () => {
+    const rows = [watched(1, A), watched(2, B)];
+    const { w, events, calls, settle } = setup(rows, [stored(A, 'a'), stored(B, 'c')]);
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    // Seen by the next pass.
+    rows[0]!.pausedAt = Date.now();
+    await w.ingest();
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await settle();
+    expect(events).toContain('progress 1 null null');
+    // Seen by the progress it writes: this one is deleted mid-way.
+    await w.ingest();
+    expect(calls[1]!.dest).toBe(join(dir, storedFile(1, B, 'transfers')));
+    rows.splice(1, 1);
+    calls[1]!.onProgress(0.2);
+    await settle();
+    expect(calls[1]!.signal.aborted).toBe(true);
+    expect(events.some((e) => e.startsWith('failed'))).toBe(false);
+  });
+
+  it('a failed trail download waits for its back-off after the transfers have loaded', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls } = setup([watched(1, A)], [stored(A, 'a', 'b')]);
+    await w.ingest();
+    await calls[0]!.finish();
+    // Loads the transfers, which clears the load's own note, then starts the trail.
+    await w.ingest();
+    expect(events).toContain('restore 1');
+    expect(calls[1]!.dest).toBe(trailPath(dir, stored(A, 'a', 'b')));
+    await calls[1]!.fail(new Error('socket hang up'));
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.failed}`);
+    now += 5 * 60_000 - 1;
+    await w.ingest();
+    expect(calls).toHaveLength(2);
+    now += 1;
+    await w.ingest();
+    expect(calls).toHaveLength(3);
+    await calls[2]!.finish();
+  });
+
+  it('a failed download backs off with a note, and the chain is read meanwhile', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls } = setup([watched(1, A)], [stored(A, 'a')], RPC);
+    await w.ingest();
+    expect(events).not.toContain('served 1');
+    // Not analysed while its stored data is on the way: it is analysed once loaded.
+    expect(await w.analyze()).toBe('nothing due');
+    await calls[0]!.fail(new Error(`fetch failed: ${hubUrl('u/d', REV, storedFile(1, A, 'transfers'))}`));
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.failed}`);
+    const said = logged.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(said).toContain('fetch failed');
+    expect(said).not.toContain('huggingface.co');
+    now += 60_000;
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    expect(events).toContain('served 1');
+    // And analysed on what it has.
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    now += 4 * 60_000;
+    await w.ingest();
+    expect(calls).toHaveLength(2);
+    await calls[1]!.finish();
+  });
+
+  it('fails a download whose lock connection is lost, and goes on', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls, client, settle } = setup([watched(1, A)], [stored(A, 'a')]);
+    await w.ingest();
+    client.alive = false;
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await settle();
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.failed}`);
+    expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('the connection holding its lock was lost (Connection terminated unexpectedly)');
+    // Heard while the download ran, and only then: nothing is left listening.
+    expect(client.listenerCount('error')).toBe(0);
+  });
+
+  it('fails a download within a minute once its lock connection has died without a word', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls, client, settle } = setup([watched(1, A)], [stored(A, 'a')]);
+    await w.ingest();
+    // Bytes keep coming, so it is no stall.
+    await appendFile(partPath(calls[0]!.dest, sha('a')), 'x');
+    await vi.advanceTimersByTimeAsync(55_000);
+    client.alive = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await settle();
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.failed}`);
+  });
+
+  it('a full disk says so', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls } = setup([watched(1, A)], [stored(A, 'a')]);
+    await w.ingest();
+    await calls[0]!.fail(new StoredDataError(`not enough disk space for ${storedFile(1, A, 'transfers')}`, 'disk'));
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.disk}`);
+  });
+
+  it('waits out its back-off though the store could not record it, as when the store\'s disk is full too', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, calls, store } = setup([watched(1, A)], [stored(A, 'a')]);
+    store.downloadFailed = async () => { throw new Error('could not extend file: No space left on device'); };
+    await w.ingest();
+    await calls[0]!.fail(new StoredDataError('not enough disk space', 'disk'));
+    now += 5 * 60_000 - 1;
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    now += 1;
+    await w.ingest();
+    expect(calls).toHaveLength(2);
+    await calls[1]!.finish();
+  });
+
+  it('fetches the manifest again after a download that does not match it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, calls, hub } = setup([watched(1, A)], [stored(A, 'a')]);
+    await w.ingest();
+    expect(hub.asked).toBe(1);
+    await calls[0]!.fail(new StoredDataError('does not match its checksum', 'mismatch'));
+    await w.ingest();
+    expect(hub.asked).toBe(2);
+    await w.ingest();
+    expect(hub.asked).toBe(2);
+  });
+
+  it('a stalled download is given up after two minutes', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls, settle } = setup([watched(1, A)], [stored(A, 'a')]);
+    await w.ingest();
+    await vi.advanceTimersByTimeAsync(100_000);
+    // Bytes came: the two minutes start again.
+    await appendFile(partPath(calls[0]!.dest, sha('a')), 'some bytes');
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(calls[0]!.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(calls[0]!.signal.aborted).toBe(true);
+    await settle();
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.failed}`);
+  });
+
+  it('uses the cached manifest when the Hub cannot be reached, and says so once', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const e = stored(A, 'a');
+    await writeManifest(join(dir, 'manifest.json'), { version: 2, revision: REV, collections: [e] });
+    await writeFile(join(dir, e.transfers.file), sha('a'));
+    const { w, events, hub } = setup([watched(1, A)], [e]);
+    hub.answer = async () => { throw new Error('fetch failed: getaddrinfo ENOTFOUND https://huggingface.co/datasets/u/d/resolve/main/manifest.json'); };
+    await w.ingest();
+    expect(events).toContain('restore 1');
+    // A failed fetch is an attempt: not tried again within the hour.
+    now += 30 * 60_000;
+    await w.ingest();
+    expect(hub.asked).toBe(1);
+    now += 31 * 60_000;
+    await w.ingest();
+    expect(hub.asked).toBe(2);
+    const lines = () => warned.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('Hugging Face'));
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]).toContain('ENOTFOUND');
+    expect(lines()[0]).not.toContain('huggingface.co');
+    // Answered, then failing again: said again.
+    hub.answer = async () => ({ version: 2, revision: REV, collections: [e] });
+    now += 61 * 60_000;
+    await w.ingest();
+    hub.answer = async () => { throw new Error('fetch failed'); };
+    now += 61 * 60_000;
+    await w.ingest();
+    expect(lines()).toHaveLength(2);
+  });
+
+  it('takes a Hub with no manifest as no stored data, though an older one is on disk', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const e = stored(A, 'a');
+    await writeManifest(join(dir, 'manifest.json'), { version: 2, revision: REV, collections: [e] });
+    await writeFile(join(dir, e.transfers.file), sha('a'));
+    const { w, events, calls, hub } = setup([watched(1, A)], [e]);
+    hub.answer = async () => null;
+    await w.ingest();
+    expect(events).not.toContain('restore 1');
+    expect(calls).toEqual([]);
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    // Left as it was.
+    expect((await readManifest(join(dir, 'manifest.json'))).collections).toEqual([e]);
+  });
+
+  it('re-fetches the manifest at most hourly, and when a collection is newly watched', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const rows = [watched(1, A, { cursorBlock: 950 })];
+    const { w, hub } = setup(rows, [stored(A, 'a')], RPC);
+    await w.ingest();
+    expect(hub.asked).toBe(1);
+    now += 30 * 60_000;
+    await w.ingest();
+    // Only ingest fetches: an analysis reads what is on disk.
+    await w.analyze();
+    expect(hub.asked).toBe(1);
+    // A paused collection is no new watch.
+    rows.push(watched(2, B, { addedAt: now, pausedAt: now }));
+    now += 1;
+    await w.ingest();
+    expect(hub.asked).toBe(1);
+    rows.push(watched(3, C, { addedAt: now, cursorBlock: 950 }));
+    now += 1;
+    await w.ingest();
+    expect(hub.asked).toBe(2);
+    now += 59 * 60_000;
+    await w.ingest();
+    expect(hub.asked).toBe(2);
+    now += 2 * 60_000;
+    await w.ingest();
+    expect(hub.asked).toBe(3);
+    // Another repo set in the console: asked at once.
+    hub.repo = 'someone/else';
+    now += 1;
+    await w.ingest();
+    expect(hub.asked).toBe(4);
   });
 });
 
@@ -1105,7 +1560,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       setError: async (_id: number, message: string | null) => { errors.push(message); },
       setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
-    const w = new Worker(store, config, '');
+    const w = askedHub(new Worker(store, config, ''));
     (w as any).manifest = async () => ({ version: 2, collections: [] });
     // The real chain client, whose provider refuses: viem puts "URL: <the RPC URL>" in the message.
     (w as any).chain = (chainId: number, url: string) => {
@@ -1129,7 +1584,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       collections: async () => [row({ contract: null, cursorBlock: 1_000 })],
       setError: async () => {}, setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
-    const w = new Worker(store, config, '');
+    const w = askedHub(new Worker(store, config, ''));
     (w as any).manifest = async () => ({ version: 2, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,

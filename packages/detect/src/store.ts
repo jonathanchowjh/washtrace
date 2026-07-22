@@ -82,6 +82,14 @@ export interface CollectionRow {
   trailImportedSha: string | null;
   /** Why a money trail on disk was not loaded. It is not tried again until the file changes. */
   trailNote: string | null;
+  /** Which of its stored files is downloading, while one is. Null otherwise. */
+  downloadFile: 'transfers' | 'trail' | null;
+  /** How far that download has got, 0 to 1. Null when none runs. */
+  downloadProgress: number | null;
+  /** Why its stored data could not be downloaded (DOWNLOAD_NOTES). Meanwhile its chain is read, if it has an RPC. */
+  downloadNote: string | null;
+  /** When a failed download is tried again, in ms. Null when none is waiting. */
+  downloadRetryAt: number | null;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -547,6 +555,55 @@ export class Store {
    */
   async clearRestoreProgress(): Promise<void> {
     await this.pool.query('UPDATE washtrace.collections SET restore_progress = NULL WHERE restore_progress IS NOT NULL');
+  }
+
+  /**
+   * Say which of a collection's stored files is downloading and how far, or
+   * with null that none is. Returns whether the collection is still watched:
+   * false when it was paused or deleted, and the download stops. Progress is
+   * not written for a paused one; clearing always is.
+   */
+  async setDownload(id: number, file: 'transfers' | 'trail' | null, share: number | null): Promise<boolean> {
+    const { rows } = await this.pool.query<{ live: boolean }>(
+      `UPDATE washtrace.collections SET download_file = $2, download_progress = $3
+       WHERE id = $1 AND ($2::text IS NULL OR paused_at IS NULL)
+       RETURNING paused_at IS NULL AS live`,
+      [id, file, share],
+    );
+    return rows[0]?.live ?? false;
+  }
+
+  /**
+   * A download failed: say why, and wait as a failed load does (see
+   * restore), five minutes doubling with each failure in a row, up to an
+   * hour. Meanwhile its chain is read, if it has an RPC.
+   */
+  async downloadFailed(id: number, note: string): Promise<void> {
+    // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+    await this.pool.query(
+      `UPDATE washtrace.collections SET download_file = NULL, download_progress = NULL, download_note = $2, download_failures = download_failures + 1,
+         download_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(download_failures, 4))))
+       WHERE id = $1`,
+      [id, note],
+    );
+  }
+
+  /** A download went through: nothing about downloading is true any more. */
+  async downloadDone(id: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.collections SET download_file = NULL, download_progress = NULL, download_note = NULL, download_failures = 0, download_retry_at = NULL
+       WHERE id = $1`,
+      [id],
+    );
+  }
+
+  /**
+   * Forget every download's file and progress. For a worker starting: a
+   * download running when the last one died says "Downloading" for ever
+   * otherwise. Its note and back-off are kept: they are still true.
+   */
+  async clearDownloads(): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET download_file = NULL, download_progress = NULL WHERE download_file IS NOT NULL OR download_progress IS NOT NULL');
   }
 
   /**
@@ -1361,7 +1418,7 @@ const COLLECTION_SELECT = `
 SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM c.ingested_at)::float8 AS ingested,
        extract(epoch FROM c.error_at)::float8 AS errored, extract(epoch FROM c.served_at)::float8 AS served, extract(epoch FROM c.paused_at)::float8 AS paused,
        extract(epoch FROM c.stored_through_time)::float8 AS stored_through, extract(epoch FROM c.restore_retry_at)::float8 AS restore_retry,
-       extract(epoch FROM c.analysis_retry_at)::float8 AS analysis_retry,
+       extract(epoch FROM c.analysis_retry_at)::float8 AS analysis_retry, extract(epoch FROM c.download_retry_at)::float8 AS download_retry,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches,
        extract(epoch FROM a.ran_at)::float8 AS ran
@@ -1446,6 +1503,8 @@ function toCollection(r: any): CollectionRow {
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
     trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note,
+    downloadFile: r.download_file, downloadProgress: num(r.download_progress), downloadNote: r.download_note,
+    downloadRetryAt: r.download_retry === null ? null : r.download_retry * 1000,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };
