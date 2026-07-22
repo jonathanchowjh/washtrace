@@ -8,7 +8,5 @@ dist
 .remember
 docs
 *.tsbuildinfo
-# Money trails are local and large, and never baked into an image; a .part is
-# a file still being written.
-data/stored/*.trail.csv.zst
-data/stored/*.part
+# Stored data is large and downloaded at run time, never baked into an image.
+data/stored/

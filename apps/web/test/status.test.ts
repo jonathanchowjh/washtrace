@@ -166,6 +166,22 @@ describe('status', () => {
     expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'backfilling' });
   });
 
+  it('says which collection is downloading which file and how far', () => {
+    const manifest = { version: 2 as const, collections: [{ chainId: 1, address: '0xBC4C', name: 'BAYC', startBlock: 1, throughBlock: 2, throughTime: 3, transfers: { file: 'a', rows: 1, bytes: 12_300_000, sha256: 'x' }, trail: { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 3_400_000_000, sha256: 'y' } }] };
+    const run = (more: Partial<CollectionRow>) => texts(snapshot({ collections: [collection(more)], manifest }), 'working');
+    expect(run({ downloadFile: 'transfers', downloadProgress: 0.416 })).toEqual(['Downloading stored data for BAYC · 41% of 12.3 MB']);
+    expect(run({ downloadFile: 'trail', downloadProgress: 0.05 })).toEqual(['Downloading the money trail for BAYC · 5% of 3.4 GB']);
+    // Paused, nothing downloads; no manifest, no size to say.
+    expect(run({ downloadFile: 'trail', downloadProgress: 0.05, pausedAt: 1 })).toEqual([]);
+    expect(texts(snapshot({ collections: [collection({ downloadFile: 'transfers', downloadProgress: 0.416 })] }), 'working')).toEqual(['Downloading stored data for BAYC · 41%']);
+  });
+
+  it('says a failed download as information, not a fault', () => {
+    const s = snapshot({ collections: [collection({ downloadNote: 'Stored data could not be downloaded. Tried again later.' })] });
+    expect(texts(s, 'info')).toContain('BAYC: Stored data could not be downloaded. Tried again later.');
+    expect(texts(s, 'needs-you')).toEqual([]);
+  });
+
   it('says a collection loading stored data is loading it, not behind', () => {
     const s = snapshot({ collections: [collection({ cursorBlock: null, startBlock: null, restoreProgress: 0.42 })] });
     expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'restoring' });

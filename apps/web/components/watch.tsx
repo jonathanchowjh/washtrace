@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Warn } from '@/components/head';
 import { CHAINS } from '@/lib/chains';
+import { storedLine, type StoredSize } from '@/lib/format';
 
 const FIELD = 'rounded-[5px] border bg-card px-2 py-1 text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none';
 const BUTTON = 'rounded-[5px] border px-2.5 py-1 font-medium text-foreground hover:bg-muted disabled:opacity-50';
@@ -25,6 +26,8 @@ export const SUGGESTED = [
   { name: 'Meebits', chainId: 1, address: '0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7', paper: 34.51, footprint: 96.02 },
   { name: 'Bored Ape Yacht Club', chainId: 1, address: '0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d', paper: 9.78, footprint: 1.46, control: true },
 ] as const;
+
+type Row = { name: string; chainId: number; address: string } & Partial<{ paper: number; footprint: number; control: boolean }>;
 
 /** POST /api/collections, the same call an integrator makes, and what to say about its answer. */
 async function watch(collection: { chainId: number; address: string; name?: string; fromBlock?: number }): Promise<Said> {
@@ -49,13 +52,28 @@ export function WatchPanel({ startOpen, children }: { startOpen: boolean; childr
   return <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)} className="group mt-6">{children}</details>;
 }
 
-/** One press watches a suggestion. `watched` holds `chainId/address` of every watched collection; those link to their page instead. */
-export function Suggested({ watched }: { watched: string[] }) {
+/** A collection's key in the lists: chain and lowercase address, as the store keeps them. */
+const keyOf = (chainId: number, address: string) => `${chainId}/${address.toLowerCase()}`;
+
+/**
+ * One press watches a suggestion. `watched` holds `chainId/address` of every
+ * watched collection; those link to their page instead. The list is the
+ * paper's collections, then every other collection with stored data on the
+ * Hub (`stored`, the manifest's sizes; null while none is cached). A row says
+ * how big its stored data is, because watching downloads it.
+ */
+export function Suggested({ watched, stored }: { watched: string[]; stored: StoredSize[] | null }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<Said | null>(null);
 
-  async function add(s: (typeof SUGGESTED)[number]) {
+  const suggested: readonly Row[] = SUGGESTED;
+  const paper = new Set(suggested.map((s) => keyOf(s.chainId, s.address)));
+  const rows: Row[] = [...suggested, ...(stored ?? []).filter((e) => !paper.has(keyOf(e.chainId, e.address)))];
+  const extra = rows.length > suggested.length;
+  const sizeOf = (r: Row) => stored?.find((e) => keyOf(e.chainId, e.address) === keyOf(r.chainId, r.address));
+
+  async function add(s: Row) {
     setBusy(s.address);
     setSaid(null);
     const answer = await watch({ chainId: s.chainId, address: s.address, name: s.name });
@@ -67,17 +85,23 @@ export function Suggested({ watched }: { watched: string[] }) {
 
   return (
     <div className="text-[13px]">
-      <p className="text-xs text-muted-foreground">Suggested: collections from the term paper, each with a known answer to compare this reading against.</p>
+      <p className="text-xs text-muted-foreground">
+        Suggested: collections from the term paper, each with a known answer to compare this reading against
+        {stored !== null && extra ? ', and other collections whose stored data is on Hugging Face' : ''}.
+      </p>
       <ul className="mt-2 divide-y rounded-md border">
-        {SUGGESTED.map((s) => {
+        {rows.map((s) => {
           const key = `${s.chainId}/${s.address}`;
+          const size = sizeOf(s);
           return (
             <li key={key} className="flex items-center gap-4 px-3 py-2">
               <div className="min-w-0 flex-1 md:flex md:items-baseline md:gap-4">
                 <p className="font-medium text-foreground md:w-44 md:shrink-0">{s.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {'control' in s ? 'Control: ' : ''}paper found {Math.round(s.paper)}% washed · Footprint {Math.round(s.footprint)}%
-                </p>
+                <div className="text-xs text-muted-foreground">
+                  <p>{s.paper !== undefined && s.footprint !== undefined ? `${s.control ? 'Control: ' : ''}paper found ${Math.round(s.paper)}% washed · Footprint ${Math.round(s.footprint)}%` : 'Its stored data is on Hugging Face.'}</p>
+                  {/* No line when the manifest has no entry for it: nothing is downloaded for it. */}
+                  {stored === null ? <p>stored data: not checked yet</p> : size ? <p>{storedLine(size)}</p> : null}
+                </div>
               </div>
               {watched.includes(key)
                 ? <Link href={`/c/${key}`} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
@@ -92,8 +116,12 @@ export function Suggested({ watched }: { watched: string[] }) {
 }
 
 /** Watch any collection by its contract address. */
-export function AddCollection() {
+export function AddCollection({ stored }: { stored: StoredSize[] | null }) {
   const router = useRouter();
+  // What is typed, for the size of its stored data; the form itself is still read from its fields on submit.
+  const [chain, setChain] = useState('1');
+  const [typed, setTyped] = useState('');
+  const size = stored?.find((e) => keyOf(e.chainId, e.address) === keyOf(Number(chain), typed.trim()));
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
 
@@ -115,12 +143,12 @@ export function AddCollection() {
   return (
     <form action={submit} className="flex flex-wrap items-end gap-2 text-[13px]">
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Chain
-        <select name="chainId" defaultValue="1" className={FIELD}>
+        <select name="chainId" defaultValue="1" onChange={(e) => setChain(e.target.value)} className={FIELD}>
           {Object.entries(CHAINS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select>
       </label>
       <label className="flex max-w-full flex-col gap-0.5 text-xs text-muted-foreground">Contract
-        <input name="address" required pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className={`${FIELD} w-[23rem] max-w-full font-mono text-xs`} />
+        <input name="address" required onChange={(e) => setTyped(e.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className={`${FIELD} w-[23rem] max-w-full font-mono text-xs`} />
       </label>
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Name
         <input name="name" placeholder="optional" className={`${FIELD} w-36`} />
@@ -129,6 +157,8 @@ export function AddCollection() {
         <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className={`${FIELD} w-28 font-mono text-xs`} />
       </label>
       <button type="submit" disabled={busy} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
+ {/* Watching it downloads this, so it is said before the press. */}
+      {size ? <p className="basis-full text-xs text-muted-foreground">{storedLine(size)}</p> : null}
       {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
     </form>
   );

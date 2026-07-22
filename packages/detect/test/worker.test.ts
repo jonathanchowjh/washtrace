@@ -893,7 +893,7 @@ describe('Worker downloading stored data', () => {
     expect(lines()).toHaveLength(2);
   });
 
-  it('takes a Hub with no manifest as no stored data, though an older one is on disk', async () => {
+  it('takes a Hub with no manifest as no stored data, and empties the older one on disk', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const e = stored(A, 'a');
     await writeManifest(join(dir, 'manifest.json'), { version: 2, revision: REV, collections: [e] });
@@ -904,8 +904,10 @@ describe('Worker downloading stored data', () => {
     expect(events).not.toContain('restore 1');
     expect(calls).toEqual([]);
     expect(await w.analyze()).toBe('BAYC analyzed');
-    // Left as it was.
-    expect((await readManifest(join(dir, 'manifest.json'))).collections).toEqual([e]);
+    // The cache now says the Hub has none, so the console quotes nothing either.
+    const cached = await readManifest(join(dir, 'manifest.json'));
+    expect(cached).toEqual({ version: 2, collections: [] });
+    expect(cached.revision).toBeUndefined();
   });
 
   it('re-fetches the manifest at most hourly, and when a collection is newly watched', async () => {

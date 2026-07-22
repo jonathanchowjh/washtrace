@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { handle, json } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
 import { status } from '@/lib/status';
-import { store } from '@/lib/store';
+import { store, storedManifest } from '@/lib/store';
 import { trailFunded } from '@/lib/views';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -22,6 +22,6 @@ export async function GET(): Promise<Response> {
     const config = configFromSources(sources, settings);
     // The worker page's and Settings' answer, so the notice about it says the same.
     const fed = config.funding ? false : await trailFunded(s, collections);
-    return json(status({ passes, collections, funding, config, trailFunded: fed }, Date.now(), zone));
+    return json(status({ passes, collections, funding, config, trailFunded: fed, manifest: await storedManifest() }, Date.now(), zone));
   });
 }

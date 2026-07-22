@@ -340,3 +340,43 @@ describe('a money trail loaded from stored data', () => {
     expect(cards(false, true)).toContain('the next analysis runs this lens');
   });
 });
+
+describe('downloading stored data', () => {
+  const down = (more: Partial<CollectionRow> = {}) => row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.416, ...more });
+
+  it('says it in the pill and the summary, in the working colour', () => {
+    const c = down();
+    const cov = coverage(c, ON, 0);
+    const pill = render(<ReadingPill cov={cov} />).container;
+    expect(pill.textContent).toBe('Downloading stored data · 41%');
+    expect(pill.querySelector('.text-focus')).not.toBeNull();
+    expect(pill.querySelector('.text-fault')).toBeNull();
+    expect(pill.querySelector('.animate-pulse')).not.toBeNull();
+    const text = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
+    expect(text).toContain('41%');
+    expect(text).toContain('of its stored data downloaded from Hugging Face');
+  });
+
+  it('a trail download shows on the funding step, not as the reading', () => {
+    const c = row({ downloadFile: 'trail', downloadProgress: 0.416 });
+    const cov = coverage(c, ON, 0);
+    expect(cov.reading).not.toBe('downloading');
+    const text = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} trailBytes={3_400_000_000} />).container.textContent!;
+    expect(text).toContain('Money trail downloading from stored data · 41% of 3.4 GB');
+    // Without the manifest's size, no size is guessed.
+    expect(render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent).toContain('Money trail downloading from stored data · 41%');
+  });
+
+  it('says nothing is downloading when paused, and the note only while it is tried again', () => {
+    const note = 'Stored data could not be downloaded. Tried again later.';
+    const paused = row({ downloadFile: 'trail', downloadProgress: 0.4, downloadNote: note, pausedAt: 1 });
+    const text = render(<ReadingPanel c={paused} cov={coverage(paused, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(text).not.toContain('downloading');
+    expect(text).not.toContain(note);
+    cleanup();
+    const failed = row({ downloadNote: note });
+    const el = render(<ReadingPanel c={failed} cov={coverage(failed, ON, 0)} why="Waiting" rpcChains={ON} />).container;
+    expect(el.textContent).toContain(note);
+    expect(el.querySelector('.text-fault')).toBeNull();
+  });
+});

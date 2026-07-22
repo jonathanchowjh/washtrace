@@ -26,10 +26,11 @@ COPY apps/web/package.json apps/web/
 RUN npm ci --omit=dev --workspace @washtrace/worker && npm cache clean --force
 COPY --from=build /repo/packages/detect/dist packages/detect/dist
 COPY --from=build /repo/apps/worker/dist apps/worker/dist
-# Stored data: the manifest and each collection's transfers, loaded before the
-# chain is read. /app/data/stored is where the worker looks (WASHTRACE_STORED_DIR
-# overrides it). Money trails are left out (.dockerignore): too big for an image.
-COPY --from=build /repo/data/stored data/stored
+# Stored data is not in the image: the worker downloads it from Hugging Face
+# into /app/data/stored (WASHTRACE_STORED_DIR overrides it), which compose
+# mounts as a volume. The folder is made here, owned by node, so a fresh named
+# volume copies that ownership and the worker can write it.
+RUN mkdir -p data/stored && chown node:node data/stored
 USER node
 EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
@@ -50,8 +51,9 @@ ENV HOSTNAME=0.0.0.0
 # expects them copied beside the server.
 COPY --from=build /repo/apps/web/.next/standalone ./
 COPY --from=build /repo/apps/web/.next/static ./apps/web/.next/static
-# The same stored data as the worker's, at the same place, for the console to describe.
-COPY --from=build /repo/data/stored data/stored
+# The worker's stored data is mounted here (read only) for the console to describe.
+# The folder exists so the console reads an empty one before the volume has data.
+RUN mkdir -p data/stored && chown node:node data/stored
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \

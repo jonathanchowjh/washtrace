@@ -3,7 +3,7 @@ import { authConfigured } from './auth';
 import { storedOnly } from './metrics';
 import { configFromSources, view } from './settings';
 import { status } from './status';
-import { store } from './store';
+import { store, storedManifest } from './store';
 
 /**
  * Reads a page and its API route both serve, in one place, so the console
@@ -64,7 +64,7 @@ export async function workerView(zone = 'UTC') {
   // With no key, whether a loaded money trail still feeds the money lenses.
   const fed = config.funding ? false : await trailFunded(s, collections);
   // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
-  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed }, Date.now(), zone);
+  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed, manifest: await storedManifest() }, Date.now(), zone);
   return {
     every: EVERY,
     rpcChains: config.chains,

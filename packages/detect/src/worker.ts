@@ -333,13 +333,11 @@ export class Worker {
   private readonly restoreFailed = new Map<number, { failures: number; retryAt: number }>();
   /**
    * When the Hub was last asked for its manifest, whatever it answered, and
-   * which repo. In memory: a restart asks at once. `hubHasNone` is that the
-   * Hub said the repo has none; `hubFailing` that the last ask failed, so an
-   * outage is one log line and not one an hour.
+   * which repo. In memory: a restart asks at once. `hubFailing` is that the
+   * last ask failed, so an outage is one log line and not one an hour.
    */
   private hubAskedAt = -Infinity;
   private hubRepo = '';
-  private hubHasNone = false;
   private hubFailing = false;
   /** The download running in this process, outside every pass (see startDownload). One at a time. */
   private downloading: { id: number; file: 'transfers' | 'trail'; abort: AbortController; done: Promise<void> } | null = null;
@@ -507,11 +505,10 @@ export class Worker {
 
   /**
    * The stored-data manifest, or null when it cannot be read: then no
-   * collection has stored data, and that is said once. Empty when the Hub
-   * said it has none: one from before on disk says nothing true now.
+   * collection has stored data, and that is said once. A Hub that said it has
+   * none left an empty manifest on disk (askHub), which reads as empty.
    */
   private async storedManifest(): Promise<Manifest | null> {
-    if (this.hubHasNone) return { version: 2, collections: [] };
     try {
       const manifest = await this.manifest();
       this.manifestFailed = '';
@@ -530,8 +527,9 @@ export class Worker {
    * and next pass after a download that did not match it. A failed ask
    * counts, so a Hub that is down is asked hourly too; meanwhile the manifest
    * on disk, if any, is used, and the outage is one log line. A Hub that says
-   * the repo has none means no stored data: one from before is left on disk,
-   * unread, until the Hub has one again. Only ingest asks: everything else
+   * the repo has none means no stored data: the manifest on disk is replaced by
+   * an empty one, so no step (and not the console, which reads the same file)
+   * goes on quoting stored data that will not be downloaded. Only ingest asks: everything else
    * reads what is on disk.
    */
   private async askHub(collections: readonly CollectionRow[], repo: string): Promise<void> {
@@ -542,11 +540,8 @@ export class Worker {
     this.hubRepo = repo;
     try {
       const manifest = await this.fetchHubManifest(repo);
-      this.hubHasNone = manifest === null;
-      if (manifest !== null) {
-        await mkdir(this.stored, { recursive: true });
-        await writeManifest(join(this.stored, 'manifest.json'), manifest);
-      }
+      await mkdir(this.stored, { recursive: true });
+      await writeManifest(join(this.stored, 'manifest.json'), manifest ?? { version: 2, collections: [] });
       this.hubFailing = false;
     } catch (err) {
       if (!this.hubFailing) console.warn('[washtrace] stored data not fetched from Hugging Face: %s. The manifest on disk is used, if there is one.', this.scrubbed(err));

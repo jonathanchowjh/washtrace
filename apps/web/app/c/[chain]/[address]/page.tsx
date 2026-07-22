@@ -56,8 +56,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // The chains the worker can read: with none for this one, its stored data is all there is.
   const config = configFromSources(sources, settings);
   const rpcChains = new Set(config.chains);
-  // How many traders the loaded money trail checked, from the manifest, when the trail it describes is the one loaded.
-  const entry = c.trailImportedSha === null ? null : await storedEntry(chainId, address);
+  // The manifest entry: how many traders the loaded money trail checked (when it is the one loaded), and how big the trail is while it downloads.
+  const entry = await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
@@ -133,7 +133,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} now={Date.now()} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>
