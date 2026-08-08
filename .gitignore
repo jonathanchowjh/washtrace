@@ -23,3 +23,4 @@ docs/CS470/
 # Stored data is downloaded from Hugging Face, or cut locally with
 # `npm run stored`: never committed. A .part is a file being written.
 data/stored/
+publish-dry/

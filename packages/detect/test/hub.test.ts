@@ -73,6 +73,13 @@ describe('fetchManifest', () => {
     await expect(fetchManifest('u/d', base)).rejects.toThrow('Hugging Face answered 500 for u/d');
   });
 
+  it('exposes the HTTP status on the error it throws, for a 401 as for a 500', async () => {
+    handler = (_req, res) => void res.writeHead(401, { 'x-error-code': 'RepoNotFound' }).end();
+    await expect(fetchManifest('u/d', base)).rejects.toMatchObject({ status: 401, message: 'Hugging Face answered 401 for u/d' });
+    handler = (_req, res) => void res.writeHead(503).end();
+    await expect(fetchManifest('u/d', base)).rejects.toMatchObject({ status: 503 });
+  });
+
   it('refuses an answer with no revision, or one that is not a commit sha', async () => {
     handler = (_req, res) => void res.writeHead(200).end(MANIFEST);
     await expect(fetchManifest('u/d', base)).rejects.toThrow('Hugging Face gave no revision for u/d');

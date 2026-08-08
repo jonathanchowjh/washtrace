@@ -10,7 +10,7 @@ export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } f
 export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, needsRestore, needsTrail, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
 export { ConfigError, storeUrl, workerConfig } from './env.js';
 export {
-  StoredDataError, type StoredDataFault, DOWNLOAD_NOTES, storedDir, storedFile, trailPath, entryFor, upsertEntry, readManifest, parseManifest, writeManifest, sha256File,
+  StoredDataError, type StoredDataFault, DOWNLOAD_NOTES, storedDir, storedFile, trailPath, entryFor, upsertEntry, mergeManifest, datasetCard, megabytes, parseTarget, cutCollection, readManifest, parseManifest, writeManifest, sha256File,
   writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type Written,
 } from './stored.js';
 export { HUB, STORED_REPO, hubUrl, fetchManifest, partPath, download } from './hub.js';

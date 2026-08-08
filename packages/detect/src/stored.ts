@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { constants, createZstdCompress, createZstdDecompress } from 'node:zlib';
+import type { Store } from './store.js';
 import type { Flow, FlowKind, Transfer } from './types.js';
 
 /**
@@ -90,9 +91,9 @@ const BATCH = 5_000;
 const CHUNK_LINES = 1_000;
 const ZSTD_LEVEL = 19;
 
-const TRANSFER_COLUMNS = ['tx_hash', 'log_index', 'block_number', 'block_time', 'token_id', 'from_address', 'to_address', 'marketplace', 'price_wei', 'currency'];
-const CHECKED_COLUMNS = ['address'];
-const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'value_wei', 'token', 'block_number', 'block_time'];
+export const TRANSFER_COLUMNS = ['tx_hash', 'log_index', 'block_number', 'block_time', 'token_id', 'from_address', 'to_address', 'marketplace', 'price_wei', 'currency'];
+export const CHECKED_COLUMNS = ['address'];
+export const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'value_wei', 'token', 'block_number', 'block_time'];
 
 /** Errors of the process, not of the file (out of descriptors or memory): a load that meets one backs off, and is not noted as bad stored data. */
 const PROCESS_FAULTS = new Set(['EMFILE', 'ENFILE', 'EAGAIN', 'ENOMEM']);
@@ -131,6 +132,145 @@ export function upsertEntry(m: Manifest, e: StoredEntry): Manifest {
   const others = m.collections.filter((x) => !(x.chainId === e.chainId && x.address.toLowerCase() === e.address.toLowerCase()));
   const collections = [...others, e].sort((x, y) => x.chainId - y.chainId || x.address.toLowerCase().localeCompare(y.address.toLowerCase()));
   return { version: 2, collections };
+}
+
+/**
+ * The manifest a publish commits: what the Hub already lists, with the
+ * collections just cut in place of their old entries. A publish of one
+ * collection must not drop the others, so it starts from the remote's list.
+ * The remote's `revision` is dropped: it names the commit this one follows.
+ */
+export function mergeManifest(remote: Manifest | null, cut: StoredEntry[]): Manifest {
+  let m: Manifest = { version: 2, collections: remote?.collections ?? [] };
+  for (const e of cut) m = upsertEntry(m, e);
+  return m;
+}
+
+/**
+ * The dataset's README on the Hub: front matter, what the files hold and how
+ * to read them. Built from the manifest, so it can never list a collection
+ * the manifest does not, nor columns other than the ones written here.
+ */
+export function datasetCard(m: Manifest): string {
+  const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+  const rows = m.collections.map((e) =>
+    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} (${new Date(e.throughTime).toISOString().slice(0, 10)}) | ${megabytes(e.transfers.bytes)} | ${e.trail ? megabytes(e.trail.bytes) : 'none'} |`);
+  return `---
+license: cc-by-4.0
+pretty_name: washtrace data
+tags: [ethereum, nft, wash-trading]
+---
+
+# washtrace data
+
+Transfers of NFT collections, and the money trail of the wallets that traded them, read from the chain. The data
+is made for washtrace, an NFT wash-trading detector: a washtrace install downloads these files instead of reading
+each collection from its deploy block.
+
+Only data that can be read from the chain is included. Nothing about how it was collected, and no labels or
+settings, are in the files.
+
+## Collections
+
+| Name | Address | Chain id | Through block (date) | Transfers file | Trail file |
+| --- | --- | --- | --- | --- | --- |
+${rows.join('\n')}
+
+The name is the contract's own \`name()\`, or its address when it has none. \`manifest.json\` lists each file with
+its row count, size and sha256.
+
+## Files
+
+Each file is CSV compressed with zstd. Null is an empty field.
+
+\`<chainId>-<address>.transfers.csv.zst\` has the columns
+
+\`\`\`
+${TRANSFER_COLUMNS.join(',')}
+\`\`\`
+
+\`<chainId>-<address>.trail.csv.zst\` has two sections. First \`#checked\`, the wallets whose payments are included in
+full, with the column
+
+\`\`\`
+${CHECKED_COLUMNS.join(',')}
+\`\`\`
+
+then \`#flows\`, the payments those wallets made or received, with the columns
+
+\`\`\`
+${FLOW_COLUMNS.join(',')}
+\`\`\`
+
+## Reading them
+
+\`\`\`python
+import io
+import pandas as pd
+import zstandard
+
+transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd')
+
+with open("1-0x....trail.csv.zst", "rb") as f:
+    text = zstandard.ZstdDecompressor().stream_reader(f).read().decode()
+checked_part, flows_part = text.split("#flows\\n")
+checked = pd.read_csv(io.StringIO(checked_part.removeprefix("#checked\\n")))
+flows = pd.read_csv(io.StringIO(flows_part))
+\`\`\`
+
+Licence: CC-BY-4.0.
+`;
+}
+
+/** A size in megabytes, to one decimal: how the card and the logs say it. */
+export function megabytes(bytes: number): string {
+  return `${(bytes / 2 ** 20).toFixed(1)} MB`;
+}
+
+/** `<chainId>/<address>` as the maintainer's commands take it, the address lowercased; null when it is not one. */
+export function parseTarget(text: string | undefined): { chainId: number; address: string } | null {
+  const m = /^(\d+)\/(0x[0-9a-fA-F]{40})$/.exec(text ?? '');
+  return m ? { chainId: Number(m[1]), address: m[2]!.toLowerCase() } : null;
+}
+
+/**
+ * Cut one collection's stored data from `store` into `dir`: its transfers,
+ * and with `trail` its money trail, and the manifest entry that describes
+ * them. The entry's trail is null without `trail`; a caller that keeps an
+ * earlier one says so. Shared by `npm run stored` and the publisher so the
+ * two cut the same way. Only reads the store.
+ */
+export async function cutCollection(store: Store, dir: string, chainId: number, address: string, { trail }: { trail: boolean }): Promise<StoredEntry> {
+  const head = await store.storedHeader(chainId, address);
+  if (head === null) throw new Error(`${chainId}/${address} is not watched in this store`);
+  if (head.startBlock === null || head.throughBlock === null) throw new Error(`${head.name} has not read any blocks yet`);
+  if (head.throughTime === null) throw new Error(`${head.name} has no transfer with a block time at or below block ${head.throughBlock}`);
+
+  const file = storedFile(chainId, address, 'transfers');
+  const started = Date.now();
+  const transfers = await writeTransfers(join(dir, file), store.storedTransfers(head.id, head.throughBlock));
+  console.info('[stored] %s: %d transfers through block %d, %s, in %ds', file, transfers.rows, head.throughBlock, megabytes(transfers.bytes), seconds(started));
+
+  let cutTrail: StoredEntry['trail'] = null;
+  if (trail) {
+    const trailFile = storedFile(chainId, address, 'trail');
+    const begun = Date.now();
+    const { checked, of, addresses, flows } = await store.trail(head.id, chainId);
+    const written = await writeTrail(join(dir, trailFile), { checked: addresses, flows });
+    cutTrail = { rows: written.rows, wallets: written.wallets, checked, of, bytes: written.bytes, sha256: written.sha256 };
+    console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, megabytes(written.bytes), seconds(begun));
+  }
+  return {
+    chainId, address,
+    // The contract's own name, never the console label (collections.name), which is the maintainer's. `||`: an empty name() is no name.
+    name: head.contractName || address,
+    startBlock: head.startBlock, throughBlock: head.throughBlock, throughTime: head.throughTime,
+    transfers: { file, ...transfers }, trail: cutTrail,
+  };
+}
+
+function seconds(since: number): number {
+  return Math.round((Date.now() - since) / 1000);
 }
 
 /** The manifest at `path`. A missing one is empty: an install with no stored data reads the chain as before. */

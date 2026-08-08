@@ -910,6 +910,30 @@ describe('Worker downloading stored data', () => {
     expect(cached.revision).toBeUndefined();
   });
 
+  it('takes a 401 from the Hub (no such public dataset) as no stored data, and empties the cache', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const e = stored(A, 'a');
+    await writeManifest(join(dir, 'manifest.json'), { version: 2, revision: REV, collections: [e] });
+    const { w, calls } = setup([watched(1, A)], [e]);
+    // The real method, over a Hub that answers 401 (and 503 below).
+    vi.mocked(Worker.prototype.fetchHubManifest).mockRestore();
+    delete (w as any).fetchHubManifest;
+    const answer = vi.fn(async () => new Response(null, { status: 401, headers: { 'x-error-code': 'RepoNotFound' } }));
+    vi.stubGlobal('fetch', answer);
+    try {
+      await w.ingest();
+      expect(answer).toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(await readManifest(join(dir, 'manifest.json'))).toEqual({ version: 2, collections: [] });
+      // A Hub that is down is not "no dataset": the cache stays.
+      await writeManifest(join(dir, 'manifest.json'), { version: 2, revision: REV, collections: [e] });
+      answer.mockImplementation(async () => new Response(null, { status: 503 }));
+      await expect(w.fetchHubManifest('u/d')).rejects.toMatchObject({ status: 503 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('re-fetches the manifest at most hourly, and when a collection is newly watched', async () => {
     let now = 1_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);

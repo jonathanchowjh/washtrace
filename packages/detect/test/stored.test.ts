@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, entryFor, parseManifest, readManifest, writeManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
+  StoredDataError, datasetCard, megabytes, parseTarget, entryFor, mergeManifest, parseManifest, readManifest, writeManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
   type Manifest, type StoredEntry,
 } from '../src/stored.js';
 import type { Flow, Transfer } from '../src/types.js';
@@ -265,5 +265,71 @@ describe('the manifest', () => {
     expect(storedFile(1, '0xabc', 'trail')).toBe('1-0xabc.trail.csv.zst');
     // The money trail sits beside the manifest, never named by it.
     expect(trailPath('/app/data/stored', { chainId: 1, address: '0xABC' } as StoredEntry)).toBe('/app/data/stored/1-0xabc.trail.csv.zst');
+  });
+});
+
+describe('mergeManifest', () => {
+  const A = entry({ address: w('a1'), name: 'A' });
+  const B = entry({ address: w('b2'), name: 'B', throughBlock: 100 });
+  const B2 = entry({ address: w('b2'), name: 'B', throughBlock: 200 });
+
+  it('keeps the collections it was not given', () => {
+    const merged = mergeManifest({ version: 2, revision: 'a'.repeat(40), collections: [B, A] }, [B2]);
+    expect(merged).toEqual({ version: 2, collections: [A, B2] });
+    expect('revision' in merged).toBe(false);
+    expect(mergeManifest(null, [A])).toEqual({ version: 2, collections: [A] });
+  });
+
+  it('sorts by chain, then address', () => {
+    const other = entry({ chainId: 137, address: w('01') });
+    expect(mergeManifest({ version: 2, collections: [other, B] }, [A]).collections.map((e) => e.address)).toEqual([A.address, B.address, other.address]);
+  });
+});
+
+describe('datasetCard', () => {
+  const m: Manifest = {
+    version: 2,
+    collections: [
+      entry({ address: w('a1'), name: 'Alpha | Club', throughBlock: 123456, throughTime: Date.UTC(2026, 9, 1), transfers: { file: 'x', rows: 5, bytes: 2_097_152, sha256: '' },
+        trail: { rows: 9, wallets: 2, checked: 2, of: 3, bytes: 1_048_576, sha256: '' } }),
+      entry({ address: w('b2'), name: w('b2') }),
+    ],
+  };
+
+  it('lists every collection and the exact columns, and states the licence', () => {
+    const card = datasetCard(m);
+    expect(card.startsWith('---\n')).toBe(true);
+    expect(card).toContain('license: cc-by-4.0');
+    expect(card).toContain('pretty_name: washtrace data');
+    expect(card).toContain('tags: [ethereum, nft, wash-trading]');
+    expect(card).toContain('Alpha \\| Club');
+    expect(card).toContain(w('a1'));
+    expect(card).toContain(w('b2'));
+    expect(card).toContain('123456');
+    expect(card).toContain('2026-10-01');
+    expect(card).toContain('2.0 MB');
+    expect(card).toContain('1.0 MB');
+    expect(card).toContain('tx_hash,log_index,block_number,block_time,token_id,from_address,to_address,marketplace,price_wei,currency');
+    expect(card).toContain('tx_hash,kind,from_address,to_address,value_wei,token,block_number,block_time');
+    expect(card).toContain('#checked');
+    expect(card).toContain('#flows');
+    expect(card).toContain("compression='zstd'");
+    expect(card).toContain('made for washtrace, an NFT wash-trading detector');
+    expect(card).not.toContain('github.com');
+  });
+
+  it('says only chain data is included', () => {
+    expect(datasetCard(m)).toMatch(/only data that can be read from the chain/i);
+  });
+});
+
+describe('parseTarget and megabytes', () => {
+  it('reads <chainId>/<address>, lowercased, and nothing else', () => {
+    expect(parseTarget(`1/0x${'AB'.repeat(20)}`)).toEqual({ chainId: 1, address: `0x${'ab'.repeat(20)}` });
+    expect(parseTarget('1/0x12')).toBeNull();
+    expect(parseTarget(undefined)).toBeNull();
+  });
+  it('formats megabytes to one decimal', () => {
+    expect(megabytes(1_572_864)).toBe('1.5 MB');
   });
 });

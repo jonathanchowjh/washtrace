@@ -44,8 +44,26 @@ async function drop(chainId: number, address: string): Promise<void> {
   await store.removeCollection(chainId, address);
 }
 
+describe('Store.schemaVersion', () => {
+  it('reads 0 for a database with no schema, without creating one', async () => {
+    await store.pool.query('CREATE DATABASE bare');
+    const url = new URL(pg.getConnectionUri());
+    url.pathname = '/bare';
+    const bare = Store.connect(url.toString());
+    try {
+      expect(await bare.schemaVersion()).toBe(0);
+      const { rows } = await bare.pool.query("SELECT to_regclass('washtrace.schema_version') AS t");
+      expect(rows[0].t).toBeNull();
+    } finally {
+      await bare.pool.end();
+    }
+  });
+});
+
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
+    expect(await store.migrate()).toBe(16);
+    expect(await store.schemaVersion()).toBe(16);
     expect(await store.migrate()).toBe(16);
     expect(await store.migrate()).toBe(16);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');

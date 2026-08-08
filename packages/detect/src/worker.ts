@@ -549,9 +549,18 @@ export class Worker {
     }
   }
 
-  /** The Hub's manifest of `repo`, null when it has none. Tests override it on the instance. */
-  fetchHubManifest(repo: string): Promise<Manifest | null> {
-    return fetchManifest(repo, HUB, AbortSignal.timeout(HUB_TIMEOUT_MS));
+  /**
+   * The Hub's manifest of `repo`, null when it has none. The Hub answers an anonymous read of a dataset
+   * that does not exist, or is private, with 401: for the worker, which sends no token, that is no public
+   * dataset, so no stored data. Tests override it on the instance.
+   */
+  async fetchHubManifest(repo: string): Promise<Manifest | null> {
+    try {
+      return await fetchManifest(repo, HUB, AbortSignal.timeout(HUB_TIMEOUT_MS));
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) return null;
+      throw err;
+    }
   }
 
   /**

@@ -25,14 +25,16 @@ export function hubUrl(repo: string, revision: string, file: string, endpoint = 
  * The repo's manifest as of its latest commit, with `revision` set to that
  * commit (the Hub names it in `x-repo-commit`), so the files are fetched from
  * the same publish as the manifest. Null when the repo or its manifest does
- * not exist. An answer without a commit sha is refused, not fetched
+ * not exist. (An anonymous read of a dataset that does not exist, or is private, is answered 401, not 404: it
+ * is thrown with `status` set, and the callers that take it as "no such public dataset" say so.) An answer without a commit sha is refused, not fetched
  * unpinned: the revision goes into URLs, so it must be a sha, never a name.
  * `signal` gives up on a Hub that never answers.
  */
 export async function fetchManifest(repo: string, endpoint = HUB, signal?: AbortSignal): Promise<Manifest | null> {
   const res = await fetch(hubUrl(repo, 'main', 'manifest.json', endpoint), { signal });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Hugging Face answered ${res.status} for ${repo}`);
+  // The status rides on the error so a caller can tell a missing public dataset (401) from a Hub that is down.
+  if (!res.ok) throw Object.assign(new Error(`Hugging Face answered ${res.status} for ${repo}`), { status: res.status });
   const revision = res.headers.get('x-repo-commit');
   if (revision === null || !/^[0-9a-f]{40}$/.test(revision)) throw new Error(`Hugging Face gave no revision for ${repo}`);
   return { ...parseManifest(await res.text()), revision };

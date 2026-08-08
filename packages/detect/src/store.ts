@@ -243,6 +243,15 @@ export class Store {
     }) as Promise<number>;
   }
 
+  /** The schema version the store is at (0 when it has none), without changing anything: for a caller that must refuse a store it did not migrate. */
+  async schemaVersion(): Promise<number> {
+    // Two queries: a SELECT naming a missing table fails to plan, even behind a CASE.
+    const { rows: found } = await this.pool.query<{ there: boolean }>(`SELECT to_regclass('washtrace.schema_version') IS NOT NULL AS there`);
+    if (!found[0]?.there) return 0;
+    const { rows } = await this.pool.query<{ version: number }>('SELECT version FROM washtrace.schema_version');
+    return rows[0]?.version ?? 0;
+  }
+
   /**
    * Run `fn` holding job `job`'s advisory lock, or return `skipped` at once
    * when another replica holds it. This is what lets the same image run as
