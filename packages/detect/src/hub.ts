@@ -52,12 +52,27 @@ export function partPath(dest: string, sha256: string): string {
  * part the server calls out of range (416: longer than the file, or already
  * whole) is deleted and started over once. `onProgress` gets the share on
  * disk, at most once per 1%, and 1 at the end. The part is kept when aborted
- * or cut off, and deleted when it is wrong or the disk is full.
+ * or cut off, and deleted when it is wrong or the disk is full. With the
+ * file's expected `bytes`, a part of exactly that size is checked without a
+ * request.
  */
-export async function download(url: string, dest: string, sha256: string, onProgress: (share: number) => void, signal?: AbortSignal): Promise<void> {
+export async function download(url: string, dest: string, sha256: string, onProgress: (share: number) => void, signal?: AbortSignal, bytes?: number): Promise<void> {
   await mkdir(dirname(dest), { recursive: true });
   const part = partPath(dest, sha256);
-  let offset = await stat(part).then((s) => s.size, () => 0);
+  const offset = await stat(part).then((s) => s.size, () => 0);
+  // A part already as long as the file is whole (a restart between the last byte and the rename): asking would only get a 416, and a second copy.
+  if (bytes === undefined || offset !== bytes) await fetchPart(url, dest, part, offset, onProgress, signal);
+  const actual = await sha256File(part);
+  if (actual !== sha256) {
+    await rm(part, { force: true });
+    throw new StoredDataError(`${basename(dest)} does not match its checksum (sha256 ${actual}, expected ${sha256})`, 'mismatch');
+  }
+  await rename(part, dest);
+  onProgress(1);
+}
+
+/** Stream `url` into `part` from `offset` on (see download). */
+async function fetchPart(url: string, dest: string, part: string, offset: number, onProgress: (share: number) => void, signal?: AbortSignal): Promise<void> {
   let res = await fetch(url, { headers: offset > 0 ? { range: `bytes=${offset}-` } : {}, signal });
   if (res.status === 416) {
     await res.body?.cancel();
@@ -92,11 +107,4 @@ export async function download(url: string, dest: string, sha256: string, onProg
     }
     throw err;
   }
-  const actual = await sha256File(part);
-  if (actual !== sha256) {
-    await rm(part, { force: true });
-    throw new StoredDataError(`${basename(dest)} does not match its checksum (sha256 ${actual}, expected ${sha256})`, 'mismatch');
-  }
-  await rename(part, dest);
-  onProgress(1);
 }

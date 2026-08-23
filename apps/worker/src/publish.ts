@@ -89,10 +89,25 @@ export class Publisher {
     return fetchManifest(this.repo);
   }
 
-  /** Whoever the token is, and the public dataset created if it is not there yet. */
+  /** The name the token belongs to. Tests override it on the instance. */
+  async whoAmI(): Promise<string> {
+    return (await whoAmI({ accessToken: this.accessToken() })).name;
+  }
+
+  /**
+   * Whoever the token is, and the public dataset created if it is not there
+   * yet. A token that is not the repo's owner is refused before anything is
+   * created: createRepo would make the repo under the token's own name or fail
+   * late, and the publish would go somewhere unintended. The message names
+   * the account, never the token.
+   */
   async ensureRepo(): Promise<void> {
-    const me = await whoAmI({ accessToken: this.accessToken() });
-    console.info('[publish] publishing to %s as %s', this.repo, me.name);
+    const name = await this.whoAmI();
+    const owner = this.repo.split('/')[0]!;
+    if (name !== owner) {
+      throw new Error(`HF_TOKEN belongs to ${name}, but the target repo is ${this.repo}: set WASHTRACE_STORED_REPO or use a token for ${owner}.`);
+    }
+    console.info('[publish] publishing to %s as %s', this.repo, name);
     try {
       await createRepo({ repo: { type: 'dataset', name: this.repo }, visibility: 'public', accessToken: this.accessToken() });
       console.info('[publish] created %s', this.repo);

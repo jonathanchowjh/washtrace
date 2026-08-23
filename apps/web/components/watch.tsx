@@ -100,7 +100,7 @@ export function Suggested({ watched, stored }: { watched: string[]; stored: Stor
                 <div className="text-xs text-muted-foreground">
                   <p>{s.paper !== undefined && s.footprint !== undefined ? `${s.control ? 'Control: ' : ''}paper found ${Math.round(s.paper)}% washed · Footprint ${Math.round(s.footprint)}%` : 'Its stored data is on Hugging Face.'}</p>
                   {/* No line when the manifest has no entry for it: nothing is downloaded for it. */}
-                  {stored === null ? <p>stored data: not checked yet</p> : size ? <p>{storedLine(size)}</p> : null}
+                  {stored === null ? <p>stored data: not known yet</p> : size ? <p>{storedLine(size)}</p> : null}
                 </div>
               </div>
               {watched.includes(key)

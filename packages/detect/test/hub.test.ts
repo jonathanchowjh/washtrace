@@ -152,6 +152,25 @@ describe('download', () => {
     expect(await readFile(other, 'utf8')).toBe('someone else');
   });
 
+  it('hashes a complete part without asking the server', async () => {
+    let asked = 0;
+    handler = (req, res) => { asked += 1; serveBody(req, res); };
+    const dest = join(dir, 'complete.bin');
+    await writeFile(partPath(dest, sha), body);
+    const shares: number[] = [];
+    await download(`${base}/f`, dest, sha, (s) => shares.push(s), undefined, body.length);
+    expect(asked).toBe(0);
+    expect(await readFile(dest)).toEqual(body);
+    expect(await exists(partPath(dest, sha))).toBe(false);
+    expect(shares).toEqual([1]);
+    // A complete part that is wrong is deleted and refused, as a downloaded one is.
+    const bad = join(dir, 'complete-bad.bin');
+    await writeFile(partPath(bad, sha), Buffer.alloc(body.length));
+    await expect(download(`${base}/f`, bad, sha, () => {}, undefined, body.length)).rejects.toMatchObject({ kind: 'mismatch' });
+    expect(asked).toBe(0);
+    expect(await exists(partPath(bad, sha))).toBe(false);
+  });
+
   it('refuses a file whose sha256 is not the manifest\'s', async () => {
     handler = serveBody;
     const dest = join(dir, 'bad.bin');

@@ -10,3 +10,6 @@ docs
 *.tsbuildinfo
 # Stored data is large and downloaded at run time, never baked into an image.
 data/stored/
+# The publish token and a dry run's files never go into an image.
+.env
+publish-dry/

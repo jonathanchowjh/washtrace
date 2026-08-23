@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { constants, createZstdCompress, createZstdDecompress } from 'node:zlib';
+import { formatBytes } from './bytes.js';
 import type { Store } from './store.js';
 import type { Flow, FlowKind, Transfer } from './types.js';
 
@@ -33,20 +34,19 @@ export interface StoredEntry {
   throughBlock: number;
   /** Milliseconds. The time of the latest transfer at or below `throughBlock`. */
   throughTime: number;
-  /** Committed beside the manifest; `file` is relative to it. */
+  /** Published to the Hub and cached beside the manifest; `file` is relative to it. */
   transfers: { file: string; rows: number; bytes: number; sha256: string };
   /**
-   * The money trail: too big to commit, so it stays local and gitignored,
-   * beside the manifest, and is loaded when it is there and matches
-   * `sha256`. It holds chain data only (the wallets read to the end, and the
-   * flows they found), so it is published like the transfers. `rows` counts
+   * The money trail: published beside the transfers, downloaded next to the
+   * manifest, and loaded when it is there and matches `sha256`. It holds
+   * chain data only (the wallets read to the end, and the flows they found). `rows` counts
    * flows, `wallets` the checked list's length. `checked` of `of` is how many
    * of the collection's traders are on that list.
    */
   trail: { rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string } | null;
 }
 
-/** Every collection with stored data. In the repo at data/stored/manifest.json. */
+/** Every collection with stored data. Fetched from Hugging Face, and cached in the stored folder as manifest.json. */
 export interface Manifest {
   /** 2: the trail carries chain data only. A version 1 manifest (wallet bookkeeping in the trail) is not read. */
   version: 2;
@@ -114,8 +114,8 @@ export function storedFile(chainId: number, address: string, part: 'transfers' |
 
 /**
  * Where a collection's money trail is on disk: beside the manifest, under
- * the name the cut gave it. The manifest names no trail file, since the
- * trail is never committed; only its sha256 says which file it is.
+ * the name the cut gave it. The manifest names no trail file; only its
+ * sha256 says which file it is.
  */
 export function trailPath(dir: string, e: Pick<StoredEntry, 'chainId' | 'address'>): string {
   return join(dir, storedFile(e.chainId, e.address, 'trail'));
@@ -154,7 +154,7 @@ export function mergeManifest(remote: Manifest | null, cut: StoredEntry[]): Mani
 export function datasetCard(m: Manifest): string {
   const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
   const rows = m.collections.map((e) =>
-    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} (${new Date(e.throughTime).toISOString().slice(0, 10)}) | ${megabytes(e.transfers.bytes)} | ${e.trail ? megabytes(e.trail.bytes) : 'none'} |`);
+    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} (${new Date(e.throughTime).toISOString().slice(0, 10)}) | ${formatBytes(e.transfers.bytes)} | ${e.trail ? formatBytes(e.trail.bytes) : 'none'} |`);
   return `---
 license: cc-by-4.0
 pretty_name: washtrace data
@@ -189,8 +189,8 @@ Each file is CSV compressed with zstd. Null is an empty field.
 ${TRANSFER_COLUMNS.join(',')}
 \`\`\`
 
-\`<chainId>-<address>.trail.csv.zst\` has two sections. First \`#checked\`, the wallets whose payments are included in
-full, with the column
+\`<chainId>-<address>.trail.csv.zst\` has two sections. First \`#checked\`, the wallets whose payments were read to the end of
+their history when checked, with the column
 
 \`\`\`
 ${CHECKED_COLUMNS.join(',')}
@@ -209,22 +209,19 @@ import io
 import pandas as pd
 import zstandard
 
-transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd')
+transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd', dtype=str)
 
 with open("1-0x....trail.csv.zst", "rb") as f:
     text = zstandard.ZstdDecompressor().stream_reader(f).read().decode()
 checked_part, flows_part = text.split("#flows\\n")
 checked = pd.read_csv(io.StringIO(checked_part.removeprefix("#checked\\n")))
-flows = pd.read_csv(io.StringIO(flows_part))
+flows = pd.read_csv(io.StringIO(flows_part), dtype=str)
 \`\`\`
+
+\`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.
 
 Licence: CC-BY-4.0.
 `;
-}
-
-/** A size in megabytes, to one decimal: how the card and the logs say it. */
-export function megabytes(bytes: number): string {
-  return `${(bytes / 2 ** 20).toFixed(1)} MB`;
 }
 
 /** `<chainId>/<address>` as the maintainer's commands take it, the address lowercased; null when it is not one. */
@@ -249,7 +246,7 @@ export async function cutCollection(store: Store, dir: string, chainId: number, 
   const file = storedFile(chainId, address, 'transfers');
   const started = Date.now();
   const transfers = await writeTransfers(join(dir, file), store.storedTransfers(head.id, head.throughBlock));
-  console.info('[stored] %s: %d transfers through block %d, %s, in %ds', file, transfers.rows, head.throughBlock, megabytes(transfers.bytes), seconds(started));
+  console.info('[stored] %s: %d transfers through block %d, %s, in %ds', file, transfers.rows, head.throughBlock, formatBytes(transfers.bytes), seconds(started));
 
   let cutTrail: StoredEntry['trail'] = null;
   if (trail) {
@@ -258,7 +255,7 @@ export async function cutCollection(store: Store, dir: string, chainId: number, 
     const { checked, of, addresses, flows } = await store.trail(head.id, chainId);
     const written = await writeTrail(join(dir, trailFile), { checked: addresses, flows });
     cutTrail = { rows: written.rows, wallets: written.wallets, checked, of, bytes: written.bytes, sha256: written.sha256 };
-    console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, megabytes(written.bytes), seconds(begun));
+    console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, formatBytes(written.bytes), seconds(begun));
   }
   return {
     chainId, address,

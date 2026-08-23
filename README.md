@@ -160,11 +160,17 @@ Linked wallets without an Etherscan key.
 
 - **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
   repo or the image. Under Compose it is the named volume `stored`, written by
-  the worker and mounted read only into the api.
+  the worker and mounted read only into the api. Under Compose,
+  `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
+  the worker and the api look in different places.
+- **Upgrading.** Compose used to bind-mount `./data/stored`; it is now the named
+  volume `stored`, and old local files there are no longer read by Compose. The
+  worker downloads what it needs again; copy files into the volume only if you
+  cut them yourself.
 - **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
-  setting (the environment wins). The worker fetches the dataset's manifest at
-  most hourly and keeps the last one, so an unreachable Hub only means the
-  chain is read instead.
+  setting (the environment wins). The worker fetches the dataset's manifest about
+  hourly, and at once when a collection is newly watched, and keeps the last
+  one, so an unreachable Hub only means the chain is read instead.
 - **What is published.** Chain data only: transfers, the money trail's flows,
   the checked wallets' addresses, and each collection's address, chain and
   contract name. Never a wallet's status or errors, a label you gave a
@@ -184,7 +190,7 @@ settings writes and Tests answer 403 while basic auth is off.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. |
 | `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
 | `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
 | `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |

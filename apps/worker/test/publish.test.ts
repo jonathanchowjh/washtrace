@@ -170,3 +170,13 @@ describe('publish', () => {
     expect(new Publisher(fakeStore(), TOKEN).repo).toBe(STORED_REPO);
   });
 });
+
+describe('Publisher.ensureRepo', () => {
+  it('refuses a token that is not the repo\'s owner, naming both and never the token', async () => {
+    const p = new Publisher(fakeStore(), TOKEN, 'someone/data');
+    p.whoAmI = vi.fn(async () => 'else');
+    const err = await p.ensureRepo().then(() => null, (e: Error) => e);
+    expect(err?.message).toBe('HF_TOKEN belongs to else, but the target repo is someone/data: set WASHTRACE_STORED_REPO or use a token for someone.');
+    expect(err?.message).not.toContain(TOKEN);
+  });
+});

@@ -1159,6 +1159,31 @@ describe('Store', () => {
       await drop(chainId, coll);
     });
 
+    it('clearDownloadNote drops the note, and the back-off only when asked', async () => {
+      const coll = w('9d4');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.downloadFailed(id, 'could not');
+      await store.clearDownloadNote(id, false);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadNote: null });
+      expect((await store.collection(chainId, coll))!.downloadRetryAt).not.toBeNull();
+      expect(await failures(id)).toBe(1);
+      await store.downloadFailed(id, 'could not');
+      await store.clearDownloadNote(id, true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadNote: null, downloadRetryAt: null });
+      expect(await failures(id)).toBe(0);
+      await drop(chainId, coll);
+    });
+
+    it('a collection waiting its turn is a file with no progress, and a restart clears it', async () => {
+      const coll = w('9d5');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      expect(await store.setDownload(id, 'transfers', null)).toBe(true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: 'transfers', downloadProgress: null });
+      await store.clearDownloads();
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null });
+      await drop(chainId, coll);
+    });
+
     it('writes no progress for a collection paused or deleted, and says the download should stop', async () => {
       const coll = w('9d2');
       const { id } = await store.addCollection(chainId, coll, null, 10);

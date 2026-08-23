@@ -1,6 +1,7 @@
 /** Display only. Nothing here is summed or compared; amounts stay wei strings until they are drawn. */
 
 import type { Manifest } from '@washtrace/detect';
+import { formatBytes } from '@washtrace/detect/bytes';
 import { EXPLORERS } from './links';
 
 export function short(address: string): string {
@@ -103,16 +104,8 @@ export function ethRange(lowWei: string, highWei: string): string {
   return lowWei === highWei ? eth(lowWei) : `${eth(lowWei, '').trim()}–${eth(highWei)}`;
 }
 
-/**
- * A file's size as the Hub shows it (decimal units): MB to one place below a
- * gigabyte, else GB. A file under 0.1 MB says so rather than "0.0 MB", which
- * would read as no file.
- */
-export function formatBytes(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
-  const mb = n / 1e6;
-  return mb < 0.05 ? '<0.1 MB' : `${mb.toFixed(1)} MB`;
-}
+/** A file's size as the Hub shows it. Defined once in the detect package, so the dataset card says the same size (see bytes.ts). */
+export { formatBytes };
 
 /** One collection's stored files, sized: what the suggested list and the add form say of it. */
 export interface StoredSize { chainId: number; address: string; name: string; transfers: number; trail: number | null }

@@ -21,12 +21,13 @@ export function store(): Store {
 
 /**
  * The stored-data manifest the worker fetched and cached, or null when there
- * is none yet or it cannot be read: the console then says "not checked yet"
+ * is none yet or it cannot be read: the console then says "not known yet"
  * and never fails over it. It is data/stored at the repo root, two up from
  * where Next runs (apps/web, in dev and in the image alike), unless
  * WASHTRACE_STORED_DIR says otherwise, as for the worker. A missing file is
  * null, not an empty manifest (readManifest's reading): the two differ for a
- * reader, "none checked yet" against "none has stored data".
+ * reader, "not known yet" against "none has stored data". "Known", not
+ * "checked": a manifest that fails to parse was checked, and is still not known.
  */
 export async function storedManifest(): Promise<Manifest | null> {
   try {

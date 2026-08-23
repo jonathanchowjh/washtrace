@@ -4,9 +4,10 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, datasetCard, megabytes, parseTarget, entryFor, mergeManifest, parseManifest, readManifest, writeManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
+  StoredDataError, datasetCard, parseTarget, entryFor, mergeManifest, parseManifest, readManifest, writeManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
   type Manifest, type StoredEntry,
 } from '../src/stored.js';
+import { formatBytes } from '../src/bytes.js';
 import type { Flow, Transfer } from '../src/types.js';
 import { flow, transfer, w } from './fixtures.js';
 
@@ -307,7 +308,7 @@ describe('datasetCard', () => {
     expect(card).toContain(w('b2'));
     expect(card).toContain('123456');
     expect(card).toContain('2026-10-01');
-    expect(card).toContain('2.0 MB');
+    expect(card).toContain('2.1 MB');
     expect(card).toContain('1.0 MB');
     expect(card).toContain('tx_hash,log_index,block_number,block_time,token_id,from_address,to_address,marketplace,price_wei,currency');
     expect(card).toContain('tx_hash,kind,from_address,to_address,value_wei,token,block_number,block_time');
@@ -318,18 +319,30 @@ describe('datasetCard', () => {
     expect(card).not.toContain('github.com');
   });
 
+  it('says sizes as the console does, in decimal units', () => {
+    const big = { ...m, collections: [entry({ address: w('c3'), transfers: { file: 'x', rows: 1, bytes: 3_400_000_000, sha256: '' }, trail: null })] };
+    const card = datasetCard(big);
+    expect(card).toContain(`| ${formatBytes(3_400_000_000)} | none |`);
+    expect(card).toContain('3.4 GB');
+  });
+
+  it('describes #checked by what was read, and reads big numbers as text', () => {
+    const card = datasetCard(m);
+    expect(card).toContain('wallets whose payments were read to the end of\ntheir history when checked');
+    expect(card).not.toContain('included in');
+    expect(card).toContain("compression='zstd', dtype=str");
+    expect(card).toContain('`dtype=str` keeps `price_wei`, `value_wei` and `token_id` at full precision');
+  });
+
   it('says only chain data is included', () => {
     expect(datasetCard(m)).toMatch(/only data that can be read from the chain/i);
   });
 });
 
-describe('parseTarget and megabytes', () => {
+describe('parseTarget', () => {
   it('reads <chainId>/<address>, lowercased, and nothing else', () => {
     expect(parseTarget(`1/0x${'AB'.repeat(20)}`)).toEqual({ chainId: 1, address: `0x${'ab'.repeat(20)}` });
     expect(parseTarget('1/0x12')).toBeNull();
     expect(parseTarget(undefined)).toBeNull();
-  });
-  it('formats megabytes to one decimal', () => {
-    expect(megabytes(1_572_864)).toBe('1.5 MB');
   });
 });

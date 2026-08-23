@@ -1,8 +1,12 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/api';
-import { localTime } from '@/lib/format';
+import { localTime, storedSizes } from '@/lib/format';
+import { storedManifest } from '@/lib/store';
 import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { CollectionRow } from '@/components/collection-row';
 import { CollectionTabs } from '@/components/tabs';
@@ -93,7 +97,21 @@ describe('Suggested stored data', () => {
     expect(container.textContent).not.toContain('stored data:');
     cleanup();
     render(<Suggested watched={[]} stored={null} />);
-    expect(screen.getAllByText('stored data: not checked yet')).toHaveLength(SUGGESTED.length);
+    expect(screen.getAllByText('stored data: not known yet')).toHaveLength(SUGGESTED.length);
+  });
+
+  it('says not known yet, not "not checked", for a cached manifest that cannot be read', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'washtrace-web-manifest-'));
+    vi.stubEnv('WASHTRACE_STORED_DIR', dir);
+    try {
+      await writeFile(join(dir, 'manifest.json'), '{ not json');
+      render(<Suggested watched={[]} stored={storedSizes(await storedManifest())} />);
+      expect(screen.getAllByText('stored data: not known yet')).toHaveLength(SUGGESTED.length);
+      expect(screen.queryByText(/not checked/)).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('shows the size of a typed collection that has stored data', () => {

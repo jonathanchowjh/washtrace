@@ -11,6 +11,8 @@ import { Time } from '@/components/time';
 const PILL = {
   // A working colour like a load: it is progress, not a fault.
   downloading: 'bg-focus/12 text-focus',
+  // Neutral: it has not started, so there is nothing moving to colour as work.
+  queued: 'bg-muted text-muted-foreground',
   restoring: 'bg-focus/12 text-focus',
   complete: 'bg-ok/12 text-ok',
   checking: 'bg-focus/12 text-focus',
@@ -25,7 +27,7 @@ const PILL = {
 } as const;
 
 /** Readings where nothing is moving, so the pill's dot does not pulse. */
-const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', 'stored-only', 'head-unknown']);
+const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', 'stored-only', 'head-unknown', 'queued']);
 
 /**
  * How far the reading under a collection's numbers has got, as one word or
@@ -98,6 +100,7 @@ export function AnalysisFailed({ c, now, className }: { c: CollectionRow; now: n
 export function trust(c: CollectionRow, cov: Coverage): string | null {
   // No analysis yet means no shares on screen; the empty state says why instead.
   if (c.latest === null) return null;
+  if (cov.reading === 'queued') return 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
   if (cov.reading === 'downloading') return 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
   if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
   if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
@@ -126,6 +129,7 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
 export function ReadingSummary({ c, cov, href }: { c: CollectionRow; cov: Coverage; href: string }) {
   const stage: { share: number; of: ReactNode; figure?: string } | null = cov.stops !== null ? { share: 1, figure: 'Stored data', of: <>stops <Time ms={cov.stops} style="date" /> · {cov.unsynced}. No newer block is read until its chain has an RPC.</> }
     : cov.readTo !== null ? { share: 1, figure: 'No RPC', of: `Read to block ${cov.readTo.toLocaleString('en-US')}. No newer block is read until its chain has an RPC.` }
+    : cov.reading === 'queued' ? { share: 0, figure: 'Waiting', of: 'to download its stored data from Hugging Face' }
     : cov.reading === 'downloading' ? { share: cov.download ?? 0, figure: downloaded(cov.download ?? 0), of: 'of its stored data downloaded from Hugging Face' }
     : cov.reading === 'restoring' ? { share: cov.restore ?? 0, of: 'Loading stored data: history cut ahead of time, so the chain is read only from where it stops' }
     : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
@@ -194,7 +198,7 @@ function Step({ n, title, figure, value, bar, paused, affects, children }: { n: 
  */
 function step1(c: CollectionRow, cov: Coverage): ReactNode {
   const unread = c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock);
-  if (cov.reading === 'restoring' || cov.reading === 'downloading') return cov.label;
+  if (cov.reading === 'restoring' || cov.reading === 'downloading' || cov.reading === 'queued') return cov.label;
   if (cov.stops !== null) return <>{plural(c.transfers, 'transfer')} from stored data, through block {c.cursorBlock!.toLocaleString('en-US')} (<Time ms={cov.stops} style="date" />)</>;
   if (cov.readTo !== null) return `${plural(c.transfers, 'transfer')} · read to block ${cov.readTo.toLocaleString('en-US')} · no RPC for its chain`;
   if (c.pausedAt !== null) return unread ? 'Not read yet · paused' : `${plural(c.transfers, 'transfer')} · read to block ${c.cursorBlock!.toLocaleString('en-US')} when paused`;
@@ -231,9 +235,9 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
         n={1} title="Transfers read"
-        figure={cov.reading === 'downloading' ? downloaded(cov.download ?? 0) : cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span>
+        figure={cov.reading === 'queued' ? <span className="text-base">Waiting</span> : cov.reading === 'downloading' ? downloaded(cov.download ?? 0) : cov.reading === 'restoring' ? progress(cov.restore ?? 0) : stored ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span>
           : cov.reading === 'head-unknown' ? <span className="text-base">Head unknown</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
-        bar={cov.reading === 'head-unknown' ? undefined : cov.reading === 'downloading' ? cov.download ?? 0 : cov.reading === 'restoring' ? cov.restore ?? 0 : stored ? 1 : cov.blocks ?? 0} paused={cov.reading === 'paused' || stored}
+        bar={cov.reading === 'head-unknown' ? undefined : cov.reading === 'queued' ? 0 : cov.reading === 'downloading' ? cov.download ?? 0 : cov.reading === 'restoring' ? cov.restore ?? 0 : stored ? 1 : cov.blocks ?? 0} paused={cov.reading === 'paused' || stored}
         value={step1(c, cov)}
         affects="all three lenses. Unread history can move any share either way."
       >

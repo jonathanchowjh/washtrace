@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionRow } from '@washtrace/detect';
-import { ReadingPanel, ReadingPill, ReadingSummary } from '@/components/coverage';
+import { ReadingPanel, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime } from '@/lib/format';
 import { coverage } from '@/lib/metrics';
 import { LensCards } from '@/components/methods';
@@ -355,6 +355,30 @@ describe('downloading stored data', () => {
     const text = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
     expect(text).toContain('41%');
     expect(text).toContain('of its stored data downloaded from Hugging Face');
+  });
+
+  it('says a collection waiting its turn waits, in the pill, the summary and the step, never "Finding the deployment block"', () => {
+    const c = down({ downloadProgress: null });
+    const cov = coverage(c, ON, 0);
+    const pill = render(<ReadingPill cov={cov} />).container;
+    expect(pill.textContent).toBe('Waiting to download stored data');
+    expect(pill.querySelector('.text-fault')).toBeNull();
+    cleanup();
+    const summary = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
+    expect(summary).toContain('to download its stored data from Hugging Face');
+    expect(summary).not.toContain('still finding where this collection begins');
+    cleanup();
+    const panel = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(panel).toContain('Waiting to download stored data');
+    expect(panel).not.toContain('Finding the deployment block');
+  });
+
+  it('a collection waiting its turn, with an analysis on screen, says its shares can move, not that it has none', () => {
+    const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+    const c = down({ downloadProgress: null, latest });
+    const said = trust(c, coverage(c, ON, 0))!;
+    expect(said).toContain('every share can move either way');
+    expect(said).not.toContain('no numbers');
   });
 
   it('a trail download shows on the funding step, not as the reading', () => {

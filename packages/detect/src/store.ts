@@ -568,7 +568,8 @@ export class Store {
 
   /**
    * Say which of a collection's stored files is downloading and how far, or
-   * with null that none is. Returns whether the collection is still watched:
+   * with null that none is. A file with no progress (null) is one waiting its
+   * turn: held for a download that has not started. Returns whether the collection is still watched:
    * false when it was paused or deleted, and the download stops. Progress is
    * not written for a paused one; clearing always is.
    */
@@ -594,6 +595,20 @@ export class Store {
          download_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(download_failures, 4))))
        WHERE id = $1`,
       [id, note],
+    );
+  }
+
+  /**
+   * Forget a download's failure note, which no longer says anything true: the
+   * download was retried, or is no longer wanted. With `backoff` its failure
+   * count and wait go too (it is not wanted, so nothing is waiting); without,
+   * the next failure still waits as long as the one before it did.
+   */
+  async clearDownloadNote(id: number, backoff: boolean): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.collections SET download_note = NULL${backoff ? ', download_failures = 0, download_retry_at = NULL' : ''}
+       WHERE id = $1 AND (download_note IS NOT NULL${backoff ? ' OR download_retry_at IS NOT NULL' : ''})`,
+      [id],
     );
   }
 

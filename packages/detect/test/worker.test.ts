@@ -568,6 +568,10 @@ describe('Worker downloading stored data', () => {
         events.push(`done ${id}`);
         Object.assign(find(id)!, { downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null });
       },
+      clearDownloadNote: async (id: number, backoff: boolean) => {
+        events.push(`unnoted ${id} ${backoff ? 'and back-off' : 'only'}`);
+        Object.assign(find(id)!, backoff ? { downloadNote: null, downloadRetryAt: null } : { downloadNote: null });
+      },
       setError: async (id: number, message: string | null) => { events.push(message === null ? `cleared ${id}` : `error ${id} ${message}`); },
       served: async (id: number) => { events.push(`served ${id}`); },
       heartbeat: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
@@ -777,6 +781,61 @@ describe('Worker downloading stored data', () => {
     await w.ingest();
     expect(calls).toHaveLength(2);
     await calls[1]!.finish();
+  });
+
+  it('a download note goes once the Hub has no stored data', async () => {
+    // A download failed and backs off; then the Hub answers 404 (an empty manifest is cached): nothing is wanted, so the note says nothing true.
+    const failed = watched(1, A, { downloadNote: DOWNLOAD_NOTES.failed, downloadRetryAt: Date.now() + 60 * 60_000 });
+    const { w, events, hub, calls } = setup([failed], [stored(A, 'a')]);
+    hub.answer = async () => null;
+    await w.ingest();
+    expect(calls).toEqual([]);
+    expect(events).toContain('unnoted 1 and back-off');
+    expect(failed.downloadNote).toBeNull();
+  });
+
+  it('a download note goes once the collection is read past its stored data', async () => {
+    const past = watched(1, A, { cursorBlock: 950, downloadNote: DOWNLOAD_NOTES.failed, downloadRetryAt: Date.now() + 60 * 60_000 });
+    const { w, events, calls } = setup([past], [stored(A, 'a')], RPC);
+    await w.ingest();
+    expect(calls).toEqual([]);
+    expect(events).toContain('unnoted 1 and back-off');
+    // Said once: nothing is left to clear on the next pass.
+    await w.ingest();
+    expect(events.filter((e) => e.startsWith('unnoted'))).toHaveLength(1);
+  });
+
+  it('keeps the note of a download that is still wanted and waiting out its back-off', async () => {
+    const waiting = watched(1, A, { downloadNote: DOWNLOAD_NOTES.failed, downloadRetryAt: Date.now() + 60 * 60_000 });
+    const { w, events } = setup([waiting], [stored(A, 'a')]);
+    await w.ingest();
+    expect(events.some((e) => e.startsWith('unnoted'))).toBe(false);
+  });
+
+  it('a retry clears the failure note when it starts, and keeps its back-off count', async () => {
+    const retrying = watched(1, A, { downloadNote: DOWNLOAD_NOTES.failed, downloadRetryAt: Date.now() - 1 });
+    const { w, events, calls } = setup([retrying], [stored(A, 'a')]);
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    expect(events.filter((e) => /^(unnoted|progress)/.test(e))).toEqual(['unnoted 1 only', 'progress 1 transfers 0']);
+    await calls[0]!.finish();
+  });
+
+  it('says a collection waits for its download while another runs, and clears it when no longer wanted', async () => {
+    const rows = [watched(1, A), watched(2, B)];
+    const { w, events, calls } = setup(rows, [stored(A, 'a'), stored(B, 'c')]);
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    // The one running writes its own progress; the one held behind it is marked queued: the file, and no progress.
+    expect(events.filter((e) => e.startsWith('progress')).sort()).toEqual(['progress 1 transfers 0', 'progress 2 transfers null']);
+    // Said once, not on every pass.
+    await w.ingest();
+    expect(events.filter((e) => e === 'progress 2 transfers null')).toHaveLength(1);
+    // Read past its stored data meanwhile: no longer waiting.
+    rows[1]!.cursorBlock = 950;
+    await w.ingest();
+    expect(events).toContain('progress 2 null null');
+    await calls[0]!.finish();
   });
 
   it('fails a download whose lock connection is lost, and goes on', async () => {

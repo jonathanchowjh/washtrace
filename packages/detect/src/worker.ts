@@ -754,31 +754,70 @@ export class Worker {
     }
     const held = new Set<number>();
     const revision = manifest.revision;
-    if (revision === undefined) return held;
-    const now = Date.now();
-    let transfers: Wanted | null = null;
-    let trail: Wanted | null = null;
-    for (const c of collections) {
-      const entry = entryFor(manifest, c.chainId, c.address);
-      if (c.pausedAt !== null || entry === null) continue;
-      const due = !this.downloadWaits(c, now);
-      // No key: a note on an earlier load is about the file as it stood, which the download replaces.
-      if (needsRestore(c, entry, null, now) && await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) {
-        // Downloading in some replica (the row says so to all of them), or about to here.
-        if (due || c.downloadFile === 'transfers') held.add(c.id);
-        if (due) transfers ??= { c, entry, file: 'transfers' };
-      } else if (due && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256
-        && await this.fetchable(manifest, trailPath(this.stored, entry), entry.trail.sha256)) {
-        trail = { c, entry, file: 'trail' };
+    let started: number | null = null;
+    if (revision !== undefined) {
+      const now = Date.now();
+      let transfers: Wanted | null = null;
+      let trail: Wanted | null = null;
+      for (const c of collections) {
+        const entry = entryFor(manifest, c.chainId, c.address);
+        if (c.pausedAt !== null || entry === null) continue;
+        const due = !this.downloadWaits(c, now);
+        // No key: a note on an earlier load is about the file as it stood, which the download replaces.
+        if (needsRestore(c, entry, null, now) && await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) {
+          // Downloading in some replica (the row says so to all of them), or about to here.
+          if (due || c.downloadFile === 'transfers') held.add(c.id);
+          if (due) transfers ??= { c, entry, file: 'transfers' };
+        } else if (due && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256
+          && await this.fetchable(manifest, trailPath(this.stored, entry), entry.trail.sha256)) {
+          trail = { c, entry, file: 'trail' };
+        }
+      }
+      if (running !== null) {
+        if (running.file === 'trail' && transfers !== null) running.abort.abort('preempted' satisfies Halt);
+      } else {
+        const next = transfers ?? trail;
+        if (next !== null) {
+          started = next.c.id;
+          this.startDownload(next, repo, revision);
+        }
       }
     }
-    if (running !== null) {
-      if (running.file === 'trail' && transfers !== null) running.abort.abort('preempted' satisfies Halt);
-    } else {
-      const next = transfers ?? trail;
-      if (next !== null) this.startDownload(next, repo, revision);
-    }
+    await this.tidyDownloads(collections, manifest, held, started);
     return held;
+  }
+
+  /**
+   * Make what a collection says of its download true again. A failure note
+   * (and its back-off) of a download no longer wanted, because the Hub has no
+   * stored data, the collection is read past it, or its entry is gone, says
+   * nothing true, and goes, as restore does for a load. A collection held for
+   * a transfers download that has not started is marked as waiting: its
+   * file, no progress. A mark on one no longer held is cleared. Fail-soft: it
+   * is said again next pass.
+   */
+  private async tidyDownloads(collections: readonly CollectionRow[], manifest: Manifest, held: ReadonlySet<number>, started: number | null): Promise<void> {
+    const logged = (id: number, what: string) => (err: unknown) => console.error('[washtrace] collection %d: %s: %s', id, what, this.scrubbed(err));
+    for (const c of collections) {
+      const idle = c.downloadFile === null && this.downloading?.id !== c.id;
+      if (c.downloadNote !== null && idle && c.pausedAt === null && !(await this.wantsDownload(c, manifest))) {
+        this.downloadsFailed.delete(c.id);
+        await this.store.clearDownloadNote(c.id, true).catch(logged(c.id, 'download note not cleared'));
+      }
+      if (held.has(c.id)) {
+        if (idle && c.id !== started) await this.store.setDownload(c.id, 'transfers', null).catch(logged(c.id, 'waiting download not noted'));
+      } else if (c.downloadFile === 'transfers' && c.downloadProgress === null && this.downloading?.id !== c.id) {
+        await this.store.setDownload(c.id, null, null).catch(logged(c.id, 'waiting download not cleared'));
+      }
+    }
+  }
+
+  /** Whether either of a collection's stored files is to be downloaded, whether or not its turn has come (see downloads). */
+  private async wantsDownload(c: CollectionRow, manifest: Manifest): Promise<boolean> {
+    const entry = entryFor(manifest, c.chainId, c.address);
+    if (entry === null) return false;
+    if (needsRestore(c, entry, null, Date.now()) && await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) return true;
+    return entry.trail !== null && c.trailImportedSha !== entry.trail.sha256 && await this.fetchable(manifest, trailPath(this.stored, entry), entry.trail.sha256);
   }
 
   /** Whether a collection's last download failed and is still waiting out its back-off: the store's, or the one held here. */
@@ -796,9 +835,13 @@ export class Worker {
    */
   private startDownload({ c, entry, file }: Wanted, repo: string, revision: string): void {
     const name = storedFile(entry.chainId, entry.address, file);
-    const sha256 = file === 'transfers' ? entry.transfers.sha256 : entry.trail!.sha256;
+    const { sha256, bytes } = file === 'transfers' ? entry.transfers : entry.trail!;
     const abort = new AbortController();
-    const done = this.store.locked(DOWNLOAD_JOB, false, (client) => this.fetchStored(client, c.id, file, hubUrl(repo, revision, name), join(this.stored, name), sha256, abort))
+    const done = this.store.locked(DOWNLOAD_JOB, false, async (client) => {
+      // A retry: the failure it noted is being tried again, and "could not be downloaded" must not show beside the progress. The back-off count stays.
+      if (c.downloadNote !== null) await this.store.clearDownloadNote(c.id, false).catch((err) => console.error('[washtrace] collection %d: download note not cleared: %s', c.id, this.scrubbed(err)));
+      return this.fetchStored(client, c.id, file, hubUrl(repo, revision, name), join(this.stored, name), sha256, bytes, abort);
+    })
       .then(() => {}, (err) => console.error('[washtrace] collection %d: stored data not downloaded: %s', c.id, this.scrubbed(err)))
       .finally(() => { if (this.downloading?.abort === abort) this.downloading = null; });
     this.downloading = { id: c.id, file, abort, done };
@@ -820,7 +863,7 @@ export class Worker {
    * or found dead by a look once a minute, it fails the download, since the
    * lock went with it.
    */
-  private async fetchStored(client: pg.PoolClient, id: number, file: 'transfers' | 'trail', url: string, dest: string, sha256: string, abort: AbortController): Promise<void> {
+  private async fetchStored(client: pg.PoolClient, id: number, file: 'transfers' | 'trail', url: string, dest: string, sha256: string, bytes: number, abort: AbortController): Promise<void> {
     let lost: unknown = null;
     const lose = (err: unknown) => {
       lost ??= err;
@@ -852,7 +895,7 @@ export class Worker {
     const logged = (what: string) => (err: unknown) => console.error('[washtrace] collection %d: %s: %s', id, what, this.scrubbed(err));
     const watch = watchStall(partPath(dest, sha256), abort);
     try {
-      await this.downloadFile(url, dest, sha256, progress, abort.signal);
+      await this.downloadFile(url, dest, sha256, progress, abort.signal, bytes);
       await writes;
       this.downloadsFailed.delete(id);
       await this.store.downloadDone(id).catch(logged('finished download not noted'));
@@ -879,9 +922,9 @@ export class Worker {
     }
   }
 
-  /** Download `url` to `dest`, resumable and checked against `sha256` (see hub.ts). Tests override it on the instance. */
-  downloadFile(url: string, dest: string, sha256: string, onProgress: (share: number) => void, signal: AbortSignal): Promise<void> {
-    return download(url, dest, sha256, onProgress, signal);
+  /** Download `url` to `dest`, resumable and checked against `sha256`, whose size is `bytes` (see hub.ts). Tests override it on the instance. */
+  downloadFile(url: string, dest: string, sha256: string, onProgress: (share: number) => void, signal: AbortSignal, bytes?: number): Promise<void> {
+    return download(url, dest, sha256, onProgress, signal, bytes);
   }
 
   /** Read one collection's spans until it reaches the head or `deadline`, counting into `got` so a throw keeps what was read. `blocks` is how far the cursor moved. */
