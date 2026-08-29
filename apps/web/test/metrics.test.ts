@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
-import { localTime } from '@/lib/format';
+import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -63,7 +63,8 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
     latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
     servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
   };
 }
 
@@ -88,6 +89,39 @@ describe('coverage', () => {
     expect(c.reading).toBe('restoring');
     expect(c.label).toBe('Loading stored data · 42%');
     expect(cov(row({ restoreProgress: 0.42, pausedAt: 5 })).reading).toBe('paused');
+  });
+
+  it('reads downloading while its transfers download, before restoring', () => {
+    const c = cov(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.416, restoreProgress: 0.1 }));
+    expect(c.reading).toBe('downloading');
+    expect(c.label).toBe('Downloading stored data · 41%');
+    expect(c.download).toBe(0.416);
+  });
+
+  it('a paused collection never reads downloading', () => {
+    expect(cov(row({ downloadFile: 'transfers', downloadProgress: 0.4, pausedAt: 5 })).reading).toBe('paused');
+    expect(cov(row({ downloadFile: 'transfers', downloadProgress: 0.4, pausedAt: 5 })).download).toBeNull();
+  });
+
+  it('reads a collection held for a download that has not started as waiting, not as starting', () => {
+    // The worker marks it with the file and no progress; its start block is not known, as it is read from the stored data.
+    const c = cov(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: null }));
+    expect(c.reading).toBe('queued');
+    expect(c.label).toBe('Waiting to download stored data');
+    expect(c.download).toBeNull();
+    expect(cov(row({ downloadFile: 'transfers', downloadProgress: null, pausedAt: 5 })).reading).toBe('paused');
+    expect(cov(row({ downloadFile: 'trail', downloadProgress: null })).reading).not.toBe('queued');
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), 0)).toBe('Waiting to download stored data · it is analysed once it has loaded.');
+  });
+
+  it('a trail download is no reading of its own', () => {
+    const c = cov(row({ downloadFile: 'trail', downloadProgress: 0.4 }));
+    expect(c.reading).toBe('complete');
+    expect(c.download).toBeNull();
+  });
+
+  it('says it waits for a download before the first analysis', () => {
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), 0)).toBe('Downloading stored data · it is analysed once it has loaded.');
   });
 
   it('never shows a load as done before it has committed', () => {
@@ -277,5 +311,17 @@ describe('waiting', () => {
     expect(isRunning(pass())).toBe(true);
     expect(isRunning(pass({ finishedAt: NOW }))).toBe(false);
     expect(isRunning(pass({ finishedAt: NOW - 10 * 60_000 }))).toBe(true);
+  });
+});
+
+describe('formatBytes', () => {
+  it('says 12.3 MB and 3.4 GB', () => {
+    expect(formatBytes(12_300_000)).toBe('12.3 MB');
+    expect(formatBytes(3_400_000_000)).toBe('3.4 GB');
+    expect(formatBytes(999_000_000)).toBe('999.0 MB');
+  });
+
+  it('never says 0.0 MB for a file that is there', () => {
+    expect(formatBytes(4_000)).toBe('<0.1 MB');
   });
 });

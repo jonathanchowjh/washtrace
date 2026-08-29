@@ -1,7 +1,7 @@
-import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { eta, localTime } from './format';
-import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './metrics';
+import { eta, formatBytes, localTime } from './format';
+import { analysisRetry, downloaded, isRunning, progress, restoreText, storedOnly } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -14,6 +14,8 @@ export interface Snapshot {
   config: SourcesConfig;
   /** Whether some collection's loaded money trail feeds its money lenses (trailFunded in views), as the worker page and Settings say it. */
   trailFunded: boolean;
+  /** The cached stored-data manifest (storedManifest), for the sizes of a download; absent or null says none. */
+  manifest?: Manifest | null;
 }
 
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
@@ -101,6 +103,15 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     const stored = storedOnly(c, new Set(s.config.chains));
     const storedTurn = !paused && !restoring && stored;
     const backfilling = !paused && !restoring && !stored && behind !== null && behind > BEHIND_BLOCKS;
+    // A trail download is a working notice too: the transfers are there, the money trail is on its way.
+    if (!paused && c.downloadFile !== null && c.downloadProgress !== null) {
+      const e = s.manifest ? entryFor(s.manifest, c.chainId, c.address) : null;
+      const bytes = c.downloadFile === 'trail' ? e?.trail?.bytes : e?.transfers.bytes;
+      const what = c.downloadFile === 'trail' ? 'the money trail' : 'stored data';
+      notice('working', `Downloading ${what} for ${label} · ${downloaded(c.downloadProgress)}${bytes === undefined ? '' : ` of ${formatBytes(bytes)}`}`);
+    }
+    // Not a fault: its chain is read instead where there is an RPC, and the note says it is tried again. A paused collection tries nothing.
+    if (!paused && c.downloadNote) notice('info', `${label}: ${c.downloadNote}`);
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
     // Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again.
     const restore = restoreText(c, new Set(s.config.chains), zone);

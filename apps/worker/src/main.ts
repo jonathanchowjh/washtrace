@@ -36,6 +36,8 @@ for (let attempt = 1; ; attempt++) {
 // console says "Loading stored data" for ever. Before the first pass, which
 // may start a load of its own.
 await store.clearRestoreProgress().catch((err) => console.warn('[worker] stale stored-data progress not cleared: %s', messageOf(err)));
+// The same for a download that was running: its part file is kept, and the next pass resumes it.
+await store.clearDownloads().catch((err) => console.warn('[worker] stale download progress not cleared: %s', messageOf(err)));
 
 // Stored data is data/stored at the repo root (/app in the image), wherever
 // the process was started from: `npm run worker` starts it in apps/worker.

@@ -263,4 +263,19 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_failures int
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_error text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_retry_at timestamptz;
 `,
+  `
+-- The worker downloads a watched collection's stored data from Hugging Face
+-- before it would load it, one file at a time across every replica. While one
+-- runs, download_file says which ('transfers' or 'trail') and
+-- download_progress how far, 0 to 1, so every replica and the console see it.
+-- A failed download says why in download_note and waits until
+-- download_retry_at, five minutes doubling with each of download_failures in a
+-- row, up to an hour, as a failed load does; meanwhile its chain is read, if
+-- it has an RPC.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_file text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_progress real;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_note text;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_failures int NOT NULL DEFAULT 0;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_retry_at timestamptz;
+`,
 ];

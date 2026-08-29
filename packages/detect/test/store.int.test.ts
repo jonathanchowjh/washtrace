@@ -13,7 +13,7 @@ import { chain, flow, input, w } from './fixtures.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { StoredDataError, readTrail, trailPath, writeTrail, type StoredEntry, type WalletRow } from '../src/stored.js';
+import { StoredDataError, readTrail, trailPath, writeTrail, type StoredEntry } from '../src/stored.js';
 import { needsRestore } from '../src/worker.js';
 import type { Flow, Transfer } from '../src/types.js';
 
@@ -44,12 +44,30 @@ async function drop(chainId: number, address: string): Promise<void> {
   await store.removeCollection(chainId, address);
 }
 
+describe('Store.schemaVersion', () => {
+  it('reads 0 for a database with no schema, without creating one', async () => {
+    await store.pool.query('CREATE DATABASE bare');
+    const url = new URL(pg.getConnectionUri());
+    url.pathname = '/bare';
+    const bare = Store.connect(url.toString());
+    try {
+      expect(await bare.schemaVersion()).toBe(0);
+      const { rows } = await bare.pool.query("SELECT to_regclass('washtrace.schema_version') AS t");
+      expect(rows[0].t).toBeNull();
+    } finally {
+      await bare.pool.end();
+    }
+  });
+});
+
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(15);
-    expect(await store.migrate()).toBe(15);
+    expect(await store.migrate()).toBe(16);
+    expect(await store.schemaVersion()).toBe(16);
+    expect(await store.migrate()).toBe(16);
+    expect(await store.migrate()).toBe(16);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 15 }]);
+    expect(rows).toEqual([{ version: 16 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -58,7 +76,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(15);
+      expect(await store.migrate()).toBe(16);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -75,7 +93,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(15);
+      expect(await store.migrate()).toBe(16);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -445,7 +463,7 @@ describe('Store', () => {
   });
 
   it('analyzes a collection with its own rules', async () => {
-    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri());
+    const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri());
     // The thread's own body, in-process: the TS sources cannot start the thread.
     worker.analyzeOff = (request) => analyzeStored(store, request);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
@@ -824,7 +842,7 @@ describe('Store', () => {
       // A span stored past the cursor is not in a snapshot that stops at it.
       await store.pool.query('UPDATE washtrace.collections SET cursor_block = 11 WHERE id = $1', [id]);
       expect(await store.storedHeader(chainId, coll.toUpperCase().replace('0X', '0x'))).toEqual({
-        id, name: coll, startBlock: 1, throughBlock: 11, throughTime: 1_700_000_001_000,
+        id, name: coll, contractName: null, startBlock: 1, throughBlock: 11, throughTime: 1_700_000_001_000,
       });
       expect(await all(store.storedTransfers(id, 11))).toEqual(ts.slice(0, 2));
 
@@ -841,9 +859,7 @@ describe('Store', () => {
       await store.fund(chainId, m2, [flow(m2, w('0u8'))], false);
       // b is still unchecked: it counts in "of", and stays out of the file.
       expect({ checked: trail.checked, of: trail.of }).toEqual({ checked: 1, of: 2 });
-      const wallets = await all(trail.wallets);
-      expect(wallets.map((x) => [x.address, x.status, x.depth])).toEqual([[a, 'done', 0], [m, 'done', 1]]);
-      expect(wallets.every((x) => typeof x.fetchedAt === 'number')).toBe(true);
+      expect(await all(trail.addresses)).toEqual([a, m]);
       // In block order, each flow in its own block here.
       expect(await all(trail.flows)).toEqual([...paid, ...onward]);
     });
@@ -855,7 +871,7 @@ describe('Store', () => {
       for await (const _ of store.storedTransfers(c!.id, 11)) break;
       expect(out()).toBe(before);
       const trail = await store.trail(c!.id, chainId);
-      for await (const _ of trail.wallets) break;
+      for await (const _ of trail.addresses) break;
       for await (const _ of trail.flows) break;
       expect(out()).toBe(before);
       // And the pool still answers: nothing is left holding a transaction open.
@@ -1133,13 +1149,88 @@ describe('Store', () => {
     });
   });
 
-  describe('loading a money trail', () => {
-    type Batch = { wallets: WalletRow[]; flows: Flow[] };
-    /** A wallet as a trail carries it: checked on the install that cut it, which counted its own transfers. */
-    const wr = (address: string, more: Partial<WalletRow> = {}): WalletRow => ({
-      address, transfers: 99, status: 'done', truncated: false, depth: 0, fetchedAt: 1_700_000_000_000, ...more,
+  describe('downloading stored data', () => {
+    const chainId = 9;
+    const failures = async (id: number) => (await store.pool.query('SELECT download_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].download_failures;
+
+    it('downloadFailed backs off on the restore curve, and downloadDone clears it', async () => {
+      const coll = w('9d1');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      expect(await store.setDownload(id, 'transfers', 0.25)).toBe(true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: 'transfers', downloadProgress: 0.25, downloadNote: null, downloadRetryAt: null });
+      const started = Date.now();
+      await store.downloadFailed(id, 'could not');
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: 'could not' });
+      expect(await failures(id)).toBe(1);
+      expect(c.downloadRetryAt! - started).toBeGreaterThan(5 * 60_000 - 5_000);
+      expect(c.downloadRetryAt! - started).toBeLessThan(5 * 60_000 + 5_000);
+      await store.downloadFailed(id, 'could not');
+      expect((await store.collection(chainId, coll))!.downloadRetryAt! - Date.now()).toBeGreaterThan(10 * 60_000 - 5_000);
+      // An hour at most, however many in a row.
+      await store.pool.query('UPDATE washtrace.collections SET download_failures = 2000 WHERE id = $1', [id]);
+      await store.downloadFailed(id, 'could not');
+      const capped = (await store.collection(chainId, coll))!.downloadRetryAt! - Date.now();
+      expect(capped).toBeGreaterThan(60 * 60_000 - 5_000);
+      expect(capped).toBeLessThan(60 * 60_000 + 5_000);
+      await store.setDownload(id, 'trail', 0.5);
+      await store.downloadDone(id);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null });
+      expect(await failures(id)).toBe(0);
+      await drop(chainId, coll);
     });
-    /** A trail's reader: each call reads it from the start, as readTrail does, wallets first. */
+
+    it('clearDownloadNote drops the note, and the back-off only when asked', async () => {
+      const coll = w('9d4');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.downloadFailed(id, 'could not');
+      await store.clearDownloadNote(id, false);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadNote: null });
+      expect((await store.collection(chainId, coll))!.downloadRetryAt).not.toBeNull();
+      expect(await failures(id)).toBe(1);
+      await store.downloadFailed(id, 'could not');
+      await store.clearDownloadNote(id, true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadNote: null, downloadRetryAt: null });
+      expect(await failures(id)).toBe(0);
+      await drop(chainId, coll);
+    });
+
+    it('a collection waiting its turn is a file with no progress, and a restart clears it', async () => {
+      const coll = w('9d5');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      expect(await store.setDownload(id, 'transfers', null)).toBe(true);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: 'transfers', downloadProgress: null });
+      await store.clearDownloads();
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null });
+      await drop(chainId, coll);
+    });
+
+    it('writes no progress for a collection paused or deleted, and says the download should stop', async () => {
+      const coll = w('9d2');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.pause(chainId, coll);
+      expect(await store.setDownload(id, 'transfers', 0.25)).toBe(false);
+      expect(await store.collection(chainId, coll)).toMatchObject({ downloadFile: null, downloadProgress: null });
+      await store.removeCollection(chainId, coll);
+      expect(await store.setDownload(id, 'transfers', 0.5)).toBe(false);
+    });
+
+    it('clearDownloads clears what a restart left', async () => {
+      const coll = w('9d3');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      await store.setDownload(id, 'transfers', 0.4);
+      await store.pool.query("UPDATE washtrace.collections SET download_note = 'kept', download_retry_at = now() + interval '1 hour' WHERE id = $1", [id]);
+      await store.clearDownloads();
+      const c = (await store.collection(chainId, coll))!;
+      expect(c).toMatchObject({ downloadFile: null, downloadProgress: null, downloadNote: 'kept' });
+      expect(c.downloadRetryAt).not.toBeNull();
+      await drop(chainId, coll);
+    });
+  });
+
+  describe('loading a money trail', () => {
+    type Batch = { checked: string[]; flows: Flow[] };
+    /** A trail's reader: each call reads it from the start, as readTrail does, checked addresses first. */
     const trailOf = (...bs: Batch[]) => () => (async function* () { for (const b of bs) yield b; })();
     const walletRows = async (chainId: number) => (await store.pool.query(
       `SELECT address, transfers, status, truncated, depth, extract(epoch FROM fetched_at)::float8 * 1000 AS fetched
@@ -1149,20 +1240,13 @@ describe('Store', () => {
        FROM washtrace.flows WHERE chain_id = $1 ORDER BY tx_hash, from_address, to_address`, [chainId])).rows;
     const version = async (id: number) => Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
 
-    const p = w('9a1'), q = w('9a2'), m = w('9a3'), f = w('9a4'), deep = w('9a5'), kept = w('9a6'), x1 = w('9a7');
+    const p = w('9a1'), q = w('9a2'), m = w('9a3'), deep = w('9a5'), kept = w('9a6'), x1 = w('9a7');
     const local = flow(p, x1);
-    const trail = [
-      { wallets: [wr(p, { transfers: 50, truncated: true, fetchedAt: 1 }), wr(q, { transfers: 70 }), wr(m, { depth: 1, transfers: 5 })], flows: [] },
-      {
-        wallets: [
-          wr(f, { status: 'pending', depth: 1, fetchedAt: null }), wr(deep, { status: 'pending', depth: 1, fetchedAt: null }),
-          wr(kept, { status: 'pending', depth: 1, fetchedAt: null }),
-        ],
-        flows: [],
-      },
+    const trail: Batch[] = [
+      { checked: [p, q, m], flows: [] },
       // The flow p's own check already stored, read again from the trail: one edge, not two.
-      { wallets: [], flows: [{ ...local }, flow(q, m)] },
-      { wallets: [], flows: [flow(m, p)] },
+      { checked: [], flows: [{ ...local }, flow(q, m)] },
+      { checked: [], flows: [flow(m, p)] },
     ];
 
     /** A chain's store before the import: p checked here, q queued, a followed wallet two hops out, and one followed and checked. */
@@ -1189,13 +1273,12 @@ describe('Store', () => {
       // Checked here first: kept as it was, its count and its check.
       expect(now[p]).toEqual(was[p]);
       expect(now[kept]).toEqual(was[kept]);
-      // Queued here, checked in the trail: done now, its count still this store's.
-      expect(now[q]).toMatchObject({ status: 'done', transfers: 1, truncated: false, depth: 0, fetched: 1_700_000_000_000 });
-      // New here: as the trail has it, counting no transfer this store has not seen.
+      // Queued here, checked in the trail: done now, its count still this store's, and no time it was read.
+      expect(now[q]).toMatchObject({ status: 'done', transfers: 1, truncated: false, depth: 0, fetched: null });
+      // New here: it trades nothing in this collection, so a followed wallet, counting no transfer this store has not seen.
       expect(now[m]).toMatchObject({ status: 'done', transfers: 0, depth: 1 });
-      // The trail's frontier: still to check, here too, the nearer depth taken.
-      expect(now[f]).toMatchObject({ status: 'pending', transfers: 0, depth: 1, fetched: null });
-      expect(now[deep]).toMatchObject({ status: 'pending', depth: 1 });
+      // Not on the trail's list: left as it was.
+      expect(now[deep]).toEqual(was[deep]);
       expect((await flowRows(9)).map((r) => [r.from_address, r.to_address])).toEqual(expect.arrayContaining([[p, x1], [q, m], [m, p]]));
       expect(await flowRows(9)).toHaveLength(3);
       expect(await store.collection(9, w('9c1'))).toMatchObject({ trailImportedSha: 'feed', trailNote: null });
@@ -1223,7 +1306,7 @@ describe('Store', () => {
       let reads = 0;
       const lostInFlows = () => (async function* () {
         reads += 1;
-        yield* trail.slice(0, 3);
+        yield* trail.slice(0, 2);
         throw new Error('connection lost');
       })();
       await expect(store.importTrail(cut, 11, 'feed', lostInFlows)).rejects.toThrow('connection lost');
@@ -1253,7 +1336,7 @@ describe('Store', () => {
     it('takes a value the store refuses as a bad file, not a store failure, and marks no wallet done', async () => {
       const id = await before(16, w('16c1'));
       const was = await walletRows(16);
-      const bad = [trail[0]!, { wallets: [], flows: [flow(q, m, { valueWei: 'not a number' })] }];
+      const bad = [trail[0]!, { checked: [], flows: [flow(q, m, { valueWei: 'not a number' })] }];
       const err = await store.importTrail(id, 16, 'feed', trailOf(...bad)).catch((e) => e);
       expect(err).toBeInstanceOf(StoredDataError);
       expect(err.kind).toBe('unreadable');
@@ -1284,19 +1367,57 @@ describe('Store', () => {
       expect(funded).toEqual([q]);
     });
 
-    it('writes the followed wallets still to check into a cut as pending, so an importing store follows on past it', async () => {
-      const coll = w('13c1'), t1 = w('13a1'), t2 = w('13a2'), f1 = w('13f1'), f2 = w('13f2');
+    it('cuts a trail of checked wallets, leaving out the truncated and the unchecked', async () => {
+      const all = async <T>(rows: AsyncIterable<T>) => { const out: T[] = []; for await (const r of rows) out.push(r); return out; };
+      const coll = w('13c1'), ta = w('13a1'), tb = w('13a2'), tc = w('13a3'), td = w('13a4'), e = w('13e1'), f1 = w('13f1');
       const { id } = await store.addCollection(13, coll, null, 10);
-      await store.ingest(id, 13, chain('1', t1, t2).map((t, i) => ({ ...t, blockNumber: 20 + i })), 50, [t1, t2]);
-      await store.fund(13, t1, [flow(t1, f1), flow(t1, f2)], false, { hops: 2, fanout: 3, exclude: [] });
-      await store.fundingFailed(13, f2, 'rate limited');
-      await store.fundingFailed(13, t2, 'rate limited');
+      await store.ingest(id, 13, chain('1', ta, tb, tc, td).map((t, i) => ({ ...t, blockNumber: 20 + i })), 50, [ta, tb, tc, td]);
+      await store.fund(13, ta, [flow(ta, e)], false, { hops: 2, fanout: 3, exclude: [] });
+      await store.fund(13, tb, [flow(tb, f1)], true);
+      await store.fundingFailed(13, td, 'rate limited');
+      await store.fund(13, e, [flow(e, f1)], false);
       const cut = await store.trail(id, 13);
-      const wallets: WalletRow[] = [];
-      for await (const r of cut.wallets) wallets.push(r);
-      expect(wallets.map((r) => [r.address, r.status, r.depth, r.fetchedAt === null])).toEqual([
-        [t1, 'done', 0, false], [t2, 'failed', 0, false], [f1, 'pending', 1, true], [f2, 'pending', 1, true],
-      ]);
+      expect(await all(cut.addresses)).toEqual([ta, e].sort());
+      expect({ checked: cut.checked, of: cut.of }).toEqual({ checked: 1, of: 4 });
+    });
+
+    describe('a v2 trail', () => {
+      const asTrail = (checked: string[], flows: Flow[]) => () => (async function* () { yield { checked, flows }; })();
+
+      it('imports: checked traders at depth 0, others at depth 1, flows in', async () => {
+        const coll = w('17c1'), t1 = w('17a1'), t2 = w('17a2'), x = w('17b1'), y = w('17b2');
+        const { id } = await store.addCollection(17, coll, null, 10);
+        await store.ingest(id, 17, chain('1', t1, t2).map((t, i) => ({ ...t, blockNumber: 20 + i })), 50, [t1, t2]);
+        const done = await store.importTrail(id, 17, 'cafe', asTrail([t1, x], [flow(t1, x), flow(x, y)]));
+        expect(done).toEqual({ wallets: 2, flows: 2 });
+        const rows = Object.fromEntries((await walletRows(17)).map((r) => [r.address, r]));
+        expect(rows[t1]).toMatchObject({ status: 'done', depth: 0, truncated: false, fetched: null });
+        expect(rows[x]).toMatchObject({ status: 'done', depth: 1, truncated: false, fetched: null });
+        // y is only the end of a flow: nothing says it was checked, so it is not here.
+        expect(rows[y]).toBeUndefined();
+        // t2 was not on the list: it keeps what this store has of it.
+        expect(rows[t2]).toMatchObject({ status: 'pending', depth: 0 });
+        expect(await flowRows(17)).toHaveLength(2);
+        expect(await store.collection(17, coll)).toMatchObject({ trailImportedSha: 'cafe' });
+      });
+
+      it('a local done wallet keeps its own check and depth on import', async () => {
+        const coll = w('18c1'), t1 = w('18a1');
+        const { id } = await store.addCollection(18, coll, null, 10);
+        await store.ingest(id, 18, chain('1', t1, t1).map((t, i) => ({ ...t, blockNumber: 20 + i })), 50, [t1]);
+        await store.fund(18, t1, [], true);
+        const was = (await walletRows(18))[0];
+        expect(was).toMatchObject({ status: 'done', truncated: true });
+        await store.importTrail(id, 18, 'cafe', asTrail([t1], []));
+        expect((await walletRows(18))[0]).toEqual(was);
+      });
+    });
+
+    it('storedHeader gives the contract\'s own name, not the console label', async () => {
+      const coll = w('19c1');
+      await store.addCollection(19, coll, 'My label', 10);
+      await store.pool.query('UPDATE washtrace.collections SET contract_name = $2 WHERE chain_id = 19 AND address = $1', [coll, 'Bored Ape Yacht Club']);
+      expect(await store.storedHeader(19, coll)).toMatchObject({ name: 'My label', contractName: 'Bored Ape Yacht Club' });
     });
 
     describe('from a file on disk', () => {
@@ -1306,13 +1427,13 @@ describe('Store', () => {
       const entry = (chainId: number, address: string, sha256: string): StoredEntry => ({
         chainId, address, name: 'Trailed', startBlock: 5, throughBlock: 300, throughTime: 1_700_000_100_000,
         transfers: { file: `${chainId}-${address}.transfers.csv.zst`, rows: 0, bytes: 0, sha256: '' },
-        trail: { rows: 3, wallets: 6, checked: 2, of: 2, bytes: 0, sha256 },
+        trail: { rows: 3, wallets: 3, checked: 2, of: 2, bytes: 0, sha256 },
       });
       const worker = (key: string | null) => new Worker(
-        store, () => ({ rpc: new Map(), etherscanKey: key, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir,
+        store, () => ({ rpc: new Map(), etherscanKey: key, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir,
       );
       const written = async (e: StoredEntry) => writeTrail(trailPath(dir, e), {
-        wallets: trail.flatMap((b) => b.wallets).sort((x, y) => x.address.localeCompare(y.address)),
+        checked: trail.flatMap((b) => b.checked).sort(),
         flows: trail.flatMap((b) => b.flows),
       });
 
@@ -1326,7 +1447,7 @@ describe('Store', () => {
         // Another collection on the chain, with no trail of its own.
         const z = (await store.addCollection(14, w('14c2'), null, 10)).id;
         expect(await store.importedFunding(id)).toBe(false);
-        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 1, collections: [e] });
+        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 2, collections: [e] });
         expect(await store.collection(14, coll)).toMatchObject({ trailImportedSha: sha256, trailNote: null });
         expect(await flowRows(14)).toHaveLength(3);
         expect(await store.importedFunding(id)).toBe(true);
@@ -1335,13 +1456,13 @@ describe('Store', () => {
         // Loaded: not loaded again.
         let read = 0;
         (w14 as any).storedTrail = (path: string, sha: string) => { read += 1; return readTrail(path, sha); };
-        await (w14 as any).trails(await mine(), { version: 1, collections: [e] });
+        await (w14 as any).trails(await mine(), { version: 2, collections: [e] });
         expect(read).toBe(0);
 
         // No key, but checked wallets from the trail: the money lenses run.
         const analyse = async (which: number) => {
           const only = Object.assign(Object.create(store), { stale: async () => (await store.stale()).filter((s) => s.id === which) });
-          const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {} }), pg.getConnectionUri(), dir);
+          const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir);
           analyst.analyzeOff = (request) => analyzeStored(store, request);
           await analyst.analyze();
         };
@@ -1358,7 +1479,7 @@ describe('Store', () => {
         await store.addCollection(15, coll, null, 10);
         await written(entry(15, coll, ''));
         const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        await (worker(null) as any).trails([(await store.collection(15, coll))!], { version: 1, collections: [entry(15, coll, 'beef')] });
+        await (worker(null) as any).trails([(await store.collection(15, coll))!], { version: 2, collections: [entry(15, coll, 'beef')] });
         logged.mockRestore();
         expect(await walletRows(15)).toEqual([]);
         expect(await flowRows(15)).toEqual([]);

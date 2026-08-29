@@ -6,6 +6,8 @@ import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { constants, createZstdCompress, createZstdDecompress } from 'node:zlib';
+import { formatBytes } from './bytes.js';
+import type { Store } from './store.js';
 import type { Flow, FlowKind, Transfer } from './types.js';
 
 /**
@@ -32,35 +34,44 @@ export interface StoredEntry {
   throughBlock: number;
   /** Milliseconds. The time of the latest transfer at or below `throughBlock`. */
   throughTime: number;
-  /** Committed beside the manifest; `file` is relative to it. */
+  /** Published to the Hub and cached beside the manifest; `file` is relative to it. */
   transfers: { file: string; rows: number; bytes: number; sha256: string };
   /**
-   * The money trail: too big to commit, so it stays local and gitignored,
-   * beside the manifest, and is loaded when it is there and matches
-   * `sha256`. Nothing downloads it. `rows` counts flows. `checked` of `of`
-   * is how many of the collection's traders it covers.
+   * The money trail: published beside the transfers, downloaded next to the
+   * manifest, and loaded when it is there and matches `sha256`. It holds
+   * chain data only (the wallets read to the end, and the flows they found). `rows` counts
+   * flows, `wallets` the checked list's length. `checked` of `of` is how many
+   * of the collection's traders are on that list.
    */
   trail: { rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string } | null;
 }
 
-/** Every collection with stored data. In the repo at data/stored/manifest.json. */
+/** Every collection with stored data. Fetched from Hugging Face, and cached in the stored folder as manifest.json. */
 export interface Manifest {
-  version: 1;
+  /** 2: the trail carries chain data only. A version 1 manifest (wallet bookkeeping in the trail) is not read. */
+  version: 2;
+  /** The Hub commit (a 40-hex sha, as it goes into download URLs) this manifest was fetched at, so what is fetched next stays on it. Absent in a manifest cut here. */
+  revision?: string;
   collections: StoredEntry[];
 }
 
-/** A wallet's funding state, as a money trail carries it. `fetchedAt` is milliseconds. */
-export interface WalletRow {
-  address: string;
-  transfers: number;
-  status: 'pending' | 'done' | 'failed';
-  truncated: boolean;
-  depth: number;
-  fetchedAt: number | null;
-}
+/**
+ * Which way stored data is bad, for a reader who needs it in a few words.
+ * `disk` is the machine, not the data: a write that found the disk full or
+ * failing. It is noted like `unreadable`, but says nothing against the file.
+ */
+export type StoredDataFault = 'missing' | 'mismatch' | 'unreadable' | 'disk';
 
-/** Which way stored data is bad, for a reader who needs it in a few words. */
-export type StoredDataFault = 'missing' | 'mismatch' | 'unreadable';
+/**
+ * Why a collection's stored data was not downloaded, in the words the console
+ * shows. Only why, and that the download is tried again: what happens
+ * meanwhile (the chain read, or nothing) depends on the chain's RPC, which
+ * the console knows. The full error goes to the log.
+ */
+export const DOWNLOAD_NOTES = {
+  failed: 'Stored data could not be downloaded. Tried again later.',
+  disk: 'Not enough disk space to download its stored data. Tried again later.',
+} as const;
 
 /** Stored data that is missing, changed or malformed. Callers fall back to reading the chain. */
 export class StoredDataError extends Error {
@@ -80,16 +91,15 @@ const BATCH = 5_000;
 const CHUNK_LINES = 1_000;
 const ZSTD_LEVEL = 19;
 
-const TRANSFER_COLUMNS = ['tx_hash', 'log_index', 'block_number', 'block_time', 'token_id', 'from_address', 'to_address', 'marketplace', 'price_wei', 'currency'];
-/** The wallets table, minus `error`: a message, which may hold a comma, and is local to whoever read it. */
-const WALLET_COLUMNS = ['address', 'transfers', 'status', 'truncated', 'fetched_at', 'depth'];
-const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'value_wei', 'token', 'block_number', 'block_time'];
+export const TRANSFER_COLUMNS = ['tx_hash', 'log_index', 'block_number', 'block_time', 'token_id', 'from_address', 'to_address', 'marketplace', 'price_wei', 'currency'];
+export const CHECKED_COLUMNS = ['address'];
+export const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'value_wei', 'token', 'block_number', 'block_time'];
 
 /** Errors of the process, not of the file (out of descriptors or memory): a load that meets one backs off, and is not noted as bad stored data. */
 const PROCESS_FAULTS = new Set(['EMFILE', 'ENFILE', 'EAGAIN', 'ENOMEM']);
 
 /** The trail's two sections, each a marker line then its header. */
-const WALLETS = '#wallets';
+const CHECKED = '#checked';
 const FLOWS = '#flows';
 
 /** The stored-data folder: `WASHTRACE_STORED_DIR`, else data/stored under the working directory (the repo root, or /app in the image). */
@@ -104,8 +114,8 @@ export function storedFile(chainId: number, address: string, part: 'transfers' |
 
 /**
  * Where a collection's money trail is on disk: beside the manifest, under
- * the name the cut gave it. The manifest names no trail file, since the
- * trail is never committed; only its sha256 says which file it is.
+ * the name the cut gave it. The manifest names no trail file; only its
+ * sha256 says which file it is.
  */
 export function trailPath(dir: string, e: Pick<StoredEntry, 'chainId' | 'address'>): string {
   return join(dir, storedFile(e.chainId, e.address, 'trail'));
@@ -121,7 +131,143 @@ export function entryFor(m: Manifest, chainId: number, address: string): StoredE
 export function upsertEntry(m: Manifest, e: StoredEntry): Manifest {
   const others = m.collections.filter((x) => !(x.chainId === e.chainId && x.address.toLowerCase() === e.address.toLowerCase()));
   const collections = [...others, e].sort((x, y) => x.chainId - y.chainId || x.address.toLowerCase().localeCompare(y.address.toLowerCase()));
-  return { version: 1, collections };
+  return { version: 2, collections };
+}
+
+/**
+ * The manifest a publish commits: what the Hub already lists, with the
+ * collections just cut in place of their old entries. A publish of one
+ * collection must not drop the others, so it starts from the remote's list.
+ * The remote's `revision` is dropped: it names the commit this one follows.
+ */
+export function mergeManifest(remote: Manifest | null, cut: StoredEntry[]): Manifest {
+  let m: Manifest = { version: 2, collections: remote?.collections ?? [] };
+  for (const e of cut) m = upsertEntry(m, e);
+  return m;
+}
+
+/**
+ * The dataset's README on the Hub: front matter, what the files hold and how
+ * to read them. Built from the manifest, so it can never list a collection
+ * the manifest does not, nor columns other than the ones written here.
+ */
+export function datasetCard(m: Manifest): string {
+  const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+  const rows = m.collections.map((e) =>
+    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} (${new Date(e.throughTime).toISOString().slice(0, 10)}) | ${formatBytes(e.transfers.bytes)} | ${e.trail ? formatBytes(e.trail.bytes) : 'none'} |`);
+  return `---
+license: cc-by-4.0
+pretty_name: washtrace data
+tags: [ethereum, nft, wash-trading]
+---
+
+# washtrace data
+
+Transfers of NFT collections, and the money trail of the wallets that traded them, read from the chain. The data
+is made for washtrace, an NFT wash-trading detector: a washtrace install downloads these files instead of reading
+each collection from its deploy block.
+
+Only data that can be read from the chain is included. Nothing about how it was collected, and no labels or
+settings, are in the files.
+
+## Collections
+
+| Name | Address | Chain id | Through block (date) | Transfers file | Trail file |
+| --- | --- | --- | --- | --- | --- |
+${rows.join('\n')}
+
+The name is the contract's own \`name()\`, or its address when it has none. \`manifest.json\` lists each file with
+its row count, size and sha256.
+
+## Files
+
+Each file is CSV compressed with zstd. Null is an empty field.
+
+\`<chainId>-<address>.transfers.csv.zst\` has the columns
+
+\`\`\`
+${TRANSFER_COLUMNS.join(',')}
+\`\`\`
+
+\`<chainId>-<address>.trail.csv.zst\` has two sections. First \`#checked\`, the wallets whose payments were read to the end of
+their history when checked, with the column
+
+\`\`\`
+${CHECKED_COLUMNS.join(',')}
+\`\`\`
+
+then \`#flows\`, the payments those wallets made or received, with the columns
+
+\`\`\`
+${FLOW_COLUMNS.join(',')}
+\`\`\`
+
+## Reading them
+
+\`\`\`python
+import io
+import pandas as pd
+import zstandard
+
+transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd', dtype=str)
+
+with open("1-0x....trail.csv.zst", "rb") as f:
+    text = zstandard.ZstdDecompressor().stream_reader(f).read().decode()
+checked_part, flows_part = text.split("#flows\\n")
+checked = pd.read_csv(io.StringIO(checked_part.removeprefix("#checked\\n")))
+flows = pd.read_csv(io.StringIO(flows_part), dtype=str)
+\`\`\`
+
+\`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.
+
+Licence: CC-BY-4.0.
+`;
+}
+
+/** `<chainId>/<address>` as the maintainer's commands take it, the address lowercased; null when it is not one. */
+export function parseTarget(text: string | undefined): { chainId: number; address: string } | null {
+  const m = /^(\d+)\/(0x[0-9a-fA-F]{40})$/.exec(text ?? '');
+  return m ? { chainId: Number(m[1]), address: m[2]!.toLowerCase() } : null;
+}
+
+/**
+ * Cut one collection's stored data from `store` into `dir`: its transfers,
+ * and with `trail` its money trail, and the manifest entry that describes
+ * them. The entry's trail is null without `trail`; a caller that keeps an
+ * earlier one says so. Shared by `npm run stored` and the publisher so the
+ * two cut the same way. Only reads the store.
+ */
+export async function cutCollection(store: Store, dir: string, chainId: number, address: string, { trail }: { trail: boolean }): Promise<StoredEntry> {
+  const head = await store.storedHeader(chainId, address);
+  if (head === null) throw new Error(`${chainId}/${address} is not watched in this store`);
+  if (head.startBlock === null || head.throughBlock === null) throw new Error(`${head.name} has not read any blocks yet`);
+  if (head.throughTime === null) throw new Error(`${head.name} has no transfer with a block time at or below block ${head.throughBlock}`);
+
+  const file = storedFile(chainId, address, 'transfers');
+  const started = Date.now();
+  const transfers = await writeTransfers(join(dir, file), store.storedTransfers(head.id, head.throughBlock));
+  console.info('[stored] %s: %d transfers through block %d, %s, in %ds', file, transfers.rows, head.throughBlock, formatBytes(transfers.bytes), seconds(started));
+
+  let cutTrail: StoredEntry['trail'] = null;
+  if (trail) {
+    const trailFile = storedFile(chainId, address, 'trail');
+    const begun = Date.now();
+    const { checked, of, addresses, flows } = await store.trail(head.id, chainId);
+    const written = await writeTrail(join(dir, trailFile), { checked: addresses, flows });
+    cutTrail = { rows: written.rows, wallets: written.wallets, checked, of, bytes: written.bytes, sha256: written.sha256 };
+    console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, formatBytes(written.bytes), seconds(begun));
+  }
+  return {
+    chainId, address,
+    // The contract's own name, never the console label (collections.name), which is the maintainer's. `||`: an empty name() is no name.
+    name: head.contractName || address,
+    startBlock: head.startBlock, throughBlock: head.throughBlock, throughTime: head.throughTime,
+    transfers: { file, ...transfers }, trail: cutTrail,
+  };
+}
+
+function seconds(since: number): number {
+  return Math.round((Date.now() - since) / 1000);
 }
 
 /** The manifest at `path`. A missing one is empty: an install with no stored data reads the chain as before. */
@@ -130,12 +276,60 @@ export async function readManifest(path: string): Promise<Manifest> {
   try {
     text = await readFile(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, collections: [] };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 2, collections: [] };
     throw err;
   }
-  const m = JSON.parse(text) as Manifest;
-  if (m.version !== 1 || !Array.isArray(m.collections)) throw new StoredDataError(`${path} is not a version 1 manifest`);
-  return m;
+  try {
+    return parseManifest(text);
+  } catch (err) {
+    throw err instanceof StoredDataError ? new StoredDataError(`${path}: ${err.message}`, err.kind) : err;
+  }
+}
+
+/**
+ * A manifest from its JSON, or StoredDataError('unreadable'). The manifest
+ * names files that are fetched and opened by path, and may come from the
+ * network, so each value that ends up in a path, a query or a count is
+ * checked rather than trusted: a file is only ever the name `storedFile`
+ * gives, and an address is lowercase hex.
+ */
+export function parseManifest(text: string): Manifest {
+  const bad = (what: string): never => { throw new StoredDataError(`not a version 2 manifest: ${what}`); };
+  let raw: any;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return bad('it is not JSON');
+  }
+  if (raw === null || typeof raw !== 'object' || raw.version !== 2 || !Array.isArray(raw.collections)) return bad('its version is not 2');
+  if (raw.revision !== undefined && (typeof raw.revision !== 'string' || !/^[0-9a-f]{40}$/.test(raw.revision))) bad('its revision is not a commit sha');
+  const count = (v: unknown, what: string): number => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : bad(what));
+  const sha = (v: unknown, what: string): string => (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : bad(what));
+  const collections = raw.collections.map((e: any): StoredEntry => {
+    if (e === null || typeof e !== 'object' || e.transfers === null || typeof e.transfers !== 'object') return bad('an entry is not an object');
+    if (!Number.isInteger(e.chainId) || e.chainId <= 0) bad('a chainId is not a positive integer');
+    if (typeof e.address !== 'string' || !/^0x[0-9a-f]{40}$/.test(e.address)) bad('an address is not lowercase hex');
+    if (typeof e.name !== 'string') bad('a name is not text');
+    if (e.transfers.file !== storedFile(e.chainId, e.address, 'transfers')) bad('a transfers file is not named for its collection');
+    const t = e.trail;
+    if (t !== null && typeof t !== 'object') bad('a trail is neither an object nor null');
+    return {
+      chainId: e.chainId, address: e.address, name: e.name,
+      startBlock: count(e.startBlock, 'a startBlock is not a count'), throughBlock: count(e.throughBlock, 'a throughBlock is not a count'),
+      // Milliseconds, taken from a float of seconds: whole in practice, but only required to be a time.
+      throughTime: typeof e.throughTime === 'number' && e.throughTime >= 0 ? e.throughTime : bad('a throughTime is not a time'),
+      transfers: {
+        file: e.transfers.file, rows: count(e.transfers.rows, 'a transfers row count is not a count'),
+        bytes: count(e.transfers.bytes, 'a transfers size is not a count'), sha256: sha(e.transfers.sha256, 'a transfers sha256 is not a sha256'),
+      },
+      trail: t === null ? null : {
+        rows: count(t.rows, 'a trail row count is not a count'), wallets: count(t.wallets, 'a trail wallet count is not a count'),
+        checked: count(t.checked, 'a trail checked count is not a count'), of: count(t.of, 'a trail trader count is not a count'),
+        bytes: count(t.bytes, 'a trail size is not a count'), sha256: sha(t.sha256, 'a trail sha256 is not a sha256'),
+      },
+    };
+  });
+  return raw.revision === undefined ? { version: 2, collections } : { version: 2, revision: raw.revision, collections };
 }
 
 /** Write the manifest whole, through a temporary file, so a reader never sees half of one. */
@@ -231,19 +425,21 @@ export async function* readTransfers(path: string, sha256: string): AsyncIterabl
 }
 
 /**
- * Write a collection's money trail to `path`: every wallet checked so far,
- * then every flow those checks found, as two sections of one file. The
- * wallets are read to the end before the flows are started.
+ * Write a collection's money trail to `path`: the wallets checked to the end
+ * (addresses only), then every flow those checks found, as two sections of
+ * one file. Nothing of how a wallet was read goes in (its status, depth,
+ * time or errors): the file holds what the chain says, so it can be
+ * published. The addresses are read to the end before the flows are started.
  */
-export async function writeTrail(path: string, trail: { wallets: Rows<WalletRow>; flows: Rows<Flow> }): Promise<Written & { wallets: number }> {
+export async function writeTrail(path: string, trail: { checked: Rows<string>; flows: Rows<Flow> }): Promise<Written & { wallets: number }> {
   let wallets = 0;
   let flows = 0;
   async function* lines(): AsyncIterable<string> {
-    yield WALLETS;
-    yield WALLET_COLUMNS.join(',');
-    for await (const r of trail.wallets) {
+    yield CHECKED;
+    yield CHECKED_COLUMNS.join(',');
+    for await (const address of trail.checked) {
       wallets++;
-      yield line(WALLET_COLUMNS, [r.address, r.transfers, r.status, r.truncated, r.fetchedAt, r.depth]);
+      yield line(CHECKED_COLUMNS, [address]);
     }
     yield FLOWS;
     yield FLOW_COLUMNS.join(',');
@@ -257,37 +453,34 @@ export async function writeTrail(path: string, trail: { wallets: Rows<WalletRow>
 }
 
 /**
- * A money trail from `path`, in batches of up to 5,000 rows, wallets first.
- * Checked against `sha256` before the first batch, as `readTransfers` is.
+ * A money trail from `path`, in batches of up to 5,000 rows, checked
+ * addresses first. Checked against `sha256` before the first batch, as
+ * `readTransfers` is.
  */
-export async function* readTrail(path: string, sha256: string): AsyncIterable<{ wallets: WalletRow[]; flows: Flow[] }> {
-  let wallets: WalletRow[] = [];
+export async function* readTrail(path: string, sha256: string): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
+  let checked: string[] = [];
   let flows: Flow[] = [];
   // Where in the file: before a section, at its header, or in its rows.
-  let section: typeof WALLETS | typeof FLOWS | null = null;
+  let section: typeof CHECKED | typeof FLOWS | null = null;
   let header = false;
   for await (const text of readLines(path, sha256)) {
-    if (text === WALLETS || text === FLOWS) {
-      if (text === FLOWS && wallets.length > 0) {
-        yield { wallets, flows: [] };
-        wallets = [];
+    if (text === CHECKED || text === FLOWS) {
+      if (text === FLOWS && checked.length > 0) {
+        yield { checked, flows: [] };
+        checked = [];
       }
       section = text;
       header = true;
       continue;
     }
-    if (section === null) throw new StoredDataError(`${path} does not start with ${WALLETS}`);
+    if (section === null) throw new StoredDataError(`${path} does not start with ${CHECKED}`);
     if (header) {
-      expectHeader(path, text, section === WALLETS ? WALLET_COLUMNS : FLOW_COLUMNS);
+      expectHeader(path, text, section === CHECKED ? CHECKED_COLUMNS : FLOW_COLUMNS);
       header = false;
       continue;
     }
-    if (section === WALLETS) {
-      const f = fields(path, text, WALLET_COLUMNS.length);
-      wallets.push({
-        address: f[0]!, transfers: Number(f[1]), status: f[2] as WalletRow['status'], truncated: f[3] === 'true',
-        fetchedAt: f[4] ? Number(f[4]) : null, depth: Number(f[5]),
-      });
+    if (section === CHECKED) {
+      checked.push(fields(path, text, CHECKED_COLUMNS.length)[0]!);
     } else {
       const f = fields(path, text, FLOW_COLUMNS.length);
       flows.push({
@@ -295,14 +488,14 @@ export async function* readTrail(path: string, sha256: string): AsyncIterable<{ 
         blockNumber: Number(f[6]), blockTime: Number(f[7]),
       });
     }
-    if (wallets.length + flows.length === BATCH) {
-      yield { wallets, flows };
-      wallets = [];
+    if (checked.length + flows.length === BATCH) {
+      yield { checked, flows };
+      checked = [];
       flows = [];
     }
   }
   if (section !== FLOWS) throw new StoredDataError(`${path} has no ${FLOWS} section`);
-  if (wallets.length + flows.length > 0) yield { wallets, flows };
+  if (checked.length + flows.length > 0) yield { checked, flows };
 }
 
 /** One CSV line. Throws on a comma or a line break, which would shift or split the row on read. */

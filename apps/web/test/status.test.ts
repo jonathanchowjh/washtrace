@@ -15,7 +15,8 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, ...more,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
   };
 }
 
@@ -163,6 +164,22 @@ describe('status', () => {
     expect(texts(s, 'needs-you')).toEqual(['1:0xdead: RPC timed out']);
     expect(texts(s, 'working')).toEqual(['BAYC: 1,000 blocks behind the finalized head.']);
     expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'backfilling' });
+  });
+
+  it('says which collection is downloading which file and how far', () => {
+    const manifest = { version: 2 as const, collections: [{ chainId: 1, address: '0xBC4C', name: 'BAYC', startBlock: 1, throughBlock: 2, throughTime: 3, transfers: { file: 'a', rows: 1, bytes: 12_300_000, sha256: 'x' }, trail: { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 3_400_000_000, sha256: 'y' } }] };
+    const run = (more: Partial<CollectionRow>) => texts(snapshot({ collections: [collection(more)], manifest }), 'working');
+    expect(run({ downloadFile: 'transfers', downloadProgress: 0.416 })).toEqual(['Downloading stored data for BAYC · 41% of 12.3 MB']);
+    expect(run({ downloadFile: 'trail', downloadProgress: 0.05 })).toEqual(['Downloading the money trail for BAYC · 5% of 3.4 GB']);
+    // Paused, nothing downloads; no manifest, no size to say.
+    expect(run({ downloadFile: 'trail', downloadProgress: 0.05, pausedAt: 1 })).toEqual([]);
+    expect(texts(snapshot({ collections: [collection({ downloadFile: 'transfers', downloadProgress: 0.416 })] }), 'working')).toEqual(['Downloading stored data for BAYC · 41%']);
+  });
+
+  it('says a failed download as information, not a fault', () => {
+    const s = snapshot({ collections: [collection({ downloadNote: 'Stored data could not be downloaded. Tried again later.' })] });
+    expect(texts(s, 'info')).toContain('BAYC: Stored data could not be downloaded. Tried again later.');
+    expect(texts(s, 'needs-you')).toEqual([]);
   });
 
   it('says a collection loading stored data is loading it, not behind', () => {

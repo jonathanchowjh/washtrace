@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionRow } from '@washtrace/detect';
-import { ReadingPanel, ReadingPill, ReadingSummary } from '@/components/coverage';
+import { ReadingPanel, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime } from '@/lib/format';
 import { coverage } from '@/lib/metrics';
 import { LensCards } from '@/components/methods';
@@ -338,5 +338,69 @@ describe('a money trail loaded from stored data', () => {
     expect(empty).toContain('WASHTRACE_ETHERSCAN_KEY');
     // A key set since the last analysis: the next one runs it.
     expect(cards(false, true)).toContain('the next analysis runs this lens');
+  });
+});
+
+describe('downloading stored data', () => {
+  const down = (more: Partial<CollectionRow> = {}) => row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.416, ...more });
+
+  it('says it in the pill and the summary, in the working colour', () => {
+    const c = down();
+    const cov = coverage(c, ON, 0);
+    const pill = render(<ReadingPill cov={cov} />).container;
+    expect(pill.textContent).toBe('Downloading stored data · 41%');
+    expect(pill.querySelector('.text-focus')).not.toBeNull();
+    expect(pill.querySelector('.text-fault')).toBeNull();
+    expect(pill.querySelector('.animate-pulse')).not.toBeNull();
+    const text = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
+    expect(text).toContain('41%');
+    expect(text).toContain('of its stored data downloaded from Hugging Face');
+  });
+
+  it('says a collection waiting its turn waits, in the pill, the summary and the step, never "Finding the deployment block"', () => {
+    const c = down({ downloadProgress: null });
+    const cov = coverage(c, ON, 0);
+    const pill = render(<ReadingPill cov={cov} />).container;
+    expect(pill.textContent).toBe('Waiting to download stored data');
+    expect(pill.querySelector('.text-fault')).toBeNull();
+    cleanup();
+    const summary = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container.textContent!;
+    expect(summary).toContain('to download its stored data from Hugging Face');
+    expect(summary).not.toContain('still finding where this collection begins');
+    cleanup();
+    const panel = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(panel).toContain('Waiting to download stored data');
+    expect(panel).not.toContain('Finding the deployment block');
+  });
+
+  it('a collection waiting its turn, with an analysis on screen, says its shares can move, not that it has none', () => {
+    const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+    const c = down({ downloadProgress: null, latest });
+    const said = trust(c, coverage(c, ON, 0))!;
+    expect(said).toContain('every share can move either way');
+    expect(said).not.toContain('no numbers');
+  });
+
+  it('a trail download shows on the funding step, not as the reading', () => {
+    const c = row({ downloadFile: 'trail', downloadProgress: 0.416 });
+    const cov = coverage(c, ON, 0);
+    expect(cov.reading).not.toBe('downloading');
+    const text = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} trailBytes={3_400_000_000} />).container.textContent!;
+    expect(text).toContain('Money trail downloading from stored data · 41% of 3.4 GB');
+    // Without the manifest's size, no size is guessed.
+    expect(render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent).toContain('Money trail downloading from stored data · 41%');
+  });
+
+  it('says nothing is downloading when paused, and the note only while it is tried again', () => {
+    const note = 'Stored data could not be downloaded. Tried again later.';
+    const paused = row({ downloadFile: 'trail', downloadProgress: 0.4, downloadNote: note, pausedAt: 1 });
+    const text = render(<ReadingPanel c={paused} cov={coverage(paused, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(text).not.toContain('downloading');
+    expect(text).not.toContain(note);
+    cleanup();
+    const failed = row({ downloadNote: note });
+    const el = render(<ReadingPanel c={failed} cov={coverage(failed, ON, 0)} why="Waiting" rpcChains={ON} />).container;
+    expect(el.textContent).toContain(note);
+    expect(el.querySelector('.text-fault')).toBeNull();
   });
 });

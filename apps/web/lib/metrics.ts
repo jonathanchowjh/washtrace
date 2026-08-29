@@ -59,7 +59,12 @@ export function progress(share: number): string {
   return share < 1 && text === '100%' ? '>99%' : text;
 }
 
-export type Reading = 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete' | 'paused';
+/** A download's share rounded down, as the Hub's own count would say it: 41.6% reads 41%, never a step ahead of the bytes. */
+export function downloaded(share: number): string {
+  return `${Math.floor(share * 100)}%`;
+}
+
+export type Reading = 'queued' | 'downloading' | 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete' | 'paused';
 
 export interface Coverage {
   reading: Reading;
@@ -73,6 +78,8 @@ export interface Coverage {
   floor: Method[];
   /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
   restore: number | null;
+  /** How far the download of its transfers has got, 0 to 1, while one runs and it is not paused; else null. A trail download is a note on the funding step, not a reading. */
+  download: number | null;
   /** When the stored data stops, while it is all there is (stored-only, not read past it); else null. */
   stops: number | null;
   /** How long ago that was, "9 days unsynced", whenever `stops` is set; else null. */
@@ -145,7 +152,7 @@ function unsyncedFor(ms: number): string {
  * wallets leave the money lenses as floors but are not a step in progress.
  */
 export function coverage(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers' | 'analysisError'>>,
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'downloadFile' | 'downloadProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers' | 'analysisError'>>,
   rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', funding = true,
 ): Coverage {
   const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
@@ -158,13 +165,19 @@ export function coverage(
   // A load is never resumed after a pause, so progress left on a paused collection is stale.
   // Never shown as done: the data is not there until the load commits, and then the progress is gone.
   const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
-  const noRpc = c.pausedAt === null && restore === null && storedOnly(c, rpcChains);
+  // The download comes first: the stored data cannot load until it has arrived. Capped like a load, for the same reason.
+  const download = c.pausedAt === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null ? Math.min(c.downloadProgress!, 0.99) : null;
+  // Held for a download that has not started (another runs, or another replica has the lock): the worker marks the file, with no progress.
+  const queued = c.pausedAt === null && download === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) === null;
+  const noRpc = c.pausedAt === null && restore === null && download === null && !queued && storedOnly(c, rpcChains);
   // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
   const past = noRpc && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
   const stops = noRpc && !past ? c.storedThroughTime! : null;
   const unsynced = stops === null ? null : unsyncedFor(now - stops);
   const readTo = past ? c.cursorBlock : null;
-  const base = { blocks, behind, wallets, money, floor, restore, stops, unsynced, readTo };
+  const base = { blocks, behind, wallets, money, floor, restore, download, stops, unsynced, readTo };
+  if (download !== null) return { ...base, reading: 'downloading', label: `Downloading stored data · ${downloaded(download)}` };
+  if (queued && restore === null) return { ...base, reading: 'queued', label: 'Waiting to download stored data' };
   if (restore !== null) return { ...base, reading: 'restoring', label: `Loading stored data · ${progress(restore)}` };
   if (c.pausedAt !== null) return { ...base, reading: 'paused', label: c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}` };
   // Before 'starting': with no RPC the head is never known, and the stored numbers are all there is.
@@ -224,6 +237,8 @@ export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, name
   // Never analysed while paused, so promise nothing.
   if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
   // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
+  if (c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null) return 'Downloading stored data · it is analysed once it has loaded.';
+  if (c.downloadFile === 'transfers') return 'Waiting to download stored data · it is analysed once it has loaded.';
   if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
   if (c.transfers === 0) return 'Waiting for its first transfers.';
   const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;

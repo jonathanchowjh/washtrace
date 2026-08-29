@@ -20,6 +20,8 @@
     "dev": "npm run --workspace @washtrace/web dev",
     "worker": "npm run --workspace @washtrace/worker dev",
     "stored": "npm run --workspace @washtrace/worker build && node apps/worker/dist/stored.js",
+    "migrate": "npm run --workspace @washtrace/worker build && node apps/worker/dist/migrate.js",
+    "publish:hub": "npm run --workspace @washtrace/worker build && node --env-file-if-exists=.env apps/worker/dist/publish-main.js",
     "db:up": "./scripts/dev-db.sh up",
     "db:down": "./scripts/dev-db.sh down",
     "db:psql": "./scripts/dev-db.sh psql"

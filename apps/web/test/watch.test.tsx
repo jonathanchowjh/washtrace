@@ -1,9 +1,13 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/api';
-import { localTime } from '@/lib/format';
-import { CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
+import { localTime, storedSizes } from '@/lib/format';
+import { storedManifest } from '@/lib/store';
+import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { CollectionRow } from '@/components/collection-row';
 import { CollectionTabs } from '@/components/tabs';
 
@@ -41,7 +45,7 @@ describe('SUGGESTED', () => {
 
 describe('Suggested', () => {
   it('links a watched suggestion to its page and offers the rest', () => {
-    render(<Suggested watched={['1/0x4e1f41613c9084fdb9e34e11fae9412427480e56']} />);
+    render(<Suggested watched={['1/0x4e1f41613c9084fdb9e34e11fae9412427480e56']} stored={[]} />);
     expect(screen.getByRole('link', { name: 'Watching →' }).getAttribute('href')).toBe('/c/1/0x4e1f41613c9084fdb9e34e11fae9412427480e56');
     expect(screen.getAllByRole('button', { name: 'Watch' })).toHaveLength(SUGGESTED.length - 1);
   });
@@ -49,13 +53,74 @@ describe('Suggested', () => {
   it('watches with one press, named, and refreshes', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ created: true }), { status: 201 }));
     vi.stubGlobal('fetch', fetch);
-    render(<Suggested watched={[]} />);
+    render(<Suggested watched={[]} stored={[]} />);
     const [first] = screen.getAllByRole('button', { name: 'Watch' });
     fireEvent.click(first!);
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ chainId: 1, address: SUGGESTED[0].address, name: SUGGESTED[0].name });
     expect(screen.getByRole('status').textContent).toBe('Dreadfulz: Watching. The worker reads it on its next pass.');
+  });
+});
+
+describe('Suggested stored data', () => {
+  const MEEBITS = SUGGESTED[3].address;
+  const stored = [
+    { chainId: 1, address: MEEBITS, name: 'Meebits', transfers: 12_300_000, trail: 3_400_000_000 },
+    { chainId: 1, address: '0x1111111111111111111111111111111111111111', name: 'Extra', transfers: 5_000_000, trail: null },
+  ];
+
+  it('lists a manifest collection that is not suggested, with its size', () => {
+    render(<Suggested watched={[]} stored={stored} />);
+    expect(screen.getByText('Extra')).toBeTruthy();
+    expect(screen.getByText('stored data: 5.0 MB transfers')).toBeTruthy();
+    expect(screen.getByText('Its stored data is on Hugging Face.')).toBeTruthy();
+    expect(screen.getByText('stored data: 12.3 MB transfers + 3.4 GB money trail')).toBeTruthy();
+    // A suggested one keeps its paper line.
+    expect(screen.getAllByText(/paper found/)).toHaveLength(SUGGESTED.length);
+    expect(screen.getAllByRole('button', { name: 'Watch' })).toHaveLength(SUGGESTED.length + 1);
+  });
+
+  it('says the intro true for rows with and without manifest-only collections', () => {
+    const paper = 'Suggested: collections from the term paper, each with a known answer to compare this reading against';
+    const { container } = render(<Suggested watched={[]} stored={stored} />);
+    expect(container.querySelector('p')!.textContent).toBe(`${paper}, and other collections whose stored data is on Hugging Face.`);
+    for (const none of [[], null, [stored[0]!]]) {
+      cleanup();
+      const text = render(<Suggested watched={[]} stored={none} />).container.querySelector('p')!.textContent;
+      expect(text).toBe(`${paper}.`);
+    }
+  });
+
+  it('shows no size for a collection with no stored data, and says when none is checked yet', () => {
+    const { container } = render(<Suggested watched={[]} stored={[]} />);
+    expect(container.textContent).not.toContain('stored data:');
+    cleanup();
+    render(<Suggested watched={[]} stored={null} />);
+    expect(screen.getAllByText('stored data: not known yet')).toHaveLength(SUGGESTED.length);
+  });
+
+  it('says not known yet, not "not checked", for a cached manifest that cannot be read', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'washtrace-web-manifest-'));
+    vi.stubEnv('WASHTRACE_STORED_DIR', dir);
+    try {
+      await writeFile(join(dir, 'manifest.json'), '{ not json');
+      render(<Suggested watched={[]} stored={storedSizes(await storedManifest())} />);
+      expect(screen.getAllByText('stored data: not known yet')).toHaveLength(SUGGESTED.length);
+      expect(screen.queryByText(/not checked/)).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows the size of a typed collection that has stored data', () => {
+    const { container } = render(<AddCollection stored={stored} />);
+    const address = container.querySelector('input[name="address"]')!;
+    fireEvent.change(address, { target: { value: MEEBITS.toUpperCase().replace('0X', '0x') } });
+    expect(screen.getByText('stored data: 12.3 MB transfers + 3.4 GB money trail')).toBeTruthy();
+    fireEvent.change(address, { target: { value: '0x2222222222222222222222222222222222222222' } });
+    expect(container.textContent).not.toContain('stored data:');
   });
 });
 

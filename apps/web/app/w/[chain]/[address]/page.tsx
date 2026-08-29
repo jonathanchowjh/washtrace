@@ -35,7 +35,7 @@ export default async function WalletPage({ params }: Props) {
   const money = funding === null ? 'Its money is not read: it never traded a watched collection.'
     : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
     : funding.status === 'failed' ? `Reading its money failed: ${funding.error ?? 'unknown error'}. Retried hourly; until then ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
-    : <>Its money was read {funding.fetchedAt === null ? '' : <Time ms={funding.fetchedAt} />}{funding.truncated ? '. It has more history than Etherscan pages through, so it is never treated as the shared funder between two others' : ''}.</>;
+    : <>Its money was read {funding.fetchedAt === null ? 'from stored data' : <Time ms={funding.fetchedAt} />}{funding.truncated ? '. It has more history than Etherscan pages through, so it is never treated as the shared funder between two others' : ''}.</>;
 
   return (
     <>
