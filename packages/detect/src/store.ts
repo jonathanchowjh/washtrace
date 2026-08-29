@@ -641,13 +641,15 @@ export class Store {
    * The wallets to read funding for next, in lanes so one big collection cannot
    * crowd out the rest: one lane per collection on the chain that is not paused (its traders),
    * and a last lane for followed wallets (depth > 0), which trade in no collection,
-   * there only while some collection is in sync to read them for.
+   * there only while some collection is in sync to read them for, and only
+   * those within `hops`: ones queued while following went further out wait,
+   * and 0 reads traders only.
    * Each lane is at most `perLane` long: failed wallets last (they retry after
    * an hour), then the shallowest, then the busiest. A trader of two
    * collections is in both lanes; `interleave` checks it once. Which wallets
    * a lane can hold is SERVED_*'s: fundingBacklog counts with them too.
    */
-  async fundingLanes(chainId: number, perLane: number): Promise<{ lanes: FundingLane[] }> {
+  async fundingLanes(chainId: number, perLane: number, hops: number): Promise<{ lanes: FundingLane[] }> {
     const unchecked = `w.chain_id = $1 AND (w.status = 'pending' OR (w.status = 'failed' AND w.fetched_at < now() - interval '1 hour'))`;
     const order = `ORDER BY w.status = 'failed', w.depth, w.transfers DESC`; // followed lane only
     // Start from the unchecked traders (few, and none in steady state), then probe
@@ -673,11 +675,11 @@ export class Store {
       if (lane?.collectionId !== r.id) lanes.push((lane = { collectionId: r.id, wallets: [] }));
       if (r.address !== null) lane.wallets.push(r.address);
     }
-    // Some collection on the chain is live: SERVED_WALLET's test for a followed wallet.
-    if (lanes.length > 0) {
+    // Some collection on the chain is live: servedWallet's test for a followed wallet.
+    if (lanes.length > 0 && hops > 0) {
       const followed = await this.pool.query<{ address: string }>(
-        `SELECT w.address FROM washtrace.wallets w WHERE ${unchecked} AND w.depth > 0 ${order} LIMIT $2`,
-        [chainId, perLane],
+        `SELECT w.address FROM washtrace.wallets w WHERE ${unchecked} AND w.depth > 0 AND w.depth <= $3 ${order} LIMIT $2`,
+        [chainId, perLane, hops],
       );
       if (followed.rows.length > 0) lanes.push({ collectionId: null, wallets: followed.rows.map((r) => r.address) });
     }
@@ -741,13 +743,14 @@ export class Store {
 
   /**
    * Each chain's wallets by funding state. `pending` and `failed` are the
-   * ones a lane will serve (SERVED_WALLET, from what fundingLanes builds on),
+   * ones a lane will serve (servedWallet, from what fundingLanes builds on),
    * so the wait drains to nothing; `stranded` are the unchecked rest, held
-   * back while every collection that names them is paused or removed, and no
-   * lane takes them. The status route and the Worker page read this every
-   * few seconds.
+   * back while every collection that names them is paused or removed, or
+   * followed further out than `hops`, and no lane takes them. The status
+   * route and the Worker page read this every few seconds, with the hops the
+   * worker reported.
    */
-  async fundingBacklog(): Promise<{ chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; followed: number; doneLastHour: number }[]> {
+  async fundingBacklog(hops: number): Promise<{ chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; followed: number; doneLastHour: number }[]> {
     // Only the unchecked wallets are probed, each once (MATERIALIZED, so the
     // probe is not repeated in every count that reads it). Stranded ones
     // dominate the cost and are permanent: deleting a collection keeps its
@@ -760,7 +763,7 @@ export class Store {
       await c.query('SET LOCAL jit = off');
       const { rows } = await c.query(
         `WITH waiting AS MATERIALIZED (
-           SELECT w.chain_id, w.status, ${SERVED_WALLET} AS served FROM washtrace.wallets w WHERE w.status IN ('pending', 'failed')
+           SELECT w.chain_id, w.status, ${servedWallet('$1')} AS served FROM washtrace.wallets w WHERE w.status IN ('pending', 'failed')
          ), unchecked AS (
            SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending,
                   count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE NOT served)::int AS stranded
@@ -772,6 +775,7 @@ export class Store {
                 count(*) FILTER (WHERE w.truncated)::int AS truncated, count(*) FILTER (WHERE w.depth > 0)::int AS followed
          FROM washtrace.wallets w LEFT JOIN unchecked u ON u.chain_id = w.chain_id
          GROUP BY w.chain_id, u.pending, u.failed, u.stranded ORDER BY w.chain_id`,
+        [hops],
       );
       await c.query('COMMIT');
       return rows.map((r) => ({
@@ -1374,10 +1378,11 @@ LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.
  * Which wallets funding serves, for fundingLanes and fundingBacklog alike, so
  * what is counted waiting is what gets checked. SERVED_LIVE: collection c is
  * not paused. SERVED_NAMES: c's transfers name wallet w, probed by index each
- * way, for a lane of one collection. SERVED_WALLET: the same question per
+ * way, for a lane of one collection. servedWallet: the same question per
  * wallet, for the count: w is a trader some live collection on its chain
- * names, or a followed wallet (depth > 0) on a chain where some collection
- * is live, as fundingLanes gives followed wallets a lane only then.
+ * names, or a followed wallet (depth > 0) within `hops` (a query parameter)
+ * on a chain where some collection is live, as fundingLanes gives followed
+ * wallets a lane only then.
  */
 const SERVED_LIVE = 'c.paused_at IS NULL';
 const SERVED_NAMES = `(EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = c.id AND x.from_address = w.address)
@@ -1389,7 +1394,8 @@ const SERVED_NAMES = `(EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.colle
 const namedLive = (side: 'from_address' | 'to_address') =>
   `EXISTS (SELECT 1 FROM (SELECT x.collection_id FROM washtrace.transfers x WHERE x.${side} = w.address OFFSET 0) x
      JOIN washtrace.collections c ON c.id = x.collection_id WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})`;
-const SERVED_WALLET = `CASE WHEN w.depth > 0 THEN EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})
+const servedWallet = (hops: string) =>
+  `CASE WHEN w.depth > 0 THEN w.depth <= ${hops} AND EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})
   ELSE ${namedLive('from_address')} OR ${namedLive('to_address')} END`;
 
 const TRANSFER_COLUMNS = `

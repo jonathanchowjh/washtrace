@@ -534,6 +534,18 @@ describe('Worker.fund', () => {
     expect(funded).toEqual(['c', 'a', 'f', 'b']);
     expect(beats).toEqual(['Checking wallets for Doodles', 'Checking wallets for BAYC', 'Checking wallets for followed wallets', 'Checking wallets for BAYC']);
   });
+
+  it('asks for lanes within the hops it follows, so a lowered setting stops the deeper wallets queued before', async () => {
+    const asked: number[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1 })],
+      fundingLanes: async (_chain: number, _perLane: number, hops: number) => { asked.push(hops); return { lanes: [] }; },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 1, sources: {} }), '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    await w.fund();
+    expect(asked).toEqual([1]);
+  });
 });
 
 describe('Worker.fund priority', () => {

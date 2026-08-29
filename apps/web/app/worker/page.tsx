@@ -91,7 +91,7 @@ export default async function WorkerPage() {
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{b.done.toLocaleString()} of {all.toLocaleString()} checked</span></p>
                           <span aria-hidden className="mt-1 block h-1.5 overflow-hidden rounded-full bg-muted"><i className="block h-full rounded-full bg-muted-foreground" style={{ width: `${all === 0 ? 0 : (b.done / all) * 100}%` }} /></span>
-                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.stranded > 0 ? `${b.stranded.toLocaleString()} held back while their collections are paused or removed · ` : ''}{b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{b.pending.toLocaleString()} waiting · {b.failed} failed · {b.stranded > 0 ? `${b.stranded.toLocaleString()} held back while their collections are paused or removed, or further out than the hops followed · ` : ''}{b.truncated} too large to page · {b.followed.toLocaleString()} followed from traders</p>
                         </div>
                       );
                     })}

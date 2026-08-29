@@ -242,7 +242,7 @@ describe('status', () => {
     // fundingBacklog counts a paused collection's failed wallets as stranded, not failed: no lane retries them.
     const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 0, stranded: 3, truncated: 0, doneLastHour: 0 }] });
     expect(texts(s, 'needs-you')).toEqual([]);
-    expect(texts(s, 'info')).toContain('Ethereum: 3 wallets are not checked while their collections are paused or removed.');
+    expect(texts(s, 'info')).toContain('Ethereum: 3 wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.');
     expect(status(s, NOW).funding[0]!.etaMs).toBeNull();
     // With funding off no wallet is checked, and the funding-off notice says so.
     const off = snapshot({ config: { ...CONFIG, funding: false }, funding: [{ chainId: 1, pending: 0, done: 1, failed: 0, stranded: 3, truncated: 0, doneLastHour: 0 }] });

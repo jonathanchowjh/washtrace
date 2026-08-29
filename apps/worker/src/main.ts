@@ -79,7 +79,11 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     worker.stop();
     health.close();
     await worker.drain(8_000);
-    await store.pool.end().catch(() => {});
+    // A pass still running holds its pool client, and end() waits for it, so
+    // it is given a second, not the rest of the pass: an analysis outlasts
+    // the SIGKILL. Exiting drops the connection; Postgres rolls the pass back
+    // and frees its lock, as a crash would.
+    await Promise.race([store.pool.end().catch(() => {}), new Promise((r) => setTimeout(r, 1_000))]);
     process.exit(0);
   });
 }

@@ -219,3 +219,8 @@ export function configFromSources(sources: Record<string, SettingSource>, settin
     followHops: reported('follow.hops'),
   };
 }
+
+/** How many hops out the worker follows money: what it reported, or its default. What its funding lanes serve, so the backlog counts with it. */
+export function hopsFollowed(config: SourcesConfig): number {
+  return config.followHops ?? Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback);
+}

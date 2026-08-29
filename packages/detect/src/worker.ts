@@ -674,7 +674,7 @@ export class Worker {
     let done = 0;
     let failed = 0;
     for (const chainId of new Set(collections.map((c) => c.chainId))) {
-      const { lanes } = await this.store.fundingLanes(chainId, 20);
+      const { lanes } = await this.store.fundingLanes(chainId, 20, followHops);
       // Every collection flagged on this chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
       const priority = new Set(collections.filter((c) => c.chainId === chainId && c.priority && c.pausedAt === null).map((c) => c.id));
       const whose = (wallet: string) => {

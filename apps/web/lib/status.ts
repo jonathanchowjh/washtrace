@@ -8,7 +8,7 @@ import { FIELDS, type SourcesConfig } from './settings';
 export interface Snapshot {
   passes: readonly PassRow[];
   collections: readonly CollectionRow[];
-  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections (fundingBacklog). */
+  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the hops set (fundingBacklog). */
   funding: readonly { chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; doneLastHour: number }[];
   /** From the worker's report (configFromSources), never this process's environment. */
   config: SourcesConfig;
@@ -164,7 +164,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
   // With funding off nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {
     // No lane takes these, so they neither wait nor fail: resuming a collection brings its own back.
-    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed.`);
+    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);
     // Only wallets the worker will check count as failed, so one held back never blames the key.
     if (f.failed === 0) continue;
     // Some wallets failing while others are checked is a rate limit or a timeout: they retry on their own.

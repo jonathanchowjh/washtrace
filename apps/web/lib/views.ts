@@ -1,7 +1,7 @@
 import { EVERY, ZERO, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
 import { authConfigured } from './auth';
 import { storedOnly } from './metrics';
-import { configFromSources, view } from './settings';
+import { configFromSources, hopsFollowed, view } from './settings';
 import { status } from './status';
 import { store } from './store';
 
@@ -58,9 +58,10 @@ export async function settingsView() {
 /** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
 export async function workerView(zone = 'UTC') {
   const s = store();
-  const [passes, backlog, collections, sources, settings] = await Promise.all([s.passes(), s.fundingBacklog(), s.collections(), s.sources(), s.settings()]);
+  const [passes, collections, sources, settings] = await Promise.all([s.passes(), s.collections(), s.sources(), s.settings()]);
   // What the worker reported, not this process's environment: only the worker reads the chain.
   const config = configFromSources(sources, settings);
+  const backlog = await s.fundingBacklog(hopsFollowed(config));
   // With no key, whether a loaded money trail still feeds the money lenses.
   const fed = config.funding ? false : await trailFunded(s, collections);
   // The same reading of the passes as /api/status, so the page and the route never disagree about a job.

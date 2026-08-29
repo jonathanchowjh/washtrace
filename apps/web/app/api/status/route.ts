@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { handle, json } from '@/lib/api';
-import { configFromSources } from '@/lib/settings';
+import { configFromSources, hopsFollowed } from '@/lib/settings';
 import { status } from '@/lib/status';
 import { store } from '@/lib/store';
 import { trailFunded } from '@/lib/views';
@@ -15,11 +15,12 @@ import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 export async function GET(): Promise<Response> {
   return handle(async () => {
     const s = store();
-    const [passes, collections, funding, sources, settings] = await Promise.all([s.passes(), s.collections(), s.fundingBacklog(), s.sources(), s.settings()]);
+    const [passes, collections, sources, settings] = await Promise.all([s.passes(), s.collections(), s.sources(), s.settings()]);
     // The worker's report of its sources, never this process's environment.
     // The reader's zone when a browser asks, for the dates in the notices; UTC otherwise.
     const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone;
     const config = configFromSources(sources, settings);
+    const funding = await s.fundingBacklog(hopsFollowed(config));
     // The worker page's and Settings' answer, so the notice about it says the same.
     const fed = config.funding ? false : await trailFunded(s, collections);
     return json(status({ passes, collections, funding, config, trailFunded: fed }, Date.now(), zone));

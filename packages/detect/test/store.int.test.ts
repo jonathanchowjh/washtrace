@@ -120,17 +120,38 @@ describe('Store', () => {
     await store.ingest(c.id, 1, ts, 200, []);
     const after = (await store.collection(1, collection))!;
     expect(after).toMatchObject({ cursorBlock: 200, transfers: 4 });
-    expect(await store.fundingLanes(1, 10)).toEqual({ lanes: [{ collectionId: c.id, wallets: [a, b] }] });
+    expect(await store.fundingLanes(1, 10, 3)).toEqual({ lanes: [{ collectionId: c.id, wallets: [a, b] }] });
   });
 
   it('gives each collection its own lane of unchecked traders, a shared one in both', async () => {
     const other = (await store.addCollection(1, w('0be'), 'Other', 1)).id;
     const c = (await store.collection(1, collection))!;
     await store.ingest(other, 1, chain('2', b, w('o1')), 10, [b, w('o1')]);
-    const { lanes } = await store.fundingLanes(1, 10);
+    const { lanes } = await store.fundingLanes(1, 10, 3);
     expect(lanes).toEqual([{ collectionId: c.id, wallets: [b, a] }, { collectionId: other, wallets: [b, w('o1')] }]);
-    expect((await store.fundingLanes(1, 1)).lanes.map((l) => l.wallets.length)).toEqual([1, 1]);
+    expect((await store.fundingLanes(1, 1, 3)).lanes.map((l) => l.wallets.length)).toEqual([1, 1]);
     await drop(1, w('0be'));
+  });
+
+  it('leaves followed wallets further out than the hops followed unchecked, and counts them held back', async () => {
+    const chainId = 22, t = w('22a1'), m1 = w('22a2'), m2 = w('22a3');
+    const id = (await store.addCollection(chainId, w('22c1'), 'Hops', 1)).id;
+    const row = async (hops: number) => (await store.fundingBacklog(hops)).find((r) => r.chainId === chainId)!;
+    try {
+      await store.ingest(id, chainId, chain('25', t), 10, [t]);
+      // Queued while following went two hops out; then the setting came down.
+      await store.pool.query('INSERT INTO washtrace.wallets (chain_id, address, depth) VALUES ($1, $2, 1), ($1, $3, 2)', [chainId, m1, m2]);
+      expect((await store.fundingLanes(chainId, 10, 2)).lanes.at(-1)).toEqual({ collectionId: null, wallets: [m1, m2] });
+      expect((await store.fundingLanes(chainId, 10, 1)).lanes.at(-1)).toEqual({ collectionId: null, wallets: [m1] });
+      // 0 reads traders only.
+      expect((await store.fundingLanes(chainId, 10, 0)).lanes).toEqual([{ collectionId: id, wallets: [t] }]);
+      expect(await row(2)).toMatchObject({ pending: 3, stranded: 0 });
+      expect(await row(1)).toMatchObject({ pending: 2, stranded: 1 });
+      expect(await row(0)).toMatchObject({ pending: 1, stranded: 2 });
+    } finally {
+      await drop(chainId, w('22c1'));
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = $1', [chainId]);
+    }
   });
 
   it('probes a collection\'s transfers for its traders only, never for followed wallets', async () => {
@@ -140,7 +161,7 @@ describe('Store', () => {
     // Named in its transfers yet followed (depth > 0), as no ingest leaves a trader: in the followed lane alone.
     await store.pool.query('UPDATE washtrace.wallets SET depth = 1 WHERE chain_id = 7 AND address = $1', [m]);
     try {
-      expect((await store.fundingLanes(7, 10)).lanes).toEqual([{ collectionId: id, wallets: [t] }, { collectionId: null, wallets: [m] }]);
+      expect((await store.fundingLanes(7, 10, 3)).lanes).toEqual([{ collectionId: id, wallets: [t] }, { collectionId: null, wallets: [m] }]);
     } finally {
       await drop(7, w('8c0'));
       // Wallets outlive a collection's data: these would turn up in the other tests on chain 7.
@@ -157,13 +178,13 @@ describe('Store', () => {
     expect(await store.pause(1, w('9c1'))).toBe(true);
     expect(await store.pause(1, w('9c1'))).toBe(false);
     expect((await store.collection(1, w('9c1')))!.pausedAt).not.toBeNull();
-    const { lanes } = await store.fundingLanes(1, 10);
+    const { lanes } = await store.fundingLanes(1, 10, 3);
     expect(lanes.map((l) => l.collectionId)).not.toContain(c1);
     expect(lanes.find((l) => l.collectionId === c2)!.wallets).toContain(s);
     expect((await store.stale()).map((r) => r.id)).not.toContain(c1);
     // With nothing in sync on the chain there are no lanes, the followed one included.
     await store.pool.query('UPDATE washtrace.collections SET paused_at = now()');
-    expect((await store.fundingLanes(1, 10)).lanes).toEqual([]);
+    expect((await store.fundingLanes(1, 10, 3)).lanes).toEqual([]);
     expect(await store.resume(1, w('9c2'))).toBe(true);
     expect(await store.resume(1, w('9c2'))).toBe(false);
     await store.pool.query('UPDATE washtrace.collections SET paused_at = NULL');
@@ -177,7 +198,7 @@ describe('Store', () => {
     const l = w('21a1'), lf = w('21a2'), p = w('21a3'), pf = w('21a4'), m = w('21a5'), sh = w('21a6');
     const c1 = (await store.addCollection(chainId, live, 'Live', 1)).id;
     const c2 = (await store.addCollection(chainId, held, 'Held', 1)).id;
-    const row = async () => (await store.fundingBacklog()).find((r) => r.chainId === chainId)!;
+    const row = async () => (await store.fundingBacklog(3)).find((r) => r.chainId === chainId)!;
     try {
       await store.ingest(c1, chainId, chain('21', l, lf), 10, [l, lf]);
       await store.ingest(c2, chainId, chain('22', p, pf), 10, [p, pf]);
@@ -254,7 +275,7 @@ describe('Store', () => {
   });
 
   it('counts the wallets finished in the last hour, for the funding wait', async () => {
-    const lastHour = async () => (await store.fundingBacklog()).find((r) => r.chainId === 1)!.doneLastHour;
+    const lastHour = async () => (await store.fundingBacklog(3)).find((r) => r.chainId === 1)!.doneLastHour;
     const before = await lastHour();
     expect(before).toBeGreaterThan(0);
     await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '2 hours' WHERE chain_id = 1 AND address = $1`, [x]);
@@ -447,7 +468,7 @@ describe('Store', () => {
       expect(await depthOf(w('m1'))).toBe(1);
       expect(await depthOf(w('in'))).toBeNull();
       expect(await depthOf(w('5ea'))).toBeNull();
-      const { lanes } = await store.fundingLanes(1, 10);
+      const { lanes } = await store.fundingLanes(1, 10, 3);
       expect(lanes.at(-1)).toEqual({ collectionId: null, wallets: [w('m1')] });
       expect(lanes.slice(0, -1).some((l) => l.wallets.includes(w('m1')))).toBe(false);
     });
@@ -877,7 +898,7 @@ describe('Store', () => {
       expect(await version(id)).toBe(before + 1);
       // Queued as ingest queues them: the zero address left out, and the one already read not counted twice.
       expect(await wallets(p, q, r)).toEqual({ [p]: 2, [q]: 2, [r]: 1 });
-      expect((await store.fundingLanes(chainId, 10)).lanes.find((l) => l.collectionId === id)!.wallets.sort()).toEqual([p, q, r].sort());
+      expect((await store.fundingLanes(chainId, 10, 3)).lanes.find((l) => l.collectionId === id)!.wallets.sort()).toEqual([p, q, r].sort());
       await drop(chainId, coll);
     });
 
