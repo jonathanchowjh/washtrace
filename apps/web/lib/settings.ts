@@ -121,6 +121,15 @@ export const FIELDS: readonly Field[] = [
     used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10,
     fallback: '3',
   },
+  {
+    key: 'stored.repo',
+    label: 'Stored data dataset',
+    secret: false,
+    validate: (v) => (/^[\w.-]+\/[\w.-]+$/.test(v) ? null : 'The dataset is a Hugging Face owner/name, such as jonathanmiro97/washtrace-data.'),
+    // The worker takes any value here; a wrong one shows as no stored data found.
+    used: () => true,
+    fallback: 'jonathanmiro97/washtrace-data',
+  },
 ];
 
 /** The 409 for a value the environment set: the environment wins, so saving it would do nothing. */
@@ -218,4 +227,9 @@ export function configFromSources(sources: Record<string, SettingSource>, settin
     perSecond: reported('etherscan.rps'),
     followHops: reported('follow.hops'),
   };
+}
+
+/** How many hops out the worker follows money: what it reported, or its default. What its funding lanes serve, so the backlog counts with it. */
+export function hopsFollowed(config: SourcesConfig): number {
+  return config.followHops ?? Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback);
 }

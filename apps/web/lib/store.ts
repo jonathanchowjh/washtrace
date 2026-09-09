@@ -1,5 +1,6 @@
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Store, entryFor, readManifest, storedDir, type StoredEntry } from '@washtrace/detect';
+import { Store, entryFor, parseManifest, storedDir, type Manifest, type StoredEntry } from '@washtrace/detect';
 import { storeUrl } from './config';
 
 /**
@@ -19,17 +20,25 @@ export function store(): Store {
 }
 
 /**
- * A collection's entry in the stored-data manifest, or null: what the
- * console says of its stored data, such as how many traders its money trail
- * checked. The manifest is data/stored at the repo root, two up from where
- * Next runs (apps/web, in dev and in the image alike), unless
- * WASHTRACE_STORED_DIR says otherwise, as for the worker. One that cannot be
- * read is no entry: the page says less, and never fails over it.
+ * The stored-data manifest the worker fetched and cached, or null when there
+ * is none yet or it cannot be read: the console then says "not known yet"
+ * and never fails over it. It is data/stored at the repo root, two up from
+ * where Next runs (apps/web, in dev and in the image alike), unless
+ * WASHTRACE_STORED_DIR says otherwise, as for the worker. A missing file is
+ * null, not an empty manifest (readManifest's reading): the two differ for a
+ * reader, "not known yet" against "none has stored data". "Known", not
+ * "checked": a manifest that fails to parse was checked, and is still not known.
  */
-export async function storedEntry(chainId: number, address: string): Promise<StoredEntry | null> {
+export async function storedManifest(): Promise<Manifest | null> {
   try {
-    return entryFor(await readManifest(join(storedDir(process.env, join(process.cwd(), '..', '..')), 'manifest.json')), chainId, address);
+    return parseManifest(await readFile(join(storedDir(process.env, join(process.cwd(), '..', '..')), 'manifest.json'), 'utf8'));
   } catch {
     return null;
   }
+}
+
+/** A collection's entry in the manifest, or null: what the console says of its stored data, such as how many traders its money trail checked. */
+export async function storedEntry(chainId: number, address: string): Promise<StoredEntry | null> {
+  const m = await storedManifest();
+  return m === null ? null : entryFor(m, chainId, address);
 }

@@ -1,5 +1,7 @@
 /** Display only. Nothing here is summed or compared; amounts stay wei strings until they are drawn. */
 
+import type { Manifest } from '@washtrace/detect';
+import { formatBytes } from '@washtrace/detect/bytes';
 import { EXPLORERS } from './links';
 
 export function short(address: string): string {
@@ -100,4 +102,20 @@ export function explorer(chainId: number): string {
 /** "35–62 ETH", or "35 ETH" when both ends agree. */
 export function ethRange(lowWei: string, highWei: string): string {
   return lowWei === highWei ? eth(lowWei) : `${eth(lowWei, '').trim()}–${eth(highWei)}`;
+}
+
+/** A file's size as the Hub shows it. Defined once in the detect package, so the dataset card says the same size (see bytes.ts). */
+export { formatBytes };
+
+/** One collection's stored files, sized: what the suggested list and the add form say of it. */
+export interface StoredSize { chainId: number; address: string; name: string; transfers: number; trail: number | null }
+
+/** The manifest as sizes, or null when none is cached yet (not the same as a manifest with no collection). */
+export function storedSizes(m: Manifest | null): StoredSize[] | null {
+  return m === null ? null : m.collections.map((e) => ({ chainId: e.chainId, address: e.address, name: e.name, transfers: e.transfers.bytes, trail: e.trail?.bytes ?? null }));
+}
+
+/** "stored data: 12.3 MB transfers + 3.4 GB money trail"; with no trail, the transfers alone. */
+export function storedLine(s: Pick<StoredSize, 'transfers' | 'trail'>): string {
+  return `stored data: ${formatBytes(s.transfers)} transfers${s.trail === null ? '' : ` + ${formatBytes(s.trail)} money trail`}`;
 }

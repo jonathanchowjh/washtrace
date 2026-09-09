@@ -20,6 +20,7 @@ three corrections are new: see [From the paper to now](#from-the-paper-to-now).
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
 - [Configuration](#configuration)
+- [Stored data](#stored-data)
 - [API](#api)
 - [Pages](#pages)
 - [From the paper to now](#from-the-paper-to-now)
@@ -137,12 +138,48 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. While `WASHTRACE_ETHERSCAN_KEY` is set, only this variable sets the URL: a URL saved in the console is ignored, so it can't receive the key. |
 | `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. |
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
+| `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. Overrides the console's `stored.repo` setting. |
 | `PORT` | The api's listen port. `8080` in the image. |
 | `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
 
 **Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
 are stateless. Worker replicas share each job through an advisory lock, so a
 second worker gives failover, not double reads.
+
+## Stored data
+
+Reading a big collection from the chain takes days, so its chain data is cut
+once and published to a Hugging Face dataset (`jonathanmiro97/washtrace-data`
+by default). When you watch a collection that the dataset holds, the worker
+downloads its files in the background and loads them, then reads on from the
+chain where they stop. The console shows the download as it runs ("Downloading
+stored data · 41%") and the Watch panel lists each collection's size before you
+watch it, such as `stored data: 12.3 MB transfers + 3.4 GB money trail`. The
+transfers come first; the money trail follows and feeds Money loops back and
+Linked wallets without an Etherscan key.
+
+- **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
+  repo or the image. Under Compose it is the named volume `stored`, written by
+  the worker and mounted read only into the api. Under Compose,
+  `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
+  the worker and the api look in different places.
+- **Upgrading.** Compose used to bind-mount `./data/stored`; it is now the named
+  volume `stored`, and old local files there are no longer read by Compose. The
+  worker downloads what it needs again; copy files into the volume only if you
+  cut them yourself.
+- **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
+  setting (the environment wins). The worker fetches the dataset's manifest about
+  hourly, and at once when a collection is newly watched, and keeps the last
+  one, so an unreachable Hub only means the chain is read instead.
+- **What is published.** Chain data only: transfers, the money trail's flows,
+  the checked wallets' addresses, and each collection's address, chain and
+  contract name. Never a wallet's status or errors, a label you gave a
+  collection, or any setting or key.
+- **Cleaning up.** Delete `data/stored/`, or under Compose
+  `docker volume rm <project>_stored` with the services stopped.
+- **Cutting your own.** `npm run stored` writes a local manifest and files into
+  `data/stored/`. The worker's hourly fetch replaces that manifest, so a local
+  cut is for publishing, not for serving.
 
 ## API
 
@@ -153,7 +190,7 @@ settings writes and Tests answer 403 while basic auth is off.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. |
 | `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
 | `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
 | `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |

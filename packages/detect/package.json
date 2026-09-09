@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./bytes": { "types": "./dist/bytes.d.ts", "default": "./dist/bytes.js" }
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",

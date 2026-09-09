@@ -20,7 +20,7 @@ docs/CS470/
 .remember/
 # Plans and reports from agent sessions: working notes, not the product.
 .superpowers/
-# A money trail is too big to commit: it stays local, and the worker loads
-# it when it is there. A .part is a file being written, not yet renamed.
-data/stored/*.trail.csv.zst
-data/stored/*.part
+# Stored data is downloaded from Hugging Face, or cut locally with
+# `npm run stored`: never committed. A .part is a file being written.
+data/stored/
+publish-dry/

@@ -12,5 +12,8 @@
   },
   "dependencies": {
     "@washtrace/detect": "*"
+  },
+  "devDependencies": {
+    "@huggingface/hub": "2.17.9"
   }
 }

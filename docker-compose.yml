@@ -37,12 +37,11 @@ services:
         required: false
     environment:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
-    # Stored data from the host, over the copy in the image: a money trail is
-    # too big to bake in (.dockerignore), so a trail file put in data/stored
-    # loads from here. /app/data/stored is where the worker looks, unless
-    # WASHTRACE_STORED_DIR says otherwise. Read only: the worker never writes it.
+    # Stored data downloaded from Hugging Face lands in a named volume, not the
+    # repo or the image. /app/data/stored is where the worker looks and writes,
+    # unless WASHTRACE_STORED_DIR says otherwise. Replicas share it.
     volumes:
-      - ./data/stored:/app/data/stored:ro
+      - stored:/app/data/stored
     restart: unless-stopped
 
   api:
@@ -57,10 +56,11 @@ services:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
     ports:
       - "8080:8080"
-    # The same stored data as the worker's, so the console describes the manifest the worker loads from.
+    # The worker's stored data, read only: the console describes the manifest the worker fetched.
     volumes:
-      - ./data/stored:/app/data/stored:ro
+      - stored:/app/data/stored:ro
     restart: unless-stopped
 
 volumes:
   db:
+  stored:

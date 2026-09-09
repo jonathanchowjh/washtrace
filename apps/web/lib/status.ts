@@ -1,19 +1,21 @@
-import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, type CollectionRow, type Job, type PassRow } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { eta, localTime } from './format';
-import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './metrics';
+import { eta, formatBytes, localTime } from './format';
+import { analysisRetry, downloaded, isRunning, progress, restoreText, storedOnly } from './metrics';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
 export interface Snapshot {
   passes: readonly PassRow[];
   collections: readonly CollectionRow[];
-  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections (fundingBacklog). */
+  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the hops set (fundingBacklog). */
   funding: readonly { chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; doneLastHour: number }[];
   /** From the worker's report (configFromSources), never this process's environment. */
   config: SourcesConfig;
   /** Whether some collection's loaded money trail feeds its money lenses (trailFunded in views), as the worker page and Settings say it. */
   trailFunded: boolean;
+  /** The cached stored-data manifest (storedManifest), for the sizes of a download; absent or null says none. */
+  manifest?: Manifest | null;
 }
 
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
@@ -101,6 +103,15 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     const stored = storedOnly(c, new Set(s.config.chains));
     const storedTurn = !paused && !restoring && stored;
     const backfilling = !paused && !restoring && !stored && behind !== null && behind > BEHIND_BLOCKS;
+    // A trail download is a working notice too: the transfers are there, the money trail is on its way.
+    if (!paused && c.downloadFile !== null && c.downloadProgress !== null) {
+      const e = s.manifest ? entryFor(s.manifest, c.chainId, c.address) : null;
+      const bytes = c.downloadFile === 'trail' ? e?.trail?.bytes : e?.transfers.bytes;
+      const what = c.downloadFile === 'trail' ? 'the money trail' : 'stored data';
+      notice('working', `Downloading ${what} for ${label} · ${downloaded(c.downloadProgress)}${bytes === undefined ? '' : ` of ${formatBytes(bytes)}`}`);
+    }
+    // Not a fault: its chain is read instead where there is an RPC, and the note says it is tried again. A paused collection tries nothing.
+    if (!paused && c.downloadNote) notice('info', `${label}: ${c.downloadNote}`);
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
     // Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again.
     const restore = restoreText(c, new Set(s.config.chains), zone);
@@ -164,7 +175,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
   // With funding off nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {
     // No lane takes these, so they neither wait nor fail: resuming a collection brings its own back.
-    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed.`);
+    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);
     // Only wallets the worker will check count as failed, so one held back never blames the key.
     if (f.failed === 0) continue;
     // Some wallets failing while others are checked is a rate limit or a timeout: they retry on their own.

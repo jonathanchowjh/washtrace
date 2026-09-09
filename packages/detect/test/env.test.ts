@@ -79,4 +79,12 @@ describe('workerConfig', () => {
     expect(c.followHops).toBe(3);
     expect(c.sources).toEqual({});
   });
+
+  it('the stored repo defaults to the published dataset, and the environment beats the console', () => {
+    expect(workerConfig({}).storedRepo).toBe('jonathanmiro97/washtrace-data');
+    expect(workerConfig({}, new Map([['stored.repo', 'me/data']])).storedRepo).toBe('me/data');
+    const c = workerConfig({ WASHTRACE_STORED_REPO: 'env/data' }, new Map([['stored.repo', 'me/data']]));
+    expect(c.storedRepo).toBe('env/data');
+    expect(c.sources['stored.repo']).toEqual({ source: 'env', value: 'env/data' });
+  });
 });

@@ -1,4 +1,5 @@
 import { ETHERSCAN_V2 } from './etherscan.js';
+import { STORED_REPO } from './hub.js';
 import { SECRET_KEYS, type SettingSource } from './store.js';
 import type { WorkerConfig } from './worker.js';
 
@@ -67,6 +68,7 @@ export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = n
     etherscanPerSecond: Number.isFinite(perSecond) && perSecond > 0 ? perSecond : 4,
     etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL', sources['etherscan.key']?.source === 'env') ?? ETHERSCAN_V2,
     followHops: hops(pick('follow.hops', 'WASHTRACE_FOLLOW_HOPS')),
+    storedRepo: pick('stored.repo', 'WASHTRACE_STORED_REPO') ?? STORED_REPO,
     sources,
   };
 }

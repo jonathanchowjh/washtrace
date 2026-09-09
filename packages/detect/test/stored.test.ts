@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { zstdDecompressSync } from 'node:zlib';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  StoredDataError, entryFor, readManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
-  type Manifest, type StoredEntry, type WalletRow,
+  StoredDataError, datasetCard, parseTarget, entryFor, mergeManifest, parseManifest, readManifest, writeManifest, readTransfers, readTrail, sha256File, storedFile, storedKey, trailPath, upsertEntry, writeTransfers, writeTrail,
+  type Manifest, type StoredEntry,
 } from '../src/stored.js';
+import { formatBytes } from '../src/bytes.js';
 import type { Flow, Transfer } from '../src/types.js';
 import { flow, transfer, w } from './fixtures.js';
 
@@ -151,34 +153,41 @@ describe('stored transfers', () => {
 });
 
 describe('stored money trail', () => {
-  const wallets: WalletRow[] = [
-    { address: a, transfers: 12, status: 'done', truncated: false, depth: 0, fetchedAt: 1_700_000_000_000 },
-    { address: b, transfers: 0, status: 'done', truncated: true, depth: 1, fetchedAt: 1_700_000_100_000 },
-    { address: c, transfers: 3, status: 'failed', truncated: false, depth: 0, fetchedAt: null },
-  ];
+  const checked = [a, b];
   const flows: Flow[] = [
     flow(a, b),
     flow(b, c, { kind: 'token', token: w('e2c0'), valueWei: '340282366920938463463374607431768211455' }),
     flow(c, a, { kind: 'internal' }),
   ];
 
-  it('round-trips wallets and flows in one file', async () => {
+  it('the trail file holds checked addresses and flows only', async () => {
+    const path = join(dir, 'chain-only.trail.csv.zst');
+    await writeTrail(path, { checked, flows: [flows[0]!] });
+    const text = zstdDecompressSync(await readFile(path)).toString('utf8');
+    expect(text.trimEnd().split('\n')).toEqual([
+      '#checked', 'address', a, b, '#flows', 'tx_hash,kind,from_address,to_address,value_wei,token,block_number,block_time',
+      `${flows[0]!.txHash},${flows[0]!.kind},${a},${b},${flows[0]!.valueWei},${flows[0]!.token},${flows[0]!.blockNumber},${flows[0]!.blockTime}`,
+    ]);
+    for (const bookkeeping of ['status', 'truncated', 'fetched_at', 'depth', 'transfers']) expect(text).not.toContain(bookkeeping);
+  });
+
+  it('readTrail gives back what writeTrail wrote', async () => {
     const path = join(dir, 'round.trail.csv.zst');
-    const written = await writeTrail(path, { wallets, flows });
-    expect(written).toMatchObject({ wallets: 3, rows: 3, bytes: (await readFile(path)).length });
+    const written = await writeTrail(path, { checked, flows });
+    expect(written).toMatchObject({ wallets: 2, rows: 3, bytes: (await readFile(path)).length });
     const batches = await collect(readTrail(path, written.sha256));
-    expect({ wallets: batches.flatMap((x) => x.wallets), flows: batches.flatMap((x) => x.flows) }).toEqual({ wallets, flows });
+    expect({ checked: batches.flatMap((x) => x.checked), flows: batches.flatMap((x) => x.flows) }).toEqual({ checked, flows });
   });
 
   it('throws StoredDataError on a changed byte', async () => {
     const path = join(dir, 'changed.trail.csv.zst');
-    const written = await writeTrail(path, { wallets, flows });
+    const written = await writeTrail(path, { checked, flows });
     await expect(collect(readTrail(path, written.sha256.replace(/^./, (ch) => (ch === '0' ? '1' : '0'))))).rejects.toBeInstanceOf(StoredDataError);
   });
 
   it('refuses a value with a comma on write', async () => {
     const path = join(dir, 'comma.trail.csv.zst');
-    await expect(writeTrail(path, { wallets, flows: [flow(a, b, { token: 'x,y' })] })).rejects.toBeInstanceOf(StoredDataError);
+    await expect(writeTrail(path, { checked, flows: [flow(a, b, { token: 'x,y' })] })).rejects.toBeInstanceOf(StoredDataError);
     expect((await readdir(dir)).filter((f) => f.startsWith('comma.trail'))).toEqual([]);
   });
 });
@@ -201,14 +210,14 @@ describe('storedKey', () => {
 
 describe('the manifest', () => {
   it('finds an entry whatever the case of the address', () => {
-    const m: Manifest = { version: 1, collections: [entry({ address: '0xabcdef0000000000000000000000000000000001' })] };
+    const m: Manifest = { version: 2, collections: [entry({ address: '0xabcdef0000000000000000000000000000000001' })] };
     expect(entryFor(m, 1, '0xABCDEF0000000000000000000000000000000001')?.name).toBe('Test');
     expect(entryFor(m, 8453, '0xabcdef0000000000000000000000000000000001')).toBeNull();
     expect(entryFor(m, 1, w('d1ff'))).toBeNull();
   });
 
   it('replaces an entry for the same collection, and keeps the list in order', () => {
-    let m: Manifest = { version: 1, collections: [] };
+    let m: Manifest = { version: 2, collections: [] };
     m = upsertEntry(m, entry({ address: w('b'), name: 'B' }));
     m = upsertEntry(m, entry({ address: w('a'), name: 'A' }));
     m = upsertEntry(m, entry({ address: w('B').toUpperCase().replace('0X', '0x'), name: 'B again' }));
@@ -216,7 +225,40 @@ describe('the manifest', () => {
   });
 
   it('reads a missing manifest as empty', async () => {
-    expect(await readManifest(join(dir, 'none.json'))).toEqual({ version: 1, collections: [] });
+    expect(await readManifest(join(dir, 'none.json'))).toEqual({ version: 2, collections: [] });
+  });
+
+  it('a manifest of another version is unreadable', () => {
+    expect(() => parseManifest('{"version":1,"collections":[]}')).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    expect(() => parseManifest('not json')).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+  });
+
+  it('a manifest whose file is not its own name is unreadable', () => {
+    const sha = 'a'.repeat(64);
+    const good = (more: object = {}, trail: object | null = null) => JSON.stringify({
+      version: 2, collections: [{
+        chainId: 1, address: w('c011'), name: 'T', startBlock: 1, throughBlock: 2, throughTime: 3,
+        transfers: { file: storedFile(1, w('c011'), 'transfers'), rows: 1, bytes: 1, sha256: sha }, trail, ...more,
+      }],
+    });
+    expect(parseManifest(good())).toMatchObject({ version: 2 });
+    expect(() => parseManifest(good({ transfers: { file: '../../etc/x', rows: 1, bytes: 1, sha256: sha } }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    expect(() => parseManifest(good({ address: '0xABC' }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    expect(() => parseManifest(good({ chainId: 0 }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    expect(() => parseManifest(good({ transfers: { file: storedFile(1, w('c011'), 'transfers'), rows: -1, bytes: 1, sha256: sha } }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    expect(() => parseManifest(good({}, { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 1, sha256: 'xyz' }))).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+  });
+
+  it('keeps the revision a manifest was fetched at, and refuses one that is not a commit sha', async () => {
+    const rev = 'c0ffee'.padEnd(40, '0');
+    expect(parseManifest(`{"version":2,"revision":"${rev}","collections":[]}`)).toEqual({ version: 2, revision: rev, collections: [] });
+    const path = join(dir, 'revised.json');
+    await writeManifest(path, { version: 2, revision: rev, collections: [] });
+    expect(await readManifest(path)).toEqual({ version: 2, revision: rev, collections: [] });
+    // The revision goes into download URLs, so a branch name or a path is no revision.
+    for (const bad of ['', 'main', 'abc123', '../x', rev.toUpperCase(), `${rev}0`]) {
+      expect(() => parseManifest(`{"version":2,"revision":"${bad}","collections":[]}`)).toThrow(expect.objectContaining({ kind: 'unreadable' }));
+    }
   });
 
   it('names files by chain and lowercase address', () => {
@@ -224,5 +266,83 @@ describe('the manifest', () => {
     expect(storedFile(1, '0xabc', 'trail')).toBe('1-0xabc.trail.csv.zst');
     // The money trail sits beside the manifest, never named by it.
     expect(trailPath('/app/data/stored', { chainId: 1, address: '0xABC' } as StoredEntry)).toBe('/app/data/stored/1-0xabc.trail.csv.zst');
+  });
+});
+
+describe('mergeManifest', () => {
+  const A = entry({ address: w('a1'), name: 'A' });
+  const B = entry({ address: w('b2'), name: 'B', throughBlock: 100 });
+  const B2 = entry({ address: w('b2'), name: 'B', throughBlock: 200 });
+
+  it('keeps the collections it was not given', () => {
+    const merged = mergeManifest({ version: 2, revision: 'a'.repeat(40), collections: [B, A] }, [B2]);
+    expect(merged).toEqual({ version: 2, collections: [A, B2] });
+    expect('revision' in merged).toBe(false);
+    expect(mergeManifest(null, [A])).toEqual({ version: 2, collections: [A] });
+  });
+
+  it('sorts by chain, then address', () => {
+    const other = entry({ chainId: 137, address: w('01') });
+    expect(mergeManifest({ version: 2, collections: [other, B] }, [A]).collections.map((e) => e.address)).toEqual([A.address, B.address, other.address]);
+  });
+});
+
+describe('datasetCard', () => {
+  const m: Manifest = {
+    version: 2,
+    collections: [
+      entry({ address: w('a1'), name: 'Alpha | Club', throughBlock: 123456, throughTime: Date.UTC(2026, 9, 1), transfers: { file: 'x', rows: 5, bytes: 2_097_152, sha256: '' },
+        trail: { rows: 9, wallets: 2, checked: 2, of: 3, bytes: 1_048_576, sha256: '' } }),
+      entry({ address: w('b2'), name: w('b2') }),
+    ],
+  };
+
+  it('lists every collection and the exact columns, and states the licence', () => {
+    const card = datasetCard(m);
+    expect(card.startsWith('---\n')).toBe(true);
+    expect(card).toContain('license: cc-by-4.0');
+    expect(card).toContain('pretty_name: washtrace data');
+    expect(card).toContain('tags: [ethereum, nft, wash-trading]');
+    expect(card).toContain('Alpha \\| Club');
+    expect(card).toContain(w('a1'));
+    expect(card).toContain(w('b2'));
+    expect(card).toContain('123456');
+    expect(card).toContain('2026-10-01');
+    expect(card).toContain('2.1 MB');
+    expect(card).toContain('1.0 MB');
+    expect(card).toContain('tx_hash,log_index,block_number,block_time,token_id,from_address,to_address,marketplace,price_wei,currency');
+    expect(card).toContain('tx_hash,kind,from_address,to_address,value_wei,token,block_number,block_time');
+    expect(card).toContain('#checked');
+    expect(card).toContain('#flows');
+    expect(card).toContain("compression='zstd'");
+    expect(card).toContain('made for washtrace, an NFT wash-trading detector');
+    expect(card).not.toContain('github.com');
+  });
+
+  it('says sizes as the console does, in decimal units', () => {
+    const big = { ...m, collections: [entry({ address: w('c3'), transfers: { file: 'x', rows: 1, bytes: 3_400_000_000, sha256: '' }, trail: null })] };
+    const card = datasetCard(big);
+    expect(card).toContain(`| ${formatBytes(3_400_000_000)} | none |`);
+    expect(card).toContain('3.4 GB');
+  });
+
+  it('describes #checked by what was read, and reads big numbers as text', () => {
+    const card = datasetCard(m);
+    expect(card).toContain('wallets whose payments were read to the end of\ntheir history when checked');
+    expect(card).not.toContain('included in');
+    expect(card).toContain("compression='zstd', dtype=str");
+    expect(card).toContain('`dtype=str` keeps `price_wei`, `value_wei` and `token_id` at full precision');
+  });
+
+  it('says only chain data is included', () => {
+    expect(datasetCard(m)).toMatch(/only data that can be read from the chain/i);
+  });
+});
+
+describe('parseTarget', () => {
+  it('reads <chainId>/<address>, lowercased, and nothing else', () => {
+    expect(parseTarget(`1/0x${'AB'.repeat(20)}`)).toEqual({ chainId: 1, address: `0x${'ab'.repeat(20)}` });
+    expect(parseTarget('1/0x12')).toBeNull();
+    expect(parseTarget(undefined)).toBeNull();
   });
 });

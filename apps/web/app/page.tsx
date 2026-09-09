@@ -9,10 +9,10 @@ import { Refresh } from '@/components/refresh';
 import { CollectionTabs, type Tab } from '@/components/tabs';
 import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
 import { ConfigError } from '@/lib/config';
-import { short } from '@/lib/format';
+import { short, storedSizes } from '@/lib/format';
 import { tabCounts, waiting } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
-import { store } from '@/lib/store';
+import { store, storedManifest } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 export const metadata: Metadata = { title: 'Collections' };
@@ -49,6 +49,8 @@ export default async function Collections({ searchParams }: { searchParams: Prom
       </>
     );
   }
+  // What the worker last fetched from the Hub; null until it has, which the list says.
+  const stored = storedSizes(await storedManifest());
   const counts = tabCounts(rows, rpcChains);
   const shown = tab === 'all' ? rows : rows.filter((c) => (c.pausedAt !== null) === (tab === 'paused'));
   const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
@@ -68,10 +70,10 @@ export default async function Collections({ searchParams }: { searchParams: Prom
           <span aria-hidden className="text-muted-foreground group-open:rotate-45 transition-transform">+</span> Watch a collection
         </summary>
         <div className="mt-2 space-y-5 rounded-lg border bg-card p-4">
-          <Suggested watched={rows.map((c) => `${c.chainId}/${c.address}`)} />
+          <Suggested watched={rows.map((c) => `${c.chainId}/${c.address}`)} stored={stored} />
           <div>
             <p className="mb-2 text-xs text-muted-foreground">Or any collection, by its contract address.</p>
-            <AddCollection />
+            <AddCollection stored={stored} />
           </div>
         </div>
       </WatchPanel>
