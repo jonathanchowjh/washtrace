@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
-import { Etherscan } from './etherscan.js';
+import { Etherscan, WALLET_MS } from './etherscan.js';
 import { ZERO } from './graph.js';
 import { HUB, download, fetchManifest, hubUrl, partPath } from './hub.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
@@ -1003,7 +1003,7 @@ export class Worker {
         if (Date.now() > deadline) return `${done} wallets read, ${failed} failed`;
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
-          const { flows, truncated } = await etherscan.flows(chainId, wallet);
+          const { flows, truncated } = await etherscan.flows(chainId, wallet, WALLET_MS);
           const follow = followHops > 0 ? { hops: followHops, fanout: FOLLOW_FANOUT, exclude: [...contractsFor(chainId), ZERO] } : undefined;
           await this.store.fund(chainId, wallet, flows, truncated, follow);
           done += 1;

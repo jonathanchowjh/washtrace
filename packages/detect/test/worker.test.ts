@@ -7,7 +7,7 @@ import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTr
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
 import { workerConfig } from '../src/env.js';
-import { ETHERSCAN_V2, Etherscan } from '../src/etherscan.js';
+import { ETHERSCAN_V2, Etherscan, WALLET_MS } from '../src/etherscan.js';
 import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPath, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
 import { hubUrl, partPath } from '../src/hub.js';
 import type { CollectionRow, StaleRow } from '../src/store.js';
@@ -1085,6 +1085,19 @@ describe('Worker.fund', () => {
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     await w.fund();
     expect(asked).toEqual([1]);
+  });
+
+  it('gives each wallet read a budget, so one busy wallet cannot hold the pass past its stuck ceiling', async () => {
+    const budgets: (number | undefined)[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1 })],
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['0xa'] }] }),
+      fund: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, storedRepo: 'u/d', sources: {} }), '');
+    (w as any).etherscanClient = () => ({ flows: async (_c: number, _w: string, budgetMs?: number) => { budgets.push(budgetMs); return { flows: [], truncated: false }; } });
+    await w.fund();
+    expect(budgets).toEqual([WALLET_MS]);
   });
 });
 

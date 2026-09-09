@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { Etherscan } from '../src/etherscan.js';
+import { describe, expect, it, vi } from 'vitest';
+import { Etherscan, REQUEST_TIMEOUT_MS, WALLET_MS } from '../src/etherscan.js';
+import { BUDGET_MS, STUCK_MS } from '../src/worker.js';
 
 function row(i: number, more: Record<string, string> = {}) {
   return { hash: `0xH${i}`, from: '0xA', to: '0xB', value: '5', blockNumber: String(i), timeStamp: String(i), isError: '0', ...more };
@@ -95,5 +96,23 @@ describe('Etherscan', () => {
     await expect(refused.ping(1)).rejects.not.toThrow(/KEY/);
     const jsonRpcError = fake(() => ({ jsonrpc: '2.0', id: 83, error: { code: -32000, message: 'chain not supported' } })).e;
     await expect(jsonRpcError.ping(999)).rejects.toThrow(/chain not supported/);
+  });
+
+  it('gives up a wallet whose pages run past its deadline, before asking for the next page', async () => {
+    let now = 0;
+    const { e, urls } = fake(() => { now += 4 * 60_000; return { status: '1', message: 'OK', result: Array.from({ length: 1_000 }, (_, i) => row(i)) }; });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(e.flows(1, '0xa', WALLET_MS)).rejects.toThrow(/took over 6 minutes/);
+      expect(urls).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('waits two minutes for a page, and reading one wallet ends inside the fund pass stuck ceiling', () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(120_000);
+    // The pass checks its budget between wallets; the last wallet's last page can start just before its deadline.
+    expect(BUDGET_MS + WALLET_MS + REQUEST_TIMEOUT_MS).toBeLessThan(STUCK_MS.fund);
   });
 });

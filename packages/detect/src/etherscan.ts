@@ -8,6 +8,10 @@ const PAGES = 10;
 const RETRIES = 4;
 /** A Test's one try waits this long, so it answers inside the 20 seconds the console polls for. */
 const PING_TIMEOUT_MS = 6_000;
+/** One page waits this long. A busy wallet's pages can take over a minute to come back, and 30 seconds failed them every time. */
+export const REQUEST_TIMEOUT_MS = 120_000;
+/** One wallet's reads stop asking for pages after this long, so a funding pass ends inside its stuck ceiling; it is tried again later. */
+export const WALLET_MS = 6 * 60_000;
 
 interface Row {
   hash: string;
@@ -45,8 +49,13 @@ export class Etherscan {
     private readonly base = ETHERSCAN_V2,
   ) {}
 
-  /** Every flow in or out of `wallet`, and whether any list was longer than Etherscan pages through. */
-  async flows(chainId: number, wallet: string): Promise<{ flows: Flow[]; truncated: boolean }> {
+  /**
+   * Every flow in or out of `wallet`, and whether any list was longer than
+   * Etherscan pages through. Past `budgetMs` no further page is asked for and
+   * the read fails, rather than holding the funding pass past its ceiling.
+   */
+  async flows(chainId: number, wallet: string, budgetMs = Infinity): Promise<{ flows: Flow[]; truncated: boolean }> {
+    const deadline = Date.now() + budgetMs;
     const lists: [FlowKind, Record<string, string>][] = [
       ['native', { action: 'txlist' }],
       ['internal', { action: 'txlistinternal' }],
@@ -57,6 +66,7 @@ export class Etherscan {
     let truncated = false;
     for (const [kind, params] of lists) {
       for (let page = 1; page <= PAGES; page++) {
+        if (Date.now() > deadline) throw new Error(`Etherscan took over ${Math.round(budgetMs / 60_000)} minutes to page through this wallet`);
         const rows = await this.call(chainId, { module: 'account', address: wallet, page: String(page), offset: String(PAGE), sort: 'asc', ...params });
         for (const r of rows) {
           if (r.isError === '1' || r.value === '0' || !r.to) continue;
@@ -130,7 +140,7 @@ export class Etherscan {
   }
 
   /** The network seam; tests override it on the instance. */
-  fetch(url: URL, timeoutMs = 30_000): Promise<Response> {
+  fetch(url: URL, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
     return fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   }
 
