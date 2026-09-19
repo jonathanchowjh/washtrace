@@ -6,16 +6,20 @@ traded them. It flags wash trades by three graph methods and says why each one
 was flagged. It runs as two services over one Postgres: a polling **worker**
 and a JSON **API** with a console.
 
-washtrace is the 2023 paper *Detecting and quantifying wash trading of
-non-fungible tokens* (Chow, SMU CS470) rebuilt on the systems that exist in
-2026. The three methods are the paper's. The data sources, the marketplaces and
-three corrections are new: see [From the paper to now](#from-the-paper-to-now).
+washtrace is the paper [*Detecting and quantifying wash trading of
+non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
+(Chow, 2023) rebuilt on the systems that exist in 2026. The three methods are
+the paper's. The data sources, the marketplaces and three corrections are new:
+see [From the paper to now](#from-the-paper-to-now).
 
 - **Status:** v0.1.0. Tested against Postgres 17 and anvil 1.5.1; verified on
   Ethereum mainnet against the paper's own example sale.
+- **Paper:** [PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf),
+  7 pages. What it builds on is in [The paper and its sources](#the-paper-and-its-sources).
 
 ## Contents
 
+- [The paper and its sources](#the-paper-and-its-sources)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
@@ -28,6 +32,34 @@ three corrections are new: see [From the paper to now](#from-the-paper-to-now).
 
 How it is built and why, and how to work on it, is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## The paper and its sources
+
+[*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
+(Chow, 2023) starts from an observation: the top NFT collections by market cap
+show far less wash trading than the rest, which points to wash trades hidden
+from the usual detector. That detector looks for strongly connected components
+in a token's own transfers, and a wash trader beats it by paying through
+wallets that never touch the token. The paper adds the graph of money between
+wallets to the token's transfers, which gives the three methods washtrace runs.
+
+It builds on:
+
+| Work | What washtrace takes from it |
+|---|---|
+| Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM | SCC detection on each token's transfer graph, flagging a component by its cycle count: the basis of SCC A. |
+| Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543), arXiv:2305.01543 | SCC detection over sales as well as transfers, so a sale fills an edge the transfers miss. |
+| hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune | Five filters, one of them buyer and seller first funded by the same wallet: the shared funder that SCC AC generalises. |
+| Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001), arXiv:2102.07001 | SCC detection over the user transaction graph to find colluding traders, here applied to money between NFT traders. |
+| Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451), IEEE TNNLS 27(11) | Wash trades as cycles in a directed graph of trades. Its volume matching does not carry over: NFTs are not fungible. |
+
+Further reading:
+
+- [ERC-721](https://eips.ethereum.org/EIPS/eip-721), the token standard
+  washtrace reads.
+- [Seaport](https://github.com/ProjectOpenSea/seaport), the marketplace
+  protocol whose sales washtrace prices.
+- [Etherscan API V2](https://docs.etherscan.io/), the source of who paid whom.
 
 ## Architecture
 
