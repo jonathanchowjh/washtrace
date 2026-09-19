@@ -24,11 +24,13 @@ see [From the paper to now](#from-the-paper-to-now).
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
 - [Configuration](#configuration)
+- [Deploying](#deploying)
 - [Stored data](#stored-data)
 - [API](#api)
 - [Pages](#pages)
 - [From the paper to now](#from-the-paper-to-now)
 - [Known limits](#known-limits)
+- [Citing](#citing)
 
 How it is built and why, and how to work on it, is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -171,12 +173,38 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. |
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
 | `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. Overrides the console's `stored.repo` setting. |
+| `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
 | `PORT` | The api's listen port. `8080` in the image. |
 | `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
 
-**Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
-are stateless. Worker replicas share each job through an advisory lock, so a
-second worker gives failover, not double reads.
+## Deploying
+
+The [Dockerfile](Dockerfile) builds two images, and
+[docker-compose.yml](docker-compose.yml) runs them over Postgres 17:
+
+```sh
+docker build --target worker -t washtrace-worker .
+docker build --target api    -t washtrace-api .
+```
+
+- **Schema.** Both services migrate the `washtrace` schema on boot, so there
+  is no separate migration step. Point `WASHTRACE_STORE_URL` at any Postgres
+  you run. The Compose file's own database and password are for a single
+  host, not for production.
+- **Health.** The worker answers `GET :8081/health` and the api
+  `GET /api/health`, and both images declare a `HEALTHCHECK`. Only the api
+  needs a public port.
+- **Auth.** On a public host, set `WASHTRACE_USERNAME` and
+  `WASHTRACE_PASSWORD`. Without them the console is open to anyone, though
+  its settings are read only.
+- **Stored data.** Give the worker a writable volume at
+  `WASHTRACE_STORED_DIR` and mount the same volume read only into the api.
+- **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds to
+  finish, then exits. Postgres rolls back a pass that did not finish and frees
+  its lock, so `docker stop`'s 10-second grace is enough.
+- **Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
+  are stateless. Worker replicas share each job through an advisory lock, so a
+  second worker gives failover, not double reads.
 
 ## Stored data
 
@@ -190,15 +218,15 @@ watch it, such as `stored data: 12.3 MB transfers + 3.4 GB money trail`. The
 transfers come first; the money trail follows and feeds Money loops back and
 Linked wallets without an Etherscan key.
 
+> **Not yet published.** The default dataset is not public yet. Until it is,
+> the Hub answers 401, the worker takes that as no dataset, and every
+> collection is read from the chain.
+
 - **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
   repo or the image. Under Compose it is the named volume `stored`, written by
   the worker and mounted read only into the api. Under Compose,
   `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
   the worker and the api look in different places.
-- **Upgrading.** Compose used to bind-mount `./data/stored`; it is now the named
-  volume `stored`, and old local files there are no longer read by Compose. The
-  worker downloads what it needs again; copy files into the volume only if you
-  cut them yourself.
 - **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
   setting (the environment wins). The worker fetches the dataset's manifest about
   hourly, and at once when a collection is newly watched, and keeps the last
@@ -318,3 +346,16 @@ Three corrections, each with a test:
   four calls per second, so a collection with 30,000 wallets needs about eight
   hours. Until then the console states AU and AC as floors, along with the
   share of wallets read so far.
+
+## Citing
+
+washtrace implements the methods of (Chow, 2023):
+
+```bibtex
+@misc{chow2023washtrading,
+  author = {Chow, Jonathan},
+  title  = {Detecting and quantifying wash trading of non-fungible tokens},
+  year   = {2023},
+  url    = {https://github.com/jonathanchowjh/opensea-fraud-detector/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf}
+}
+```
