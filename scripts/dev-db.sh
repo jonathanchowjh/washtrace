@@ -6,7 +6,7 @@
 #   ./scripts/dev-db.sh down    # stop and remove
 #   ./scripts/dev-db.sh psql    # open psql inside the container
 #
-# A port of its own, so it runs beside pg-ops' dev database on 55432.
+# Port 55433 by default, so it runs beside another Postgres on 5432.
 set -euo pipefail
 
 NAME="washtrace-dev"

@@ -128,8 +128,7 @@ read is 404 from the API, never `washTrade: false`.
 
 ### Two services, one store
 
-pg-ops runs its scheduler inside the Next server. washtrace does not: the
-worker is its own process ([apps/worker](apps/worker)), and the api never
+The worker is its own process ([apps/worker](apps/worker)), and the api never
 calls a chain. They share nothing but Postgres, so a slow backfill cannot slow
 a page, and either can be restarted, scaled or redeployed alone. Each pass
 takes its job's advisory lock without waiting, so N workers do one worker's

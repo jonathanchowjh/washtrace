@@ -11,14 +11,10 @@ coverage/
 .next/
 next-env.d.ts
 .playwright-mcp/
-# The 2023 paper, its drafts and the reference library are kept locally and
-# not published: several of the references are other authors' PDFs.
+# Local working notes and the reference library: several of the references
+# are other authors' PDFs. The paper itself is published in paper/.
 docs/
-# The CS470 coursework by name, so it stays out even if docs/ is ever tracked.
-docs/CS470/
-**/CS470/
 .remember/
-# Plans and reports from agent sessions: working notes, not the product.
 .superpowers/
 # Stored data is downloaded from Hugging Face, or cut locally with
 # `npm run stored`: never committed. A .part is a file being written.

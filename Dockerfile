@@ -4,7 +4,7 @@
 # docker-compose.yml builds both.
 
 # ---- build ----------------------------------------------------------------
-# One install of the whole context, as pg-ops does: copying a workspace's
+# One install of the whole context: copying a workspace's
 # node_modules between stages breaks the day npm hoists a package elsewhere.
 FROM node:22-alpine AS build
 WORKDIR /repo
