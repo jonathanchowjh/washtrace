@@ -57,8 +57,9 @@ export const BUDGET_MS = 45_000;
  * A pass still running after this long is stuck, however fresh its heartbeat:
  * the keep-alive beats while a step goes on, whether or not the step moves.
  * Analyze sits above the thread's own ceiling (ANALYZE_TIMEOUT_MS), so a
- * stopped analysis is said as its failure first. Ingest can load stored data
- * or a money trail, which takes minutes; a funding pass keeps to its budget.
+ * stopped analysis is said as its failure first. Ingest can load stored data,
+ * which takes minutes; a money trail imports outside it (see
+ * startTrailImport); a funding pass keeps to its budget.
  */
 export const STUCK_MS: Readonly<Record<Job, number>> = { ingest: 30 * 60_000, fund: 10 * 60_000, analyze: ANALYZE_TIMEOUT_MS + 10 * 60_000 };
 
@@ -135,6 +136,7 @@ export function needsTrail(c: CollectionRow, e: StoredEntry | null, fileSha: str
 export const TRAIL_NOTES = {
   mismatch: 'Money trail on disk does not match the stored data, so it was not loaded.',
   unreadable: 'Money trail on disk could not be read, so it was not loaded.',
+  failed: 'The money trail could not be loaded. Tried again later.',
 } as const;
 
 /**
@@ -216,6 +218,16 @@ const CHECKS_LOCK = 4;
 /** The downloads' advisory lock key: one download at a time across every replica, so two never write the same part file. */
 const DOWNLOAD_JOB = 5;
 
+/** The trail imports' advisory lock key: one import at a time across every replica, so two never load the same trail at once. */
+const TRAIL_JOB = 6;
+
+/**
+ * A trail import that committed no batch for this long is given up, and
+ * fails. A batch is seconds; this is long enough for a whole file's sha256
+ * to be checked before the first. Looked at every STALL_CHECK_MS.
+ */
+const TRAIL_STALL_MS = 15 * 60_000;
+
 /**
  * How often the Hub is asked for its manifest. A publish is rare, and a
  * newly watched collection asks at once (see askHub).
@@ -237,14 +249,18 @@ const STALL_CHECK_MS = 10_000;
 const LOCK_CHECK_MS = 60_000;
 
 /**
- * Why a download was stopped: its collection paused or deleted, or the
- * worker stopping; transfers that go first; a stall; or the connection
- * holding its lock lost. Only the last two are failures.
+ * Why a download or a trail import was stopped: its collection paused or
+ * deleted, its trail cut again, or the worker stopping; transfers that go
+ * first; a stall; or the connection holding its lock lost. Only the last two
+ * are failures.
  */
 type Halt = 'stopped' | 'preempted' | 'stalled' | 'lost';
 
 /** A download to start: whose, and which of its files. */
 interface Wanted { c: CollectionRow; entry: StoredEntry; file: 'transfers' | 'trail' }
+
+/** A trail import to start: whose, the file on disk, and the sha256 and stat it was found with. */
+interface TrailDue { c: CollectionRow; entry: StoredEntry; path: string; file: { key: string; sha: string } }
 
 /**
  * A check asked for longer ago than this is finished as expired, not run.
@@ -343,6 +359,10 @@ export class Worker {
   private downloading: { id: number; file: 'transfers' | 'trail'; abort: AbortController; done: Promise<void> } | null = null;
   /** Downloads that failed, by collection, timed as the store times them: kept here too, as restoreFailed is, since the write that records the back-off can fail with the download (a full disk). */
   private readonly downloadsFailed = new Map<number, { failures: number; retryAt: number }>();
+  /** The trail import running in this process, outside every pass (see startTrailImport). One at a time. */
+  private importing: { id: number; sha: string; abort: AbortController; done: Promise<void> } | null = null;
+  /** Trail imports the store failed, by collection, timed as a failed load is. In memory only: the note says it failed, and a restart tries again. */
+  private readonly trailsBackoff = new Map<number, { failures: number; retryAt: number }>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -367,11 +387,16 @@ export class Worker {
     }
   }
 
-  /** Stops the timers, the listener and any download (its part is kept, for the next worker to resume), so nothing of the worker's keeps the process alive. */
+  /**
+   * Stops the timers, the listener, any download (its part is kept, for the
+   * next worker to resume) and any trail import (loading it again is safe),
+   * so nothing of the worker's keeps the process alive.
+   */
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
     this.downloading?.abort.abort('stopped' satisfies Halt);
+    this.importing?.abort.abort('stopped' satisfies Halt);
     this.listening = false;
     if (this.relisten !== null) clearTimeout(this.relisten);
     this.relisten = null;
@@ -388,14 +413,16 @@ export class Worker {
   }
 
   /**
-   * Resolves once no pass, check run or download is in flight, or after `ms`.
-   * For shutdown: a pass stopped mid-span would roll its transaction back and
-   * redo the span, which is safe but wasted, so it is given the time to
-   * commit; a stopped download, the time to let its lock go.
+   * Resolves once no pass, check run, download or trail import is in
+   * flight, or after `ms`. For shutdown: a pass stopped mid-span would roll
+   * its transaction back and redo the span, which is safe but wasted, so it
+   * is given the time to commit; a stopped download or import, the time to
+   * clear its progress and let its lock go.
    */
   async drain(ms = 30_000): Promise<void> {
     const until = Date.now() + ms;
-    while ((this.running.size > 0 || this.checking !== null || this.downloading !== null) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    const busy = () => this.running.size > 0 || this.checking !== null || this.downloading !== null || this.importing !== null;
+    while (busy() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   }
 
   /** One pass of `job`, unless one is in flight here or in another replica. Never rejects: a timer has no caller. */
@@ -440,7 +467,8 @@ export class Worker {
    * collection it reaches further for: it needs no RPC, and is the head
    * start the chain is then read on from. Stored data not on disk yet is
    * downloaded in the background, and a collection waiting for its
-   * transfers is not read meanwhile (see downloads).
+   * transfers is not read meanwhile (see downloads). A money trail on disk
+   * imports in the background too, and holds nothing (see trails).
    */
   async ingest(): Promise<string> {
     const { rpc, storedRepo } = this.resolved();
@@ -450,8 +478,8 @@ export class Worker {
     const restored = manifest === null ? 0 : await this.restore(collections, manifest);
     // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
     if (restored > 0) collections = await this.store.collections();
-    // After every load of stored data, under the same lock, so a trail never loads beside one.
-    const trails = manifest === null ? 0 : await this.trails(collections, manifest);
+    // After every load of stored data, so a trail waits for its collection's transfers.
+    if (manifest !== null) await this.trails(collections, manifest);
     // After the loads, so a file just loaded is not downloaded.
     const held = manifest === null ? new Set<number>() : await this.downloads(collections, manifest, storedRepo);
     // A chain with no RPC has nothing to read, so its collections are settled here and hold no slice of the budget.
@@ -499,7 +527,7 @@ export class Worker {
     // Slices come from what keep-up left, and no turn runs past the pass.
     const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;
     for (const { c, sliceMs } of rest) await serve(c, Math.min(Date.now() + sliceMs, passEnd));
-    const loaded = `${restored > 0 ? `stored data loaded for ${restored} collections; ` : ''}${trails > 0 ? `money trails loaded for ${trails}; ` : ''}`;
+    const loaded = restored > 0 ? `stored data loaded for ${restored} collections; ` : '';
     return `${loaded}${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
   }
 
@@ -622,15 +650,28 @@ export class Worker {
   }
 
   /**
-   * Load the money trail on disk of every collection that needs it (see
-   * needsTrail), one at a time, and say how many loaded. A file that is not
-   * the manifest's trail, or cannot be read, loads nothing and says so on the
-   * collection, and is not tried again until it changes. A store that failed
-   * (a deadlock, a lost connection) says nothing there: the next pass tries
-   * again, and loading again is safe (see Store.importTrail).
+   * Start the import of the next money trail on disk that is due, if none
+   * runs in this process, and stop the one running once it is no longer
+   * wanted. A trail is due when needsTrail says so, its collection's
+   * transfers are not still to load (needsRestore, keyed as restore keys
+   * it), and no failure of its own is waiting out its back-off. A file that
+   * is not the manifest's trail, or cannot be read, imports nothing and says
+   * so on the collection, and is not tried again until it changes. The pass
+   * never waits for an import: one of millions of flows takes an hour (see
+   * startTrailImport). Meanwhile its collection is read and analysed as any.
    */
-  private async trails(collections: readonly CollectionRow[], manifest: Manifest): Promise<number> {
-    let loaded = 0;
+  private async trails(collections: readonly CollectionRow[], manifest: Manifest): Promise<void> {
+    const now = Date.now();
+    const running = this.importing;
+    if (running !== null) {
+      const c = collections.find((x) => x.id === running.id);
+      const entry = c === undefined ? null : entryFor(manifest, c.chainId, c.address);
+      // Paused or deleted, cut again, or its transfers to load again: stopped, not failed. Loading it again later is safe.
+      if (c === undefined || c.pausedAt !== null || entry?.trail?.sha256 !== running.sha || needsRestore(c, entry, await this.noteKey(c, entry), now)) {
+        running.abort.abort('stopped' satisfies Halt);
+      }
+    }
+    let next: TrailDue | null = null;
     for (const c of collections) {
       const entry = entryFor(manifest, c.chainId, c.address);
       if (c.pausedAt !== null) continue;
@@ -659,20 +700,140 @@ export class Worker {
         continue;
       }
       if (needsTrail(c, entry, file?.sha ?? null) !== 'import' || this.trailsFailed.get(path) === file!.key) continue;
-      await this.beat('ingest', `Loading the money trail for ${c.name ?? entry.name}`, c.id);
-      try {
-        const sha = file!.sha;
-        const { wallets, flows } = await this.store.importTrail(c.id, c.chainId, sha, () => this.storedTrail(path, sha));
-        console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
-        loaded += 1;
-      } catch (err) {
-        console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, this.scrubbed(err));
-        if (!(err instanceof StoredDataError)) continue;
-        this.trailsFailed.set(path, file!.key);
-        await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
-      }
+      // One at a time; the first due goes.
+      if (this.importing !== null || next !== null) continue;
+      if (now < (this.trailsBackoff.get(c.id)?.retryAt ?? 0)) continue;
+      if (needsRestore(c, entry, await this.noteKey(c, entry), now)) continue;
+      next = { c, entry, path, file: file! };
     }
-    return loaded;
+    if (next !== null) this.startTrailImport(next);
+  }
+
+  /**
+   * Run one trail import in the background, outside every pass: an import of
+   * an hour holds no job lock and writes no pass or heartbeat, so it is never
+   * taken for a stuck ingest. It holds the trail lock for its whole length
+   * instead, so two replicas never import at once: one that finds it held
+   * starts nothing, the other replica is importing. With the download's,
+   * that is at most two of the pool's ten clients (Store.connect) held for
+   * hours; the passes and the checks share the rest. Never rejects: it has
+   * no caller.
+   */
+  private startTrailImport(due: TrailDue): void {
+    const abort = new AbortController();
+    const done = this.store.locked(TRAIL_JOB, false, (client) => this.importTrail(client, due, abort))
+      .then(() => {}, (err) => console.error('[washtrace] collection %d: money trail not loaded: %s', due.c.id, this.scrubbed(err)))
+      .finally(() => { if (this.importing?.abort === abort) this.importing = null; });
+    this.importing = { id: due.c.id, sha: due.file.sha, abort, done };
+  }
+
+  /**
+   * One trail import, said on the collection as it goes: at most once per
+   * 1%, capped at 99% (the manifest's count of rows is a guide), fail-soft,
+   * and a write that finds the collection paused or deleted stops it, as the
+   * next pass would. The row is read again first, under the lock: another
+   * replica, or an earlier pass, may have imported it since the pass read
+   * it. No batch committed for TRAIL_STALL_MS stops it too, as a failure. A
+   * bad file is noted on the file, as before; any other failure says it
+   * failed and waits its back-off. One stopped is no failure: only its
+   * progress goes. One that goes through clears its progress and its note in
+   * its last statement (Store.importTrail).
+   *
+   * `client` holds the trail lock, as fetchStored's holds the download's:
+   * lost, or found dead by a look once a minute, it fails the import, since
+   * the lock went with it.
+   */
+  private async importTrail(client: pg.PoolClient, { c, entry, path, file }: TrailDue, abort: AbortController): Promise<void> {
+    const row = await this.store.collection(c.chainId, c.address);
+    if (row === null || row.pausedAt !== null || row.trailImportedSha === file.sha) return;
+    // A retry: "could not be loaded" must not show beside the progress. A note about the file is not this one's to clear.
+    if (row.trailNote === TRAIL_NOTES.failed) await this.noteTrail(c.id, null);
+    let lost: unknown = null;
+    const lose = (err: unknown) => {
+      lost ??= err;
+      abort.abort('lost' satisfies Halt);
+    };
+    client.on('error', lose);
+    const alive = setInterval(() => { client.query('SELECT 1').catch(lose); }, LOCK_CHECK_MS);
+    alive.unref?.();
+    // In order, so a late write never overwrites the clear at the end.
+    let writes = Promise.resolve();
+    let writeFailed = false;
+    const write = (share: number) => {
+      writes = writes.then(async () => {
+        try {
+          if (!(await this.store.setTrailProgress(c.id, share))) abort.abort('stopped' satisfies Halt);
+        } catch (err) {
+          if (!writeFailed) console.warn('[washtrace] collection %d: money trail progress not written: %s', c.id, this.scrubbed(err));
+          writeFailed = true;
+        }
+      });
+    };
+    // 0 while the file's whole sha256 is checked, before the first batch.
+    let percent = 0;
+    write(0);
+    const rows = Math.max(1, entry.trail!.rows);
+    const onFlows = (flows: number) => {
+      const share = Math.min(0.99, flows / rows);
+      if (Math.floor(share * 100) <= percent) return;
+      percent = Math.floor(share * 100);
+      write(share);
+    };
+    let movedAt = Date.now();
+    const watch = setInterval(() => { if (Date.now() - movedAt >= TRAIL_STALL_MS) abort.abort('stalled' satisfies Halt); }, STALL_CHECK_MS);
+    watch.unref?.();
+    const read = () => this.storedTrail(path, file.sha);
+    // The store asks for a batch once the one before it committed: that is the import moving. Each pass ends
+    // only once the progress written so far has landed, so none lands after the last statement clears it.
+    const open = () => (async function* () {
+      try {
+        for await (const batch of read()) {
+          yield batch;
+          movedAt = Date.now();
+        }
+      } finally {
+        await writes;
+      }
+    })();
+    const logged = (what: string) => (err: unknown) => console.error('[washtrace] collection %d: %s: %s', c.id, what, this.scrubbed(err));
+    try {
+      const { wallets, flows } = await this.store.importTrail(c.id, c.chainId, file.sha, open, { onFlows, signal: abort.signal });
+      this.trailsBackoff.delete(c.id);
+      console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
+    } catch (err) {
+      await writes;
+      await this.store.setTrailProgress(c.id, null).catch(logged('money trail progress not cleared'));
+      const halt: Halt | null = abort.signal.aborted ? abort.signal.reason : null;
+      if (halt === 'stopped') return;
+      if (halt === null && err instanceof StoredDataError) {
+        // Bad stored data is keyed on the file, not timed.
+        console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, this.scrubbed(err));
+        this.trailsBackoff.delete(c.id);
+        this.trailsFailed.set(path, file.key);
+        await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
+        return;
+      }
+      const why = halt === 'stalled' ? `nothing was written for ${TRAIL_STALL_MS / 60_000} minutes`
+        : halt === 'lost' ? `the connection holding its lock was lost (${this.scrubbed(lost)})` : this.scrubbed(err);
+      console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, why);
+      const failures = (this.trailsBackoff.get(c.id)?.failures ?? 0) + 1;
+      this.trailsBackoff.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
+      await this.noteTrail(c.id, TRAIL_NOTES.failed);
+    } finally {
+      clearInterval(watch);
+      clearInterval(alive);
+      client.removeListener('error', lose);
+    }
+  }
+
+  /**
+   * Forget the progress of a trail import that was running when the last
+   * worker died: the console says it imports for ever otherwise. Only while
+   * no replica imports: it takes the trail lock, and one held means another
+   * replica is importing, and its progress is true. For start-up.
+   */
+  async clearStaleTrailProgress(): Promise<void> {
+    await this.store.locked(TRAIL_JOB, false, () => this.store.clearTrailProgress());
   }
 
   /** Say on the collection why its trail was not loaded, or with null that nothing is wrong. Fail-soft: the rest of the pass goes on. */
@@ -768,7 +929,8 @@ export class Worker {
           // Downloading in some replica (the row says so to all of them), or about to here.
           if (due || c.downloadFile === 'transfers') held.add(c.id);
           if (due) transfers ??= { c, entry, file: 'transfers' };
-        } else if (due && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256
+        } else if (due && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256 && this.importing?.id !== c.id
+          // Not over the file an import is still reading: it stops this pass (see trails), and the download starts the next.
           && await this.fetchable(manifest, trailPath(this.stored, entry), entry.trail.sha256)) {
           trail = { c, entry, file: 'trail' };
         }

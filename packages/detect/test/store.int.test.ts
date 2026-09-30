@@ -62,12 +62,12 @@ describe('Store.schemaVersion', () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(16);
-    expect(await store.schemaVersion()).toBe(16);
-    expect(await store.migrate()).toBe(16);
-    expect(await store.migrate()).toBe(16);
+    expect(await store.migrate()).toBe(17);
+    expect(await store.schemaVersion()).toBe(17);
+    expect(await store.migrate()).toBe(17);
+    expect(await store.migrate()).toBe(17);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 16 }]);
+    expect(rows).toEqual([{ version: 17 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -76,7 +76,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(16);
+      expect(await store.migrate()).toBe(17);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -93,7 +93,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(16);
+      expect(await store.migrate()).toBe(17);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -1343,6 +1343,91 @@ describe('Store', () => {
       expect(await walletRows(16)).toEqual(was);
     });
 
+    it('importTrail stops between batches when its signal aborts, and a second run completes it', async () => {
+      const clean = await before(21, w('21c1'));
+      await store.importTrail(clean, 21, 'feed', trailOf(...trail));
+      const id = await before(20, w('20c1'));
+      const was = await walletRows(20);
+      const abort = new AbortController();
+      // Stopped once the second batch's flows are in: the third is never written.
+      const onFlows = (n: number) => { if (n >= 2) abort.abort('stopped'); };
+      const err = await store.importTrail(id, 20, 'feed', trailOf(...trail), { onFlows, signal: abort.signal }).catch((e) => e);
+      expect(err).toBe('stopped');
+      expect((await flowRows(20)).map((r) => [r.from_address, r.to_address])).not.toContainEqual([m, p]);
+      expect(await walletRows(20)).toEqual(was);
+      expect(await store.collection(20, w('20c1'))).toMatchObject({ trailImportedSha: null });
+      await store.importTrail(id, 20, 'feed', trailOf(...trail), { signal: new AbortController().signal });
+      const strip = (rows: any[]) => rows.map(({ fetched: _, ...r }) => r);
+      expect(strip(await walletRows(20))).toEqual(strip(await walletRows(21)));
+      expect(await flowRows(20)).toEqual(await flowRows(21));
+      expect(await store.collection(20, w('20c1'))).toMatchObject({ trailImportedSha: 'feed' });
+    });
+
+    it('importTrail reports flows as each batch commits', async () => {
+      const id = await before(22, w('22c1'));
+      const totals: number[] = [];
+      await store.importTrail(id, 22, 'feed', trailOf(...trail), { onFlows: (n) => totals.push(n) });
+      // A running count, once a batch: the trail's first batch holds no flow, then two, then one.
+      expect(totals).toEqual([0, 2, 3]);
+    });
+
+    it('importTrail retries a statement that deadlocks', async () => {
+      const clean = await before(24, w('24c1'));
+      await store.importTrail(clean, 24, 'feed', trailOf(...trail));
+      const id = await before(23, w('23c1'));
+      const real = store.pool.query.bind(store.pool);
+      // Each kind of statement the import runs deadlocks once: the flows, the wallets, the final mark.
+      const deadlocked = new Set<string>();
+      (store.pool as any).query = (text: unknown, ...rest: unknown[]) => {
+        const kind = typeof text === 'string' ? ['INSERT INTO washtrace.flows', 'INSERT INTO washtrace.wallets', 'UPDATE washtrace.collections SET version'].find((k) => text.includes(k)) : undefined;
+        if (kind !== undefined && !deadlocked.has(kind)) {
+          deadlocked.add(kind);
+          return Promise.reject(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+        }
+        return (real as any)(text, ...rest);
+      };
+      try {
+        await store.importTrail(id, 23, 'feed', trailOf(...trail));
+      } finally {
+        delete (store.pool as any).query;
+      }
+      expect(deadlocked.size).toBe(3);
+      const strip = (rows: any[]) => rows.map(({ fetched: _, ...r }) => r);
+      expect(strip(await walletRows(23))).toEqual(strip(await walletRows(24)));
+      expect(await flowRows(23)).toEqual(await flowRows(24));
+      expect(await store.collection(23, w('23c1'))).toMatchObject({ trailImportedSha: 'feed' });
+    });
+
+    it('importTrail\'s final statement clears the collection\'s trail progress', async () => {
+      const id = await before(25, w('25c1'));
+      const other = (await store.addCollection(25, w('25c2'), null, 10)).id;
+      expect(await store.setTrailProgress(id, 0.5)).toBe(true);
+      expect(await store.setTrailProgress(other, 0.25)).toBe(true);
+      expect(await store.collection(25, w('25c1'))).toMatchObject({ trailProgress: 0.5 });
+      await store.importTrail(id, 25, 'feed', trailOf(...trail));
+      expect(await store.collection(25, w('25c1'))).toMatchObject({ trailProgress: null, trailImportedSha: 'feed' });
+      // Another collection's import is its own: its progress stays.
+      expect(await store.collection(25, w('25c2'))).toMatchObject({ trailProgress: 0.25 });
+    });
+
+    it('setTrailProgress refuses a paused row, and clearTrailProgress clears every row', async () => {
+      const live = (await store.addCollection(26, w('26c1'), null, 10)).id;
+      const paused = (await store.addCollection(26, w('26c2'), null, 10)).id;
+      expect(await store.setTrailProgress(live, 0.25)).toBe(true);
+      expect(await store.setTrailProgress(paused, 0.5)).toBe(true);
+      await store.pause(26, w('26c2'));
+      expect(await store.setTrailProgress(paused, 0.75)).toBe(false);
+      expect(await store.collection(26, w('26c2'))).toMatchObject({ trailProgress: 0.5 });
+      // Clearing always writes, paused or not.
+      expect(await store.setTrailProgress(paused, null)).toBe(false);
+      expect(await store.collection(26, w('26c2'))).toMatchObject({ trailProgress: null });
+      // Gone: nothing to write.
+      expect(await store.setTrailProgress(-1, 0.25)).toBe(false);
+      await store.clearTrailProgress();
+      expect(await store.collection(26, w('26c1'))).toMatchObject({ trailProgress: null });
+      expect((await store.collections()).filter((c) => c.trailProgress !== null)).toEqual([]);
+    });
+
     it('holds no wallet between batches, so funding is never kept waiting on it', async () => {
       const id = await before(12, w('12c1'));
       const probe = await store.pool.connect();
@@ -1425,7 +1510,8 @@ describe('Store', () => {
       beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'washtrace-trail-int-')); });
       afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
       const entry = (chainId: number, address: string, sha256: string): StoredEntry => ({
-        chainId, address, name: 'Trailed', startBlock: 5, throughBlock: 300, throughTime: 1_700_000_100_000,
+        // Through block 40: a collection read to 50 (see before) is past its transfers, and only its trail is due.
+        chainId, address, name: 'Trailed', startBlock: 5, throughBlock: 40, throughTime: 1_700_000_100_000,
         transfers: { file: `${chainId}-${address}.transfers.csv.zst`, rows: 0, bytes: 0, sha256: '' },
         trail: { rows: 3, wallets: 3, checked: 2, of: 2, bytes: 0, sha256 },
       });
@@ -1448,6 +1534,8 @@ describe('Store', () => {
         const z = (await store.addCollection(14, w('14c2'), null, 10)).id;
         expect(await store.importedFunding(id)).toBe(false);
         await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 2, collections: [e] });
+        // The import runs in the background: wait for it.
+        await (w14 as any).importing?.done;
         expect(await store.collection(14, coll)).toMatchObject({ trailImportedSha: sha256, trailNote: null });
         expect(await flowRows(14)).toHaveLength(3);
         expect(await store.importedFunding(id)).toBe(true);

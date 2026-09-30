@@ -11,6 +11,8 @@ const LOCK_NS = 0x77617368; // "wash"
 const MIGRATE_JOB = 0;
 /** Postgres's code for a row whose parent is gone. */
 const FOREIGN_KEY_VIOLATION = '23503';
+/** Postgres's code for a statement it ended to break a deadlock. */
+const DEADLOCK_DETECTED = '40P01';
 /** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
 const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
@@ -82,6 +84,8 @@ export interface CollectionRow {
   trailImportedSha: string | null;
   /** Why a money trail on disk was not loaded. It is not tried again until the file changes. */
   trailNote: string | null;
+  /** How far an import of its money trail has got, 0 to 0.99, while one runs. Null otherwise. */
+  trailProgress: number | null;
   /** Which of its stored files is downloading, while one is. Null otherwise. */
   downloadFile: 'transfers' | 'trail' | null;
   /** How far that download has got, 0 to 1. Null when none runs. */
@@ -655,24 +659,37 @@ export class Store {
    * that is merely an end of a flow does not, and is queued when something
    * follows it.
    *
-   * Only then is the trail's sha recorded and every collection on the chain
-   * queued for analysis, in one statement. A load cut off anywhere is safe
-   * to run again from the start, and ends as one clean run does. Returns
-   * how many wallets and flows the trail held.
+   * Only then is the trail's sha recorded, its progress cleared and every
+   * collection on the chain queued for analysis, in one statement. A load
+   * cut off anywhere is safe to run again from the start, and ends as one
+   * clean run does. Returns how many wallets and flows the trail held.
+   *
+   * It runs for an hour on a big trail, in the background (see
+   * Worker.startTrailImport), so `onFlows` hears the running count of flows
+   * as each batch commits, and `signal` stops it before the next batch of
+   * either pass, throwing its reason. Every statement is idempotent, so one
+   * Postgres ends to break a deadlock (funding writes the same wallets and
+   * collections) is run again in place, not the whole import.
    */
-  async importTrail(id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ checked: string[]; flows: Flow[] }>): Promise<{ wallets: number; flows: number }> {
+  async importTrail(
+    id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ checked: string[]; flows: Flow[] }>,
+    opts: { onFlows?: (flows: number) => void; signal?: AbortSignal } = {},
+  ): Promise<{ wallets: number; flows: number }> {
     let flows = 0;
     for await (const batch of open()) {
-      await insertFlows(this.pool, chainId, batch.flows).catch((err) => { throw asDataFault(err); });
+      opts.signal?.throwIfAborted();
+      await deadlockRetried(() => insertFlows(this.pool, chainId, batch.flows)).catch((err) => { throw asDataFault(err); });
       flows += batch.flows.length;
+      opts.onFlows?.(flows);
     }
     let wallets = 0;
     for await (const batch of open()) {
       // The checked addresses come first; past them are only flows, all in already.
       if (batch.checked.length === 0) break;
+      opts.signal?.throwIfAborted();
       const addresses = [...batch.checked].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
       // Funding locks a wallet and then collections, so this can still deadlock with it, rarely: Postgres ends one, and it is retried.
-      await this.pool.query(
+      await deadlockRetried(() => this.pool.query(
         `INSERT INTO washtrace.wallets (chain_id, address, transfers, status, truncated, fetched_at, depth)
          SELECT $1, a, 0, 'done', false, NULL,
                 CASE WHEN EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $3 AND (t.from_address = a OR t.to_address = a)) THEN 0 ELSE 1 END
@@ -685,18 +702,44 @@ export class Store {
            error = CASE WHEN washtrace.wallets.status <> 'done' THEN NULL ELSE washtrace.wallets.error END,
            depth = LEAST(washtrace.wallets.depth, EXCLUDED.depth)`,
         [chainId, addresses, id],
-      ).catch((err) => { throw asDataFault(err); });
+      )).catch((err) => { throw asDataFault(err); });
       wallets += addresses.length;
     }
     // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
-    await this.pool.query(
+    await deadlockRetried(() => this.pool.query(
       `UPDATE washtrace.collections SET version = version + 1,
          trail_imported_sha = CASE WHEN id = $2 THEN $3 ELSE trail_imported_sha END,
-         trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END
+         trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END,
+         trail_progress = CASE WHEN id = $2 THEN NULL ELSE trail_progress END
        WHERE id IN (SELECT id FROM washtrace.collections WHERE chain_id = $1 ORDER BY id FOR NO KEY UPDATE)`,
       [chainId, id, sha256],
-    );
+    ));
     return { wallets, flows };
+  }
+
+  /**
+   * Say how far a collection's money trail import has got, or with null that
+   * none runs. Returns whether the collection is still watched: false when it
+   * was paused or deleted, and the import stops. Progress is not written for
+   * a paused one; clearing always is.
+   */
+  async setTrailProgress(id: number, share: number | null): Promise<boolean> {
+    const { rows } = await this.pool.query<{ live: boolean }>(
+      `UPDATE washtrace.collections SET trail_progress = $2
+       WHERE id = $1 AND ($2::real IS NULL OR paused_at IS NULL)
+       RETURNING paused_at IS NULL AS live`,
+      [id, share],
+    );
+    return rows[0]?.live ?? false;
+  }
+
+  /**
+   * Forget every trail import's progress. For a worker starting, while no
+   * replica imports (see Worker.clearStaleTrailProgress): an import running
+   * when the last one died says "Importing" for ever otherwise.
+   */
+  async clearTrailProgress(): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET trail_progress = NULL WHERE trail_progress IS NOT NULL');
   }
 
   /** Say why a money trail on disk was not loaded, or with null that nothing is wrong. */
@@ -1532,7 +1575,7 @@ function toCollection(r: any): CollectionRow {
     analysisError: r.analysis_error, analysisRetryAt: r.analysis_retry === null ? null : r.analysis_retry * 1000,
     storedThroughTime: r.stored_through === null ? null : r.stored_through * 1000,
     storedThroughBlock: r.stored_through_block === null ? null : Number(r.stored_through_block),
-    trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note,
+    trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note, trailProgress: num(r.trail_progress),
     downloadFile: r.download_file, downloadProgress: num(r.download_progress), downloadNote: r.download_note,
     downloadRetryAt: r.download_retry === null ? null : r.download_retry * 1000,
     rules: r.rules ?? {},
@@ -1584,6 +1627,17 @@ async function insertFlows(c: pg.Pool | pg.PoolClient, chainId: number, flows: r
       flows.map((f) => f.valueWei), flows.map((f) => f.token), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
     ],
   );
+}
+
+/** `statement`, run again in place up to three times when Postgres ends it to break a deadlock. Only for a statement that is safe to run twice. */
+async function deadlockRetried<T>(statement: () => Promise<T>): Promise<T> {
+  for (let retries = 0; ; retries++) {
+    try {
+      return await statement();
+    } catch (err) {
+      if (retries >= 3 || (err as { code?: unknown } | null)?.code !== DEADLOCK_DETECTED) throw err;
+    }
+  }
 }
 
 /**

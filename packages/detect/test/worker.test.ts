@@ -3,7 +3,7 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, Worker, type WorkerConfig } from '../src/worker.js';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, TRAIL_NOTES, Worker, type WorkerConfig } from '../src/worker.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
 import { workerConfig } from '../src/env.js';
@@ -48,7 +48,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
     downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
   };
 }
@@ -376,27 +376,64 @@ describe('needsTrail', () => {
 
 describe('Worker.ingest loading a money trail', () => {
   const TRAILED: StoredEntry = { ...ENTRY, trail: { rows: 9, wallets: 3, checked: 1_612, of: 11_259, bytes: 157, sha256: 'feed' } };
+  /** A second collection with a trail, for what one import at a time means. */
+  const OTHER: StoredEntry = { ...TRAILED, address: '0xb2', transfers: { ...TRAILED.transfers, file: '1-0xb2.transfers.csv.zst' } };
   let dir: string;
   beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'washtrace-trail-')); });
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
-  /** A worker over a stub store that says what happened, in order, with a trail file on disk whose sha256 is `sha`. */
+  /** An import the store was asked for, held until the test lets it go or its signal aborts it. */
+  interface Held {
+    id: number; sha: string; open: () => AsyncIterable<unknown>;
+    opts: { onFlows: (flows: number) => void; signal: AbortSignal };
+    release(): void;
+  }
+
+  /**
+   * A worker over a stub store that says what happened, in order, and keeps
+   * the rows as the store would, with a trail file on disk whose sha256 is
+   * `sha`. The import runs under lock 6, which another replica holds while
+   * `lock.other`. `hold` makes each import wait for the test; `settle` waits
+   * for the one running in the background to end.
+   */
   async function setup(rows: CollectionRow[], sha: string, after: CollectionRow[] = rows) {
     await writeFile(trailPath(dir, TRAILED), 'trail');
+    await writeFile(trailPath(dir, OTHER), 'trail');
     const events: string[] = [];
     let restored = false;
+    const now = () => (restored ? after : rows);
+    const find = (id: number) => now().find((r) => r.id === id);
+    const lock = { other: false };
+    /** The connection the lock is held on, as pg's: it emits 'error' when lost, and answers a query while alive. */
+    const client = Object.assign(new EventEmitter(), { alive: true, query: async () => { if (!client.alive) throw new Error('Connection terminated unexpectedly'); return { rows: [] }; } });
     const store: any = {
-      collections: async () => { events.push('collections'); return restored ? after : rows; },
+      collections: async () => { events.push('collections'); return now().map((r) => ({ ...r })); },
+      collection: async (_chainId: number, address: string) => { const r = now().find((x) => x.address === address); return r === undefined ? null : { ...r }; },
+      locked: async (key: number, _wait: boolean, fn: (c: unknown) => Promise<unknown>) => { events.push(`lock ${key}`); return lock.other ? 'skipped' : fn(client); },
       restore: async () => { events.push('restore'); restored = true; },
       importTrail: async (id: number, chainId: number, sha256: string, open: () => AsyncIterable<unknown>) => {
         events.push(`import ${id} ${chainId} ${sha256}`);
         for await (const _ of open()) events.push('batch');
+        find(id)!.trailImportedSha = sha256;
         return { wallets: 1, flows: 1 };
       },
-      setTrailNote: async (id: number, note: string | null) => { events.push(`note ${id} ${note}`); },
+      setTrailProgress: async (id: number, share: number | null) => {
+        events.push(`progress ${id} ${share}`);
+        const r = find(id);
+        return r !== undefined && r.pausedAt === null;
+      },
+      setTrailNote: async (id: number, note: string | null) => {
+        events.push(`note ${id} ${note}`);
+        const r = find(id);
+        if (r !== undefined) r.trailNote = note;
+      },
       heartbeat: async (_job: string, doing: string | null) => { events.push(`beat ${doing}`); },
-      setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {}, served: async () => {},
+      served: async (id: number) => { events.push(`served ${id}`); },
+      setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
     };
     const w = askedHub(new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', dir));
     (w as any).manifest = async () => ({ version: 2, collections: [TRAILED] });
@@ -404,26 +441,332 @@ describe('Worker.ingest loading a money trail', () => {
     const hashed: string[] = [];
     w.fileSha = async (path: string) => { hashed.push(path); return sha; };
     (w as any).storedTrail = async function* (path: string, sha256: string) { events.push(`read ${path.slice(dir.length + 1)} ${sha256}`); yield { checked: [], flows: [] }; };
-    return { w, events, store, hashed };
+    const settle = async () => { await (w as any).importing?.done; };
+    /** From now on each import waits for the test. An abort rejects it with `onAbort(reason)`, as the store throws the signal's reason between batches. */
+    const hold = (onAbort: (reason: unknown) => unknown = (reason) => reason) => {
+      const calls: Held[] = [];
+      store.importTrail = (id: number, _chainId: number, sha256: string, open: () => AsyncIterable<unknown>, opts: Held['opts']) => new Promise((resolve, reject) => {
+        events.push(`import ${id} ${sha256}`);
+        opts.signal.addEventListener('abort', () => reject(onAbort(opts.signal.reason)));
+        calls.push({ id, sha: sha256, open, opts, release: () => { find(id)!.trailImportedSha = sha256; resolve({ wallets: 1, flows: 1 }); } });
+      });
+      /** Resolves once the store has been asked for `n` imports in all. */
+      const asked = (n: number) => vi.waitFor(() => expect(calls).toHaveLength(n));
+      return { calls, asked };
+    };
+    return { w, events, store, hashed, lock, client, settle, hold, rows };
   }
 
-  it('loads a matching trail on disk after any stored data, in the ingest pass, with no button', async () => {
+  it('loads a matching trail on disk after any stored data, in the background, with no button', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { w, events } = await setup([row({ cursorBlock: null, startBlock: null })], 'feed', [row({ cursorBlock: 900 })]);
+    const { w, events, settle } = await setup([row({ cursorBlock: null, startBlock: null })], 'feed', [row({ cursorBlock: 900 })]);
     await w.ingest();
+    await settle();
     const at = (e: string) => events.indexOf(e);
     expect(at('import 1 1 feed')).toBeGreaterThan(at('restore'));
-    expect(events).toContain('beat Loading the money trail for BAYC');
     expect(events).toContain('read 1-0xbc4c.trail.csv.zst feed');
+    // No step of the pass: the pass says nothing of it.
+    expect(events.some((e) => e.startsWith('beat Loading the money trail'))).toBe(false);
+  });
+
+  it('an ingest pass starts a trail import and returns without waiting for it', async () => {
+    const { w, events, hold, settle } = await setup([row()], 'feed');
+    const { calls, asked } = hold();
+    expect(await w.ingest()).not.toContain('money trail');
+    await asked(1);
+    expect(events).toContain('lock 6');
+    expect((w as any).importing).toMatchObject({ id: 1, sha: 'feed' });
+    // Still running when the next pass comes: not started twice.
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    calls[0]!.release();
+    await settle();
+    expect((w as any).importing).toBeNull();
+  });
+
+  it('writes no ingest heartbeat for a trail import', async () => {
+    vi.useFakeTimers();
+    const { w, events, store, hold, settle } = await setup([row()], 'feed');
+    Object.assign(store, {
+      settings: async () => new Map(), reportSources: async () => {},
+      passStarted: async (job: string) => { events.push(`pass ${job}`); },
+      passFinished: async (job: string, _ms: number, outcome: string) => { events.push(`passed ${job} ${outcome}`); },
+    });
+    const { calls, asked } = hold();
+    expect(await w.run('ingest')).toBe('ran');
+    await asked(1);
+    // The pass is over while the import runs, and nothing beats for the import meanwhile.
+    expect(events).toContain('passed ingest ok');
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(events.filter((e) => e.startsWith('beat') || e.startsWith('pass'))).toEqual(['pass ingest', 'passed ingest ok']);
+    calls[0]!.release();
+    await settle();
+  });
+
+  it('starts no trail import while the collection\'s transfers still need loading', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, store, settle } = await setup([row({ cursorBlock: null, startBlock: null })], 'feed');
+    // The load fails: its transfers are still to load, and the trail waits for them.
+    store.restore = async () => { events.push('restore'); throw new Error('connection to server lost'); };
+    await w.ingest();
+    await settle();
+    expect(events).toContain('restore');
+    expect(events.some((e) => e === 'lock 6' || e.startsWith('import'))).toBe(false);
+  });
+
+  it('runs one trail import at a time, and none while another replica holds the lock', async () => {
+    const { w, events, lock, hold, settle } = await setup([row(), row({ id: 2, address: '0xb2' })], 'feed');
+    (w as any).manifest = async () => ({ version: 2, collections: [TRAILED, OTHER] });
+    lock.other = true;
+    await w.ingest();
+    await settle();
+    // Asked for once, for the first due: the other replica is importing, and nothing else starts this pass.
+    expect(events.filter((e) => e === 'lock 6')).toHaveLength(1);
+    expect(events.some((e) => e.startsWith('import'))).toBe(false);
+    lock.other = false;
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    await w.ingest();
+    expect(calls.map((c) => c.id)).toEqual([1]);
+    calls[0]!.release();
+    await settle();
+    await w.ingest();
+    await asked(2);
+    expect(calls.map((c) => c.id)).toEqual([1, 2]);
+    calls[1]!.release();
+    await settle();
+  });
+
+  it('skips an import another replica finished, by the row read inside the lock', async () => {
+    const { w, events, store, settle } = await setup([row()], 'feed');
+    // The pass read the row before the other replica's import ended; the lock is free by now.
+    store.collection = async () => row({ trailImportedSha: 'feed' });
+    await w.ingest();
+    await settle();
+    expect(events).toContain('lock 6');
+    expect(events.some((e) => /^(import|progress|note|read)/.test(e))).toBe(false);
+    expect((w as any).importing).toBeNull();
+  });
+
+  it('reads the chain of a collection whose trail is importing', async () => {
+    const { w, events, hold, settle } = await setup([row({ contract: {} as any })], 'feed');
+    (w as any).config = () => ({ rpc: new Map([[1, 'http://rpc']]), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' });
+    (w as any).chain = () => ({ finalized: async () => 1_000, transfers: async () => ({ transfers: [], through: 1_000 }) });
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    await w.ingest();
+    expect(events.filter((e) => e === 'served 1')).toHaveLength(2);
+    calls[0]!.release();
+    await settle();
+  });
+
+  it('stops an import when a new cut changes its trail, without a mismatch note', async () => {
+    const { w, events, hold, settle } = await setup([row()], 'feed');
+    // The reader of a file replaced under it finds it no longer matches; the import was stopped first, and that is what counts.
+    const { calls, asked } = hold(() => new StoredDataError('1-0xbc4c.trail.csv.zst does not match its checksum', 'mismatch'));
+    await w.ingest();
+    await asked(1);
+    // A new cut: the manifest and the file on disk both change.
+    (w as any).manifest = async () => ({ version: 2, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, sha256: 'beef' } }] });
+    w.fileSha = async () => 'beef';
+    await writeFile(trailPath(dir, TRAILED), 'a trail cut again');
+    await w.ingest();
+    expect(calls[0]!.opts.signal.reason).toBe('stopped');
+    // The old import ended while the pass looked at the file, so the new cut starts in the same pass.
+    await asked(2);
+    expect(calls[1]!.sha).toBe('beef');
+    expect(events.indexOf('progress 1 null')).toBeLessThan(events.indexOf('import 1 beef'));
+    expect(events.some((e) => e.startsWith('note'))).toBe(false);
+    calls[1]!.release();
+    await settle();
+  });
+
+  it('stops the import of a collection paused mid-way, and clears its progress without a failure note', async () => {
+    const paused = await setup([row()], 'feed');
+    const one = paused.hold();
+    await paused.w.ingest();
+    await one.asked(1);
+    // Seen by the next pass.
+    paused.rows[0]!.pausedAt = Date.now();
+    await paused.w.ingest();
+    expect(one.calls[0]!.opts.signal.reason).toBe('stopped');
+    await paused.settle();
+    expect(paused.events).toContain('progress 1 null');
+    expect(paused.events.some((e) => e.startsWith('note'))).toBe(false);
+    // Seen by the progress it writes: this one is deleted mid-way.
+    const deleted = await setup([row()], 'feed');
+    const two = deleted.hold();
+    await deleted.w.ingest();
+    await two.asked(1);
+    deleted.rows.splice(0, 1);
+    two.calls[0]!.opts.onFlows(5);
+    await deleted.settle();
+    expect(two.calls[0]!.opts.signal.reason).toBe('stopped');
+    expect(deleted.events.some((e) => e.startsWith('note'))).toBe(false);
+  });
+
+  it('writes trail progress in order, at most once per 1%, capped at 99%, and clears it after the last write', async () => {
+    const { w, events, store, settle } = await setup([row()], 'feed');
+    (w as any).manifest = async () => ({ version: 2, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, rows: 1_000 } }] });
+    // Batches of flows that bring the count to 1, 4, 11, 12, 500, 999, 1000 and 1200 of the manifest's 1000.
+    const sizes = [1, 3, 7, 1, 488, 499, 1, 200];
+    (w as any).storedTrail = async function* () {
+      yield { checked: ['0xa'], flows: [] };
+      for (const n of sizes) yield { checked: [], flows: new Array(n).fill({}) };
+    };
+    // The first write is the slowest: a later one must still land after it.
+    store.setTrailProgress = async (id: number, share: number | null) => {
+      await new Promise((r) => setTimeout(r, share === 0 ? 30 : 1));
+      events.push(`progress ${id} ${share}`);
+      return true;
+    };
+    // As the store does: a flows pass, a wallets pass, then the final statement, which clears the progress.
+    store.importTrail = async (id: number, _chainId: number, _sha: string, open: () => AsyncIterable<{ checked: string[]; flows: unknown[] }>, opts: Held['opts']) => {
+      let flows = 0;
+      for await (const b of open()) {
+        flows += b.flows.length;
+        opts.onFlows(flows);
+      }
+      for await (const b of open()) if (b.checked.length === 0) break;
+      events.push(`imported ${id}, progress cleared`);
+      return { wallets: 1, flows };
+    };
+    await w.ingest();
+    await vi.waitFor(() => expect(events).toContain('imported 1, progress cleared'));
+    await settle();
+    expect(events.filter((e) => /^(progress|imported)/.test(e))).toEqual([
+      'progress 1 0', 'progress 1 0.011', 'progress 1 0.5', 'progress 1 0.99', 'imported 1, progress cleared',
+    ]);
+  });
+
+  it('clears a failed note when the retry starts', async () => {
+    const { w, events, hold, settle } = await setup([row({ trailNote: TRAIL_NOTES.failed })], 'feed');
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    expect(events.indexOf('note 1 null')).toBeGreaterThan(events.indexOf('lock 6'));
+    expect(events.indexOf('note 1 null')).toBeLessThan(events.indexOf('import 1 feed'));
+    calls[0]!.release();
+    await settle();
+    expect(events.filter((e) => e.startsWith('note'))).toEqual(['note 1 null']);
+  });
+
+  it('notes a store failure instead of trying again next pass', async () => {
+    const { w, events, store, settle } = await setup([row()], 'feed');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    store.importTrail = async () => { events.push('import'); throw Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' }); };
+    await w.ingest();
+    await settle();
+    await w.ingest();
+    await settle();
+    expect(events.filter((e) => e === 'import')).toHaveLength(1);
+    expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
+    expect(events).toContain('progress 1 null');
+    expect(logged.mock.calls.some((c) => c.join(' ').includes('terminating connection due to administrator command'))).toBe(true);
+  });
+
+  it('a store failure during an import notes it and waits out its back-off', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, store, settle } = await setup([row()], 'feed');
+    store.importTrail = async () => { events.push('import'); throw Object.assign(new Error('could not extend file: No space left on device'), { code: '53100' }); };
+    const tries = async () => { await w.ingest(); await settle(); return events.filter((e) => e === 'import').length; };
+    expect(await tries()).toBe(1);
+    expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
+    now += 5 * 60_000 - 1;
+    expect(await tries()).toBe(1);
+    now += 1;
+    expect(await tries()).toBe(2);
+    // Doubling: ten minutes after the second failure.
+    now += 10 * 60_000 - 1;
+    expect(await tries()).toBe(2);
+    now += 1;
+    expect(await tries()).toBe(3);
+  });
+
+  it('an import with no committed batch for 15 minutes is given up as a failure', async () => {
+    vi.useFakeTimers();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, hold, settle } = await setup([row()], 'feed');
+    (w as any).storedTrail = async function* () { for (let i = 0; i < 3; i++) yield { checked: [], flows: [] }; };
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    // The store asks for the next batch once the one before it committed: the 15 minutes start again.
+    const batches = calls[0]!.open()[Symbol.asyncIterator]();
+    await batches.next();
+    await batches.next();
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    expect(calls[0]!.opts.signal.aborted).toBe(false);
+    // Looked at every ten seconds: given up within one look of the 15 minutes.
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(calls[0]!.opts.signal.reason).toBe('stalled');
+    await settle();
+    expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
+    expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
+  });
+
+  it('a lost lock connection fails the import instead of crashing', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, client, hold, settle } = await setup([row()], 'feed');
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    client.alive = false;
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    expect(calls[0]!.opts.signal.reason).toBe('lost');
+    await settle();
+    expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
+    expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('the connection holding its lock was lost (Connection terminated unexpectedly)');
+    // Heard while the import ran, and only then: nothing is left listening.
+    expect(client.listenerCount('error')).toBe(0);
+  });
+
+  it('stop() aborts a running import and drain() waits for it', async () => {
+    const { w, events, store, hold } = await setup([row()], 'feed');
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    // The clear after a stop takes a while: drain waits for it.
+    const write = store.setTrailProgress;
+    store.setTrailProgress = async (id: number, share: number | null) => {
+      if (share === null) await new Promise((r) => setTimeout(r, 300));
+      return write(id, share);
+    };
+    w.stop();
+    expect(calls[0]!.opts.signal.reason).toBe('stopped');
+    await w.drain(5_000);
+    expect((w as any).importing).toBeNull();
+    expect(events).toContain('progress 1 null');
+    expect(events.some((e) => e.startsWith('note'))).toBe(false);
+  });
+
+  it('clearStaleTrailProgress leaves the progress of an import another replica holds', async () => {
+    const { w, events, store, lock } = await setup([row()], 'feed');
+    let cleared = 0;
+    store.clearTrailProgress = async () => { cleared += 1; };
+    lock.other = true;
+    await w.clearStaleTrailProgress();
+    expect(cleared).toBe(0);
+    lock.other = false;
+    await w.clearStaleTrailProgress();
+    expect(cleared).toBe(1);
+    expect(events.filter((e) => e === 'lock 6')).toHaveLength(2);
   });
 
   it('leaves a paused collection\'s trail alone, and one already imported', async () => {
     const paused = await setup([row({ pausedAt: 5 })], 'feed');
     await paused.w.ingest();
-    expect(paused.events.some((e) => e.startsWith('import'))).toBe(false);
+    await paused.settle();
+    expect(paused.events.some((e) => e.startsWith('import') || e === 'lock 6')).toBe(false);
     const done = await setup([row({ trailImportedSha: 'feed' })], 'feed');
     await done.w.ingest();
-    expect(done.events.some((e) => e.startsWith('import'))).toBe(false);
+    await done.settle();
+    expect(done.events.some((e) => e.startsWith('import') || e === 'lock 6')).toBe(false);
   });
 
   it('hashes a trail once while the file stays the same, and again once it changes', async () => {
@@ -478,28 +821,20 @@ describe('Worker.ingest loading a money trail', () => {
   });
 
   it('notes a trail that cannot be read and does not try it again until the file changes', async () => {
-    const { w, events, store } = await setup([row()], 'feed');
+    const { w, events, store, settle } = await setup([row()], 'feed');
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     store.importTrail = async () => { events.push('import'); throw new StoredDataError('/data/1-0xbc4c.trail.csv.zst has a row of 3 fields, expected 8'); };
     await w.ingest();
+    await settle();
     await w.ingest();
+    await settle();
     expect(events.filter((e) => e === 'import')).toHaveLength(1);
     expect(events).toContain('note 1 Money trail on disk could not be read, so it was not loaded.');
     expect(logged.mock.calls.some((c) => c.join(' ').includes('has a row of 3 fields'))).toBe(true);
     await writeFile(trailPath(dir, TRAILED), 'a trail cut again');
     await w.ingest();
+    await settle();
     expect(events.filter((e) => e === 'import')).toHaveLength(2);
-  });
-
-  it('writes no note when the store failed, and tries again next pass', async () => {
-    const { w, events, store } = await setup([row()], 'feed');
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-    store.importTrail = async () => { events.push('import'); throw Object.assign(new Error('deadlock detected'), { code: '40P01' }); };
-    await w.ingest();
-    await w.ingest();
-    expect(events.filter((e) => e === 'import')).toHaveLength(2);
-    expect(events.some((e) => e.startsWith('note'))).toBe(false);
-    expect(logged.mock.calls.some((c) => c.join(' ').includes('deadlock detected'))).toBe(true);
   });
 });
 
@@ -547,12 +882,14 @@ describe('Worker downloading stored data', () => {
     const client = Object.assign(new EventEmitter(), { alive: true, query: async () => { if (!client.alive) throw new Error('Connection terminated unexpectedly'); return { rows: [] }; } });
     const store: any = {
       collections: async () => rows.map((r) => ({ ...r })),
+      collection: async (_chainId: number, address: string) => { const r = rows.find((x) => x.address === address); return r === undefined ? null : { ...r }; },
       locked: async (key: number, _wait: boolean, fn: (c: unknown) => Promise<unknown>) => { events.push(`lock ${key}`); return hub.lock ? fn(client) : 'skipped'; },
       restore: async (id: number, _chainId: number, e: StoredEntry) => {
         events.push(`restore ${id}`);
         Object.assign(find(id)!, { startBlock: e.startBlock, cursorBlock: e.throughBlock, storedThroughTime: e.throughTime, restoreNote: null, restoreNoteKey: null });
       },
       importTrail: async (id: number, _chainId: number, sha256: string) => { events.push(`import ${id}`); find(id)!.trailImportedSha = sha256; return { wallets: 1, flows: 1 }; },
+      setTrailProgress: async (id: number, share: number | null) => { events.push(`trail ${id} ${share}`); return find(id)?.pausedAt === null; },
       setDownload: async (id: number, file: string | null, share: number | null) => {
         events.push(`progress ${id} ${file} ${share}`);
         const r = find(id);
@@ -580,8 +917,11 @@ describe('Worker downloading stored data', () => {
       importedFunding: async () => false, saveAnalysis: async () => {},
     };
     const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: hub.repo }), '', dir);
-    /** Waits for the download running in the background, if any, to end. */
-    const settle = async () => { await (w as any).downloading?.done; };
+    /** Waits for the download and the trail import running in the background, if any, to end. */
+    const settle = async () => {
+      await (w as any).downloading?.done;
+      await (w as any).importing?.done;
+    };
     w.fetchHubManifest = async () => { hub.asked += 1; return hub.answer(); };
     w.fileSha = (path: string) => readFile(path, 'utf8');
     w.downloadFile = (url, dest, sha256, onProgress, signal) => new Promise<void>((resolve, reject) => {
@@ -696,6 +1036,36 @@ describe('Worker downloading stored data', () => {
     await w.ingest();
     expect(calls.map((c) => c.dest)).toEqual([trailPath(dir, stored(A, 'a', 'b')), join(dir, storedFile(1, B, 'transfers'))]);
     await calls[1]!.finish();
+  });
+
+  it('starts no trail download for the collection importing', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Read past its stored data: only its trail is due, and it is on disk.
+    const e = stored(A, 'a', 'b');
+    await writeFile(trailPath(dir, e), sha('b'));
+    const { w, events, calls, hub, store, settle } = setup([watched(1, A, { cursorBlock: 950 })], [e], RPC);
+    // An import that, once stopped, takes until the test says to end: its reader is still on the file meanwhile.
+    let signal: AbortSignal | null = null;
+    let end: () => void = () => {};
+    store.importTrail = (id: number, _chainId: number, _sha: string, _open: unknown, opts: { signal: AbortSignal }) => new Promise((_, reject) => {
+      events.push(`import ${id}`);
+      signal = opts.signal;
+      end = () => reject(opts.signal.reason);
+    });
+    await w.ingest();
+    await vi.waitFor(() => expect(events).toContain('import 1'));
+    // A new cut on the Hub: the trail on disk is no longer the one wanted, and its import stops.
+    hub.answer = async () => ({ version: 2, revision: REV, collections: [stored(A, 'a', 'c')] });
+    (w as any).hubAskedAt = -Infinity;
+    await w.ingest();
+    expect(signal!.reason).toBe('stopped');
+    // Not downloaded over the file the import is still reading.
+    expect(calls).toEqual([]);
+    end();
+    await settle();
+    await w.ingest();
+    expect(calls.map((c) => c.dest)).toEqual([trailPath(dir, e)]);
+    await calls[0]!.finish();
   });
 
   it('starts no download while another replica holds the download lock', async () => {
