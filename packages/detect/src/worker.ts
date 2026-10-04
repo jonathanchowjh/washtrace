@@ -610,6 +610,8 @@ export class Worker {
         }
         continue;
       }
+      // Its trail is importing: that import stops this pass (see trails), and the load goes next pass, never beside it.
+      if (this.importing?.id === c.id) continue;
       const noted = await this.noteKey(c, entry);
       if (!this.restoreDue(c, entry, noted, Date.now())) continue;
       // Not on disk yet, and the Hub has it: it is downloaded first (see downloads). Loaded now, it would only be noted missing.
@@ -782,13 +784,19 @@ export class Worker {
     let movedAt = Date.now();
     const watch = setInterval(() => { if (Date.now() - movedAt >= TRAIL_STALL_MS) abort.abort('stalled' satisfies Halt); }, STALL_CHECK_MS);
     watch.unref?.();
-    const read = () => this.storedTrail(path, file.sha);
+    const read = () => this.storedTrail(path, file.sha)[Symbol.asyncIterator]();
     // The store asks for a batch once the one before it committed: that is the import moving. Each pass ends
     // only once the progress written so far has landed, so none lands after the last statement clears it.
+    // A read is raced against the abort, so one that never returns is still given up; no statement runs
+    // during a read, so none is left running under the lock. A statement waiting on a lock ends by
+    // its own timeout (Store.trailLockTimeout).
     const open = () => (async function* () {
+      const batches = read();
       try {
-        for await (const batch of read()) {
-          yield batch;
+        for (;;) {
+          const next = await orAborted(batches.next(), abort.signal);
+          if (next.done) return;
+          yield next.value;
           movedAt = Date.now();
         }
       } finally {
@@ -1486,6 +1494,16 @@ function watchStall(part: string, abort: AbortController): ReturnType<typeof set
   }, STALL_CHECK_MS);
   timer.unref?.();
   return timer;
+}
+
+/** `p`, or a rejection with `signal`'s reason once it aborts first: for a read that may never return. */
+function orAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener('abort', stop, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop));
+  });
 }
 
 export function messageOf(err: unknown): string {

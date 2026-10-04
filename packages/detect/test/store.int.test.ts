@@ -1375,27 +1375,62 @@ describe('Store', () => {
       const clean = await before(24, w('24c1'));
       await store.importTrail(clean, 24, 'feed', trailOf(...trail));
       const id = await before(23, w('23c1'));
-      const real = store.pool.query.bind(store.pool);
       // Each kind of statement the import runs deadlocks once: the flows, the wallets, the final mark.
+      // Each runs on a connection of its own, in a transaction of its own (see importTrail), so the connections are what is overridden.
       const deadlocked = new Set<string>();
-      (store.pool as any).query = (text: unknown, ...rest: unknown[]) => {
-        const kind = typeof text === 'string' ? ['INSERT INTO washtrace.flows', 'INSERT INTO washtrace.wallets', 'UPDATE washtrace.collections SET version'].find((k) => text.includes(k)) : undefined;
-        if (kind !== undefined && !deadlocked.has(kind)) {
-          deadlocked.add(kind);
-          return Promise.reject(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
-        }
-        return (real as any)(text, ...rest);
+      const connect = store.pool.connect.bind(store.pool) as () => Promise<pgClient.PoolClient>;
+      (store.pool as any).connect = async () => {
+        const client = await connect();
+        const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+        (client as any).query = (text: unknown, ...rest: unknown[]) => {
+          const kind = typeof text === 'string' ? ['INSERT INTO washtrace.flows', 'INSERT INTO washtrace.wallets', 'UPDATE washtrace.collections SET version'].find((k) => text.includes(k)) : undefined;
+          if (kind !== undefined && !deadlocked.has(kind)) {
+            deadlocked.add(kind);
+            return Promise.reject(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+          }
+          return query(text, ...rest);
+        };
+        const release = client.release;
+        client.release = (err?: Error | boolean) => {
+          delete (client as any).query;
+          client.release = release;
+          return release(err);
+        };
+        return client;
       };
       try {
         await store.importTrail(id, 23, 'feed', trailOf(...trail));
       } finally {
-        delete (store.pool as any).query;
+        delete (store.pool as any).connect;
       }
       expect(deadlocked.size).toBe(3);
       const strip = (rows: any[]) => rows.map(({ fetched: _, ...r }) => r);
       expect(strip(await walletRows(23))).toEqual(strip(await walletRows(24)));
       expect(await flowRows(23)).toEqual(await flowRows(24));
       expect(await store.collection(23, w('23c1'))).toMatchObject({ trailImportedSha: 'feed' });
+    });
+
+    it('importTrail gives up a statement waiting on a lock for longer than its lock timeout, and does not retry it', async () => {
+      const id = await before(27, w('27c1'));
+      // Another writer holds the chain's collection rows, which the final statement locks.
+      const blocker = await store.pool.connect();
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT id FROM washtrace.collections WHERE chain_id = 27 FOR UPDATE');
+      // Five minutes in the worker; a fifth of a second here.
+      store.trailLockTimeout = () => '200ms';
+      try {
+        const err = await store.importTrail(id, 27, 'feed', trailOf(...trail)).catch((e) => e);
+        expect(err).not.toBeInstanceOf(StoredDataError);
+        expect(err.code).toBe('55P03');
+      } finally {
+        delete (store as any).trailLockTimeout;
+        await blocker.query('ROLLBACK');
+        blocker.release();
+      }
+      expect(await store.collection(27, w('27c1'))).toMatchObject({ trailImportedSha: null });
+      // With the lock free, it goes through, on the five minutes as the worker runs it.
+      await store.importTrail(id, 27, 'feed', trailOf(...trail));
+      expect(await store.collection(27, w('27c1'))).toMatchObject({ trailImportedSha: 'feed' });
     });
 
     it('importTrail\'s final statement clears the collection\'s trail progress', async () => {

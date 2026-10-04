@@ -710,6 +710,37 @@ describe('Worker.ingest loading a money trail', () => {
     expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
   });
 
+  it('a read of the trail that never returns is given up as a stall', async () => {
+    vi.useFakeTimers();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, settle } = await setup([row()], 'feed');
+    // A reader stuck in a read: its next batch never comes, and nothing between batches ever runs.
+    (w as any).storedTrail = () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) });
+    await w.ingest();
+    await vi.waitFor(() => expect(events).toContain('import 1 1 feed'));
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 10_000);
+    await settle();
+    expect(events).toContain('progress 1 null');
+    expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
+    expect((w as any).trailsBackoff.has(1)).toBe(true);
+    expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
+  });
+
+  it('loads no stored data beside an import of the same collection, and stops that import', async () => {
+    const { w, events, hold, settle } = await setup([row()], 'feed');
+    const { calls, asked } = hold();
+    await w.ingest();
+    await asked(1);
+    // A new cut reaches past what was read: its transfers are to load again, and its trail goes after them.
+    (w as any).manifest = async () => ({ version: 2, collections: [{ ...TRAILED, throughBlock: 2_000 }] });
+    await w.ingest();
+    expect(events).not.toContain('restore');
+    expect(calls[0]!.opts.signal.reason).toBe('stopped');
+    await settle();
+    await w.ingest();
+    expect(events).toContain('restore');
+  });
+
   it('a lost lock connection fails the import instead of crashing', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { w, events, client, hold, settle } = await setup([row()], 'feed');

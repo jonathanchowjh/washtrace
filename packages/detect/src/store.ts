@@ -13,6 +13,8 @@ const MIGRATE_JOB = 0;
 const FOREIGN_KEY_VIOLATION = '23503';
 /** Postgres's code for a statement it ended to break a deadlock. */
 const DEADLOCK_DETECTED = '40P01';
+/** How long one of a trail import's statements waits for a lock before it fails: a stopped or stalled import is only seen between statements. */
+const TRAIL_LOCK_TIMEOUT = '5min';
 /** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
 const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
@@ -669,7 +671,9 @@ export class Store {
    * as each batch commits, and `signal` stops it before the next batch of
    * either pass, throwing its reason. Every statement is idempotent, so one
    * Postgres ends to break a deadlock (funding writes the same wallets and
-   * collections) is run again in place, not the whole import.
+   * collections) is run again in place, not the whole import. One that waits
+   * on a lock for longer than trailLockTimeout fails instead (55P03), and is
+   * not run again: the import fails, and is tried again later.
    */
   async importTrail(
     id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ checked: string[]; flows: Flow[] }>,
@@ -678,7 +682,7 @@ export class Store {
     let flows = 0;
     for await (const batch of open()) {
       opts.signal?.throwIfAborted();
-      await deadlockRetried(() => insertFlows(this.pool, chainId, batch.flows)).catch((err) => { throw asDataFault(err); });
+      await deadlockRetried(() => this.trailStatement((c) => insertFlows(c, chainId, batch.flows))).catch((err) => { throw asDataFault(err); });
       flows += batch.flows.length;
       opts.onFlows?.(flows);
     }
@@ -689,7 +693,7 @@ export class Store {
       opts.signal?.throwIfAborted();
       const addresses = [...batch.checked].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
       // Funding locks a wallet and then collections, so this can still deadlock with it, rarely: Postgres ends one, and it is retried.
-      await deadlockRetried(() => this.pool.query(
+      await deadlockRetried(() => this.trailStatement((c) => c.query(
         `INSERT INTO washtrace.wallets (chain_id, address, transfers, status, truncated, fetched_at, depth)
          SELECT $1, a, 0, 'done', false, NULL,
                 CASE WHEN EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $3 AND (t.from_address = a OR t.to_address = a)) THEN 0 ELSE 1 END
@@ -702,19 +706,45 @@ export class Store {
            error = CASE WHEN washtrace.wallets.status <> 'done' THEN NULL ELSE washtrace.wallets.error END,
            depth = LEAST(washtrace.wallets.depth, EXCLUDED.depth)`,
         [chainId, addresses, id],
-      )).catch((err) => { throw asDataFault(err); });
+      ))).catch((err) => { throw asDataFault(err); });
       wallets += addresses.length;
     }
     // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
-    await deadlockRetried(() => this.pool.query(
+    await deadlockRetried(() => this.trailStatement((c) => c.query(
       `UPDATE washtrace.collections SET version = version + 1,
          trail_imported_sha = CASE WHEN id = $2 THEN $3 ELSE trail_imported_sha END,
          trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END,
          trail_progress = CASE WHEN id = $2 THEN NULL ELSE trail_progress END
        WHERE id IN (SELECT id FROM washtrace.collections WHERE chain_id = $1 ORDER BY id FOR NO KEY UPDATE)`,
       [chainId, id, sha256],
-    ));
+    )));
     return { wallets, flows };
+  }
+
+  /**
+   * One of importTrail's statements, in a transaction of its own that waits
+   * at most trailLockTimeout for a lock. Only this transaction: everything
+   * else in the store waits as it always has.
+   */
+  private async trailStatement<T>(statement: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query("SELECT set_config('lock_timeout', $1, true)", [this.trailLockTimeout()]);
+      const out = await statement(c);
+      await c.query('COMMIT');
+      return out;
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  /** How long a trail import's statement waits for a lock (TRAIL_LOCK_TIMEOUT). Tests override it on the instance. */
+  trailLockTimeout(): string {
+    return TRAIL_LOCK_TIMEOUT;
   }
 
   /**
