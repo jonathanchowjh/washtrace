@@ -726,6 +726,59 @@ describe('Worker.ingest loading a money trail', () => {
     expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
   });
 
+  it('closes the trail reader on the second pass\'s break and on an abort', async () => {
+    const { w, store, settle } = await setup([row()], 'feed');
+    /** A reader that counts how often it is opened and closed: a real one holds a file and a decompressor open until closed. */
+    const reader = { opened: 0, closed: 0 };
+    (w as any).storedTrail = () => {
+      reader.opened += 1;
+      const batches = [{ checked: ['0xa'], flows: [] }, { checked: [], flows: [{}] }];
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => (batches.length > 0 ? { done: false, value: batches.shift() } : { done: true, value: undefined }),
+          return: async () => { reader.closed += 1; return { done: true, value: undefined }; },
+        }),
+      };
+    };
+    // As the store does: the wallets pass breaks off once the checked addresses are behind it.
+    store.importTrail = async (_id: number, _chainId: number, _sha: string, open: () => AsyncIterable<{ checked: string[] }>) => {
+      for await (const _ of open()) { /* the flows */ }
+      for await (const b of open()) if (b.checked.length === 0) break;
+      return { wallets: 1, flows: 1 };
+    };
+    await w.ingest();
+    await settle();
+    expect(reader).toEqual({ opened: 2, closed: 2 });
+
+    // Stopped between batches: the store throws the signal's reason with the reader open.
+    const stopped = await setup([row()], 'feed');
+    const once = { opened: 0, closed: 0 };
+    (stopped.w as any).storedTrail = () => {
+      once.opened += 1;
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: false, value: { checked: [], flows: [] } }),
+          return: async () => { once.closed += 1; return { done: true, value: undefined }; },
+        }),
+      };
+    };
+    let reading = () => {};
+    const read = new Promise<void>((r) => { reading = r; });
+    stopped.store.importTrail = async (_id: number, _chainId: number, _sha: string, open: () => AsyncIterable<unknown>, opts: { signal: AbortSignal }) => {
+      for await (const _ of open()) {
+        reading();
+        await new Promise((r) => opts.signal.addEventListener('abort', r));
+        opts.signal.throwIfAborted();
+      }
+      return { wallets: 1, flows: 1 };
+    };
+    await stopped.w.ingest();
+    await read;
+    stopped.w.stop();
+    await stopped.settle();
+    expect(once).toEqual({ opened: 1, closed: 1 });
+  });
+
   it('loads no stored data beside an import of the same collection, and stops that import', async () => {
     const { w, events, hold, settle } = await setup([row()], 'feed');
     const { calls, asked } = hold();

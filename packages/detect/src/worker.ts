@@ -800,6 +800,9 @@ export class Worker {
           movedAt = Date.now();
         }
       } finally {
+        // Closed however the pass ends (the wallets pass breaks off, an abort, a failure), so the file and its
+        // decompressor go. Not awaited: a close queues behind a read that never returns, and would hang with it.
+        Promise.resolve(batches.return?.()).catch(() => {});
         await writes;
       }
     })();
