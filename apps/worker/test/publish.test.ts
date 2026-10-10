@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { zstdDecompressSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MIGRATIONS, STORED_REPO, storedFile, writeTransfers, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
-import { Publisher } from '../src/publish.js';
+import { MIGRATIONS, STORED_REPO, storedFile, writeTransfers, writeTrail, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
+import { Publisher, parsePublishArgs } from '../src/publish.js';
 
 /** An operation's bytes as text: a Blob's text, or the file a URL names (decompressed, as a reader of the dataset sees it). */
 async function contentOf(op: { path: string; content: Blob | URL }): Promise<string> {
@@ -178,5 +179,175 @@ describe('Publisher.ensureRepo', () => {
     const err = await p.ensureRepo().then(() => null, (e: Error) => e);
     expect(err?.message).toBe('HF_TOKEN belongs to else, but the target repo is someone/data: set WASHTRACE_STORED_REPO or use a token for someone.');
     expect(err?.message).not.toContain(TOKEN);
+  });
+});
+
+describe('publish --from', () => {
+  const rowsOf = (n: number) => Array.from({ length: n }, (_, i) => ({
+    txHash: `0xtx${i}`, logIndex: 0, blockNumber: i + 1, blockTime: null, tokenId: '1', from: addr('a'), to: addr('b'),
+    marketplace: null, priceWei: null, currency: null,
+  }));
+
+  /** A dry-run folder as publish:hub writes one: a real transfers and trail file, their manifest and a card of its own. */
+  async function folder(over: Partial<StoredEntry> = {}): Promise<{ dir: string; entry: StoredEntry }> {
+    const dir = await mkdtemp(join(work, 'from-'));
+    const address = addr('b2');
+    const file = storedFile(1, address, 'transfers');
+    const t = await writeTransfers(join(dir, file), rowsOf(3));
+    async function* checked() { yield addr('a'); yield addr('b'); }
+    async function* flows() { yield { txHash: '0xf', kind: 'native' as const, from: addr('a'), to: addr('b'), valueWei: '1', token: '', blockNumber: 1, blockTime: 1 }; }
+    const tr = await writeTrail(join(dir, storedFile(1, address, 'trail')), { checked: checked(), flows: flows() });
+    const e = entry(address, {
+      name: 'Contract', transfers: { file, ...t },
+      trail: { rows: tr.rows, wallets: tr.wallets, checked: tr.wallets, of: tr.wallets, bytes: tr.bytes, sha256: tr.sha256 }, ...over,
+    });
+    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({ version: 2, collections: [e] }, null, 2)}\n`);
+    await writeFile(join(dir, 'README.md'), 'the dry run card, never uploaded\n');
+    return { dir, entry: e };
+  }
+
+  /** Every file's name, size and hash: the folder's whole state. */
+  async function snapshot(dir: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const f of (await readdir(dir)).sort()) out[f] = `${(await stat(join(dir, f))).size}:${createHash('sha256').update(await readFile(join(dir, f))).digest('hex')}`;
+    return out;
+  }
+
+  /** A publisher with no store, whose Hub calls are fakes. */
+  function fromPublisher(remote: Manifest | null) {
+    const p = new Publisher(null, TOKEN, 'someone/data');
+    p.remote = vi.fn(async () => remote);
+    p.ensureRepo = vi.fn(async () => {});
+    p.commit = vi.fn(async () => 'https://huggingface.co/datasets/someone/data/commit/abc');
+    return p;
+  }
+
+  it('uploads the folder\'s files with a regenerated card in one commit, and leaves the folder as it was', async () => {
+    const { dir } = await folder();
+    const before = await snapshot(dir);
+    const other = entry(addr('a1'), { name: 'Other' });
+    const p = fromPublisher({ version: 2, revision: 'c'.repeat(40), collections: [other] });
+    const seen = new Map<string, string>();
+    p.commit = vi.fn(async (ops: { path: string; content: Blob | URL }[]) => {
+      for (const op of ops) seen.set(op.path, op.content instanceof Blob ? await op.content.text() : fileURLToPath(op.content));
+      return 'url';
+    });
+    await p.runFrom(dir, { check: false });
+    expect(p.ensureRepo).toHaveBeenCalledTimes(1);
+    expect(p.commit).toHaveBeenCalledTimes(1);
+    const [, message] = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(message).toBe('Publish Contract through block 100');
+    expect([...seen.keys()].sort()).toEqual(['README.md', 'manifest.json', storedFile(1, addr('b2'), 'trail'), storedFile(1, addr('b2'), 'transfers')].sort());
+    expect(seen.get(storedFile(1, addr('b2'), 'transfers'))).toBe(join(dir, storedFile(1, addr('b2'), 'transfers')));
+    expect(seen.get('README.md')).toContain('# washtrace data');
+    expect(seen.get('README.md')).toContain(addr('a1'));
+    expect(seen.get('README.md')).not.toContain('never uploaded');
+    expect((JSON.parse(seen.get('manifest.json')!) as Manifest).collections.map((e) => e.address)).toEqual([addr('a1'), addr('b2')]);
+    expect(await snapshot(dir)).toEqual(before);
+
+    // A refusal leaves it as it was too.
+    await writeFile(join(dir, storedFile(1, addr('b2'), 'transfers')), 'x', { flag: 'a' });
+    const after = await snapshot(dir);
+    await expect(p.runFrom(dir, { check: false })).rejects.toThrow('does not match its manifest');
+    expect(await snapshot(dir)).toEqual(after);
+  });
+
+  it('--check verifies and uploads nothing', async () => {
+    const { dir } = await folder();
+    const p = new Publisher(null, undefined, 'someone/data');
+    p.remote = vi.fn(async () => null);
+    p.ensureRepo = vi.fn(async () => {});
+    p.commit = vi.fn(async () => 'url');
+    await expect(p.runFrom(dir, { check: true })).resolves.toContain('matches its manifest');
+    expect(p.remote).not.toHaveBeenCalled();
+    expect(p.ensureRepo).not.toHaveBeenCalled();
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file whose sha256 or row count does not match, before any network call', async () => {
+    const { dir } = await folder();
+    const p = fromPublisher(null);
+    const name = storedFile(1, addr('b2'), 'transfers');
+    // The same size with one byte flipped: the sha256 catches it.
+    const bytes = await readFile(join(dir, name));
+    bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
+    await writeFile(join(dir, name), bytes);
+    await expect(p.runFrom(dir, { check: false })).rejects.toThrow(`${name} in ${dir} does not match its manifest`);
+
+    // The real hash and size, but the wrong number of rows.
+    const rows = await folder();
+    const manifest = JSON.parse(await readFile(join(rows.dir, 'manifest.json'), 'utf8')) as Manifest;
+    manifest.collections[0]!.transfers.rows = 4;
+    await writeFile(join(rows.dir, 'manifest.json'), JSON.stringify(manifest));
+    await expect(p.runFrom(rows.dir, { check: false })).rejects.toThrow('it has 3 rows, the manifest says 4');
+
+    expect(p.ensureRepo).not.toHaveBeenCalled();
+    expect(p.remote).not.toHaveBeenCalled();
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing file, a wrong size and a wrong checked-wallet count', async () => {
+    const p = fromPublisher(null);
+    const { dir } = await folder();
+    const trail = storedFile(1, addr('b2'), 'trail');
+    const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as Manifest;
+    manifest.collections[0]!.trail!.wallets = 5;
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
+    await expect(p.fromDir(dir)).rejects.toThrow(`${trail} in ${dir} does not match its manifest: it has 2 checked wallets, the manifest says 5`);
+    manifest.collections[0]!.trail!.bytes += 1;
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
+    await expect(p.fromDir(dir)).rejects.toThrow('the manifest says');
+    await rm(join(dir, trail));
+    await expect(p.fromDir(dir)).rejects.toThrow(`${trail} in ${dir} does not match its manifest: the file is missing`);
+  });
+
+  it('never uploads a file the manifest does not list', async () => {
+    const { dir } = await folder();
+    await writeFile(join(dir, 'stray.csv.zst'), 'not zstd, would fail if read');
+    const p = fromPublisher(null);
+    await p.runFrom(dir, { check: false });
+    const ops = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { path: string }[];
+    expect(ops.map((o) => o.path)).not.toContain('stray.csv.zst');
+    expect(ops).toHaveLength(4);
+  });
+
+  it('refuses a folder older than the Hub\'s cut', async () => {
+    const { dir } = await folder();
+    const p = fromPublisher({ version: 2, revision: 'c'.repeat(40), collections: [entry(addr('b2'), { name: 'Contract', throughBlock: 250 })] });
+    await expect(p.runFrom(dir, { check: false })).rejects.toThrow(`the Hub has a newer cut of Contract (block 250) than ${dir} (block 100)`);
+    expect(p.commit).not.toHaveBeenCalled();
+    // The same block is not older.
+    p.remote = vi.fn(async () => ({ version: 2, collections: [entry(addr('b2'), { throughBlock: 100 })] }) as Manifest);
+    await p.runFrom(dir, { check: false });
+    expect(p.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts when the remote cannot be read, a 401 included', async () => {
+    const { dir } = await folder();
+    const p = fromPublisher(null);
+    p.remote = vi.fn(async () => { throw Object.assign(new Error('Hugging Face answered 401 for someone/data'), { status: 401 }); });
+    await expect(p.runFrom(dir, { check: false })).rejects.toThrow('401');
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it('refuses --store, --dry-run or collection names beside it', () => {
+    expect(parsePublishArgs(['--from', '/d'])).toMatchObject({ from: '/d', check: false });
+    expect(parsePublishArgs(['--from', '/d', '--check'])).toMatchObject({ from: '/d', check: true });
+    expect(parsePublishArgs(['--from', '/d', '--store', 'postgres://x'])).toBeNull();
+    expect(parsePublishArgs(['--from', '/d', '--dry-run'])).toBeNull();
+    expect(parsePublishArgs(['--from', '/d', `1/${addr('b2')}`])).toBeNull();
+    expect(parsePublishArgs(['--from'])).toBeNull();
+    expect(parsePublishArgs(['--check'])).toBeNull();
+    expect(parsePublishArgs(['--store', 'postgres://x', '--check'])).toBeNull();
+    expect(parsePublishArgs(['--store', 'postgres://x', '--dry-run'])).toMatchObject({ url: 'postgres://x', dryRun: true });
+  });
+
+  it('run() leaves a folder it did not create alone', async () => {
+    const { dir } = await folder();
+    const before = await snapshot(dir);
+    const p = publisher(null);
+    p.dir = dir;
+    await p.run([], { dryRun: false });
+    expect(await snapshot(dir)).toEqual(before);
   });
 });
