@@ -278,6 +278,9 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
         {/* Download of the money trail: the transfers are read already; this is the file the lenses feed on. Working, not a fault. */}
         {c.pausedAt === null && c.downloadFile === 'trail' && c.downloadProgress !== null
           ? <p className="text-xs text-muted-foreground">Money trail downloading from stored data · {downloaded(c.downloadProgress)}{trailBytes === null ? '' : ` of ${formatBytes(trailBytes)}`}</p> : null}
+        {/* Import of the downloaded trail: it runs after the download, never beside it. The lenses wait for it, so this is working too. */}
+        {c.pausedAt === null && c.trailProgress !== null
+          ? <p className="text-xs text-muted-foreground">Money trail loading from stored data · {downloaded(c.trailProgress)}</p> : null}
         <DownloadNote c={c} />
         {/* Why a trail on disk did not load: information, since the lenses run as they would without it. */}
         {c.trailNote ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
@@ -286,7 +289,7 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : ' · nothing new since'}</>}
+        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.trailProgress !== null ? ' · money trail loading; analysed again once it has' : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
         {/* With no analysis yet, `why` says it failed. */}

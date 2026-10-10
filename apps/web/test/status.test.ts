@@ -176,6 +176,13 @@ describe('status', () => {
     expect(texts(snapshot({ collections: [collection({ downloadFile: 'transfers', downloadProgress: 0.416 })] }), 'working')).toEqual(['Downloading stored data for BAYC · 41%']);
   });
 
+  it('says which collection\'s money trail is loading and how far', () => {
+    const run = (more: Partial<CollectionRow>) => texts(snapshot({ collections: [collection(more)] }), 'working');
+    expect(run({ trailProgress: 0.416 })).toEqual(['Loading the money trail for BAYC · 41%']);
+    expect(run({ trailProgress: 0.416, pausedAt: 1 })).toEqual([]);
+    expect(run({ trailProgress: null })).toEqual([]);
+  });
+
   it('says a failed download as information, not a fault', () => {
     const s = snapshot({ collections: [collection({ downloadNote: 'Stored data could not be downloaded. Tried again later.' })] });
     expect(texts(s, 'info')).toContain('BAYC: Stored data could not be downloaded. Tried again later.');

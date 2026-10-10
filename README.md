@@ -216,7 +216,10 @@ chain where they stop. The console shows the download as it runs ("Downloading
 stored data · 41%") and the Watch panel lists each collection's size before you
 watch it, such as `stored data: 12.3 MB transfers + 3.4 GB money trail`. The
 transfers come first; the money trail follows and feeds Money loops back and
-Linked wallets without an Etherscan key.
+Linked wallets without an Etherscan key. A large money trail loads into the
+database in the background (over an hour for the biggest collections); the
+console shows how far it has got ("Money trail loading from stored data · 41%"),
+and the analysis runs again once it is in.
 
 > **Not yet published.** The default dataset is not public yet. Until it is,
 > the Hub answers 401, the worker takes that as no dataset, and every
@@ -250,7 +253,7 @@ settings writes and Tests answer 403 while basic auth is off.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. `trailProgress` (0 to 1) says how far that collection's downloaded money trail has loaded into the database; null when none is loading. |
 | `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
 | `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
 | `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |
