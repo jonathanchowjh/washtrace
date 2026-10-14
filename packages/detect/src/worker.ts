@@ -363,6 +363,8 @@ export class Worker {
   private importing: { id: number; sha: string; abort: AbortController; done: Promise<void> } | null = null;
   /** Trail imports the store failed, by collection, timed as a failed load is. In memory only: the note says it failed, and a restart tries again. */
   private readonly trailsBackoff = new Map<number, { failures: number; retryAt: number }>();
+  /** Collections whose progress an import could not clear (the store itself failing, usually). The value is this process's own, as it held the lock; each pass tries again (see trails). */
+  private readonly clearFailed = new Set<number>();
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -661,9 +663,27 @@ export class Worker {
    * so on the collection, and is not tried again until it changes. The pass
    * never waits for an import: one of millions of flows takes an hour (see
    * startTrailImport). Meanwhile its collection is read and analysed as any.
+   *
+   * The stop conditions here, the restore guard and the trail-download guard
+   * act per process. With two replicas, if the other keeps winning the ingest
+   * lock, an import can run on to the end on a superseded sha. That wastes
+   * time but does no harm: the statements are idempotent, and a later restore
+   * resets the traders to depth 0. Stopping on needsRestore means that while
+   * a transfers load keeps failing and its back-off keeps expiring, an import
+   * longer than the back-off is stopped each time.
    */
   private async trails(collections: readonly CollectionRow[], manifest: Manifest): Promise<void> {
     const now = Date.now();
+    // A clear that failed left progress the console shows as loading. Tried again, never for the import that runs: its progress is true.
+    for (const id of [...this.clearFailed]) {
+      if (this.importing?.id === id) continue;
+      try {
+        await this.store.setTrailProgress(id, null);
+        this.clearFailed.delete(id);
+      } catch (err) {
+        console.error('[washtrace] collection %d: money trail progress not cleared: %s', id, this.scrubbed(err));
+      }
+    }
     const running = this.importing;
     if (running !== null) {
       const c = collections.find((x) => x.id === running.id);
@@ -813,7 +833,7 @@ export class Worker {
       console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
     } catch (err) {
       await writes;
-      await this.store.setTrailProgress(c.id, null).catch(logged('money trail progress not cleared'));
+      await this.store.setTrailProgress(c.id, null).catch((e) => { this.clearFailed.add(c.id); logged('money trail progress not cleared')(e); });
       const halt: Halt | null = abort.signal.aborted ? abort.signal.reason : null;
       if (halt === 'stopped') return;
       if (halt === null && err instanceof StoredDataError) {
@@ -842,6 +862,10 @@ export class Worker {
    * worker died: the console says it imports for ever otherwise. Only while
    * no replica imports: it takes the trail lock, and one held means another
    * replica is importing, and its progress is true. For start-up.
+   *
+   * It also skips while a dead session still holds lock 6, until Postgres
+   * reaps it. A row paused by then can keep its stale progress until the next
+   * restart; the console hides a trail line on a paused row, so that is no lie.
    */
   async clearStaleTrailProgress(): Promise<void> {
     await this.store.locked(TRAIL_JOB, false, () => this.store.clearTrailProgress());

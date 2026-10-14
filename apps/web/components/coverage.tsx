@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { CollectionRow } from '@washtrace/detect';
+import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { chainName } from '@/lib/chains';
 import { LENSES, formatBytes, lensList, plural } from '@/lib/format';
 import { downloaded, progress, restoreNext, storedOnly, type Coverage } from '@/lib/metrics';
@@ -282,14 +282,14 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
         {c.pausedAt === null && c.trailProgress !== null
           ? <p className="text-xs text-muted-foreground">Money trail loading from stored data · {downloaded(c.trailProgress)}</p> : null}
         <DownloadNote c={c} />
-        {/* Why a trail on disk did not load: information, since the lenses run as they would without it. */}
-        {c.trailNote ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
+        {/* Why a trail on disk did not load: information, since the lenses run as they would without it. A failed import is retried, which a paused collection is not: the notes about the file stay. */}
+        {c.trailNote && !(c.pausedAt !== null && c.trailNote === TRAIL_NOTES.failed) ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
         {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
       </Step>
       <Step
         n={3} title="Analyzed"
         figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>}
-        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.trailProgress !== null ? ' · money trail loading; analysed again once it has' : ' · nothing new since'}</>}
+        value={a === null ? why : <>took {a.tookMs < 10_000 ? `${a.tookMs} ms` : a.tookMs < 120_000 ? `${(a.tookMs / 1000).toFixed(0)} s` : `${(a.tookMs / 60_000).toFixed(1)} min`}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.pausedAt === null && c.trailProgress !== null ? ' · money trail loading; analysed again once it has' : ' · nothing new since'}</>}
         affects="every number on this page: it turns steps 1 and 2 into them."
       >
         {/* With no analysis yet, `why` says it failed. */}

@@ -829,6 +829,31 @@ describe('Worker.ingest loading a money trail', () => {
     expect(events.some((e) => e.startsWith('note'))).toBe(false);
   });
 
+  it('retries a progress clear that failed, at the next pass, and not for the import that runs', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, store, hold, settle } = await setup([row()], 'feed');
+    const { asked } = hold();
+    let failClear = true;
+    const write = store.setTrailProgress;
+    store.setTrailProgress = async (id: number, share: number | null) => {
+      if (share === null && failClear) { events.push(`progress ${id} null (fails)`); failClear = false; throw new Error('store down'); }
+      return write(id, share);
+    };
+    await w.ingest();
+    await asked(1);
+    (w as any).importing.abort.abort('stopped');
+    await settle();
+    expect(events).toContain('progress 1 null (fails)');
+    // The next pass clears it before anything else about trails.
+    events.length = 0;
+    await w.ingest();
+    expect(events).toContain('progress 1 null');
+    // Cleared once: not again.
+    events.length = 0;
+    await w.ingest();
+    expect(events).not.toContain('progress 1 null');
+  });
+
   it('clearStaleTrailProgress leaves the progress of an import another replica holds', async () => {
     const { w, events, store, lock } = await setup([row()], 'feed');
     let cleared = 0;

@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionRow } from '@washtrace/detect';
+import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { ReadingPanel, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime } from '@/lib/format';
 import { coverage } from '@/lib/metrics';
@@ -115,6 +115,11 @@ describe('a collection whose latest analysis failed', () => {
     expect(loading).not.toContain('nothing new since');
     cleanup();
     expect(step3(row({ latest: analysed })).textContent).toContain('· nothing new since');
+  });
+  it('step 3 of a paused collection says nothing of a trail loading', () => {
+    const text = step3(row({ latest: analysed, trailProgress: 0.4, pausedAt: 1 })).textContent!;
+    expect(text).not.toContain('money trail loading');
+    expect(text).toContain('· nothing new since');
   });
   const failed = (el: Element) => [...el.querySelectorAll('p')].find((p) => /^(Latest analysis|Paused · latest analysis)/.test(p.textContent!))!;
 
@@ -405,6 +410,17 @@ describe('downloading stored data', () => {
     cleanup();
     const idle = row();
     expect(render(<ReadingPanel c={idle} cov={coverage(idle, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent).not.toContain('Money trail loading');
+  });
+
+  it('the note that a trail import failed shows only while it is tried again, the notes about the file always', () => {
+    const failedNote = TRAIL_NOTES.failed;
+    const mismatch = TRAIL_NOTES.mismatch;
+    const text = (c: CollectionRow) => render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(text(row({ trailNote: failedNote }))).toContain(failedNote);
+    cleanup();
+    expect(text(row({ trailNote: failedNote, pausedAt: 1 }))).not.toContain(failedNote);
+    cleanup();
+    expect(text(row({ trailNote: mismatch, pausedAt: 1 }))).toContain(mismatch);
   });
 
   it('a paused collection shows no trail loading', () => {
