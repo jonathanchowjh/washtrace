@@ -334,6 +334,31 @@ describe('datasetCard', () => {
     expect(card).toContain('`dtype=str` keeps `price_wei`, `value_wei` and `token_id` at full precision');
   });
 
+  it('labels the date as the last transfer, in UTC, not the through block\'s date', () => {
+    const card = datasetCard(m);
+    expect(card).toContain('| Name | Address | Chain id | Through block | Last transfer (UTC) | Checked wallets | Transfers file | Trail file |');
+    expect(card).toContain(`| 123456 | 2026-10-01 |`);
+    expect(card).not.toContain('Through block (date)');
+    expect(card).toContain('Through block is where the read stops; last transfer is the date of the newest transfer at or below it.');
+  });
+
+  it('lists each collection\'s checked-wallet count', () => {
+    const card = datasetCard(m);
+    expect(card).toContain('| 2026-10-01 | 2 | 2.1 MB | 1.0 MB |');
+    expect(card).toContain(`| ${w('b2')} | 1 | 100 | `);
+    expect(card).toMatch(/\| — \| [^|]+ \| none \|/);
+  });
+
+  it('reads the trail with skiprows and nrows from the manifest', () => {
+    const card = datasetCard(m);
+    expect(card).toContain('pip install pandas zstandard');
+    expect(card).toContain('skiprows=1, nrows=n');
+    expect(card).toContain('skiprows=n + 3');
+    expect(card).toContain('n = e["trail"]["wallets"]');
+    expect(card).toContain('pass `chunksize=` to read them in parts');
+    expect(card).not.toContain('.read().decode()');
+  });
+
   it('says only chain data is included', () => {
     expect(datasetCard(m)).toMatch(/only data that can be read from the chain/i);
   });

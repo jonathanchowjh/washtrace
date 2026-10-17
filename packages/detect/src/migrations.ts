@@ -278,4 +278,11 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_note text;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_failures int NOT NULL DEFAULT 0;
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_retry_at timestamptz;
 `,
+  `
+-- A money trail imports in the background, outside every pass: one of
+-- millions of flows takes longer than an ingest pass may run. While one
+-- imports, trail_progress says how far, 0 to 0.99, so every replica and the
+-- console see it; the import's last statement sets it back to NULL.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_progress real;
+`,
 ];

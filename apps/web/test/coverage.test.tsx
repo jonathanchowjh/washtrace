@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CollectionRow } from '@washtrace/detect';
+import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { ReadingPanel, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime } from '@/lib/format';
 import { coverage } from '@/lib/metrics';
@@ -13,7 +13,7 @@ const ON = new Set([1]);
 
 const row = (more: Partial<CollectionRow> = {}) => ({
   id: 1, chainId: 1, address: '0xabc', name: 'Demo', startBlock: 1, cursorBlock: 10, headBlock: 10, transfers: 5,
-  wallets: 0, fundedWallets: 0, latest: null, error: null, stale: false, pausedAt: null, priority: false, ...more,
+  wallets: 0, fundedWallets: 0, latest: null, error: null, stale: false, pausedAt: null, priority: false, trailProgress: null, ...more,
 }) as unknown as CollectionRow;
 
 function panel(c: CollectionRow) {
@@ -109,6 +109,18 @@ describe('a collection whose latest analysis failed', () => {
     const el = render(<ReadingPanel c={c} cov={coverage(c, ON, NOW)} why="Waiting" rpcChains={ON} now={NOW} />).container;
     return el.querySelectorAll('li')[2]!;
   };
+  it('step 3 says the analysis runs again once the trail is in, not that nothing is new', () => {
+    const loading = step3(row({ latest: analysed, trailProgress: 0.3 })).textContent!;
+    expect(loading).toContain('· money trail loading; analysed again once it has');
+    expect(loading).not.toContain('nothing new since');
+    cleanup();
+    expect(step3(row({ latest: analysed })).textContent).toContain('· nothing new since');
+  });
+  it('step 3 of a paused collection says nothing of a trail loading', () => {
+    const text = step3(row({ latest: analysed, trailProgress: 0.4, pausedAt: 1 })).textContent!;
+    expect(text).not.toContain('money trail loading');
+    expect(text).toContain('· nothing new since');
+  });
   const failed = (el: Element) => [...el.querySelectorAll('p')].find((p) => /^(Latest analysis|Paused · latest analysis)/.test(p.textContent!))!;
 
   it('says the numbers shown stand, that the latest run failed and why, and when it is tried again, as a fault', () => {
@@ -389,6 +401,31 @@ describe('downloading stored data', () => {
     expect(text).toContain('Money trail downloading from stored data · 41% of 3.4 GB');
     // Without the manifest's size, no size is guessed.
     expect(render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent).toContain('Money trail downloading from stored data · 41%');
+  });
+
+  it('a trail loading in the background shows on the funding step with its progress', () => {
+    const c = row({ trailProgress: 0.416 });
+    const text = render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(text).toContain('Money trail loading from stored data · 41%');
+    cleanup();
+    const idle = row();
+    expect(render(<ReadingPanel c={idle} cov={coverage(idle, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent).not.toContain('Money trail loading');
+  });
+
+  it('the note that a trail import failed shows only while it is tried again, the notes about the file always', () => {
+    const failedNote = TRAIL_NOTES.failed;
+    const mismatch = TRAIL_NOTES.mismatch;
+    const text = (c: CollectionRow) => render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    expect(text(row({ trailNote: failedNote }))).toContain(failedNote);
+    cleanup();
+    expect(text(row({ trailNote: failedNote, pausedAt: 1 }))).not.toContain(failedNote);
+    cleanup();
+    expect(text(row({ trailNote: mismatch, pausedAt: 1 }))).toContain(mismatch);
+  });
+
+  it('a paused collection shows no trail loading', () => {
+    const c = row({ trailProgress: 0.4, pausedAt: 1 });
+    expect(render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent).not.toContain('Money trail loading');
   });
 
   it('says nothing is downloading when paused, and the note only while it is tried again', () => {

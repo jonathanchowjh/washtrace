@@ -15,7 +15,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
-    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
     downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
   };
 }
@@ -174,6 +174,13 @@ describe('status', () => {
     // Paused, nothing downloads; no manifest, no size to say.
     expect(run({ downloadFile: 'trail', downloadProgress: 0.05, pausedAt: 1 })).toEqual([]);
     expect(texts(snapshot({ collections: [collection({ downloadFile: 'transfers', downloadProgress: 0.416 })] }), 'working')).toEqual(['Downloading stored data for BAYC · 41%']);
+  });
+
+  it('says which collection\'s money trail is loading and how far', () => {
+    const run = (more: Partial<CollectionRow>) => texts(snapshot({ collections: [collection(more)] }), 'working');
+    expect(run({ trailProgress: 0.416 })).toEqual(['Loading the money trail for BAYC · 41%']);
+    expect(run({ trailProgress: 0.416, pausedAt: 1 })).toEqual([]);
+    expect(run({ trailProgress: null })).toEqual([]);
   });
 
   it('says a failed download as information, not a fault', () => {

@@ -45,6 +45,8 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 
 // The environment wins over the console's settings, which each pass re-reads.
 const worker = new Worker(store, (s) => workerConfig(process.env, s), url, storedDir(process.env, root));
+// The same for a money trail import that was running, unless another replica is importing now: its progress is true.
+await worker.clearStaleTrailProgress().catch((err) => console.warn('[worker] stale money trail progress not cleared: %s', messageOf(err)));
 worker.start();
 // A Test asked for in the console is heard at once over LISTEN, not next pass.
 void worker.listen();

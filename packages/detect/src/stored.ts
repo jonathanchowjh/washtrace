@@ -154,7 +154,7 @@ export function mergeManifest(remote: Manifest | null, cut: StoredEntry[]): Mani
 export function datasetCard(m: Manifest): string {
   const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
   const rows = m.collections.map((e) =>
-    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} (${new Date(e.throughTime).toISOString().slice(0, 10)}) | ${formatBytes(e.transfers.bytes)} | ${e.trail ? formatBytes(e.trail.bytes) : 'none'} |`);
+    `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} | ${new Date(e.throughTime).toISOString().slice(0, 10)} | ${e.trail ? e.trail.wallets : '—'} | ${formatBytes(e.transfers.bytes)} | ${e.trail ? formatBytes(e.trail.bytes) : 'none'} |`);
   return `---
 license: cc-by-4.0
 pretty_name: washtrace data
@@ -172,9 +172,11 @@ settings, are in the files.
 
 ## Collections
 
-| Name | Address | Chain id | Through block (date) | Transfers file | Trail file |
-| --- | --- | --- | --- | --- | --- |
+| Name | Address | Chain id | Through block | Last transfer (UTC) | Checked wallets | Transfers file | Trail file |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 ${rows.join('\n')}
+
+Through block is where the read stops; last transfer is the date of the newest transfer at or below it.
 
 The name is the contract's own \`name()\`, or its address when it has none. \`manifest.json\` lists each file with
 its row count, size and sha256.
@@ -204,19 +206,26 @@ ${FLOW_COLUMNS.join(',')}
 
 ## Reading them
 
+\`\`\`
+pip install pandas zstandard
+\`\`\`
+
 \`\`\`python
-import io
+import json
 import pandas as pd
-import zstandard
 
 transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd', dtype=str)
 
-with open("1-0x....trail.csv.zst", "rb") as f:
-    text = zstandard.ZstdDecompressor().stream_reader(f).read().decode()
-checked_part, flows_part = text.split("#flows\\n")
-checked = pd.read_csv(io.StringIO(checked_part.removeprefix("#checked\\n")))
-flows = pd.read_csv(io.StringIO(flows_part), dtype=str)
+m = json.load(open("manifest.json"))
+e = next(c for c in m["collections"] if c["address"] == "0x...")
+n = e["trail"]["wallets"]
+path = f"{e['chainId']}-{e['address']}.trail.csv.zst"
+checked = pd.read_csv(path, compression='zstd', skiprows=1, nrows=n)
+flows = pd.read_csv(path, compression='zstd', skiprows=n + 3, dtype=str)
 \`\`\`
+
+pandas decompresses as it reads, so the file is never held whole as text; the largest trails hold tens of millions of
+flows: pass \`chunksize=\` to read them in parts.
 
 \`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.
 

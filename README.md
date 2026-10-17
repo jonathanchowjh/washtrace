@@ -6,28 +6,62 @@ traded them. It flags wash trades by three graph methods and says why each one
 was flagged. It runs as two services over one Postgres: a polling **worker**
 and a JSON **API** with a console.
 
-washtrace is the 2023 paper *Detecting and quantifying wash trading of
-non-fungible tokens* (Chow, SMU CS470) rebuilt on the systems that exist in
-2026. The three methods are the paper's. The data sources, the marketplaces and
-three corrections are new: see [From the paper to now](#from-the-paper-to-now).
+washtrace is the paper [*Detecting and quantifying wash trading of
+non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
+(Chow, 2023) rebuilt on the systems that exist in 2026. The three methods are
+the paper's. The data sources, the marketplaces and three corrections are new:
+see [From the paper to now](#from-the-paper-to-now).
 
 - **Status:** v0.1.0. Tested against Postgres 17 and anvil 1.5.1; verified on
   Ethereum mainnet against the paper's own example sale.
+- **Paper:** [PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf),
+  7 pages. What it builds on is in [The paper and its sources](#the-paper-and-its-sources).
 
 ## Contents
 
+- [The paper and its sources](#the-paper-and-its-sources)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
 - [Configuration](#configuration)
+- [Deploying](#deploying)
 - [Stored data](#stored-data)
 - [API](#api)
 - [Pages](#pages)
 - [From the paper to now](#from-the-paper-to-now)
 - [Known limits](#known-limits)
+- [Citing](#citing)
 
 How it is built and why, and how to work on it, is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## The paper and its sources
+
+[*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
+(Chow, 2023) starts from an observation: the top NFT collections by market cap
+show far less wash trading than the rest, which points to wash trades hidden
+from the usual detector. That detector looks for strongly connected components
+in a token's own transfers, and a wash trader beats it by paying through
+wallets that never touch the token. The paper adds the graph of money between
+wallets to the token's transfers, which gives the three methods washtrace runs.
+
+It builds on:
+
+| Work | What washtrace takes from it |
+|---|---|
+| Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM | SCC detection on each token's transfer graph, flagging a component by its cycle count: the basis of SCC A. |
+| Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543), arXiv:2305.01543 | SCC detection over sales as well as transfers, so a sale fills an edge the transfers miss. |
+| hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune | Five filters, one of them buyer and seller first funded by the same wallet: the shared funder that SCC AC generalises. |
+| Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001), arXiv:2102.07001 | SCC detection over the user transaction graph to find colluding traders, here applied to money between NFT traders. |
+| Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451), IEEE TNNLS 27(11) | Wash trades as cycles in a directed graph of trades. Its volume matching does not carry over: NFTs are not fungible. |
+
+Further reading:
+
+- [ERC-721](https://eips.ethereum.org/EIPS/eip-721), the token standard
+  washtrace reads.
+- [Seaport](https://github.com/ProjectOpenSea/seaport), the marketplace
+  protocol whose sales washtrace prices.
+- [Etherscan API V2](https://docs.etherscan.io/), the source of who paid whom.
 
 ## Architecture
 
@@ -139,12 +173,38 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. |
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
 | `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. Overrides the console's `stored.repo` setting. |
+| `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
 | `PORT` | The api's listen port. `8080` in the image. |
 | `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
 
-**Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
-are stateless. Worker replicas share each job through an advisory lock, so a
-second worker gives failover, not double reads.
+## Deploying
+
+The [Dockerfile](Dockerfile) builds two images, and
+[docker-compose.yml](docker-compose.yml) runs them over Postgres 17:
+
+```sh
+docker build --target worker -t washtrace-worker .
+docker build --target api    -t washtrace-api .
+```
+
+- **Schema.** Both services migrate the `washtrace` schema on boot, so there
+  is no separate migration step. Point `WASHTRACE_STORE_URL` at any Postgres
+  you run. The Compose file's own database and password are for a single
+  host, not for production.
+- **Health.** The worker answers `GET :8081/health` and the api
+  `GET /api/health`, and both images declare a `HEALTHCHECK`. Only the api
+  needs a public port.
+- **Auth.** On a public host, set `WASHTRACE_USERNAME` and
+  `WASHTRACE_PASSWORD`. Without them the console is open to anyone, though
+  its settings are read only.
+- **Stored data.** Give the worker a writable volume at
+  `WASHTRACE_STORED_DIR` and mount the same volume read only into the api.
+- **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds to
+  finish, then exits. Postgres rolls back a pass that did not finish and frees
+  its lock, so `docker stop`'s 10-second grace is enough.
+- **Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
+  are stateless. Worker replicas share each job through an advisory lock, so a
+  second worker gives failover, not double reads.
 
 ## Stored data
 
@@ -156,17 +216,20 @@ chain where they stop. The console shows the download as it runs ("Downloading
 stored data · 41%") and the Watch panel lists each collection's size before you
 watch it, such as `stored data: 12.3 MB transfers + 3.4 GB money trail`. The
 transfers come first; the money trail follows and feeds Money loops back and
-Linked wallets without an Etherscan key.
+Linked wallets without an Etherscan key. A large money trail loads into the
+database in the background (over an hour for the biggest collections); the
+console shows how far it has got ("Money trail loading from stored data · 41%"),
+and the analysis runs again once it is in.
+
+> **Not yet published.** The default dataset is not public yet. Until it is,
+> the Hub answers 401, the worker takes that as no dataset, and every
+> collection is read from the chain.
 
 - **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
   repo or the image. Under Compose it is the named volume `stored`, written by
   the worker and mounted read only into the api. Under Compose,
   `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
   the worker and the api look in different places.
-- **Upgrading.** Compose used to bind-mount `./data/stored`; it is now the named
-  volume `stored`, and old local files there are no longer read by Compose. The
-  worker downloads what it needs again; copy files into the volume only if you
-  cut them yourself.
 - **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
   setting (the environment wins). The worker fetches the dataset's manifest about
   hourly, and at once when a collection is newly watched, and keeps the last
@@ -190,7 +253,7 @@ settings writes and Tests answer 403 while basic auth is off.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. `trailProgress` (0 to 1) says how far that collection's downloaded money trail has loaded into the database; null when none is loading. |
 | `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
 | `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
 | `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |
@@ -286,3 +349,16 @@ Three corrections, each with a test:
   four calls per second, so a collection with 30,000 wallets needs about eight
   hours. Until then the console states AU and AC as floors, along with the
   share of wallets read so far.
+
+## Citing
+
+washtrace implements the methods of (Chow, 2023):
+
+```bibtex
+@misc{chow2023washtrading,
+  author = {Chow, Jonathan},
+  title  = {Detecting and quantifying wash trading of non-fungible tokens},
+  year   = {2023},
+  url    = {https://github.com/jonathanchowjh/opensea-fraud-detector/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf}
+}
+```

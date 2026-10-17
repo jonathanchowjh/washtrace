@@ -2,7 +2,7 @@
 
 body { margin: 0; }
 
-/* pg-ops' palette: neutral grey surfaces, and hue reserved for verdicts so
+/* Neutral grey surfaces, and hue reserved for verdicts so
    that grey can mean "no verdict" (a method that could not run) and never
    be mistaken for clean. */
 @theme inline {

@@ -110,6 +110,8 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       const what = c.downloadFile === 'trail' ? 'the money trail' : 'stored data';
       notice('working', `Downloading ${what} for ${label} · ${downloaded(c.downloadProgress)}${bytes === undefined ? '' : ` of ${formatBytes(bytes)}`}`);
     }
+    // The downloaded trail goes into the database after the download; the lenses run again once it is in.
+    if (!paused && c.trailProgress !== null) notice('working', `Loading the money trail for ${label} · ${downloaded(c.trailProgress)}`);
     // Not a fault: its chain is read instead where there is an RPC, and the note says it is tried again. A paused collection tries nothing.
     if (!paused && c.downloadNote) notice('info', `${label}: ${c.downloadNote}`);
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);

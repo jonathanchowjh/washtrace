@@ -6,7 +6,10 @@ dist
 **/dist
 .git
 .remember
+.superpowers
+.playwright-mcp
 docs
+paper
 *.tsbuildinfo
 # Stored data is large and downloaded at run time, never baked into an image.
 data/stored/
