@@ -14,6 +14,7 @@
     "@washtrace/detect": "*"
   },
   "devDependencies": {
-    "@huggingface/hub": "2.17.9"
+    "@huggingface/hub": "2.17.9",
+    "undici": "7.30.1"
   }
 }

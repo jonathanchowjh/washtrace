@@ -3,11 +3,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { commit, createRepo, whoAmI, type CommitFile } from '@huggingface/hub';
+import { Agent, fetch as undiciFetch } from 'undici';
 import {
   MIGRATIONS, STORED_REPO, Store, datasetCard, entryFor, fetchManifest, mergeManifest, messageOf, parseManifest, parseTarget, cutCollection,
   readTransfers, readTrail, storedFile,
   type Manifest, type StoredEntry,
 } from '@washtrace/detect';
+
+/**
+ * How long one upload request may wait for the Hub's answer. The Hub answers
+ * a block of a large file (up to about 64 MB) only once all of it is in, so on
+ * a slow uplink one takes past fetch's default 300 s, and the commit fails as
+ * "fetch failed" near its end, as the first upload of the dataset did twice.
+ */
+export const UPLOAD_TIMEOUT_MS = 30 * 60_000;
+
+/** A fetch for the commit that waits `timeoutMs` for an answer instead of 300 s. */
+export function uploadFetch(timeoutMs = UPLOAD_TIMEOUT_MS): typeof fetch {
+  const dispatcher = new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs });
+  return ((input, init) => undiciFetch(input as never, { ...init, dispatcher } as never)) as typeof fetch;
+}
 
 function bad(name: string): never {
   throw new Error(`${name} is not <chainId>/<address>`);
@@ -223,7 +238,7 @@ export class Publisher {
 
   /** The one commit. The only place a file or the token goes to the Hub. */
   async commit(operations: CommitFile[], title: string): Promise<string> {
-    const out = await commit({ repo: { type: 'dataset', name: this.repo }, operations, title, accessToken: this.accessToken() });
+    const out = await commit({ repo: { type: 'dataset', name: this.repo }, operations, title, accessToken: this.accessToken(), fetch: uploadFetch() });
     return out?.commit.url ?? `https://huggingface.co/datasets/${this.repo}`;
   }
 

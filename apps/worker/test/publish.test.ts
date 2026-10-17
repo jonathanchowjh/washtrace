@@ -5,8 +5,10 @@ import { zstdDecompressSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { MIGRATIONS, STORED_REPO, storedFile, writeTransfers, writeTrail, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
-import { Publisher, parsePublishArgs } from '../src/publish.js';
+import { Publisher, UPLOAD_TIMEOUT_MS, parsePublishArgs, uploadFetch } from '../src/publish.js';
 
 /** An operation's bytes as text: a Blob's text, or the file a URL names (decompressed, as a reader of the dataset sees it). */
 async function contentOf(op: { path: string; content: Blob | URL }): Promise<string> {
@@ -350,4 +352,25 @@ describe('publish --from', () => {
     await p.run([], { dryRun: false });
     expect(await snapshot(dir)).toEqual(before);
   });
+});
+
+describe('uploadFetch', () => {
+  it('waits past the default 300 s for the Hub to answer an upload, and still gives up at its own limit', async () => {
+    expect(UPLOAD_TIMEOUT_MS).toBeGreaterThan(300_000);
+    // A server that, like the Hub with a xet block, answers only well after the body is in.
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => setTimeout(() => res.end('ok'), 3_000));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    try {
+      const cut = await uploadFetch(1_000)(url, { method: 'POST', body: 'block' }).catch((err: Error) => err);
+      expect((cut as Error & { cause?: { code?: string } }).cause?.code).toBe('UND_ERR_HEADERS_TIMEOUT');
+      const res = await uploadFetch(10_000)(url, { method: 'POST', body: 'block' });
+      expect(await res.text()).toBe('ok');
+    } finally {
+      server.close();
+    }
+  }, 20_000);
 });
