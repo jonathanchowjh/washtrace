@@ -1,5 +1,6 @@
 import { isMainThread, parentPort, Worker as Thread, workerData } from 'node:worker_threads';
 import { analyze, type Input } from './methods.js';
+import { Payments } from './payments.js';
 import { Store } from './store.js';
 import type { Analysis } from './types.js';
 
@@ -40,8 +41,17 @@ export interface Analysed {
  */
 export async function analyzeStored(store: Store, request: AnalysisRequest): Promise<Analysed> {
   const { storeUrl: _, id, chainId, ...settings } = request;
-  const input = await store.analysisInput(id, chainId);
+  const input = await read(store, id, chainId);
   return { analysis: analyze({ ...input, ...settings }), through: input.through };
+}
+
+/**
+ * The store's input with its flows made Payments. A function of its own so
+ * the Flow array is garbage once it returns, not held through the analysis.
+ */
+async function read(store: Store, id: number, chainId: number) {
+  const { flows, ...rest } = await store.analysisInput(id, chainId);
+  return { ...rest, payments: Payments.from(flows, rest.transfers) };
 }
 
 /**

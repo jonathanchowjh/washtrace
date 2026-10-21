@@ -1,5 +1,6 @@
-import { AddressGraph, ZERO, tokenGraph, type Hop } from './graph.js';
-import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
+import { AddressGraph, tokenGraph, type Hop } from './graph.js';
+import type { Payments } from './payments.js';
+import type { Analysis, Flag, Method, MethodTotals, Transfer, Witness } from './types.js';
 
 /**
  * The numbers the methods turn on. Each is data, with the sentence that
@@ -32,8 +33,11 @@ export type Rules = { readonly [K in keyof typeof RULES]: number };
 
 export interface Input {
   transfers: readonly Transfer[];
-  /** Money flows touching the collection's wallets, from the funding source. */
-  flows: readonly Flow[];
+  /**
+   * Payments touching the collection's wallets, from the funding source:
+   * already filtered (see Payments.from), and held as numbers, not as Flows.
+   */
+  payments: Payments;
   /** False when no funding source is configured: AU and AC report themselves unavailable. */
   fundingAvailable: boolean;
   /** Wallets whose funding was read. */
@@ -158,33 +162,44 @@ function sccFlags(hops: readonly Hop[], via: readonly [string, string][], minCyc
  * The user transaction graph, built once per analysis and read per token.
  * A class because every question it answers needs the same indexes.
  *
- * Its answers never depend on the order of the flows. The store returns
+ * Its answers never depend on the order of the payments. The store returns
  * them in no set order, and a search cut short at visitCap (22% of
  * Terraforms') reaches whichever wallets it meets first: so each wallet's
  * payees are searched by address, a pair keeps its smallest tx, and a link
  * names its smallest middle.
+ *
+ * Wallets are numbered here in address order, so "by address" is "by
+ * number", and each wallet's neighbours are a run of one sorted typed array:
+ * wallet v's are `near[nearStart[v]]` up to `near[nearStart[v + 1]]`. As
+ * maps of maps keyed by address, Terraforms' graph took 1.1 GB on top of its
+ * flows, and the analysis ran out of heap.
  */
 class MoneyGraph {
-  /** Undirected: wallet → neighbour → the smallest hash of the transactions that join them. */
-  private readonly near = new Map<string, Map<string, string>>();
-  /**
-   * Every wallet in a directed flow, numbered, so SCC AU searches arrays by
-   * number. Terraforms' 11,072 wallets are each searched up to 20,000
-   * wallets deep; by address, with a Set per search, that was 29 s of the
-   * analysis's 39.
-   */
-  private readonly ids = new Map<string, number>();
-  private readonly names: string[] = [];
-  /** Directed, by number: the wallets each sent money to, by address. */
-  private readonly out: number[][] = [];
-  private readonly hubs = new Set<string>();
+  /** By number: each wallet's address. */
+  private readonly names: string[];
+  /** The Payments number of a wallet → its number here. */
+  private readonly rank: Int32Array;
+  /** Undirected, by number: each wallet's neighbours, ascending. */
+  private readonly nearStart: Int32Array;
+  private readonly near: Int32Array;
+  /** Beside `near`: the payment with the smallest hash of those that join the two, either way. */
+  private readonly nearTx: Int32Array;
+  /** Directed, by number: the wallets each sent money to, ascending, so by address. */
+  private readonly outStart: Int32Array;
+  private readonly out: Int32Array;
   /** By number: 1 for a hub, and 1 for one of the collection's wallets. */
   private readonly hub: Uint8Array;
   private readonly member: Uint8Array;
-  /** By number: the search that last saw it, so a search starts without clearing anything. */
+  /**
+   * By number: the search that last saw it, so a search starts without
+   * clearing anything. Terraforms' 11,072 wallets are each searched up to
+   * 20,000 wallets deep; by address, with a Set per search, that was 29 s of
+   * the analysis's 39.
+   */
   private readonly seen: Int32Array;
   private searches = 0;
   private readonly reached = new Map<string, Set<string>>();
+  private readonly payments: Payments;
   truncatedSearches = 0;
 
   constructor(
@@ -192,52 +207,80 @@ class MoneyGraph {
     wallets: ReadonlySet<string>,
     private readonly rules: Rules,
   ) {
-    // The payment leg of a sale is a flow from buyer to seller in the same
-    // transaction as the transfer: with a WETH bid it is a direct transfer
-    // between the two. Left in, every honest bid sale would close its own
-    // cycle. The 2023 data never showed this because it read ETH only, and
-    // Seaport routes ETH through itself; WETH, Blur Pool and every ERC-20
-    // payment do not.
-    const sales = new Set(input.transfers.map((t) => t.txHash));
-    const sent: Set<number>[] = [];
-    for (const f of input.flows) {
-      if (sales.has(f.txHash) || f.from === f.to || f.valueWei === '0') continue;
-      if (f.from === ZERO || f.to === ZERO) continue;
-      this.join(f.from, f.to, f.txHash);
-      this.join(f.to, f.from, f.txHash);
-      const from = this.id(f.from);
-      (sent[from] ??= new Set()).add(this.id(f.to));
+    const { payments } = input;
+    this.payments = payments;
+    const { names, rank } = byAddress(payments.names);
+    this.names = names;
+    this.rank = rank;
+    const n = names.length;
+    const ends = payments.ends;
+    const { start, run } = runs(ends, rank);
+
+    // One entry per pair: of the payments that join two wallets, either
+    // way, the one with the smallest hash, and whether this wallet paid.
+    const nearStart = new Int32Array(n + 1);
+    const near = new Int32Array(run.length);
+    const nearTx = new Int32Array(run.length);
+    const outStart = new Int32Array(n + 1);
+    const out = new Int32Array(run.length / 2);
+    let m = 0;
+    let o = 0;
+    for (let v = 0; v < n; v++) {
+      nearStart[v] = m;
+      outStart[v] = o;
+      for (let i = start[v]!, end = start[v + 1]!; i < end;) {
+        const y = rank[ends[run[i]! ^ 1]!]!;
+        let p = run[i]! >> 1;
+        let paid = (run[i]! & 1) === 0;
+        for (i++; i < end && rank[ends[run[i]! ^ 1]!] === y; i++) {
+          const q = run[i]! >> 1;
+          if (payments.tx(q) < payments.tx(p)) p = q;
+          if ((run[i]! & 1) === 0) paid = true;
+        }
+        near[m] = y;
+        nearTx[m++] = p;
+        if (paid) out[o++] = y;
+      }
     }
-    const { names } = this;
-    const byAddress = (x: number, y: number) => compare(names[x]!, names[y]!);
-    for (let v = 0; v < names.length; v++) this.out.push(sent[v] ? [...sent[v]!].sort(byAddress) : []);
-    for (const c of input.contracts) this.hubs.add(c);
-    for (const t of input.truncated) this.hubs.add(t);
-    for (const [x, around] of this.near) {
+    nearStart[n] = m;
+    outStart[n] = o;
+    // Copies cut to size: the buffers sized for every payment are dropped with this constructor.
+    this.nearStart = nearStart;
+    this.near = near.slice(0, m);
+    this.nearTx = nearTx.slice(0, m);
+    this.outStart = outStart;
+    this.out = out.slice(0, o);
+
+    this.member = Uint8Array.from(names, (a) => (wallets.has(a) ? 1 : 0));
+    this.hub = new Uint8Array(n);
+    for (let v = 0; v < n; v++) {
+      if (input.contracts.has(names[v]!) || input.truncated.has(names[v]!)) { this.hub[v] = 1; continue; }
       let degree = 0;
-      for (const y of around.keys()) if (wallets.has(y)) degree += 1;
-      if (degree > rules.hubDegree) this.hubs.add(x);
+      for (let i = nearStart[v]!; i < nearStart[v + 1]!; i++) degree += this.member[this.near[i]!]!;
+      if (degree > rules.hubDegree) this.hub[v] = 1;
     }
-    this.hub = Uint8Array.from(this.names, (n) => (this.hubs.has(n) ? 1 : 0));
-    this.member = Uint8Array.from(this.names, (n) => (wallets.has(n) ? 1 : 0));
-    this.seen = new Int32Array(this.names.length);
+    this.seen = new Int32Array(n);
   }
 
+  /** The number here of the wallet at `address`, or -1 for one in no payment. */
   private id(address: string): number {
-    let id = this.ids.get(address);
-    if (id === undefined) {
-      id = this.names.length;
-      this.ids.set(address, id);
-      this.names.push(address);
-    }
-    return id;
+    const id = this.payments.number(address);
+    return id === undefined ? -1 : this.rank[id]!;
   }
 
-  private join(a: string, b: string, tx: string): void {
-    let m = this.near.get(a);
-    if (!m) this.near.set(a, (m = new Map()));
-    const had = m.get(b);
-    if (had === undefined || tx < had) m.set(b, tx);
+  /** Where `y` is among `v`'s neighbours, or -1. */
+  private find(v: number, y: number): number {
+    const { near } = this;
+    let lo = this.nearStart[v]!;
+    let hi = this.nearStart[v + 1]! - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      const at = near[mid]!;
+      if (at === y) return mid;
+      if (at < y) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return -1;
   }
 
   /**
@@ -245,21 +288,24 @@ class MoneyGraph {
    * hops, ignoring direction? Direct, or through one middle that is not a
    * hub. Figure 8's six cycles are exactly these: three directions of a
    * direct flow and the middle's four, less the two AU already finds.
-   * Of several middles, the smallest address.
+   * Of several middles, the smallest address, named with the payment that
+   * joins it to whichever of `a` and `b` has fewer neighbours.
    */
   link(a: string, b: string): { middle: string | null; tx: string } | null {
-    const na = this.near.get(a);
-    const nb = this.near.get(b);
-    if (!na || !nb) return null;
-    const direct = na.get(b);
-    if (direct !== undefined) return { middle: null, tx: direct };
-    const [small, large] = na.size <= nb.size ? [na, nb] : [nb, na];
-    let best: { middle: string; tx: string } | null = null;
-    for (const [x, tx] of small) {
-      if (x === a || x === b || this.hubs.has(x) || !large.has(x)) continue;
-      if (best === null || x < best.middle) best = { middle: x, tx };
+    const va = this.id(a);
+    const vb = this.id(b);
+    if (va < 0 || vb < 0) return null;
+    const { near, nearStart, nearTx, hub, payments } = this;
+    const direct = this.find(va, vb);
+    if (direct >= 0) return { middle: null, tx: payments.tx(nearTx[direct]!) };
+    const [small, large] = nearStart[va + 1]! - nearStart[va]! <= nearStart[vb + 1]! - nearStart[vb]! ? [va, vb] : [vb, va];
+    // Ascending, so the first middle found is the smallest.
+    for (let i = nearStart[small]!; i < nearStart[small + 1]!; i++) {
+      const x = near[i]!;
+      if (x === va || x === vb || hub[x] || this.find(large, x) < 0) continue;
+      return { middle: this.names[x]!, tx: payments.tx(nearTx[i]!) };
     }
-    return best;
+    return null;
   }
 
   /**
@@ -272,18 +318,19 @@ class MoneyGraph {
     if (known) return known;
     const found = new Set<string>();
     this.reached.set(from, found);
-    const start = this.ids.get(from);
-    // A wallet in no flow sends nowhere.
-    if (this.hubs.has(from) || start === undefined) return found;
+    const start = this.id(from);
+    // A wallet in no payment sends nowhere.
+    if (start < 0 || this.hub[start]) return found;
     const search = ++this.searches;
-    const { seen, out, hub, member, names } = this;
+    const { seen, out, outStart, hub, member, names } = this;
     seen[start] = search;
     let visited = 1;
     let frontier = [start];
     for (let depth = 0; depth < this.rules.reachDepth && frontier.length > 0; depth++) {
       const next: number[] = [];
       for (const v of frontier) {
-        for (const w of out[v]!) {
+        for (let i = outStart[v]!, end = outStart[v + 1]!; i < end; i++) {
+          const w = out[i]!;
           if (seen[w] === search) continue;
           if (visited >= this.rules.visitCap) { this.truncatedSearches += 1; return found; }
           seen[w] = search;
@@ -296,6 +343,39 @@ class MoneyGraph {
     }
     return found;
   }
+}
+
+/** Wallets numbered in address order: their addresses so, and each Payments number's new number. */
+function byAddress(addresses: readonly string[]): { names: string[]; rank: Int32Array } {
+  const order = new Int32Array(addresses.length);
+  for (let i = 0; i < order.length; i++) order[i] = i;
+  order.sort((x, y) => compare(addresses[x]!, addresses[y]!));
+  const rank = new Int32Array(order.length);
+  for (let r = 0; r < order.length; r++) rank[order[r]!] = r;
+  return { names: Array.from(order, (i) => addresses[i]!), rank };
+}
+
+/**
+ * Each wallet's payments, as a run of `run` from `start[v]` to `start[v + 1]`
+ * ordered by the wallet at the other end. Entry k stands for payment k >> 1
+ * seen from `ends[k]`: even k from its payer, odd from its payee, so
+ * `ends[k ^ 1]` is the other end. Two counting sorts, by the other end and
+ * then stably by this one, order every run at once with no comparisons, and
+ * the first's buffer is dropped on return.
+ */
+function runs(ends: Int32Array, rank: Int32Array): { start: Int32Array; run: Int32Array } {
+  const n = rank.length;
+  // Each payment is one entry at each end whichever end is counted, so one count serves both sorts.
+  const start = new Int32Array(n + 1);
+  for (let k = 0; k < ends.length; k++) start[rank[ends[k]!]! + 1]! += 1;
+  for (let v = 0; v < n; v++) start[v + 1]! += start[v]!;
+  const fill = start.slice(0, n);
+  const byOther = new Int32Array(ends.length);
+  for (let k = 0; k < ends.length; k++) byOther[fill[rank[ends[k ^ 1]!]!]!++] = k;
+  fill.set(start.subarray(0, n));
+  const run = new Int32Array(ends.length);
+  for (const k of byOther) run[fill[rank[ends[k]!]!]!++] = k;
+  return { start, run };
 }
 
 /** Code-unit order: a total order on addresses and hashes, and unlike localeCompare, fast. */

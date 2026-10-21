@@ -1,6 +1,7 @@
 export * from './types.js';
 export { tokenGraph, tarjan, cycles, AddressGraph, ZERO, type Hop, type TokenGraph } from './graph.js';
 export { analyze, RULES, type Input, type Rules } from './methods.js';
+export { Payments } from './payments.js';
 export { MARKETPLACES, CUSTODIANS, WRAPPED, contractsFor, moneyFor, seaportPrice, tagSales } from './marketplaces.js';
 export { Chain, TRANSFER, topicAddress } from './chain.js';
 export { Etherscan, ETHERSCAN_V2 } from './etherscan.js';
