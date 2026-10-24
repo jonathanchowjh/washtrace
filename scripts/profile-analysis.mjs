@@ -61,7 +61,7 @@ try {
     const [result, analyzeMs] = await time(() => analyze({ ...input, ...settings }));
     const [, saveMs] = await time(() => store.saveAnalysis(id, version, result, inputMs + analyzeMs, input.through));
     console.table({
-      analysisInput: { ms: inputMs, rows: `${input.transfers.length} transfers, ${input.flows.length} flows, ${input.funded.size} funded, ${input.truncated.size} truncated` },
+      analysisInput: { ms: inputMs, rows: `${input.transfers.length} transfers, ${input.payments.size} payments, ${input.funded.size} funded, ${input.truncated.size} truncated` },
       analyze: { ms: analyzeMs, rows: `${result.wallets} wallets, ${result.truncatedSearches} truncated searches` },
       saveAnalysis: { ms: saveMs, rows: flagged(result) },
       total: { ms: inputMs + analyzeMs + saveMs, rows: '' },

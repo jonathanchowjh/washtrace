@@ -281,10 +281,68 @@ describe('Store', () => {
       flow(d1, d3, { blockNumber: 900, txHash: '0xdedu1' }), flow(d1, d3, { blockNumber: 800, txHash: '0xdedu2' }),
       flow(d1, d2, { txHash: saleTx }), flow(d1, d1), flow(d3, d1, { valueWei: '0' }),
     ], false);
-    const { flows } = await store.analysisInput(id, 1);
-    // The one MoneyGraph.join would keep of the two, whatever their blocks.
-    expect(flows.map((f) => [f.from, f.to, f.blockNumber])).toEqual([[d1, d3, 900]]);
+    const { payments } = await store.analysisInput(id, 1);
+    // Of the two d1 -> d3, the graph keeps the smaller hash, whatever their blocks.
+    expect(payments.size).toBe(1);
+    expect([payments.names[payments.ends[0]!], payments.names[payments.ends[1]!], payments.tx(0)]).toEqual([d1, d3, '0xdedu1']);
     await drop(1, w('dedu'));
+  });
+
+  it('analysisInput reads payments in batches, no matter how many', async () => {
+    const d1 = w('b1'), d2 = w('b2');
+    const { id } = await store.addCollection(1, w('batch'), null, 1);
+    await store.ingest(id, 1, chain('6', d1, d2), 10, []);
+    await store.fund(1, d1, [1, 2, 3, 4, 5, 6, 7].map((i) => flow(d1, w(`b1p${i}`), { txHash: `0xbatch${i}` })), false);
+    const request = { storeUrl: '', id, chainId: 1, rules: {}, fundingAvailable: true, custodians: new Set<string>(), contracts: new Set<string>(), money: new Set(['']) };
+    const whole = await analyzeStored(store, request);
+    store.paymentBatch = 2;
+    try {
+      expect((await store.analysisInput(id, 1)).payments.size).toBe(7);
+      expect(await analyzeStored(store, request)).toEqual(whole);
+    } finally {
+      delete (store as any).paymentBatch;
+    }
+    await drop(1, w('batch'));
+  });
+
+  it('analysisInput releases its client and rolls back when a read fails mid-cursor', async () => {
+    const d1 = w('r1'), d2 = w('r2');
+    const { id } = await store.addCollection(1, w('rollb'), null, 1);
+    await store.ingest(id, 1, chain('7', d1, d2), 10, []);
+    await store.fund(1, d1, [1, 2, 3, 4, 5].map((i) => flow(d1, w(`r1p${i}`), { txHash: `0xrollb${i}` })), false);
+    const out = () => store.pool.totalCount - store.pool.idleCount;
+    const before = out();
+    const connect = store.pool.connect.bind(store.pool) as () => Promise<pgClient.PoolClient>;
+    const rolledBack: string[] = [];
+    (store.pool as any).connect = async (...args: unknown[]) => {
+      // pool.query asks for its client with a callback; only the cursor's client, asked for without, is rigged.
+      if (args.length > 0) return (connect as any)(...args);
+      const client = await connect();
+      const query = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+      let fetches = 0;
+      (client as any).query = (text: unknown, ...rest: unknown[]) => {
+        if (typeof text === 'string' && text.startsWith('FETCH') && ++fetches === 2) return Promise.reject(new Error('connection lost'));
+        if (text === 'ROLLBACK') rolledBack.push(text);
+        return query(text, ...rest);
+      };
+      const release = client.release;
+      client.release = (err?: Error | boolean) => {
+        delete (client as any).query;
+        client.release = release;
+        return release(err);
+      };
+      return client;
+    };
+    store.paymentBatch = 2;
+    try {
+      await expect(store.analysisInput(id, 1)).rejects.toThrow('connection lost');
+    } finally {
+      delete (store as any).paymentBatch;
+      delete (store.pool as any).connect;
+    }
+    expect(rolledBack).toEqual(['ROLLBACK']);
+    expect(out()).toBe(before);
+    await drop(1, w('rollb'));
   });
 
   it('stores funding and takes the wallet off the queue', async () => {
@@ -304,10 +362,10 @@ describe('Store', () => {
     const [stale] = await store.stale();
     const read = await store.analysisInput(stale!.id, 1);
     expect(read.transfers).toHaveLength(4);
-    expect(read.flows).toHaveLength(2);
+    expect(read.payments.size).toBe(2);
     // X funded both, but never traded here: it is a middle, not one of the collection's wallets.
     expect(read.funded).toEqual(new Set());
-    const result = analyze({ ...input(read.transfers, read.flows), funded: read.funded });
+    const result = analyze({ ...input(read.transfers), payments: read.payments, funded: read.funded });
     await store.saveAnalysis(stale!.id, stale!.version, result, 5, read.through);
 
     expect(await store.stale()).toEqual([]);
@@ -506,7 +564,10 @@ describe('Store', () => {
     it('reads a followed wallet\'s payments onward into the analysis', async () => {
       const [c] = await store.collections();
       const read = await store.analysisInput(c!.id, 1);
-      expect(read.flows.some((f) => f.from === w('m1') && f.to === w('m2'))).toBe(true);
+      const { payments } = read;
+      const m1 = payments.number(w('m1')), m2 = payments.number(w('m2'));
+      expect(m1).toBeDefined();
+      expect([...payments.ends].some((n, i) => i % 2 === 0 && n === m1 && payments.ends[i + 1] === m2)).toBe(true);
     });
 
     it('takes a followed wallet back to depth 0 when it trades', async () => {

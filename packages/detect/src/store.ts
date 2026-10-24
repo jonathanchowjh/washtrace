@@ -2,6 +2,7 @@ import pg from 'pg';
 import { ZERO } from './graph.js';
 import { traders } from './marketplaces.js';
 import { MIGRATIONS } from './migrations.js';
+import { Payments } from './payments.js';
 import type { Rules } from './methods.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from './types.js';
@@ -214,6 +215,9 @@ export type StaleRow = Awaited<ReturnType<Store['stale']>>[number];
  */
 export class Store {
   constructor(readonly pool: pg.Pool) {}
+
+  /** How many payments `analysisInput` fetches at a time. A field so a test can make it small. */
+  paymentBatch = 20_000;
 
   static connect(url: string): Store {
     // Keep-alive probes find a connection that died without a word (a NAT's idle timeout, a host gone), so a
@@ -976,9 +980,14 @@ export class Store {
     }));
   }
 
-  /** What `analyze` reads for one collection: its transfers, and the flows and funding state of its wallets. */
+  /**
+   * What `analyze` reads for one collection: its transfers, the payments
+   * among its wallets and the funding state of those wallets. The payments
+   * stream through a cursor straight into a `Payments`, so no `Flow` is ever
+   * built for them: Terraforms' millions were 1.2 GB of heap as objects.
+   */
   async analysisInput(id: number, chainId: number): Promise<{
-    transfers: Transfer[]; flows: Flow[]; funded: Set<string>; truncated: Set<string>; through: number | null;
+    transfers: Transfer[]; payments: Payments; funded: Set<string>; truncated: Set<string>; through: number | null;
   }> {
     const transfers = (await this.pool.query(`${TRANSFER_SELECT} WHERE t.collection_id = $1`, [id])).rows.map(toTransfer);
     // The collection's wallets go in as an array, not as a subquery. As an
@@ -990,26 +999,28 @@ export class Store {
       `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
       [chainId],
     )).rows.map((r) => r.address);
-    // One flow per pair of wallets, the one with the smallest hash: the money
-    // graph keeps no more than that (MoneyGraph.join), so the rest would be
-    // read only to be dropped, and the answer is the same as reading them all.
-    // So are the flows it skips anyway: payments inside the collection's own
-    // sales, zero values, a wallet paying itself, and mints and burns. A
-    // trader's history runs to thousands of flows, and reading them all ran
-    // the worker out of memory at 6.7M flows for 1.3M pairs.
-    const flows = (await this.pool.query(
-      // The columns toFlow reads and no more: millions of rows, and a timestamptz parsed into a Date for each was seconds.
-      `SELECT DISTINCT ON (f.from_address, f.to_address)
-              f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
-              extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+    // One payment per pair of wallets, the one with the smallest hash: the
+    // money graph keeps no more than that, across both directions of a pair,
+    // so the rest would be read only to be dropped, and the answer is the
+    // same as reading them all. So are the flows it skips anyway: payments
+    // inside the collection's own sales, zero values, a wallet paying itself,
+    // and mints and burns. This WHERE is the whole filter, which is why
+    // `Payments.add` checks nothing. A trader's history runs to thousands of
+    // flows, and reading them all ran the worker out of memory at 6.7M flows
+    // for 1.3M pairs; the cursor keeps even the pairs from landing at once.
+    const payments = new Payments();
+    const paid = this.cursor(
+      // Three columns and no more: millions of rows, and the graph reads nothing else of a payment.
+      `SELECT DISTINCT ON (f.from_address, f.to_address) f.from_address, f.to_address, f.tx_hash FROM washtrace.flows f
        WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
          -- Followed wallets' payments onward: the middle of a path SCC AU follows back.
          OR f.from_address = ANY($3::text[]))
          AND f.value_wei > 0 AND f.from_address <> f.to_address AND f.from_address <> $4 AND f.to_address <> $4
          AND NOT EXISTS (SELECT 1 FROM washtrace.transfers s WHERE s.collection_id = $5 AND s.tx_hash = f.tx_hash)
        ORDER BY f.from_address, f.to_address, f.tx_hash`,
-      [chainId, wallets, followed, ZERO, id],
-    )).rows.map(toFlow);
+      [chainId, wallets, followed, ZERO, id], (r) => r, this.paymentBatch,
+    );
+    for await (const r of paid) payments.add(r.from_address, r.to_address, r.tx_hash);
     const state = (await this.pool.query<{ address: string; truncated: boolean }>(
       `SELECT address, truncated FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND (address = ANY($2::text[]) OR depth > 0)`,
       [chainId, wallets],
@@ -1017,7 +1028,7 @@ export class Store {
     const { rows } = await this.pool.query<{ cursor_block: string | null }>('SELECT cursor_block FROM washtrace.collections WHERE id = $1', [id]);
     return {
       transfers,
-      flows,
+      payments,
       funded: new Set(state.map((s) => s.address)),
       truncated: new Set(state.filter((s) => s.truncated).map((s) => s.address)),
       through: rows[0]?.cursor_block == null ? null : Number(rows[0].cursor_block),
@@ -1202,21 +1213,21 @@ export class Store {
   }
 
   /**
-   * The rows of `sql`, a page at a time through a server-side cursor, so
+   * The rows of `sql`, `page` at a time through a server-side cursor, so
    * millions of them stream rather than land in memory. One read-only
    * transaction, so the rows are one snapshot. Leaving the loop early (a
    * failed write) closes the cursor and gives the connection back.
    */
-  private async *cursor<T>(sql: string, params: unknown[], map: (r: any) => T): AsyncGenerator<T> {
+  private async *cursor<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE): AsyncGenerator<T> {
     const c = await this.pool.connect();
     let finished = false;
     try {
       await c.query('BEGIN READ ONLY');
       await c.query(`DECLARE stored NO SCROLL CURSOR FOR ${sql}`, params);
       for (;;) {
-        const { rows } = await c.query(`FETCH ${CURSOR_PAGE} FROM stored`);
+        const { rows } = await c.query(`FETCH ${page} FROM stored`);
         for (const r of rows) yield map(r);
-        if (rows.length < CURSOR_PAGE) break;
+        if (rows.length < page) break;
       }
       await c.query('COMMIT');
       finished = true;
