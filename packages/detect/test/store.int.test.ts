@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { StoredDataError, readTrail, trailPath, writeTrail, type StoredEntry } from '../src/stored.js';
 import { needsRestore } from '../src/worker.js';
 import type { Flow, Transfer } from '../src/types.js';
+import type { Payments } from '../src/payments.js';
 
 let pg: StartedPostgreSqlContainer;
 let store: Store;
@@ -295,12 +296,17 @@ describe('Store', () => {
     await store.fund(1, d1, [1, 2, 3, 4, 5, 6, 7].map((i) => flow(d1, w(`b1p${i}`), { txHash: `0xbatch${i}` })), false);
     const request = { storeUrl: '', id, chainId: 1, rules: {}, fundingAvailable: true, custodians: new Set<string>(), contracts: new Set<string>(), money: new Set(['']) };
     const whole = await analyzeStored(store, request);
+    const edges = (p: Payments) => Array.from({ length: p.size }, (_, i) => [p.names[p.ends[2 * i]!], p.names[p.ends[2 * i + 1]!], p.tx(i)]);
+    const one = edges((await store.analysisInput(id, 1)).payments);
+    const was = store.paymentBatch;
     store.paymentBatch = 2;
     try {
-      expect((await store.analysisInput(id, 1)).payments.size).toBe(7);
+      const batched = (await store.analysisInput(id, 1)).payments;
+      expect(batched.size).toBe(7);
+      expect(edges(batched)).toEqual(one);
       expect(await analyzeStored(store, request)).toEqual(whole);
     } finally {
-      delete (store as any).paymentBatch;
+      store.paymentBatch = was;
     }
     await drop(1, w('batch'));
   });
@@ -333,11 +339,12 @@ describe('Store', () => {
       };
       return client;
     };
+    const was = store.paymentBatch;
     store.paymentBatch = 2;
     try {
       await expect(store.analysisInput(id, 1)).rejects.toThrow('connection lost');
     } finally {
-      delete (store as any).paymentBatch;
+      store.paymentBatch = was;
       delete (store.pool as any).connect;
     }
     expect(rolledBack).toEqual(['ROLLBACK']);
