@@ -311,6 +311,12 @@ describe('Store', () => {
     await drop(1, w('batch'));
   });
 
+  it('a cursor is planned to be read to the end', async () => {
+    const rows: string[] = [];
+    for await (const f of (store as any).cursor(`SELECT current_setting('cursor_tuple_fraction') AS f`, [], (r: any) => r.f)) rows.push(f);
+    expect(rows).toEqual(['1']);
+  });
+
   it('analysisInput releases its client and rolls back when a read fails mid-cursor', async () => {
     const d1 = w('r1'), d2 = w('r2');
     const { id } = await store.addCollection(1, w('rollb'), null, 1);
