@@ -1223,9 +1223,9 @@ export class Store {
     let finished = false;
     try {
       await c.query('BEGIN READ ONLY');
-      // A cursor is planned for its first tenth of rows (an index walk, fast to
-      // the first page). Every caller reads to the end, so say so: the plan
-      // that is cheapest overall was 10x faster on Terraforms' flows.
+      // A cursor is planned for its first tenth of rows. Every caller reads to
+      // the end, so say so: Terraforms' payments planned an index walk at nearly
+      // 7x the cost of a scan and sort.
       await c.query('SET LOCAL cursor_tuple_fraction = 1');
       await c.query(`DECLARE stored NO SCROLL CURSOR FOR ${sql}`, params);
       for (;;) {

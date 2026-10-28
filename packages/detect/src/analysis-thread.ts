@@ -15,7 +15,8 @@ const REQUEST = 'washtraceAnalysisRequest';
  * and the small settings `analyze` takes. Never the input itself. Terraforms'
  * was 5.9M flows: held on the main thread and cloned into this one, it was two
  * copies at once and a 10 GB peak, past what a Docker Desktop VM often has.
- * Now payments in typed arrays, it is still read in the thread that uses it.
+ * Now that the payments are typed arrays it is far smaller, but it is still
+ * read in the thread that uses it.
  */
 export interface AnalysisRequest {
   /** Carries the store's password: never logged. */

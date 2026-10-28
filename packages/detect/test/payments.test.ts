@@ -109,6 +109,21 @@ describe('an analysis over Payments', () => {
     for (let i = 0; i < 20; i++) expect(run(shuffled(pays, next)), `order ${i}`).toEqual(want);
   });
 
+  it('a pair paid both ways keeps both directions for reach', () => {
+    // The pair b, x is kept as x → b (0x1, the smaller hash), but the way back from b to a runs b → x → a.
+    const sale = chain('1', a, b);
+    const run = (withBack: boolean) => {
+      const p = new Payments();
+      p.add(b, x, '0x9');
+      if (withBack) p.add(x, b, '0x1');
+      p.add(x, a, '0x5');
+      return analyze({ ...input(sale), payments: p });
+    };
+    const without = run(false);
+    expect(without.totals.AU.flagged).toBe(1);
+    expect(run(true)).toEqual(without);
+  });
+
   it('an empty Payments analyses as no flows did', () => {
     const ts = [...chain('1', a, b, a, b), ...chain('2', c, x)];
     const empty = analyze({ ...input(ts), payments: new Payments() });

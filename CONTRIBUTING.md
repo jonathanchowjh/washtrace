@@ -146,8 +146,10 @@ followed wallets, so following never delays a collection's own funding.
 
 - **Light OOP.** A class exists where several functions share the same state:
   `Chain` (a client and its adaptive span), `Etherscan` (a key and its pacing),
-  `Store` (a pool), `Worker` (all of those and its timers), and `MoneyGraph`
-  inside `methods.ts` (four indexes). Everything else is a function. Never
+  `Store` (a pool), `Worker` (all of those and its timers), `Payments` (the
+  numbered wallets and the arrays that grow with them as payments are added),
+  and `MoneyGraph` inside `methods.ts` (the sorted arrays built from them).
+  Everything else is a function. Never
   inheritance or dependency injection. A test that needs a seam overrides a
   method on the instance, as `etherscan.test.ts` does with `fetch`.
 - **Comments say why**: the constraint the code answers to, not what it does.
