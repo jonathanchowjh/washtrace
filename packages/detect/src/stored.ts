@@ -164,8 +164,9 @@ tags: [ethereum, nft, wash-trading]
 # washtrace data
 
 Transfers of NFT collections, and the money trail of the wallets that traded them, read from the chain. The data
-is made for washtrace, an NFT wash-trading detector: a washtrace install downloads these files instead of reading
-each collection from its deploy block.
+is made for [washtrace](https://github.com/jonathanchowjh/washtrace), an NFT wash-trading detector that follows the
+money between wallets (Chow, 2023): a washtrace install downloads these files instead of reading each collection
+from its deploy block.
 
 Only data that can be read from the chain is included. Nothing about how it was collected, and no labels or
 settings, are in the files.
@@ -229,7 +230,8 @@ flows: pass \`chunksize=\` to read them in parts.
 
 \`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.
 
-Licence: CC-BY-4.0.
+Licence: CC-BY-4.0. How to cite the data, and the paper, is in the washtrace README under
+[Citing](https://github.com/jonathanchowjh/washtrace#citing).
 `;
 }
 

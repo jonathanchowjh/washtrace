@@ -1,6 +1,7 @@
 import type { Flow, Transfer } from '../src/types.js';
 import { ZERO } from '../src/graph.js';
 import type { Input } from '../src/methods.js';
+import { Payments } from '../src/payments.js';
 
 /** Readable stand-ins for addresses: `w('a')` is a wallet named a. */
 export function w(name: string): string {
@@ -33,7 +34,7 @@ export function flow(from: string, to: string, more: Partial<Flow> = {}): Flow {
 export function input(transfers: Transfer[], flows: Flow[] = [], more: Partial<Input> = {}): Input {
   const wallets = new Set(transfers.flatMap((t) => [t.from, t.to]));
   return {
-    transfers, flows, fundingAvailable: true, funded: wallets, truncated: new Set(),
+    transfers, payments: Payments.from(flows, transfers), fundingAvailable: true, funded: wallets, truncated: new Set(),
     custodians: new Set(), contracts: new Set(), money: new Set(['']), ...more,
   };
 }

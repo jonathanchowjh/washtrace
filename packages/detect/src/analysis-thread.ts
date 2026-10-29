@@ -13,8 +13,10 @@ const REQUEST = 'washtraceAnalysisRequest';
 /**
  * What the analysis thread is given: where the store is, which collection,
  * and the small settings `analyze` takes. Never the input itself. Terraforms'
- * is 5.9M flows: held on the main thread and cloned into this one, it was two
+ * was 5.9M flows: held on the main thread and cloned into this one, it was two
  * copies at once and a 10 GB peak, past what a Docker Desktop VM often has.
+ * Now that the payments are typed arrays it is far smaller, but it is still
+ * read in the thread that uses it.
  */
 export interface AnalysisRequest {
   /** Carries the store's password: never logged. */
@@ -60,7 +62,7 @@ export const ANALYZE_TIMEOUT_MS = 60 * 60_000;
  * against that, and its memory is all returned when it exits.
  *
  * The thread reads its own input over a connection of its own, so the
- * flows only ever exist in the thread. The request and the Analysis are
+ * payments only ever exist in the thread. The request and the Analysis are
  * plain data (numbers, strings, plain objects, Sets), so structured clone
  * carries them across unchanged.
  *
