@@ -15,11 +15,15 @@ see [From the paper to now](#from-the-paper-to-now).
 - **Status:** v0.1.0. Tested against Postgres 17 and anvil 1.5.1; verified on
   Ethereum mainnet against the paper's own example sale.
 - **Paper:** [PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf),
-  7 pages. What it builds on is in [The paper and its sources](#the-paper-and-its-sources).
+  7 pages, with its [slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf).
+- **Data:** [jonathanmiro97/washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+  on Hugging Face: six Ethereum collections read from the chain, CC-BY-4.0.
+- **Sources:** the five works the paper builds on are in
+  [What it builds on](#what-it-builds-on).
 
 ## Contents
 
-- [The paper and its sources](#the-paper-and-its-sources)
+- [The paper](#the-paper)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [The methods](#the-methods)
@@ -35,7 +39,7 @@ see [From the paper to now](#from-the-paper-to-now).
 How it is built and why, and how to work on it, is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## The paper and its sources
+## The paper
 
 [*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
 (Chow, 2023) starts from an observation: the top NFT collections by market cap
@@ -45,7 +49,16 @@ in a token's own transfers, and a wash trader beats it by paying through
 wallets that never touch the token. The paper adds the graph of money between
 wallets to the token's transfers, which gives the three methods washtrace runs.
 
-It builds on:
+### Resources
+
+| Resource | What it is |
+|---|---|
+| [Paper](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf) (PDF, 7 pages) | The three methods, the 2023 data from the top 20 ERC-721 collections by trading volume, and the wash trade shares in its Tables 3 and 4. |
+| [Slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf) (PDF, 25 slides) | The paper as presented: the background on SCC detection, open source filters and DEX studies, then the approach, the evaluation and the conclusion. |
+| [washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data) (Hugging Face) | Transfers and the money trail of six collections, read from the chain, so an install need not read them from their deploy blocks. See [Stored data](#stored-data). |
+| [Demo](#quick-start) | A local chain with a scripted market that hides each kind of wash trade among honest trades, with no keys needed. |
+
+### What it builds on
 
 | Work | What washtrace takes from it |
 |---|---|
@@ -55,7 +68,7 @@ It builds on:
 | Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001), arXiv:2102.07001 | SCC detection over the user transaction graph to find colluding traders, here applied to money between NFT traders. |
 | Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451), IEEE TNNLS 27(11) | Wash trades as cycles in a directed graph of trades. Its volume matching does not carry over: NFTs are not fungible. |
 
-Further reading:
+### Further reading
 
 - [ERC-721](https://eips.ethereum.org/EIPS/eip-721), the token standard
   washtrace reads.
@@ -209,8 +222,9 @@ docker build --target api    -t washtrace-api .
 ## Stored data
 
 Reading a big collection from the chain takes days, so its chain data is cut
-once and published to a Hugging Face dataset (`jonathanmiro97/washtrace-data`
-by default). When you watch a collection that the dataset holds, the worker
+once and published to a Hugging Face dataset,
+[`jonathanmiro97/washtrace-data`](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+by default. When you watch a collection that the dataset holds, the worker
 downloads its files in the background and loads them, then reads on from the
 chain where they stop. The console shows the download as it runs ("Downloading
 stored data · 41%") and the Watch panel lists each collection's size before you
@@ -221,9 +235,21 @@ database in the background (over an hour for the biggest collections); the
 console shows how far it has got ("Money trail loading from stored data · 41%"),
 and the analysis runs again once it is in.
 
-> **Not yet published.** The default dataset is not public yet. Until it is,
-> the Hub answers 401, the worker takes that as no dataset, and every
-> collection is read from the chain.
+The default dataset holds six Ethereum collections, read through block
+26288279 (October 2026):
+
+| Collection | Address | Transfers | Money trail |
+|---|---|---|---|
+| Argonauts | [`0x387c…392c`](https://etherscan.io/address/0x387c41b0b2f1128de44db1bcf8baad085f26392c) | 1.3 MB | 321.4 MB |
+| Terraforms | [`0x4e1f…0e56`](https://etherscan.io/address/0x4e1f41613c9084fdb9e34e11fae9412427480e56) | 2.9 MB | 621.8 MB |
+| Meebits | [`0x7bd2…6bc7`](https://etherscan.io/address/0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7) | 6.3 MB | 996.6 MB |
+| Dreadfulz | [`0x81ae…5aa8`](https://etherscan.io/address/0x81ae0be3a8044772d04f32398bac1e1b4b215aa8) | 1.6 MB | 368.1 MB |
+| BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.4 MB |
+| dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.7 MB |
+
+Each file is zstd-compressed CSV, so the data reads without washtrace too. The
+[dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+gives the columns and a pandas example.
 
 - **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
   repo or the image. Under Compose it is the named volume `stored`, written by
@@ -360,5 +386,17 @@ washtrace implements the methods of (Chow, 2023):
   title  = {Detecting and quantifying wash trading of non-fungible tokens},
   year   = {2023},
   url    = {https://github.com/jonathanchowjh/opensea-fraud-detector/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf}
+}
+```
+
+The data, if you use it:
+
+```bibtex
+@misc{washtracedata,
+  author       = {Chow, Jonathan},
+  title        = {washtrace data: NFT transfers and money trails},
+  year         = {2026},
+  howpublished = {Hugging Face},
+  url          = {https://huggingface.co/datasets/jonathanmiro97/washtrace-data}
 }
 ```
