@@ -385,7 +385,7 @@ washtrace implements the methods of (Chow, 2023):
   author = {Chow, Jonathan},
   title  = {Detecting and quantifying wash trading of non-fungible tokens},
   year   = {2023},
-  url    = {https://github.com/jonathanchowjh/opensea-fraud-detector/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf}
+  url    = {https://github.com/jonathanchowjh/washtrace/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf}
 }
 ```
 

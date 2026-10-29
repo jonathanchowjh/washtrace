@@ -315,8 +315,8 @@ describe('datasetCard', () => {
     expect(card).toContain('#checked');
     expect(card).toContain('#flows');
     expect(card).toContain("compression='zstd'");
-    expect(card).toContain('made for washtrace, an NFT wash-trading detector');
-    expect(card).not.toContain('github.com');
+    expect(card).toContain('made for [washtrace](https://github.com/jonathanchowjh/washtrace), an NFT wash-trading detector');
+    expect(card).toContain('(https://github.com/jonathanchowjh/washtrace#citing)');
   });
 
   it('says sizes as the console does, in decimal units', () => {
