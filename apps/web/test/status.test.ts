@@ -199,7 +199,7 @@ describe('status', () => {
   it('says why stored data was not loaded as information, not a fault: the worker reads the chain instead', () => {
     const note = 'Stored data could not be loaded: its file does not match the manifest.';
     const s = snapshot({ collections: [collection({ restoreNote: note })] });
-    expect(texts(s, 'info')).toContain(`BAYC: ${note} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
+    expect(texts(s, 'info')).toContain(`BAYC: ${note} Reading from the chain instead; it is tried again when its stored file or its manifest entry changes.`);
     expect(texts(s, 'needs-you')).toEqual([]);
   });
 
@@ -212,6 +212,15 @@ describe('status', () => {
     const said = texts(s, 'info').find((t) => t.startsWith('BAYC: Stored data could not'))!;
     expect(said).toBe(`BAYC: Stored data could not be loaded. It is tried again after ${localTime(at, 'time', 'UTC', 'en-GB')}.`);
     expect(said).not.toContain('chain');
+  });
+
+  it('says only the load while a failed one is tried again, and a wait already over as due', () => {
+    const failed = { cursorBlock: null, startBlock: null, restoreNote: 'Stored data could not be loaded.', restoreRetryAt: NOW - MIN };
+    const due = texts(snapshot({ collections: [collection(failed)] }), 'info').find((t) => t.startsWith('BAYC: Stored data could not'));
+    expect(due).toBe('BAYC: Stored data could not be loaded. Reading from the chain instead; it is due to be tried again.');
+    const s = snapshot({ collections: [collection({ ...failed, restoreProgress: 0.3 })] });
+    expect(texts(s, 'info').some((t) => t.includes('Stored data could not'))).toBe(false);
+    expect(texts(s, 'working')).toContain('Loading stored data for BAYC · 30%');
   });
 
   it('calls a paused collection paused even with a load\'s progress left over', () => {

@@ -359,6 +359,8 @@ export class Worker {
   private downloading: { id: number; file: 'transfers' | 'trail'; abort: AbortController; done: Promise<void> } | null = null;
   /** Downloads that failed, by collection, timed as the store times them: kept here too, as restoreFailed is, since the write that records the back-off can fail with the download (a full disk). */
   private readonly downloadsFailed = new Map<number, { failures: number; retryAt: number }>();
+  /** Analyses that failed, by collection, timed as Store.analysisFailed times them: kept here too, as downloadsFailed is, since the write that records the wait can fail with the analysis. */
+  private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
   /** The trail import running in this process, outside every pass (see startTrailImport). One at a time. */
   private importing: { id: number; sha: string; abort: AbortController; done: Promise<void> } | null = null;
   /** Trail imports the store failed, by collection, timed as a failed load is. In memory only: the note says it failed, and a restart tries again. */
@@ -1233,7 +1235,8 @@ export class Worker {
         if (this.restoreDue(r, entry, await this.noteKey(r, entry), now) && !this.downloadWaits(r, now)) loading.add(r.id);
       }
     }
-    const due = (await this.store.stale()).filter((s) => !loading.has(s.id) && (s.retryAt ?? 0) <= now);
+    const due = (await this.store.stale())
+      .filter((s) => !loading.has(s.id) && (s.retryAt ?? 0) <= now && (this.analysesFailed.get(s.id)?.retryAt ?? 0) <= now);
     const c = nextAnalysis(due, now);
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
@@ -1253,8 +1256,11 @@ export class Worker {
         money: moneyFor(c.chainId),
       });
       await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through);
+      this.analysesFailed.delete(c.id);
     } catch (err) {
       // The pass fails as before, and says so; the collection says why until one is saved, and waits, so the others go first.
+      const failures = (this.analysesFailed.get(c.id)?.failures ?? 0) + 1;
+      this.analysesFailed.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
       await this.store.analysisFailed(c.id, this.scrubbed(err))
         .catch((e) => console.error('[washtrace] collection %d: failed analysis not noted: %s', c.id, this.scrubbed(e)));
       throw err;

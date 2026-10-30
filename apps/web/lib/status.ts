@@ -116,7 +116,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     if (!paused && c.downloadNote) notice('info', `${label}: ${c.downloadNote}`);
     if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
     // Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again.
-    const restore = restoreText(c, new Set(s.config.chains), zone);
+    const restore = restoreText(c, new Set(s.config.chains), now, zone);
     if (restore !== null) notice('info', `${label}: ${restore}`);
     if (storedTurn) {
       // Past the stored data (read on while an RPC was set), it stops at its cursor, whose date is not known. Text, so the locale is pinned.

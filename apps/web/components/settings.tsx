@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/head';
 import { LENSES, withoutKey } from '@/lib/format';
-import { FIELDS, READ_ONLY, variableOf, type FieldView } from '@/lib/settings';
+import { FIELDS, OPEN, READ_ONLY, variableOf, type FieldView } from '@/lib/settings';
 
 const INPUT = 'rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none disabled:opacity-60';
 const BUTTON = 'rounded-[5px] border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50 disabled:hover:bg-transparent';
@@ -62,12 +62,14 @@ async function save(key: string, value: string | null): Promise<string | null> {
 
 /**
  * Every setting the console offers, grouped by the worker step it feeds.
- * Read-only says so once at the top, and every control is off.
+ * Read-only says so once at the top, and every control is off; `open` (saving
+ * needs no login) says so in the same place, so nobody is surprised.
  */
-export function Settings({ fields, writable, trailFunded = false }: { fields: FieldView[]; writable: boolean; trailFunded?: boolean }) {
+export function Settings({ fields, writable, open = false, trailFunded = false }: { fields: FieldView[]; writable: boolean; open?: boolean; trailFunded?: boolean }) {
   return (
     <div className="max-w-3xl">
       {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{READ_ONLY}</p>}
+      {open ? <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{OPEN}</p> : null}
       {GROUPS.map((g) => (
         <Section key={g.title} title={g.title} lead={g.lead(trailFunded)}>
           <div className="divide-y rounded-lg border bg-card">
@@ -79,19 +81,19 @@ export function Settings({ fields, writable, trailFunded = false }: { fields: Fi
   );
 }
 
-/** Where a value came from, and what that means for changing it here. */
+/** Where a value came from: .env, saved here (over .env when .env also sets it), or nothing. */
 function sourceLine(f: FieldView, trailFunded: boolean): string {
-  if (f.source === 'env') return `Set by the environment (${variableOf(f.key)}), so it can't be changed here.`;
-  if (f.source === 'console') return 'Set here.';
   const fallback = FIELDS.find((x) => x.key === f.key)?.fallback;
-  // The Etherscan URL while the key is the environment's: only the environment can set it.
-  if (f.pinned !== null) return `${f.pinned} Not set in the environment (${variableOf(f.key)}), so the worker uses ${fallback ?? 'its default'}.`;
-  return `Not set, ${unset(f.key, trailFunded) ?? (fallback ? `so the worker uses ${fallback}.` : 'so the worker uses its default.')}`;
+  // The Etherscan URL while the key is .env's: only .env can set it, so say what .env does.
+  if (f.pinned !== null) return f.source === 'env' ? `${f.pinned} From .env (${variableOf(f.key)}).` : `${f.pinned} Not set in .env (${variableOf(f.key)}), so the worker uses ${fallback ?? 'its default'}.`;
+  if (f.source === 'console') return f.env !== null ? `Saved here, over .env (${variableOf(f.key)}).` : 'Saved here.';
+  if (f.source === 'env') return `From .env (${variableOf(f.key)}).`;
+  return `None: not saved here or in .env, ${unset(f.key, trailFunded) ?? (fallback ? `so the worker uses ${fallback}.` : 'so the worker uses its default.')}`;
 }
 
 /**
  * One setting: what it is for, its value (a secret only masked, with Replace
- * and Clear), where the value came from, and a Test for a source. The
+ * and Clear, or Reset to .env when .env also sets it), where the value came from, and a Test for a source. The
  * container's id is the key, so /settings#rpc.1 lands on it. It is a group
  * named by its label and described by its hint, and every button's name
  * carries the field, so a screen reader never hears a bare "Replace". What a
@@ -111,6 +113,8 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const id = `setting-${field.key}`;
   const labelId = `${id}-label`;
   const hintId = `${id}-hint`;
+  /** .env also sets this field, so clearing what is saved here is a Reset to that value. */
+  const reset = field.env !== null;
   const lockedWhy = writable ? (field.pinned ?? '') : READ_ONLY;
   /** A button's accessible name: what it does, then which field. */
   const named = (verb: string, after = '') => `${verb} ${field.label}${after}`;
@@ -124,8 +128,8 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
     setEditing(false);
     setArmed(false);
     setDraft('');
-    const gone = field.secret ? 'The worker stops using it on its next pass.' : 'The worker goes back to its default on its next pass.';
-    setSaid({ ok: true, text: value === null ? `Cleared. ${gone}` : 'Saved. The worker uses it from its next pass, within a minute.' });
+    const gone = reset ? "Back to the .env value from the worker's next pass." : field.secret ? 'The worker stops using it on its next pass.' : 'The worker goes back to its default on its next pass.';
+    setSaid({ ok: true, text: value === null ? (reset ? gone : `Cleared. ${gone}`) : 'Saved. The worker uses it from its next pass, within a minute.' });
     // The refresh brings the new source line and, for a secret, its new last 4.
     router.refresh();
   }
@@ -133,8 +137,23 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   // Only a value being typed has an input; otherwise the label is plain text naming the group.
   const hasInput = !field.secret || editing;
 
+  const clearButton = field.source === 'console'
+    ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={reset ? named('Reset', ' to its .env value…') : named('Clear', '…')} className={BUTTON}
+      title={field.locked ? lockedWhy : reset ? 'Drop what is saved here so the worker uses .env again. Asks first.' : 'Remove it from the console. Asks first.'}>{reset ? 'Reset to .env…' : 'Clear…'}</button>
+    : null;
+
   let value;
-  if (!field.secret) {
+  if (armed) {
+    value = (
+      <span className="flex flex-wrap items-center gap-2 text-xs">
+        <span>{reset
+          ? `Reset the ${field.label} to its .env value? What is saved here is dropped, and the worker uses .env.`
+          : `Clear the ${field.label}? ${unset(field.key, trailFunded) ? `Once cleared, ${unset(field.key, trailFunded)!.replace(/^so /, '')}` : 'The worker stops using it.'}`}</span>
+        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={reset ? named('Reset', ' to its .env value') : named('Clear')} className={`${BUTTON} border-foreground`}>{reset ? 'Reset' : 'Clear'}</button>
+        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className={BUTTON}>Keep</button>
+      </span>
+    );
+  } else if (!field.secret) {
     value = (
       <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => {
         e.preventDefault();
@@ -143,7 +162,8 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
       }}>
         <input id={id} name="value" key={field.shown ?? ''} defaultValue={field.shown ?? ''} placeholder={fallback} disabled={field.locked || busy}
           aria-describedby={hintId} title={field.locked ? lockedWhy : undefined} className={`${INPUT} ${field.key.endsWith('.url') ? 'w-80' : 'w-24'} max-w-full`} />
-        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : 'Save it; left empty, the worker goes back to its default'} className={BUTTON}>{busy ? 'Saving…' : 'Save'}</button>
+        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className={BUTTON}>{busy ? 'Saving…' : 'Save'}</button>
+        {clearButton}
       </form>
     );
   } else if (editing) {
@@ -156,24 +176,13 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
         <button type="button" onClick={() => { setEditing(false); setDraft(''); setSaid(null); }} aria-label={named('Cancel')} className={BUTTON}>Cancel</button>
       </form>
     );
-  } else if (armed) {
-    value = (
-      <span className="flex flex-wrap items-center gap-2 text-xs">
-        <span>Clear the {field.label}? {unset(field.key, trailFunded) ? `Once cleared, ${unset(field.key, trailFunded)!.replace(/^so /, '')}` : 'The worker stops using it.'}</span>
-        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={named('Clear')} className={`${BUTTON} border-foreground`}>Clear</button>
-        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className={BUTTON}>Keep</button>
-      </span>
-    );
   } else {
     value = (
       <span className="flex flex-wrap items-center gap-2">
         {field.shown ? <span className="font-mono text-xs text-foreground">{field.shown}</span> : null}
         <button type="button" disabled={field.locked} onClick={() => { setEditing(true); setSaid(null); }} aria-label={named(field.set ? 'Replace' : 'Set')} className={BUTTON}
           title={field.locked ? lockedWhy : field.set ? 'Type a new value in place of this one' : 'Type a value for the worker to use'}>{field.set ? 'Replace' : 'Set'}</button>
-        {field.set && field.source === 'console'
-          ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={named('Clear', '…')} className={BUTTON}
-            title={field.locked ? lockedWhy : 'Remove it from the console. Asks first.'}>Clear…</button>
-          : null}
+        {clearButton}
       </span>
     );
   }

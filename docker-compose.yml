@@ -21,6 +21,10 @@ services:
       POSTGRES_DB: washtrace
     volumes:
       - db:/var/lib/postgresql/data
+    # Parallel queries share memory through /dev/shm, which Docker caps at 64 MB.
+    # A collection page runs its queries at once, and over a big money trail
+    # (BAYC) they outgrew that and failed with "could not resize shared memory".
+    shm_size: 256mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U washtrace -d washtrace"]
       interval: 5s
@@ -54,8 +58,12 @@ services:
         required: false
     environment:
       WASHTRACE_STORE_URL: postgres://washtrace:washtrace@db:5432/washtrace
+    # Settings can be saved without a login only from this machine, so the port is
+    # published to it alone: a machine on the network could otherwise send
+    # `Host: localhost` to an all-interfaces port. To serve others, set
+    # WASHTRACE_USERNAME and WASHTRACE_PASSWORD and publish it wider.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     # The worker's stored data, read only: the console describes the manifest the worker fetched.
     volumes:
       - stored:/app/data/stored:ro

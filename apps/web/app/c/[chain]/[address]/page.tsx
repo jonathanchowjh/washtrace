@@ -60,6 +60,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const entry = await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
+  // A trail with checked wallets not loaded yet: step 2 waits for it rather than saying funding is off.
+  const trailComing = entry?.trail != null && entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
   const name = c.name ?? short(address);
@@ -133,7 +135,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} now={Date.now()} />
+        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} trailComing={trailComing} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

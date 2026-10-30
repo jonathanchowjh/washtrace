@@ -58,8 +58,8 @@ export function StoredStop({ cov }: { cov: Coverage }) {
  * a retry in the reader's zone, as every time in the console. Information,
  * not a fault: the collection is analysed on what it has meanwhile.
  */
-export function RestoreNote({ c, rpcChains, className }: { c: CollectionRow; rpcChains: ReadonlySet<number>; className?: string }) {
-  const n = restoreNext(c, rpcChains);
+export function RestoreNote({ c, rpcChains, now, className }: { c: CollectionRow; rpcChains: ReadonlySet<number>; now: number; className?: string }) {
+  const n = restoreNext(c, rpcChains, now);
   if (n === null) return null;
   return (
     <p className={cn('text-xs text-muted-foreground', className)}>
@@ -219,11 +219,13 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
  * loaded trail with checked wallets (as the lens cards are told). `trail` is
  * the stored money trail's coverage, as the manifest gives it, when the trail
  * it describes is the one this collection loaded; else null. `trailBytes` is
- * the size of the trail the manifest lists, said while it downloads. `now` says
+ * the size of the trail the manifest lists, said while it downloads.
+ * `trailComing` is whether the manifest's trail is not the one loaded and
+ * checked wallets: once it is in, it funds the money lenses. `now` says
  * whether a failed analysis's wait is over.
  */
-export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, trail = null, trailBytes = null, now = Date.now() }: {
-  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null; trailBytes?: number | null; now?: number;
+export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, trail = null, trailBytes = null, trailComing = false, now = Date.now() }: {
+  c: CollectionRow; cov: Coverage; why: string; rpcChains: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null; trailBytes?: number | null; trailComing?: boolean; now?: number;
 }) {
   const a = c.latest;
   const stored = cov.reading === 'stored-only';
@@ -231,6 +233,8 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
   // A loaded money trail is funding once it checked a wallet: the money lenses run on it, key or not, from the next analysis on.
   const fed = funded ?? (funding || trailed);
   const money = cov.money || fed;
+  // Off for now, but not for good: the trail on its way funds the lenses once loaded, so step 2 waits for it.
+  const awaited = !money && trailComing && c.pausedAt === null && ((c.downloadFile === 'trail' && c.downloadProgress !== null) || c.trailProgress !== null);
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
       <Step
@@ -254,13 +258,14 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
               : <>Set WASHTRACE_RPC_{c.chainId} for the worker to read on from here.</>}
           </p>
         ) : null}
-        <RestoreNote c={c} rpcChains={rpcChains} />
+        <RestoreNote c={c} rpcChains={rpcChains} now={now} />
       </Step>
       <Step
         n={2} title="Wallets checked for money"
-        figure={!money ? 'Off' : a === null ? '…' : progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)}
+        figure={awaited ? <span className="text-base">Waiting</span> : !money ? 'Off' : a === null ? '…' : progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of)}
         bar={money && a !== null ? (cov.wallets.of > 0 ? cov.wallets.checked / cov.wallets.of : 0) : undefined}
-        value={!money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
+        value={awaited ? 'Funded by the stored money trail once it has loaded. No funding source is set (WASHTRACE_ETHERSCAN_KEY) for wallets it did not check.'
+          : !money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
           : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
           : `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} trading wallets, busiest first`}
         affects={<>{LENSES.AU.name} and {LENSES.AC.name}. An unchecked wallet hides its links, so their shares can only rise.</>}
@@ -284,7 +289,7 @@ export function ReadingPanel({ c, cov, why, rpcChains, funding = true, funded, t
         <DownloadNote c={c} />
         {/* Why a trail on disk did not load: information, since the lenses run as they would without it. A failed import is retried, which a paused collection is not: the notes about the file stay. */}
         {c.trailNote && !(c.pausedAt !== null && c.trailNote === TRAIL_NOTES.failed) ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
-        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search')} stopped at the visit cap before following every hop.</p> : null}
+        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search', 'money searches')} stopped at the visit cap before following every hop.</p> : null}
       </Step>
       <Step
         n={3} title="Analyzed"

@@ -63,12 +63,12 @@ describe('Store.schemaVersion', () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(17);
-    expect(await store.schemaVersion()).toBe(17);
-    expect(await store.migrate()).toBe(17);
-    expect(await store.migrate()).toBe(17);
+    expect(await store.migrate()).toBe(18);
+    expect(await store.schemaVersion()).toBe(18);
+    expect(await store.migrate()).toBe(18);
+    expect(await store.migrate()).toBe(18);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 17 }]);
+    expect(rows).toEqual([{ version: 18 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -77,10 +77,26 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(17);
+      expect(await store.migrate()).toBe(18);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
+    }
+  });
+
+  it('drops console settings that .env was shadowing when upgrading, and keeps the rest', async () => {
+    await store.migrate(); // a no-op in a full run; lets this test run by itself
+    await store.pool.query("INSERT INTO washtrace.settings (key, value) VALUES ('follow.hops', '7'), ('etherscan.rps', '2') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+    await store.pool.query("INSERT INTO washtrace.setting_sources (key, source, value, reported_at) VALUES ('follow.hops', 'env', '3', now()), ('etherscan.rps', 'console', '2', now()) ON CONFLICT (key) DO UPDATE SET source = EXCLUDED.source");
+    try {
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
+      expect(await store.migrate()).toBe(18);
+      const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
+      expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
+    } finally {
+      await store.pool.query("DELETE FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps')");
+      await store.pool.query("DELETE FROM washtrace.setting_sources WHERE key IN ('follow.hops', 'etherscan.rps')");
     }
   });
 
@@ -94,7 +110,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(17);
+      expect(await store.migrate()).toBe(18);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -610,11 +626,11 @@ describe('Store', () => {
     });
 
     it('replaces the earlier report of where settings came from, and never keeps a secret', async () => {
-      await store.reportSources({ 'rpc.1': { source: 'env', value: null }, 'follow.hops': { source: 'env', value: '2' } });
+      await store.reportSources({ 'rpc.1': { source: 'env', value: '••••', env: null }, 'follow.hops': { source: 'env', value: '2', env: '2' } });
       await store.reportSources({
-        'etherscan.rps': { source: 'console', value: '5' },
-        // A caller that forgot to blank a secret: the store blanks it.
-        'rpc.1': { source: 'console', value: 'https://rpc.example/key' },
+        'etherscan.rps': { source: 'console', value: '5', env: null },
+        // A caller that forgot to mask a secret: the store blanks it.
+        'rpc.1': { source: 'console', value: 'https://rpc.example/key', env: null },
       });
       const sources = await store.sources();
       expect(Object.keys(sources).sort()).toEqual(['etherscan.rps', 'rpc.1']);
@@ -624,9 +640,21 @@ describe('Store', () => {
       expect(JSON.stringify(sources)).not.toContain('https');
     });
 
+    it('keeps what the environment holds, and never an unmasked secret', async () => {
+      await store.reportSources({
+        'rpc.1': { source: 'console', value: 'https://a.example/••••EY77', env: 'https://b.example/v2/RAWKEY99' },
+        'etherscan.key': { source: 'env', value: '••••1234', env: '••••1234' },
+        'follow.hops': { source: 'console', value: '1', env: '2' },
+      });
+      const s = await store.sources();
+      expect(s['rpc.1']).toMatchObject({ source: 'console', value: 'https://a.example/••••EY77', env: null });
+      expect(s['etherscan.key']).toMatchObject({ value: '••••1234', env: '••••1234' });
+      expect(s['follow.hops']).toMatchObject({ value: '1', env: '2' });
+    });
+
     it('takes reports from passes that run at once, keeping the last', async () => {
       // ingest, fund and analyze start together and each reports where settings came from.
-      const report = (n: number) => ({ 'follow.hops': { source: 'console' as const, value: String(n) }, [`rpc.${n}`]: { source: 'env' as const, value: null } });
+      const report = (n: number) => ({ 'follow.hops': { source: 'console' as const, value: String(n), env: null }, [`rpc.${n}`]: { source: 'env' as const, value: '••••', env: null } });
       for (let round = 0; round < 5; round++) {
         await expect(Promise.all([1, 2, 3].map((n) => store.reportSources(report(n))))).resolves.toBeDefined();
       }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SettingSource } from '@washtrace/detect';
-import { FIELDS, configFromSources, variableOf, view } from '@/lib/settings';
+import { shownSecret as workerShownSecret, type SettingSource } from '@washtrace/detect';
+import { FIELDS, configFromSources, shownSecret, variableOf, view } from '@/lib/settings';
 
 type Sources = Record<string, SettingSource & { reportedAt: number }>;
 const fake = {
@@ -25,11 +25,15 @@ const checkIdRoute = await import('@/app/api/settings/check/[id]/route');
 const collectionsRoute = await import('@/app/api/collections/route');
 
 const RPC = 'https://eth-mainnet.g.alchemy.com/v2/sEcReTkEyA1B2';
-const READ_ONLY = 'Settings are read-only until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
-const src = (source: 'env' | 'console', value: string | null): SettingSource & { reportedAt: number } => ({ source, value, reportedAt: 1 });
+const READ_ONLY = 'Settings can only be changed from this machine until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
+const PIN = 'The Etherscan key comes from .env, so its URL can only come from .env too. Save an Etherscan key here to change the URL.';
+const MASKED_RPC = 'https://eth-mainnet.g.alchemy.com/••••A1B2';
+const src = (source: 'env' | 'console', value: string | null, env: string | null = null): SettingSource & { reportedAt: number } => ({ source, value, env, reportedAt: 1 });
 const field = (fields: ReturnType<typeof view>, key: string) => fields.find((f) => f.key === key)!;
 const post = (body: unknown, headers: Record<string, string> = {}) =>
-  new Request('http://x/api', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', ...headers } });
+  new Request('http://x/api', { method: 'POST', body: JSON.stringify(body), headers: { host: 'washtrace.example.com', 'content-type': 'application/json', ...headers } });
+const local = { host: 'localhost:8080' };
+const get = (headers: Record<string, string> = {}) => new Request('http://x/api', { headers: { host: 'washtrace.example.com', ...headers } });
 const auth = (on: boolean) => {
   vi.stubEnv('WASHTRACE_USERNAME', on ? 'ada' : '');
   vi.stubEnv('WASHTRACE_PASSWORD', on ? 'pw' : '');
@@ -47,7 +51,7 @@ describe('view', () => {
   it('shows a secret as dots and its last 4, never the value', () => {
     const fields = view(new Map([['rpc.1', RPC]]), { 'rpc.1': src('console', null) }, true);
     const rpc = field(fields, 'rpc.1');
-    expect(rpc).toMatchObject({ set: true, shown: '••••A1B2', source: 'console', locked: false, secret: true });
+    expect(rpc).toMatchObject({ set: true, shown: MASKED_RPC, source: 'console', locked: false, secret: true });
     expect(JSON.stringify(fields)).not.toContain('sEcReT');
   });
 
@@ -57,13 +61,29 @@ describe('view', () => {
   });
 
   it('shows a secret the environment set as set, with no part of it', () => {
-    const key = field(view(new Map(), { 'etherscan.key': src('env', null) }, true), 'etherscan.key');
-    expect(key).toMatchObject({ set: true, shown: '••••', source: 'env', locked: true });
+    const key = field(view(new Map(), { 'etherscan.key': src('env', '••••') }, true), 'etherscan.key');
+    expect(key).toMatchObject({ set: true, shown: '••••', source: 'env', locked: false });
   });
 
-  it('locks a field the environment set, and shows its value when not secret', () => {
-    const hops = field(view(new Map([['follow.hops', '2']]), { 'follow.hops': src('env', '5') }, true), 'follow.hops');
-    expect(hops).toMatchObject({ set: true, shown: '5', source: 'env', locked: true, invalid: null });
+  it('shows a field the environment set, unlocked, with what the environment holds', () => {
+    const hops = field(view(new Map(), { 'follow.hops': src('env', '5', '5') }, true), 'follow.hops');
+    expect(hops).toMatchObject({ set: true, shown: '5', source: 'env', env: '5', locked: false, invalid: null });
+  });
+
+  it("shows a console value over the environment's, and keeps the environment's for Reset", () => {
+    const hops = field(view(new Map([['follow.hops', '2']]), { 'follow.hops': src('console', '2', '5') }, true), 'follow.hops');
+    expect(hops).toMatchObject({ shown: '2', source: 'console', env: '5' });
+  });
+
+  it('shows a secret from the environment masked, as the worker reported it', () => {
+    const sources = { 'rpc.1': src('env', MASKED_RPC, MASKED_RPC) };
+    expect(field(view(new Map(), sources, true), 'rpc.1')).toMatchObject({ shown: MASKED_RPC, source: 'env', locked: false });
+    expect(field(view(new Map(), sources, false), 'rpc.1')).toMatchObject({ shown: '••••', env: '••••' });
+  });
+
+  it("falls back to the environment's value the moment a console value is cleared, before the worker reports", () => {
+    const rpc = field(view(new Map(), { 'rpc.1': src('console', MASKED_RPC, 'https://eth-mainnet.g.alchemy.com/••••ZZ99') }, true), 'rpc.1');
+    expect(rpc).toMatchObject({ source: 'env', shown: 'https://eth-mainnet.g.alchemy.com/••••ZZ99' });
   });
 
   it('locks every field while read-only', () => {
@@ -81,12 +101,12 @@ describe('view', () => {
   });
 
   it('says why the worker ignores an invalid environment value', () => {
-    const hops = field(view(new Map(), { 'follow.hops': src('env', '99') }, true), 'follow.hops');
+    const hops = field(view(new Map(), { 'follow.hops': src('env', '99', '99') }, true), 'follow.hops');
     expect(hops.invalid).toBe('Follow hops must be a whole number from 0 to 10.');
   });
 
   it('calls invalid only what the worker ignores, not what the console would refuse to save', () => {
-    const env = (key: string, v: string) => field(view(new Map(), { [key]: src('env', v) }, true), key).invalid;
+    const env = (key: string, v: string) => field(view(new Map(), { [key]: src('env', v, v) }, true), key).invalid;
     expect(env('follow.hops', '5.0')).toBeNull();
     expect(env('follow.hops', '1e1')).toBeNull();
     expect(env('etherscan.url', 'http://x')).toBeNull();
@@ -96,21 +116,43 @@ describe('view', () => {
 });
 
 describe('view, the Etherscan URL', () => {
-  const PINNED = 'The Etherscan key is set by the environment, so only the environment can change its URL.';
-  const envKey = { 'etherscan.key': src('env', null) };
+  const PINNED = PIN;
+  const envKey = { 'etherscan.key': src('env', '••••', '••••') };
 
-  it('locks the URL, saying why, while the key is from the environment, and shows no console URL the worker ignores', () => {
-    const url = field(view(new Map([['etherscan.url', 'https://attacker.example/api']]), envKey, true), 'etherscan.url');
-    expect(url).toMatchObject({ set: false, shown: null, source: null, locked: true, pinned: PINNED, invalid: null });
+  it('locks the URL, saying why, while the key is from the environment and none is saved', () => {
+    const url = field(view(new Map(), envKey, true), 'etherscan.url');
+    expect(url).toMatchObject({ locked: true, pinned: PINNED });
   });
 
-  it('shows the environment URL, locked, when the environment set it beside the key', () => {
-    const url = field(view(new Map(), { ...envKey, 'etherscan.url': src('env', 'https://proxy.example/api') }, true), 'etherscan.url');
-    expect(url).toMatchObject({ set: true, shown: 'https://proxy.example/api', source: 'env', locked: true, pinned: "Set by the environment, so it can't be changed here." });
+  it('shows no saved URL the worker ignores while the URL is pinned', () => {
+    const fields = view(new Map([['etherscan.url', 'https://attacker.example/api']]), { 'etherscan.key': src('env', '••••1234', '••••1234') }, true);
+    expect(field(fields, 'etherscan.url')).toMatchObject({ locked: true, pinned: PINNED, source: null, shown: null });
+    expect(JSON.stringify(fields)).not.toContain('attacker');
+  });
+
+  it('shows the environment URL in use while a saved one is ignored', () => {
+    const sources = { 'etherscan.key': src('env', '••••1234', '••••1234'), 'etherscan.url': src('env', 'https://api.etherscan.io/v2/api', 'https://api.etherscan.io/v2/api') };
+    const url = field(view(new Map([['etherscan.url', 'https://attacker.example/api']]), sources, true), 'etherscan.url');
+    expect(url).toMatchObject({ source: 'env', shown: 'https://api.etherscan.io/v2/api' });
+  });
+
+  it('unlocks the URL as soon as a key is saved, whatever the report says', () => {
+    const url = field(view(new Map([['etherscan.key', 'ABCD1234EFGH']]), envKey, true), 'etherscan.url');
+    expect(url).toMatchObject({ locked: false, pinned: null });
+  });
+
+  it('unlocks the URL when the report says the key is from the console', () => {
+    const url = field(view(new Map(), { 'etherscan.key': src('console', '••••', null) }, true), 'etherscan.url');
+    expect(url).toMatchObject({ locked: false, pinned: null });
+  });
+
+  it('shows the environment URL, unlocked, when the environment set it beside a saved key', () => {
+    const url = field(view(new Map([['etherscan.key', 'ABCD1234EFGH']]), { 'etherscan.url': src('env', 'https://proxy.example/api', 'https://proxy.example/api') }, true), 'etherscan.url');
+    expect(url).toMatchObject({ set: true, shown: 'https://proxy.example/api', source: 'env', locked: false, pinned: null });
   });
 
   it('leaves the URL to the console while the key is from the console', () => {
-    const url = field(view(new Map([['etherscan.url', 'https://proxy.example/api']]), { 'etherscan.key': src('console', null) }, true), 'etherscan.url');
+    const url = field(view(new Map([['etherscan.url', 'https://proxy.example/api']]), { 'etherscan.key': src('console', '••••') }, true), 'etherscan.url');
     expect(url).toMatchObject({ set: true, shown: 'https://proxy.example/api', source: 'console', locked: false, pinned: null });
   });
 
@@ -125,7 +167,7 @@ describe('view, the Etherscan URL', () => {
       expect(shown).toContain('••••@x/api');
     }
     // The worker masks it before reporting; masked again, it stays as it was.
-    const fromEnv = field(view(new Map(), { 'etherscan.url': src('env', 'https://x/api?apikey=••••') }, true), 'etherscan.url');
+    const fromEnv = field(view(new Map(), { 'etherscan.url': src('env', 'https://x/api?apikey=••••', 'https://x/api?apikey=••••') }, true), 'etherscan.url');
     expect(fromEnv.shown).toBe('https://x/api?apikey=••••');
   });
 });
@@ -182,6 +224,7 @@ describe('validators', () => {
     ['rpc.1', 'http://192.168.1.5:8545', null],
     ['rpc.1', 'wss://eth.example/ws', 'An RPC URL starts with https:// (or http:// for a node on your network).'],
     ['rpc.1', 'eth.example', 'An RPC URL starts with https:// (or http:// for a node on your network).'],
+    ['rpc.1', 'https://eth-mainnet.g.alchemy.com/••••A1B2', 'Type the whole URL: •••• stands for a part that is kept hidden.'],
     ['etherscan.key', 'ABCD1234EFGH5678', null],
     ['etherscan.key', 'has space', 'An Etherscan key is letters and digits only, as etherscan.io/myapikey shows it.'],
     ['etherscan.key', '', 'An Etherscan key is letters and digits only, as etherscan.io/myapikey shows it.'],
@@ -205,36 +248,44 @@ describe('GET /api/settings', () => {
   it('answers writable and the fields, with no secret in it', async () => {
     fake.values = new Map([['rpc.1', RPC], ['etherscan.url', 'https://api.etherscan.io/v2/api']]);
     fake.reported = { 'rpc.1': src('console', null) };
-    const res = await settingsRoute.GET();
+    const res = await settingsRoute.GET(get());
     const text = await res.text();
     expect(res.status).toBe(200);
     expect(JSON.parse(text).writable).toBe(true);
-    // The non-secret Etherscan URL may say https; take it out, then no https is left: no RPC URL leaked.
-    expect(text.replace('https://api.etherscan.io/v2/api', '').match(/https/g)).toBeNull();
     expect(text).not.toContain('sEcReT');
+    expect(JSON.parse(text).fields.find((f: { key: string }) => f.key === 'rpc.1').shown).toMatch(/^https:\/\/eth-mainnet\.g\.alchemy\.com\//);
     // No collection loaded a money trail: no key means the money lenses are off.
     expect(JSON.parse(text).trailFunded).toBe(false);
   });
 
   it('answers no credential of the Etherscan URL', async () => {
     fake.values = new Map([['etherscan.url', 'https://x/api?apikey=SECRET1234']]);
-    expect(await (await settingsRoute.GET()).text()).not.toContain('SECRET');
+    expect(await (await settingsRoute.GET(get())).text()).not.toContain('SECRET');
   });
 
   it('says when a loaded money trail feeds the money lenses without a key', async () => {
     fake.collections.mockResolvedValueOnce([{ id: 3, trailImportedSha: null }, { id: 4, trailImportedSha: 'feed' }]);
-    const body = await (await settingsRoute.GET()).json();
+    const body = await (await settingsRoute.GET(get())).json();
     expect(body.trailFunded).toBe(true);
     expect(fake.importedFunding).toHaveBeenCalledWith(4);
     expect(fake.importedFunding).not.toHaveBeenCalledWith(3);
   });
 
-  it('is not writable while basic auth is off', async () => {
+  it('is not writable from another host while basic auth is off', async () => {
     auth(false);
     fake.values = new Map([['rpc.1', RPC]]);
-    const body = await (await settingsRoute.GET()).json();
-    expect(body.writable).toBe(false);
+    const body = await (await settingsRoute.GET(get())).json();
+    expect(body).toMatchObject({ writable: false, open: false });
     expect(body.fields.find((f: { key: string }) => f.key === 'rpc.1').shown).toBe('••••');
+  });
+
+  it('is writable and open from this machine while basic auth is off', async () => {
+    auth(false);
+    expect(await (await settingsRoute.GET(get(local))).json()).toMatchObject({ writable: true, open: true });
+  });
+
+  it('is writable, and not open, with basic auth on, from anywhere', async () => {
+    expect(await (await settingsRoute.GET(get())).json()).toMatchObject({ writable: true, open: false });
   });
 });
 
@@ -260,7 +311,13 @@ describe('POST /api/settings', () => {
     expect(await res.text()).not.toContain('sEcReT');
   });
 
-  it('403s while basic auth is off, before anything else', async () => {
+  it('saves from this machine while basic auth is off', async () => {
+    auth(false);
+    expect((await settingsRoute.POST(post({ key: 'follow.hops', value: '4' }, local))).status).toBe(200);
+    expect(fake.setSetting).toHaveBeenCalledWith('follow.hops', '4', 'console');
+  });
+
+  it('403s from another host while basic auth is off, before anything else', async () => {
     auth(false);
     fake.reported = { 'follow.hops': src('env', '3') };
     const res = await settingsRoute.POST(post({ key: 'follow.hops', value: 'many' }));
@@ -269,27 +326,24 @@ describe('POST /api/settings', () => {
     expect(fake.setSetting).not.toHaveBeenCalled();
   });
 
-  it('409s a field the environment set, before validating', async () => {
-    fake.reported = { 'follow.hops': src('env', '3') };
-    const res = await settingsRoute.POST(post({ key: 'follow.hops', value: 'many' }));
-    expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("Set by the environment, so it can't be changed here.");
-    expect(fake.setSetting).not.toHaveBeenCalled();
-  });
-
-  it('409s clearing a field the environment set', async () => {
-    fake.reported = { 'etherscan.key': src('env', null) };
-    expect((await settingsRoute.POST(post({ key: 'etherscan.key', value: null }))).status).toBe(409);
+  it('saves over a field the environment set', async () => {
+    fake.reported = { 'follow.hops': src('env', '3', '3') };
+    expect((await settingsRoute.POST(post({ key: 'follow.hops', value: '4' }))).status).toBe(200);
+    expect(fake.setSetting).toHaveBeenCalledWith('follow.hops', '4', 'console');
   });
 
   it('409s the Etherscan URL while the key is from the environment, saying why', async () => {
-    fake.reported = { 'etherscan.key': src('env', null) };
-    for (const value of ['https://attacker.example/api', null]) {
-      const res = await settingsRoute.POST(post({ key: 'etherscan.url', value }));
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).toBe('The Etherscan key is set by the environment, so only the environment can change its URL.');
-    }
+    fake.reported = { 'etherscan.key': src('env', '••••', '••••') };
+    const res = await settingsRoute.POST(post({ key: 'etherscan.url', value: 'https://attacker.example/api' }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe(PIN);
     expect(fake.setSetting).not.toHaveBeenCalled();
+  });
+
+  it('lets a pinned Etherscan URL be cleared', async () => {
+    fake.reported = { 'etherscan.key': src('env', '••••', '••••') };
+    expect((await settingsRoute.POST(post({ key: 'etherscan.url', value: null }))).status).toBe(200);
+    expect(fake.setSetting).toHaveBeenCalledWith('etherscan.url', null, 'console');
   });
 
   it('400s a URL still holding the mask it was shown with', async () => {
@@ -337,7 +391,7 @@ describe('POST /api/settings/check', () => {
     expect(fake.requestCheck).not.toHaveBeenCalled();
   });
 
-  it('403s while basic auth is off', async () => {
+  it('403s from another host while basic auth is off', async () => {
     auth(false);
     const res = await checkRoute.POST(post({ kind: 'rpc', chainId: 1 }));
     expect(res.status).toBe(403);
@@ -348,8 +402,6 @@ describe('POST /api/settings/check', () => {
 
 describe('GET /api/settings/check/[id]', () => {
   const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
-  const get = () => new Request('http://x/api');
-
   it('answers the check as the store has it', async () => {
     const res = await checkIdRoute.GET(get(), ctx('42'));
     expect(res.status).toBe(200);
@@ -393,5 +445,19 @@ describe('POST /api/collections, the no-RPC warning', () => {
   it('warns when the console setting is blank', async () => {
     fake.values = new Map([['rpc.1', '  ']]);
     expect((await (await watch()).json()).warning).toContain('No RPC is configured for chain 1');
+  });
+});
+
+describe('shownSecret', () => {
+  // The console's copy and the worker's (env.ts) must mask alike, or a value shows differently on the two sides.
+  it.each([
+    ['rpc.1', 'short'],
+    ['etherscan.key', 'ABCD1234EFGH5678'],
+    ['rpc.1', 'https://eth-mainnet.g.alchemy.com/v2/sEcReTkEyA1B2'],
+    ['rpc.1', 'https://user:pass@eth.example:8545/v2/KEY0123456789'],
+    ['rpc.1', 'wss://eth.example/ws/KEY0123456789'],
+    ['rpc.1', 'not a url at all, long enough'],
+  ])('%s %j is masked the same by both', (key, value) => {
+    expect(shownSecret(key, value)).toBe(workerShownSecret(key, value));
   });
 });

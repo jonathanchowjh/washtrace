@@ -285,4 +285,18 @@ ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_retry_at tim
 -- console see it; the import's last statement sets it back to NULL.
 ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS trail_progress real;
 `,
+  `
+-- Until now .env beat a console value, so one could sit saved while .env
+-- shadowed it. From here the console value wins. At this migration, before the
+-- new worker's first report, the last report still says which console values
+-- .env was shadowing; deleting them keeps behaviour unchanged across the upgrade.
+DELETE FROM washtrace.settings s USING washtrace.setting_sources r WHERE r.key = s.key AND r.source = 'env';
+
+-- The worker also reports what .env holds for each setting, as env_value, so
+-- the console can offer it back. A secret is reported masked ('••••' plus its
+-- last 4 characters), never itself: this replaces the earlier rule that value
+-- is null for a secret. The store still drops a secret's value or env_value
+-- that lacks '••••'.
+ALTER TABLE washtrace.setting_sources ADD COLUMN IF NOT EXISTS env_value text;
+`,
 ];

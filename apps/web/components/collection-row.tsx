@@ -52,7 +52,7 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
           ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
           : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again. */}
-        <RestoreNote c={c} rpcChains={rpcChains} className="mt-1 max-w-sm" />
+        <RestoreNote c={c} rpcChains={rpcChains} now={now} className="mt-1 max-w-sm" />
         <DownloadNote c={c} className="mt-1 max-w-sm" />
         {/* Its shares are from the analysis before. With none yet, `why` says it failed. */}
         {a ? <AnalysisFailed c={c} now={now} className="mt-1 max-w-sm" /> : null}

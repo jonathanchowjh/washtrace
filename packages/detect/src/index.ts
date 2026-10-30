@@ -9,7 +9,7 @@ export { Store, SECRET_KEYS, CHECKS_CHANNEL, type SettingSource, type CheckKind,
 export { MIGRATIONS } from './migrations.js';
 export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } from './analysis-thread.js';
 export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, needsRestore, needsTrail, TRAIL_NOTES, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
-export { ConfigError, storeUrl, workerConfig } from './env.js';
+export { ConfigError, storeUrl, workerConfig, shownSecret } from './env.js';
 export {
   StoredDataError, type StoredDataFault, DOWNLOAD_NOTES, storedDir, storedFile, trailPath, entryFor, upsertEntry, mergeManifest, datasetCard, parseTarget, cutCollection, readManifest, parseManifest, writeManifest, sha256File,
   writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type Written,

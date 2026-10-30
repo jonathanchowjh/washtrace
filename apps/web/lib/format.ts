@@ -26,8 +26,9 @@ export function pct(part: number, whole: number): string {
   return `${p.toFixed(p < 10 ? 1 : 0)}%`;
 }
 
-export function plural(n: number, word: string): string {
-  return `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
+/** "1 wallet", "2 wallets": `many` for a word whose plural is not an added s ("searches"). */
+export function plural(n: number, word: string, many = `${word}s`): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;
 }
 
 /** How long a wait will take, roughly: a guess is never shown to the minute. "about 40 min left". */

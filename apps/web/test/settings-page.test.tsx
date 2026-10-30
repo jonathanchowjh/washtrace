@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '@/components/settings';
-import { READ_ONLY, type FieldView } from '@/lib/settings';
+import { OPEN, READ_ONLY, type FieldView } from '@/lib/settings';
 import { withoutKey } from '@/lib/format';
 
 const refresh = vi.fn();
@@ -17,11 +17,11 @@ afterEach(() => {
 /** Every field as the API answers it with nothing set; `more` overrides by key. */
 function fields(more: Record<string, Partial<FieldView>> = {}, locked = false): FieldView[] {
   const base: FieldView[] = [
-    { key: 'rpc.1', label: 'Ethereum RPC URL', secret: true, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
-    { key: 'etherscan.key', label: 'Etherscan API key', secret: true, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
-    { key: 'etherscan.rps', label: 'Etherscan calls per second', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
-    { key: 'etherscan.url', label: 'Etherscan API URL', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
-    { key: 'follow.hops', label: 'Follow hops', secret: false, set: false, shown: null, source: null, locked, pinned: null, invalid: null },
+    { key: 'rpc.1', label: 'Ethereum RPC URL', secret: true, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.key', label: 'Etherscan API key', secret: true, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.rps', label: 'Etherscan calls per second', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
+    { key: 'etherscan.url', label: 'Etherscan API URL', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
+    { key: 'follow.hops', label: 'Follow hops', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
   ];
   return base.map((f) => ({ ...f, ...more[f.key] }));
 }
@@ -30,8 +30,6 @@ const box = (key: string) => document.getElementById(key)!;
 /** The field's one live region, always there so a screen reader announces what lands in it. */
 const live = (key: string) => box(key).querySelector('[role=status]')!;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-/** What the API says of a field the environment set. */
-const ENV_SET = "Set by the environment, so it can't be changed here.";
 const RPC_SET = { 'rpc.1': { set: true, shown: '••••a1b2', source: 'console' as const } };
 
 /** A fetch that answers the check request with id 7, then each poll with the next of `polls` (the last repeats). */
@@ -80,38 +78,97 @@ describe('Settings, each field', () => {
 
   it('says where each value came from', () => {
     render(<Settings writable fields={fields({
-      'etherscan.key': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET },
+      'etherscan.key': { set: true, shown: '••••', source: 'env', env: '••••' },
       'follow.hops': { set: true, shown: '2', source: 'console' },
     })} />);
-    expect(box('etherscan.key').textContent).toContain('Set by the environment (WASHTRACE_ETHERSCAN_KEY)');
-    expect(box('follow.hops').textContent).toContain('Set here');
-    expect(box('etherscan.rps').textContent).toContain('Not set');
+    expect(box('etherscan.key').textContent).toContain('From .env (WASHTRACE_ETHERSCAN_KEY).');
+    expect(box('follow.hops').textContent).toContain('Saved here.');
+    expect(box('etherscan.rps').textContent).toContain('None: not saved here or in .env');
   });
 
-  it('locks a field the environment set', () => {
-    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '5', source: 'env', locked: true, pinned: ENV_SET } })} />);
-    const input = box('follow.hops').querySelector('input')!;
-    expect(input.disabled).toBe(true);
-    expect(input.value).toBe('5');
-    expect((box('follow.hops').querySelector('button') as HTMLButtonElement).disabled).toBe(true);
-    expect((box('etherscan.rps').querySelector('input') as HTMLInputElement).disabled).toBe(false);
+  it('shows a value from .env with where it came from, and lets it be replaced', () => {
+    render(<Settings writable fields={fields({ 'rpc.1': { set: true, source: 'env', shown: 'https://x.example/••••a1b2', env: 'https://x.example/••••a1b2' } })} />);
+    expect(box('rpc.1').textContent).toContain('https://x.example/••••a1b2');
+    expect(box('rpc.1').textContent).toContain('From .env (WASHTRACE_RPC_1).');
+    expect((screen.getByRole('button', { name: 'Replace Ethereum RPC URL' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Reset/ })).toBeNull();
+  });
+
+  it('offers Reset to .env value on a console value that .env also sets', async () => {
+    const fetch = vi.fn(async () => json({ key: 'rpc.1', set: true }));
+    vi.stubGlobal('fetch', fetch);
+    render(<Settings writable fields={fields({ 'rpc.1': { set: true, source: 'console', shown: '••••c0de', env: '••••a1b2' } })} />);
+    expect(box('rpc.1').textContent).toContain('Saved here, over .env (WASHTRACE_RPC_1).');
+    expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Ethereum RPC URL to its .env value…' }));
+    expect(fetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Ethereum RPC URL to its .env value' }));
+    await waitFor(() => expect(live('rpc.1').textContent).toContain("Back to the .env value from the worker's next pass."));
+    expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ key: 'rpc.1', value: null });
+  });
+
+  it('offers Reset to .env on a number .env also sets, and Clear when it does not', async () => {
+    const fetch = vi.fn(async () => json({ key: 'follow.hops', set: true }));
+    vi.stubGlobal('fetch', fetch);
+    render(<Settings writable fields={fields({ 'follow.hops': { set: true, source: 'console', shown: '4', env: '2' } })} />);
+    expect(box('follow.hops').querySelector<HTMLButtonElement>('button[type=submit]')!.title).toContain('.env value');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow hops to its .env value…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow hops to its .env value' }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ key: 'follow.hops', value: null });
+    cleanup();
+    render(<Settings writable fields={fields({ 'follow.hops': { source: 'console', shown: '4', env: null } })} />);
+    expect(screen.getByRole('button', { name: 'Clear Follow hops…' })).toBeTruthy();
+  });
+
+  it('offers Clear on a console value .env does not set', () => {
+    render(<Settings writable fields={fields(RPC_SET)} />);
+    expect(screen.getByRole('button', { name: 'Clear Ethereum RPC URL…' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Reset/ })).toBeNull();
+  });
+
+  it('says none for a source nothing sets', () => {
+    render(<Settings writable fields={fields()} />);
+    expect(box('rpc.1').textContent).toContain('None: not saved here or in .env, so the worker reads nothing from Ethereum.');
+  });
+
+  it('says the console is open when saving needs no login', () => {
+    render(<Settings writable open fields={fields()} />);
+    expect(screen.getByRole('note').textContent).toBe(OPEN);
+  });
+
+  it('says why it is read-only', () => {
+    render(<Settings writable={false} fields={fields({}, true)} />);
+    expect(screen.getByRole('note').textContent).toBe(READ_ONLY);
   });
 
   it('locks the Etherscan URL while the key is from the environment, and says why and what the worker uses', () => {
     const why = 'The Etherscan key is set by the environment, so only the environment can change its URL.';
     render(<Settings writable fields={fields({
-      'etherscan.key': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET },
+      'etherscan.key': { set: true, shown: '••••', source: 'env', env: '••••' },
       'etherscan.url': { locked: true, pinned: why },
     })} />);
     const input = box('etherscan.url').querySelector('input')!;
     expect(input.disabled).toBe(true);
     expect(input.title).toBe(why);
     expect((box('etherscan.url').querySelector('button') as HTMLButtonElement).title).toBe(why);
-    expect(box('etherscan.url').textContent).toContain(`${why} Not set in the environment (WASHTRACE_ETHERSCAN_URL), so the worker uses https://api.etherscan.io/v2/api.`);
+    expect(box('etherscan.url').textContent).toContain(`${why} Not set in .env (WASHTRACE_ETHERSCAN_URL), so the worker uses https://api.etherscan.io/v2/api.`);
+  });
+
+  it('says a pinned Etherscan URL is from .env when .env sets it', () => {
+    const why = 'The Etherscan key is set by the environment, so only the environment can change its URL.';
+    render(<Settings writable fields={fields({
+      'etherscan.key': { set: true, shown: '••••', source: 'env', env: '••••' },
+      'etherscan.url': { set: true, shown: 'https://scan.example/api', source: 'env', env: 'https://scan.example/api', locked: true, pinned: why },
+    })} />);
+    const text = box('etherscan.url').textContent!;
+    expect(text).toContain(`${why} From .env (WASHTRACE_ETHERSCAN_URL).`);
+    expect(text).not.toContain('Not set');
   });
 
   it('says, as a fault, that the worker ignores an invalid value', () => {
-    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', locked: true, pinned: ENV_SET, invalid: 'Follow hops must be a whole number from 0 to 10.' } })} />);
+    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', env: '99', invalid: 'Follow hops must be a whole number from 0 to 10.' } })} />);
     const said = screen.getByText(/^Ignored:/);
     expect(said.textContent).toBe('Ignored: Follow hops must be a whole number from 0 to 10. The worker uses 3.');
     expect(said.closest('.text-fault')).toBeTruthy();
@@ -176,12 +233,6 @@ describe('Settings, secrets', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear Ethereum RPC URL' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ key: 'rpc.1', value: null });
-  });
-
-  it('offers no Clear for a secret the environment set', () => {
-    render(<Settings writable fields={fields({ 'rpc.1': { set: true, shown: '••••', source: 'env', locked: true, pinned: ENV_SET } })} />);
-    expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull();
-    expect((screen.getByRole('button', { name: 'Replace Ethereum RPC URL' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
@@ -339,11 +390,11 @@ describe('no Etherscan key, and a stored money trail', () => {
     const text = render(<Settings fields={fields()} writable trailFunded />).container.textContent!;
     expect(text).not.toContain('do not run');
     expect(text).not.toContain('those lenses are off');
-    expect(text).toContain('Not set, so funding is off: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
+    expect(text).toContain('None: not saved here or in .env, so funding is off: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
   });
 
   it('says they do not run when nothing feeds them', () => {
     const text = render(<Settings fields={fields()} writable />).container.textContent!;
-    expect(text).toContain('Not set, so funding is off, and Money loops back and Linked wallets do not run.');
+    expect(text).toContain('None: not saved here or in .env, so funding is off, and Money loops back and Linked wallets do not run.');
   });
 });

@@ -1,5 +1,5 @@
 import { EVERY, ZERO, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
-import { authConfigured } from './auth';
+import { authConfigured, mayWrite } from './auth';
 import { storedOnly } from './metrics';
 import { configFromSources, hopsFollowed, view } from './settings';
 import { status } from './status';
@@ -48,11 +48,11 @@ export async function trailFunded(s: Store, collections: readonly CollectionRow[
  * from, whether this console may change them, and whether a loaded money
  * trail feeds the money lenses without a key.
  */
-export async function settingsView() {
+export async function settingsView(headers: Headers) {
   const s = store();
-  const writable = authConfigured(process.env);
+  const writable = mayWrite(process.env, headers);
   const [settings, sources, collections] = await Promise.all([s.settings(), s.sources(), s.collections()]);
-  return { writable, fields: view(settings, sources, writable), trailFunded: await trailFunded(s, collections) };
+  return { writable, open: writable && !authConfigured(process.env), fields: view(settings, sources, writable), trailFunded: await trailFunded(s, collections) };
 }
 
 /** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */

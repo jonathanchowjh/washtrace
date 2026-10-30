@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { workerConfig } from '../src/env.js';
+import { shownSecret, workerConfig } from '../src/env.js';
 
 describe('workerConfig', () => {
-  it('lets the environment win over a console setting', () => {
-    const c = workerConfig({ WASHTRACE_RPC_1: 'https://env' }, new Map([['rpc.1', 'https://console']]));
-    expect(c.rpc.get(1)).toBe('https://env');
-    expect(c.sources['rpc.1']).toEqual({ source: 'env', value: null });
+  it('lets a console setting win over the environment, and says what the environment holds', () => {
+    const c = workerConfig({ WASHTRACE_RPC_1: 'https://env.example/v2/ENVKEY99' }, new Map([['rpc.1', 'https://console.example/v2/CONKEY77']]));
+    expect(c.rpc.get(1)).toBe('https://console.example/v2/CONKEY77');
+    expect(c.sources['rpc.1']).toEqual({ source: 'console', value: 'https://console.example/••••EY77', env: 'https://env.example/••••EY99' });
+  });
+
+  it('uses the environment where the console says nothing', () => {
+    const c = workerConfig({ WASHTRACE_FOLLOW_HOPS: '2' });
+    expect(c.followHops).toBe(2);
+    expect(c.sources['follow.hops']).toEqual({ source: 'env', value: '2', env: '2' });
   });
 
   it('treats an empty variable as unset', () => {
@@ -14,10 +20,14 @@ describe('workerConfig', () => {
     expect(c.sources['rpc.1']!.source).toBe('console');
   });
 
-  it('reports non-secret values, never secret ones', () => {
-    const c = workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'k', WASHTRACE_FOLLOW_HOPS: '2' });
-    expect(c.sources['etherscan.key']!.value).toBeNull();
-    expect(c.sources['follow.hops']).toEqual({ source: 'env', value: '2' });
+  it('reports a secret masked to its last 4, and a short one as dots alone', () => {
+    expect(workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'ABCDEFGH1234' }).sources['etherscan.key']).toEqual({ source: 'env', value: '••••1234', env: '••••1234' });
+    expect(workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'k' }).sources['etherscan.key']).toEqual({ source: 'env', value: '••••', env: '••••' });
+  });
+
+  it('shows an RPC URL that does not parse as dots and its last 4', () => {
+    expect(shownSecret('rpc.1', 'not a url at all')).toBe('•••• all');
+    expect(shownSecret('rpc.1', 'eth.example:8545')).toBe('••••8545');
   });
 
   it('takes console settings where the environment says nothing, and defaults where neither does', () => {
@@ -27,9 +37,9 @@ describe('workerConfig', () => {
     expect(c.followHops).toBe(1);
     expect(c.etherscanPerSecond).toBe(4);
     expect(c.sources).toEqual({
-      'rpc.8453': { source: 'console', value: null },
-      'etherscan.key': { source: 'console', value: null },
-      'follow.hops': { source: 'console', value: '1' },
+      'rpc.8453': { source: 'console', value: 'https://base/••••base', env: null },
+      'etherscan.key': { source: 'console', value: '••••-key', env: null },
+      'follow.hops': { source: 'console', value: '1', env: null },
     });
   });
 
@@ -41,14 +51,14 @@ describe('workerConfig', () => {
     expect(byDefault.sources['etherscan.url']).toBeUndefined();
     const byEnv = workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'ENVKEY1234', WASHTRACE_ETHERSCAN_URL: 'https://proxy.example/api' }, settings);
     expect(byEnv.etherscanUrl).toBe('https://proxy.example/api');
-    expect(byEnv.sources['etherscan.url']).toEqual({ source: 'env', value: 'https://proxy.example/api' });
+    expect(byEnv.sources['etherscan.url']).toEqual({ source: 'env', value: 'https://proxy.example/api', env: 'https://proxy.example/api' });
   });
 
   it('takes the console Etherscan URL with a console key, or with no key', () => {
     const url = 'https://proxy.example/api';
     const c = workerConfig({}, new Map([['etherscan.key', 'CONSOLEKEY'], ['etherscan.url', url]]));
     expect(c.etherscanUrl).toBe(url);
-    expect(c.sources['etherscan.url']).toEqual({ source: 'console', value: url });
+    expect(c.sources['etherscan.url']).toEqual({ source: 'console', value: url, env: null });
     expect(workerConfig({}, new Map([['etherscan.url', url]])).etherscanUrl).toBe(url);
   });
 
@@ -56,7 +66,7 @@ describe('workerConfig', () => {
     const url = 'https://ada:pw5678@proxy.example/v2/api?apikey=SECRET1234&chainid=1';
     const c = workerConfig({ WASHTRACE_ETHERSCAN_URL: url });
     expect(c.etherscanUrl).toBe(url);
-    expect(c.sources['etherscan.url']).toEqual({ source: 'env', value: 'https://••••@proxy.example/v2/api?apikey=••••&chainid=••••' });
+    expect(c.sources['etherscan.url']).toEqual({ source: 'env', value: 'https://••••@proxy.example/v2/api?apikey=••••&chainid=••••', env: 'https://••••@proxy.example/v2/api?apikey=••••&chainid=••••' });
   });
 
   it('masks the userinfo however the URL is spelled, as the URL parser reads it', () => {
@@ -80,11 +90,11 @@ describe('workerConfig', () => {
     expect(c.sources).toEqual({});
   });
 
-  it('the stored repo defaults to the published dataset, and the environment beats the console', () => {
+  it('the stored repo defaults to the published dataset, and the console beats the environment', () => {
     expect(workerConfig({}).storedRepo).toBe('jonathanmiro97/washtrace-data');
     expect(workerConfig({}, new Map([['stored.repo', 'me/data']])).storedRepo).toBe('me/data');
     const c = workerConfig({ WASHTRACE_STORED_REPO: 'env/data' }, new Map([['stored.repo', 'me/data']]));
-    expect(c.storedRepo).toBe('env/data');
-    expect(c.sources['stored.repo']).toEqual({ source: 'env', value: 'env/data' });
+    expect(c.storedRepo).toBe('me/data');
+    expect(c.sources['stored.repo']).toEqual({ source: 'console', value: 'me/data', env: 'env/data' });
   });
 });

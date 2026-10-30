@@ -182,10 +182,10 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_RPC_<chainId>` | JSON-RPC URL per chain, such as `WASHTRACE_RPC_1` or `WASHTRACE_RPC_8453`. Any provider, or a node of your own. Finding a deployment block needs archive state; otherwise pass `fromBlock`. |
 | `WASHTRACE_ETHERSCAN_KEY` | Etherscan API V2 key: one key for every chain. Without it, SCC AU and AC do not run. |
 | `WASHTRACE_ETHERSCAN_RPS` | Calls per second. Default 4; the free plan allows 5. |
-| `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. While `WASHTRACE_ETHERSCAN_KEY` is set, only this variable sets the URL: a URL saved in the console is ignored, so it can't receive the key. |
-| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. |
+| `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. While the Etherscan key comes from `.env` and none is saved in the console, only this variable sets the URL: a URL saved in the console is ignored, so it can't receive that key. |
+| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. Without them, settings can be saved only from the machine itself (`Host` localhost, no proxy headers). Behind a reverse proxy, set basic auth. |
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
-| `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. Overrides the console's `stored.repo` setting. |
+| `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. A `stored.repo` value saved in the console wins over it. |
 | `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
 | `PORT` | The api's listen port. `8080` in the image. |
 | `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
@@ -206,10 +206,12 @@ docker build --target api    -t washtrace-api .
   host, not for production.
 - **Health.** The worker answers `GET :8081/health` and the api
   `GET /api/health`, and both images declare a `HEALTHCHECK`. Only the api
-  needs a public port.
+  needs a public port; Compose publishes it on 127.0.0.1 only.
 - **Auth.** On a public host, set `WASHTRACE_USERNAME` and
-  `WASHTRACE_PASSWORD`. Without them the console is open to anyone, though
-  its settings are read only.
+  `WASHTRACE_PASSWORD`. Without them the console is open to anyone, and
+  settings can be saved only from the machine itself (`Host` localhost, no
+  proxy). Behind a reverse proxy, set basic auth. Compose publishes the port
+  to 127.0.0.1 only; publish it wider once basic auth is on.
 - **Stored data.** Give the worker a writable volume at
   `WASHTRACE_STORED_DIR` and mount the same volume read only into the api.
 - **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds to
@@ -257,9 +259,10 @@ gives the columns and a pandas example.
   `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
   the worker and the api look in different places.
 - **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
-  setting (the environment wins). The worker fetches the dataset's manifest about
-  hourly, and at once when a collection is newly watched, and keeps the last
-  one, so an unreachable Hub only means the chain is read instead.
+  setting (a value saved in the console wins over the environment). The worker
+  fetches the dataset's manifest about hourly, and at once when a collection is
+  newly watched, and keeps the last one, so an unreachable Hub only means the
+  chain is read instead.
 - **What is published.** Chain data only: transfers, the money trail's flows,
   the checked wallets' addresses, and each collection's address, chain and
   contract name. Never a wallet's status or errors, a label you gave a
@@ -289,8 +292,8 @@ settings writes and Tests answer 403 while basic auth is off.
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses, and the money among its wallets. |
 | `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its counterparties and its transfers in every watched collection. |
 | `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, the `methods` that flag it, and the transfers. A transaction washtrace has not read is 404, never `false`. |
-| `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4. |
-| `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null` so the default applies. 409 for a value the worker's environment pins, 400 for one the worker could not use. |
+| `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4 (an RPC URL also keeps its scheme and host). Each field also answers `env`, what `.env` holds for it (masked the same way), and the response says `open` when saving needs no login. |
+| `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null`, so `.env` applies, else the default; clearing is always allowed. 409 for a non-null `etherscan.url` while its key comes from `.env`, 400 for one the worker could not use. |
 | `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
 | `GET /api/settings/check/{id}` | That Test: `{finished, ok, detail}`. Poll until `finished`. |
 | `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding` is null while there is no Etherscan key. Its `perSecond`, and `followHops`, are null while the worker runs on its defaults. |

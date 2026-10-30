@@ -106,23 +106,27 @@ export function storedOnly(c: Pick<CollectionRow, 'chainId' | 'startBlock' | 'cu
  * nothing is, and the stored data is all the collection can have. Either way
  * a load the data failed is tried again once the stored data changes, and
  * one the store failed after its wait: then `then` ends in "after", and the
- * caller says `retryAt` in the reader's zone. A paused collection is neither
- * read nor tried, so it gets only why.
+ * caller says `retryAt` in the reader's zone; once that has passed, it is
+ * due. A paused collection is neither read nor tried, so it gets only why.
+ * Nothing while a load runs: that is the try, and its progress says so.
  */
 export function restoreNext(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt'> & Partial<Pick<CollectionRow, 'restoreNote' | 'restoreRetryAt'>>,
+  c: Pick<CollectionRow, 'chainId' | 'pausedAt'> & Partial<Pick<CollectionRow, 'restoreNote' | 'restoreRetryAt' | 'restoreProgress'>>,
   rpcChains: ReadonlySet<number>,
+  now: number,
 ): { note: string; then: string | null; retryAt: number | null } | null {
   if (!c.restoreNote) return null;
   if (c.pausedAt !== null) return { note: c.restoreNote, then: null, retryAt: null };
+  if ((c.restoreProgress ?? null) !== null) return null;
   const retryAt = c.restoreRetryAt ?? null;
   const read = rpcChains.has(c.chainId) ? 'Reading from the chain instead; it is' : 'It is';
-  return { note: c.restoreNote, then: retryAt === null ? `${read} tried again when its stored file or the manifest changes.` : `${read} tried again after`, retryAt };
+  if (retryAt === null) return { note: c.restoreNote, then: `${read} tried again when its stored file or its manifest entry changes.`, retryAt };
+  return retryAt > now ? { note: c.restoreNote, then: `${read} tried again after`, retryAt } : { note: c.restoreNote, then: `${read} due to be tried again.`, retryAt: null };
 }
 
 /** restoreNext as one line of text, its time said in `zone`. Built on the server, so the locale is pinned. */
-export function restoreText(c: Parameters<typeof restoreNext>[0], rpcChains: ReadonlySet<number>, zone = 'UTC'): string | null {
-  const n = restoreNext(c, rpcChains);
+export function restoreText(c: Parameters<typeof restoreNext>[0], rpcChains: ReadonlySet<number>, now: number, zone = 'UTC'): string | null {
+  const n = restoreNext(c, rpcChains, now);
   if (n === null) return null;
   return [n.note, n.then, n.retryAt === null ? null : `${localTime(n.retryAt, 'time', zone, 'en-GB')}.`].filter((x) => x !== null).join(' ');
 }

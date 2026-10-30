@@ -189,15 +189,21 @@ export interface PassRow {
 
 /**
  * The settings that hold a secret: an RPC URL carries its provider's key.
- * Their values are kept in `settings`, which the worker needs, but never in
- * `setting_sources`, which the API reads, nor in anything the API returns.
+ * Their values are kept in `settings`, which the worker needs, but only
+ * masked in `setting_sources`, which the API reads, and in anything the API
+ * returns.
  */
 export const SECRET_KEYS = (key: string): boolean => key.startsWith('rpc.') || key === 'etherscan.key';
 
-/** Where the worker found one setting. `value` is null for a secret. */
+/**
+ * Where the worker found one setting. `value` is the value used and `env` what
+ * .env holds (null when it does not set it), each as the console may show it:
+ * a secret masked, `etherscan.url` with its credentials masked, else raw.
+ */
 export interface SettingSource {
   source: 'env' | 'console';
   value: string | null;
+  env: string | null;
 }
 
 /** A Test the console asked the worker to run. */
@@ -1441,8 +1447,9 @@ export class Store {
   /**
    * The worker says where each setting it uses came from, replacing what it
    * said last: a setting it no longer uses is gone from the report. A secret's
-   * value is blanked here too, whatever the caller passed, so it never
-   * reaches a table the API reads. Reports are taken one at a time: the
+   * value and env are kept only when masked (they contain '••••'), else
+   * blanked, whatever the caller passed, so no unmasked secret reaches a table
+   * the API reads. Reports are taken one at a time: the
    * worker's three jobs start together and each reports, and two
    * delete-then-insert transactions at once collide on the key. EXCLUSIVE
    * still lets the API read the table meanwhile.
@@ -1456,9 +1463,9 @@ export class Store {
       await c.query('DELETE FROM washtrace.setting_sources');
       if (keys.length > 0) {
         await c.query(
-          `INSERT INTO washtrace.setting_sources (key, source, value, reported_at)
-           SELECT k, src, v, now() FROM unnest($1::text[], $2::text[], $3::text[]) AS u(k, src, v)`,
-          [keys, keys.map((k) => s[k]!.source), keys.map((k) => (SECRET_KEYS(k) ? null : s[k]!.value))],
+          `INSERT INTO washtrace.setting_sources (key, source, value, env_value, reported_at)
+           SELECT k, src, v, e, now() FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS u(k, src, v, e)`,
+          [keys, keys.map((k) => s[k]!.source), keys.map((k) => safe(k, s[k]!.value)), keys.map((k) => safe(k, s[k]!.env))],
         );
       }
       await c.query('COMMIT');
@@ -1470,12 +1477,12 @@ export class Store {
     }
   }
 
-  /** Where the worker last said each setting came from. Never a secret's value. */
+  /** Where the worker last said each setting came from, and what .env held. A secret only masked. */
   async sources(): Promise<Record<string, SettingSource & { reportedAt: number }>> {
     const { rows } = await this.pool.query(
-      'SELECT key, source, value, extract(epoch FROM reported_at)::float8 AS reported FROM washtrace.setting_sources ORDER BY key',
+      'SELECT key, source, value, env_value AS env, extract(epoch FROM reported_at)::float8 AS reported FROM washtrace.setting_sources ORDER BY key',
     );
-    return Object.fromEntries(rows.map((r) => [r.key, { source: r.source, value: r.value, reportedAt: r.reported * 1000 }]));
+    return Object.fromEntries(rows.map((r) => [r.key, { source: r.source, value: r.value, env: r.env, reportedAt: r.reported * 1000 }]));
   }
 
   /**
@@ -1575,6 +1582,11 @@ const FLAGS_AGG = `(SELECT jsonb_object_agg(f.method, f.witness) FROM washtrace.
   WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AS flags`;
 
 // bigint and numeric columns arrive as strings; each is converted where it is read.
+/** What a setting's report may keep: a secret only when it is masked, the store's own guard against its caller. */
+function safe(key: string, shown: string | null): string | null {
+  return SECRET_KEYS(key) && !shown?.includes('••••') ? null : shown;
+}
+
 function toTransfer(r: any): Transfer {
   return {
     txHash: r.tx_hash, logIndex: r.log_index, blockNumber: Number(r.block_number), blockTime: r.bt,

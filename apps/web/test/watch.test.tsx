@@ -334,7 +334,7 @@ describe('CollectionRow', () => {
     const note = 'Stored data could not be loaded: its file is missing.';
     const { container } = render(<CollectionRow c={{ ...base, restoreNote: note } as typeof base} why="Waiting" rpcChains={ON} funding now={0} />);
     const line = [...container.querySelectorAll('p')].find((p) => p.textContent!.startsWith(note))!;
-    expect(line.textContent).toBe(`${note} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
+    expect(line.textContent).toBe(`${note} Reading from the chain instead; it is tried again when its stored file or its manifest entry changes.`);
     expect(line.className).not.toContain('text-fault');
   });
 
@@ -343,7 +343,7 @@ describe('CollectionRow', () => {
     const c = { ...base, cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: note } as typeof base;
     const { container } = render(<CollectionRow c={c} why="Waiting" rpcChains={new Set()} funding now={0} />);
     const line = [...container.querySelectorAll('p')].find((p) => p.textContent!.startsWith(note))!;
-    expect(line.textContent).toBe(`${note} It is tried again when its stored file or the manifest changes.`);
+    expect(line.textContent).toBe(`${note} It is tried again when its stored file or its manifest entry changes.`);
   });
 
   const lens = (available: boolean, flaggedSales: number) => ({ available, transfers: 10, flagged: flaggedSales, sales: 10, flaggedSales, volumeWei: '10000000000000000000', flaggedVolumeWei: '1000000000000000000', wallets: 4, tokens: 2 });

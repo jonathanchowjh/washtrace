@@ -1698,7 +1698,7 @@ describe('Worker settings', () => {
     let reads = 0;
     const { store, reported } = stub({ settings: async () => { reads += 1; return new Map([['follow.hops', '2']]); } });
     const seen: ReadonlyMap<string, string>[] = [];
-    const sources = { 'follow.hops': { source: 'console' as const, value: '2' } };
+    const sources = { 'follow.hops': { source: 'console' as const, value: '2', env: null } };
     const w = new Worker(store, (s) => {
       seen.push(s);
       return { rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: Number(s.get('follow.hops') ?? 0), sources, storedRepo: 'u/d' };
@@ -1969,6 +1969,27 @@ describe('Worker.analyze when an analysis fails', () => {
     at(5 * 60_000);
     await expect(w.analyze()).rejects.toThrow('ECONNREFUSED');
     expect(logged.mock.calls.flat().join(' ')).toContain('disk full');
+  });
+
+  it('holds the wait itself when the store could not record it, doubling, and forgets it once one is saved', async () => {
+    const { w, tried, state, store, at, waiting } = setup();
+    waiting.delete(2);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The row never shows the wait: the write that records it failed too.
+    store.analysisFailed = async () => { throw new Error('disk full'); };
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    at(5 * 60_000 - 1);
+    expect(await w.analyze()).toBe('nothing due');
+    at(5 * 60_000);
+    await expect(w.analyze()).rejects.toThrow('out of memory');
+    // Ten minutes after the second failure.
+    at(15 * 60_000 - 1);
+    expect(await w.analyze()).toBe('nothing due');
+    at(15 * 60_000);
+    state.broken = false;
+    expect(await w.analyze()).toBe('BAYC analyzed');
+    expect((w as any).analysesFailed.has(1)).toBe(false);
+    expect(tried).toEqual([1, 1, 1]);
   });
 
   it('does not analyse a collection whose stored data is still to load, and analyses it once loaded', async () => {

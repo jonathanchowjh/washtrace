@@ -1,4 +1,4 @@
-import { ACTOR_HEADER, authConfigured } from '@/lib/auth';
+import { ACTOR_HEADER, mayWrite } from '@/lib/auth';
 import { bad, handle, json, readJson } from '@/lib/api';
 import { FIELDS, READ_ONLY, pinned } from '@/lib/settings';
 import { store } from '@/lib/store';
@@ -9,28 +9,31 @@ import { settingsView } from '@/lib/views';
  * whether this console may change them. A secret answers as '••••' and at
  * most its last 4: the browser can replace or clear a secret, never read it.
  */
-export async function GET(): Promise<Response> {
-  return handle(async () => json(await settingsView()));
+export async function GET(req: Request): Promise<Response> {
+  return handle(async () => json(await settingsView(req.headers)));
 }
 
 /**
  * POST `{key, value}`: save a setting, or with `value: null` clear it so the
- * default applies. The worker picks it up on its next pass. Refused while
- * basic auth is off (anyone could change it), then for a value the
- * environment pins (it set the value, or the Etherscan key the URL follows),
- * then for a value the worker could not use.
+ * default applies. The worker picks it up on its next pass. Refused from
+ * anyone but this machine while basic auth is off, then for the Etherscan
+ * URL while its key comes from the environment (a value only: clearing it
+ * is always allowed), then for a value the worker
+ * could not use. A console value beats the environment's, so that is no
+ * reason to refuse.
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!authConfigured(process.env)) return bad(READ_ONLY, 403);
+    if (!mayWrite(process.env, req.headers)) return bad(READ_ONLY, 403);
     const body = await readJson(req);
     if (body instanceof Response) return body;
     const field = FIELDS.find((f) => f.key === body.key);
     if (!field) return bad(`Unknown setting. Settings: ${FIELDS.map((f) => f.key).join(', ')}.`);
     if (body.value !== null && typeof body.value !== 'string') return bad('value must be a string, or null to clear it.');
     const s = store();
-    const why = pinned(field.key, await s.sources());
-    if (why !== null) return bad(why, 409);
+    const why = pinned(field.key, await s.sources(), await s.settings());
+    // Only a value is refused: clearing a pinned field sends nothing anywhere.
+    if (why !== null && body.value !== null) return bad(why, 409);
     const value = body.value === null ? null : body.value.trim();
     const invalid = value === null ? null : field.validate(value);
     if (invalid) return bad(invalid);

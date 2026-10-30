@@ -76,7 +76,7 @@ describe('loading stored data', () => {
 
   it('says why stored data was not loaded beside step 1, as information and not a fault, and that the chain is read meanwhile', () => {
     const line = said(panel(row({ restoreNote: NOTE })));
-    expect(line.textContent).toBe(`${NOTE} Reading from the chain instead; it is tried again when its stored file or the manifest changes.`);
+    expect(line.textContent).toBe(`${NOTE} Reading from the chain instead; it is tried again when its stored file or its manifest entry changes.`);
     expect(line.className).not.toContain('text-fault');
   });
 
@@ -84,15 +84,26 @@ describe('loading stored data', () => {
     const NONE = new Set<number>();
     const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: NOTE });
     const line = said(render(<ReadingPanel c={c} cov={coverage(c, NONE, 0)} why="Waiting" rpcChains={NONE} />).container);
-    expect(line.textContent).toBe(`${NOTE} It is tried again when its stored file or the manifest changes.`);
+    expect(line.textContent).toBe(`${NOTE} It is tried again when its stored file or its manifest entry changes.`);
     expect(line.textContent).not.toContain('chain');
   });
 
   it('says when a load the store failed is tried again, in the reader\'s zone', () => {
     document.cookie = 'washtrace_tz=UTC; path=/';
     const at = Date.UTC(2026, 9, 23, 14, 35);
-    const line = [...panel(row({ restoreNote: 'Stored data could not be loaded.', restoreRetryAt: at })).querySelectorAll('p')].find((p) => p.textContent!.startsWith('Stored data could not'))!;
-    expect(line.textContent).toBe(`Stored data could not be loaded. Reading from the chain instead; it is tried again after ${localTime(at, 'time', 'UTC')}.`);
+    const c = row({ restoreNote: 'Stored data could not be loaded.', restoreRetryAt: at });
+    const lineAt = (now: number) => [...render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} now={now} />).container.querySelectorAll('p')]
+      .find((p) => p.textContent!.startsWith('Stored data could not'))!;
+    expect(lineAt(at - 20 * 60_000).textContent).toBe(`Stored data could not be loaded. Reading from the chain instead; it is tried again after ${localTime(at, 'time', 'UTC')}.`);
+    // Past that time, before the worker's next pass: not a time already gone.
+    expect(lineAt(at + 60_000).textContent).toBe('Stored data could not be loaded. Reading from the chain instead; it is due to be tried again.');
+  });
+
+  it('says nothing of the last failure while the load is tried again: the progress says it', () => {
+    const text = panel(row({ restoreNote: NOTE, restoreRetryAt: 5, restoreProgress: 0.1 })).textContent!;
+    expect(text).toContain('Loading stored data · 10%');
+    expect(text).not.toContain(NOTE);
+    expect(text).not.toContain('Reading from the chain instead');
   });
 
   it('says only why on a paused collection: nothing is read or tried until it is resumed', () => {
@@ -272,6 +283,14 @@ describe('a money trail loaded from stored data', () => {
     expect(text).toContain('Money trail loaded from stored data · 1,612 of 11,259 traders checked');
   });
 
+  it('says how many money searches stopped at the visit cap, in plain English', () => {
+    expect(panelOf(loaded({ latest: { ...analysed(true)!, truncatedSearches: 18_482 } }), true, null).textContent)
+      .toContain('18,482 money searches stopped at the visit cap');
+    cleanup();
+    expect(panelOf(loaded({ latest: { ...analysed(true)!, truncatedSearches: 1 } }), true, null).textContent)
+      .toContain('1 money search stopped at the visit cap');
+  });
+
   it('leaves the numbers out when the manifest no longer describes the trail that loaded', () => {
     const text = panelOf(loaded(), true, null).textContent!;
     expect(text).toContain('Money trail loaded from stored data');
@@ -421,6 +440,29 @@ describe('downloading stored data', () => {
     expect(text(row({ trailNote: failedNote, pausedAt: 1 }))).not.toContain(failedNote);
     cleanup();
     expect(text(row({ trailNote: mismatch, pausedAt: 1 }))).toContain(mismatch);
+  });
+
+  it('with no key, step 2 waits for a trail on its way that checked wallets, instead of saying funding is off', () => {
+    // Analysed on the transfers alone, as a fresh install is before its trail is in: the money lenses did not run.
+    const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 0, wallets: 9, truncatedSearches: 0,
+      totals: { A: { available: true }, AU: { available: false }, AC: { available: false } } } as unknown as CollectionRow['latest'];
+    const step2 = (more: Partial<CollectionRow>, trailComing: boolean) => {
+      const c = row({ latest, ...more });
+      return [...render(<ReadingPanel c={c} cov={coverage(c, ON, 0, 'UTC', false)} why="Waiting" rpcChains={ON} funding={false} trailComing={trailComing} />).container.querySelectorAll('li')][1]!.textContent!;
+    };
+    for (const c of [{ trailProgress: 0.41 }, { downloadFile: 'trail' as const, downloadProgress: 0.2 }]) {
+      const text = step2(c, true);
+      expect(text).toContain('Waiting');
+      expect(text).not.toContain('Off');
+      expect(text).toContain('Funded by the stored money trail once it has loaded');
+      cleanup();
+    }
+    // Nothing on its way, a trail that checked no wallet, or paused: off, as before.
+    expect(step2({}, true)).toContain('Off');
+    cleanup();
+    expect(step2({ trailProgress: 0.41 }, false)).toContain('Off');
+    cleanup();
+    expect(step2({ trailProgress: 0.41, pausedAt: 1 }, true)).toContain('Off');
   });
 
   it('a paused collection shows no trail loading', () => {

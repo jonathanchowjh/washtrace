@@ -71,6 +71,32 @@ export function authConfigured(env: Record<string, string | undefined>): boolean
   return Boolean(env.WASHTRACE_USERNAME) || Boolean(env.WASHTRACE_PASSWORD);
 }
 
+/**
+ * Whether the request came to this machine by its own name, with no proxy in
+ * between. The `Host` hostname is checked so a page on another site can't
+ * reach a local console through DNS rebinding (its Host would be the
+ * attacker's name). `Forwarded` and `X-Real-IP` mark a request a reverse
+ * proxy passed on, which then isn't from this machine, whatever Host says.
+ * `X-Forwarded-For` and `X-Forwarded-Host` can't tell: Next adds both to
+ * every request itself.
+ */
+export function localRequest(headers: Headers): boolean {
+  const host = (headers.get('host') ?? '').toLowerCase();
+  // A bracketed IPv6 address keeps up to its `]`; otherwise the port, if any, follows the last colon.
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.includes(':') ? host.slice(0, host.lastIndexOf(':')) : host;
+  return ['localhost', '127.0.0.1', '[::1]'].includes(name) && !headers.has('forwarded') && !headers.has('x-real-ip');
+}
+
+/**
+ * Whether this request may change settings or run a Test: basic auth is on,
+ * so the proxy has checked who it is, or it comes from this machine. Without
+ * either, anyone who can reach the console could change the sources or spend
+ * the RPC quota.
+ */
+export function mayWrite(env: Record<string, string | undefined>, headers: Headers): boolean {
+  return authConfigured(env) || localRequest(headers);
+}
+
 export function authorize(
   env: Record<string, string | undefined>,
   authorization: string | null,

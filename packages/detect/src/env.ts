@@ -23,12 +23,15 @@ export function storeUrl(env: Env): string {
 
 /**
  * Read on every pass, so the worker follows the environment and the
- * console's settings without being rebuilt. The environment wins, so a
- * deployment can pin a value; an empty variable (copied from .env.example)
- * counts as unset. Each setting key has one variable: `rpc.<chainId>` is
- * `WASHTRACE_RPC_<chainId>`, `etherscan.key` is `WASHTRACE_ETHERSCAN_KEY`, and
- * so on. `sources` says where each set value came from, never a secret's
- * value, for the console to lock what the environment pinned.
+ * console's settings without being rebuilt. A value saved in the console
+ * wins; the environment is the starting value, used until one is saved, then
+ * the default. An empty or whitespace-only value (copied from .env.example)
+ * counts as unset at every level. Each setting key has one variable:
+ * `rpc.<chainId>` is `WASHTRACE_RPC_<chainId>`, `etherscan.key` is
+ * `WASHTRACE_ETHERSCAN_KEY`, and so on. `sources` says, per setting, which
+ * level it used, the value used and what the environment holds, each as the
+ * console may show it (a secret masked, see shownSecret), for the console to
+ * offer the environment's value back.
  *
  * The Etherscan URL follows its key: while the key comes from the
  * environment, so does the URL (or the default), never from the console.
@@ -38,18 +41,13 @@ export function storeUrl(env: Env): string {
 export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = new Map()): WorkerConfig {
   const sources: Record<string, SettingSource> = {};
   const pick = (key: string, variable: string, envOnly = false): string | undefined => {
-    const shown = (value: string) => (SECRET_KEYS(key) ? null : key === 'etherscan.url' ? maskedUrl(value) : value);
+    const shown = (value: string) => (SECRET_KEYS(key) ? shownSecret(key, value) : key === 'etherscan.url' ? maskedUrl(value) : value);
     const fromEnv = env[variable]?.trim();
-    if (fromEnv) {
-      sources[key] = { source: 'env', value: shown(fromEnv) };
-      return fromEnv;
-    }
     const fromConsole = envOnly ? undefined : settings.get(key)?.trim();
-    if (fromConsole) {
-      sources[key] = { source: 'console', value: shown(fromConsole) };
-      return fromConsole;
-    }
-    return undefined;
+    const used = fromConsole || fromEnv;
+    if (!used) return undefined;
+    sources[key] = { source: fromConsole ? 'console' : 'env', value: shown(used), env: fromEnv ? shown(fromEnv) : null };
+    return used;
   };
   const rpc = new Map<number, string>();
   const chains = new Set([...Object.keys(env), ...settings.keys()].flatMap((k) => {
@@ -71,6 +69,25 @@ export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = n
     storedRepo: pick('stored.repo', 'WASHTRACE_STORED_REPO') ?? STORED_REPO,
     sources,
   };
+}
+
+/**
+ * A secret as the console may show it: '••••' and its last 4 characters when
+ * longer than 8, else '••••' alone. An RPC URL that parses as http(s) keeps
+ * its scheme and host, to say which provider it is, as
+ * `https://eth-mainnet.g.alchemy.com/••••A1B2`. Anything else (unparseable,
+ * or another scheme) is dots and its last 4.
+ */
+export function shownSecret(key: string, value: string): string {
+  if (value.length <= 8) return '••••';
+  const tail = `••••${value.slice(-4)}`;
+  if (!key.startsWith('rpc.')) return tail;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? `${u.protocol}//${u.host}/${tail}` : tail;
+  } catch {
+    return tail;
+  }
 }
 
 /**

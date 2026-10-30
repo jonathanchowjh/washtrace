@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
+import { headers } from 'next/headers';
 import { messageOf } from '@washtrace/detect';
 import { Head, Problem } from '@/components/head';
 import { Settings } from '@/components/settings';
@@ -13,14 +14,14 @@ export default async function SettingsPage() {
   await connection();
   let v: Awaited<ReturnType<typeof settingsView>>;
   try {
-    v = await settingsView();
+    v = await settingsView(await headers());
   } catch (err) {
     return <><Head title="Settings" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
   }
   return (
     <>
-      <Head title="Settings" sub={<>Where the <Link href="/worker" className="underline">worker</Link> reads from, and how hard. A change applies from its next pass, within a minute, with no restart. A value set in the worker&apos;s environment wins.</>} />
-      <Settings fields={v.fields} writable={v.writable} trailFunded={v.trailFunded} />
+      <Head title="Settings" sub={<>Where the <Link href="/worker" className="underline">worker</Link> reads from, and how hard. A change applies from its next pass, within a minute, with no restart. A value saved here is used over .env.</>} />
+      <Settings fields={v.fields} writable={v.writable} open={v.open} trailFunded={v.trailFunded} />
     </>
   );
 }

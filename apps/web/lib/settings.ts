@@ -2,8 +2,9 @@ import type { SettingSource } from '@washtrace/detect';
 
 /**
  * The settings the console can change, how each is checked, and how each is
- * shown. The worker reads the same keys (workerConfig), with the environment
- * winning; this file only decides what the API accepts and what it answers.
+ * shown. The worker reads the same keys (workerConfig), a console value
+ * first, then the environment; this file only decides what the API accepts
+ * and what it answers.
  * Free of runtime imports, so the settings page can use FIELDS as well.
  */
 
@@ -31,10 +32,12 @@ export interface FieldView {
   label: string;
   secret: boolean;
   set: boolean;
-  /** A secret is '••••', plus its last 4 for someone who may change it; anything else is its value. */
+  /** A secret is masked (shownSecret), and '••••' alone for someone who may not change it; anything else is its value. */
   shown: string | null;
   source: 'env' | 'console' | null;
-  /** True when this viewer can't change it: `pinned`, or basic auth is off. */
+  /** What `.env` holds for it, shown the same way (null: nothing), for Reset to say what it goes back to. '••••' for a secret when the viewer may not write. */
+  env: string | null;
+  /** True when this viewer can't change it: `pinned`, or they may not write. */
   locked: boolean;
   /** Why no one can change it here, whoever views it (see pinned), or null. */
   pinned: string | null;
@@ -80,7 +83,11 @@ export const FIELDS: readonly Field[] = [
     label: 'Ethereum RPC URL',
     secret: true,
     // http too, for a node on the local network. Not wss: the worker reads over HTTP.
-    validate: (v) => (['https:', 'http:'].includes(urlOf(v)?.protocol ?? '') ? null : 'An RPC URL starts with https:// (or http:// for a node on your network).'),
+    validate: (v) => {
+      if (!['https:', 'http:'].includes(urlOf(v)?.protocol ?? '')) return 'An RPC URL starts with https:// (or http:// for a node on your network).';
+      // Pasted back as shown, the URL would lose the key the mask stands for.
+      return v.includes(MASK) ? `Type the whole URL: ${MASK} stands for a part that is kept hidden.` : null;
+    },
     used: () => true,
   },
   {
@@ -132,45 +139,63 @@ export const FIELDS: readonly Field[] = [
   },
 ];
 
-/** The 409 for a value the environment set: the environment wins, so saving it would do nothing. */
-const ENV_SET = "Set by the environment, so it can't be changed here.";
+/**
+ * A secret as the console may show it: '••••' plus its last 4 characters when
+ * longer than 8, else '••••'. An http(s) RPC URL keeps its scheme and host
+ * (`https://eth-mainnet.g.alchemy.com/••••A1B2`). The same rule as
+ * shownSecret in the worker's env.ts, copied because this file takes no
+ * runtime imports.
+ */
+export function shownSecret(key: string, value: string): string {
+  if (value.length <= 8) return MASK;
+  const tail = `${MASK}${value.slice(-4)}`;
+  if (!key.startsWith('rpc.')) return tail;
+  const u = urlOf(value);
+  return u && (u.protocol === 'http:' || u.protocol === 'https:') ? `${u.protocol}//${u.host}/${tail}` : tail;
+}
 
 /**
- * Why the console can't change `key`, whoever asks: the environment set it,
- * or set the Etherscan key, whose URL then comes from the environment or the
- * default only (env.ts), so a console URL can't receive the environment's
- * key. Null when the console may. `sources` is the worker's last report.
+ * Why the console can't change `key`, whoever asks, or null. Only the
+ * Etherscan URL is ever pinned: while the key comes from the environment and
+ * none is saved here, the URL comes from the environment or the default only
+ * (env.ts), so a console URL can't receive the environment's key. `sources`
+ * is the worker's last report; `settings` is what the console saved, which
+ * counts at once, before the worker's next report.
  */
-export function pinned(key: string, sources: Record<string, SettingSource>): string | null {
-  if (sources[key]?.source === 'env') return ENV_SET;
-  if (key === 'etherscan.url' && sources['etherscan.key']?.source === 'env') return 'The Etherscan key is set by the environment, so only the environment can change its URL.';
-  return null;
+export function pinned(key: string, sources: Record<string, SettingSource>, settings: ReadonlyMap<string, string>): string | null {
+  if (key !== 'etherscan.url') return null;
+  if (settings.get('etherscan.key')?.trim()) return null;
+  return sources['etherscan.key']?.source === 'env' ? 'The Etherscan key comes from .env, so its URL can only come from .env too. Save an Etherscan key here to change the URL.' : null;
 }
 
 /**
  * Each field for the page. `settings` is what the console saved; `sources` is
- * where the worker last said each value came from. The environment wins, as
- * it does in the worker; a console value shows even before the worker's next
- * report. The API never reads the worker's environment, so a secret the
- * environment set is only known to be set, and shows no part of itself. A
- * console secret shows its last 4 only to someone who may change it, and only
- * when it is long enough that 4 characters are a small part of it. A console
- * Etherscan URL the worker ignores, as the key is the environment's, is not
- * shown: the worker uses the default.
+ * what the worker last reported per key: the level it used, the value used
+ * and what `.env` holds, each already masked by the worker. A console value
+ * beats the environment's, and shows even before the worker's next report;
+ * once cleared, the environment's `env` is what the worker will use. While a
+ * field is pinned the worker ignores a saved value, so it isn't shown. A secret
+ * is shown masked (shownSecret), and to someone who may not change it as
+ * '••••' alone, whatever its source.
  */
 export function view(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
   return FIELDS.map((f) => {
     const reported = sources[f.key];
-    const why = pinned(f.key, sources);
-    // A console value only while the worker can use it: none while pinned.
+    const why = pinned(f.key, sources, settings);
+    // A saved value the worker ignores while the field is pinned is not shown: what it uses is the environment's, or the default.
     const saved = (why === null && settings.get(f.key)?.trim()) || null;
-    const source = reported?.source === 'env' ? 'env' : saved !== null ? 'console' : null;
+    const source = saved !== null ? 'console' : reported?.source === 'env' || reported?.env != null ? 'env' : null;
+    const envHolds = reported?.env ?? null;
     let shown: string | null = null;
-    if (f.secret && source !== null) {
-      shown = writable && source === 'console' && saved !== null && saved.length > 8 ? MASK + saved.slice(-4) : MASK;
-    } else if (!f.secret) {
-      shown = source === 'env' ? (reported?.value ?? null) : saved;
+    let env: string | null = envHolds;
+    if (f.secret) {
+      env = envHolds === null ? null : writable ? envHolds : MASK;
+      if (source === 'console') shown = writable ? shownSecret(f.key, saved!) : MASK;
+      else if (source === 'env') shown = writable ? envHolds ?? reported?.value ?? MASK : MASK;
+    } else {
+      shown = saved ?? envHolds;
       if (shown !== null && f.show) shown = f.show(shown);
+      if (env !== null && f.show) env = f.show(env);
     }
     return {
       key: f.key,
@@ -179,6 +204,7 @@ export function view(settings: ReadonlyMap<string, string>, sources: Record<stri
       set: source !== null,
       shown,
       source,
+      env,
       locked: !writable || why !== null,
       pinned: why,
       invalid: !f.secret && shown !== null && !f.used(shown) ? f.validate(shown) : null,
@@ -186,8 +212,11 @@ export function view(settings: ReadonlyMap<string, string>, sources: Record<stri
   });
 }
 
-/** The 403 every settings write and Test answers while basic auth is off: anyone could otherwise change them, or spend the RPC quota. */
-export const READ_ONLY = 'Settings are read-only until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
+/** The 403 every settings write and Test answers to someone who may not change settings: anyone could otherwise change them, or spend the RPC quota. */
+export const READ_ONLY = 'Settings can only be changed from this machine until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
+
+/** What the page says to someone who may change settings with no basic auth on: they can only be on this machine, but it is open to anyone there. */
+export const OPEN = 'Anyone who can reach this console on this machine can change these. Set WASHTRACE_USERNAME and WASHTRACE_PASSWORD before putting it online.';
 
 /** The variable that pins a setting in the worker's environment, as env.ts reads it: `rpc.1` is WASHTRACE_RPC_1. */
 export function variableOf(key: string): string {
