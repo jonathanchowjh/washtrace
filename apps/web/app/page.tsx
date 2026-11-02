@@ -92,7 +92,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
             <span>Volume that looks washed</span>
             <span>How complete</span>
           </div>
-          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, now, zone)} rpcChains={rpcChains} funding={funding} now={now} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, rpcChains, now, zone)} rpcChains={rpcChains} funding={funding} now={now} />)}</ul>
         </div>
       )}
     </>

@@ -28,24 +28,24 @@ const HINTS: Record<string, string> = {
 /**
  * What not setting a source means; a number not set falls back to its
  * default instead. `trailFunded`: a collection's loaded money trail feeds the
- * money lenses, so no key no longer means they are off.
+ * money lenses, so no key does not stop them.
  */
 function unset(key: string, trailFunded: boolean): string | undefined {
   if (key === 'rpc.1') return 'so the worker reads nothing from Ethereum.';
-  if (key === 'etherscan.key') return trailFunded ? `so funding is off: ${withoutKey(true)}.` : `so funding is off, and ${withoutKey(false)}.`;
+  if (key === 'etherscan.key') return trailFunded ? `so stage 5 needs a key: ${withoutKey(true)}.` : `so stage 5 needs a key, and ${withoutKey(false)}.`;
   return undefined;
 }
 
-/** The fields in groups, by the worker step they feed. */
+/** The fields in groups, by the worker stage they feed. */
 const GROUPS = [
   {
     title: 'Where it reads the chain',
-    lead: () => 'Read transfers, step 1 on the Worker page, needs an RPC for each chain it reads. Without one, nothing is read.',
+    lead: () => 'Read new transfers from the chain, stage 4 of every collection\'s reading, needs an RPC for each chain it reads. Without one, nothing newer is read.',
     keys: (k: string) => k.startsWith('rpc.'),
   },
   {
     title: 'Where it checks who paid whom',
-    lead: (trailFunded: boolean) => `Check wallets for money, step 2 on the Worker page, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'those lenses are off'}.`,
+    lead: (trailFunded: boolean) => `Check wallets for money, stage 5 of every collection's reading, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
     keys: (k: string) => !k.startsWith('rpc.'),
   },
 ];
@@ -61,7 +61,7 @@ async function save(key: string, value: string | null): Promise<string | null> {
 }
 
 /**
- * Every setting the console offers, grouped by the worker step it feeds.
+ * Every setting the console offers, grouped by the worker stage it feeds.
  * Read-only says so once at the top, and every control is off; `open` (saving
  * needs no login) says so in the same place, so nobody is surprised.
  */

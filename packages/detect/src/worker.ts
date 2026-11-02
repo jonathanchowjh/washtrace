@@ -101,7 +101,7 @@ export function ingestTurns(
  * short of where the stored data starts: the cursor would jump the blocks in
  * between, and they would never be read.
  */
-function reaches(c: CollectionRow, entry: StoredEntry): boolean {
+export function reaches(c: CollectionRow, entry: StoredEntry): boolean {
   return c.cursorBlock === null || (c.cursorBlock >= entry.startBlock - 1 && c.cursorBlock < entry.throughBlock);
 }
 

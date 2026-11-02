@@ -145,9 +145,10 @@ function unsyncedFor(ms: number): string {
  * their shares are floors. Before either, stored data may be loading: the
  * history it holds arrives at once, when the load commits. A paused
  * collection is none of these: its head stops moving, so "up to date" would
- * be a claim nobody is keeping true. Nor is one showing stored data with no
- * RPC: its numbers stop at the stored date, said in `zone` (the reader's;
- * the console draws that date with Time). Nor one read before whose chain's
+ * be a claim nobody is keeping true. Nor is one whose chain has no
+ * RPC, whatever it has read: its numbers stop at the stored date, said in
+ * `zone` (the reader's; the console draws that date with Time), or at the
+ * block it was read to, or there are none. Nor one read before whose chain's
  * head is not known now: its RPC failed before saying (the collection's
  * error says why), and what was read stands.
  *
@@ -173,10 +174,12 @@ export function coverage(
   const download = c.pausedAt === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null ? Math.min(c.downloadProgress!, 0.99) : null;
   // Held for a download that has not started (another runs, or another replica has the lock): the worker marks the file, with no progress.
   const queued = c.pausedAt === null && download === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) === null;
-  const noRpc = c.pausedAt === null && restore === null && download === null && !queued && storedOnly(c, rpcChains);
+  // Nothing moves stored data, so a missing RPC is what holds the reading: whatever was read, it reads stored-only.
+  const noRpc = c.pausedAt === null && restore === null && download === null && !queued && !rpcChains.has(c.chainId);
+  const stored = noRpc && storedOnly(c, rpcChains);
   // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
-  const past = noRpc && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
-  const stops = noRpc && !past ? c.storedThroughTime! : null;
+  const past = stored && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
+  const stops = stored && !past ? c.storedThroughTime! : null;
   const unsynced = stops === null ? null : unsyncedFor(now - stops);
   const readTo = past ? c.cursorBlock : null;
   const base = { blocks, behind, wallets, money, floor, restore, download, stops, unsynced, readTo };
@@ -188,6 +191,8 @@ export function coverage(
   // Built on the server, so the locale is pinned; the console draws its own date with Time.
   if (stops !== null) return { ...base, reading: 'stored-only', label: `Stored data · stops ${localTime(stops, 'date', zone, 'en-GB')} · ${unsynced}` };
   if (readTo !== null) return { ...base, reading: 'stored-only', label: `Read to block ${readTo.toLocaleString('en-US')} · no RPC for its chain` };
+  // Nothing of stored data to show, and nothing read on: `stops` and `readTo` stay null, and the pill and summary say the missing RPC.
+  if (noRpc) return { ...base, reading: 'stored-only', label: 'No RPC for its chain' };
   // Read before, but no head now: an RPC that fails (a typo, a rate limit) never said it. The numbers are there; how far behind is not known.
   const read = c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && ((c.storedThroughTime ?? null) !== null || (c.transfers ?? 0) > 0);
   if (c.headBlock === null && read) return { ...base, reading: 'head-unknown', label: `Read to block ${c.cursorBlock!.toLocaleString('en-US')}` };
@@ -221,6 +226,11 @@ export function isRunning(p: PassRow): boolean {
   return p.finishedAt === null || p.finishedAt < p.startedAt;
 }
 
+/** Whether the running analyze pass is on collection `id`: only that one's analysis stages can be running. */
+export function analyzingOn(passes: readonly PassRow[], id: number): boolean {
+  return passes.some((p) => p.job === 'analyze' && isRunning(p) && p.subjectId === id);
+}
+
 /**
  * When a collection whose last analysis failed is tried again, as the console
  * says it: after a time in `zone`, or due once that has passed, when it waits
@@ -237,14 +247,14 @@ export function analysisRetry(c: Pick<CollectionRow, 'analysisRetryAt'>, now: nu
  * another that takes a while. One whose analysis failed waits out its back-off
  * first, said in `zone`.
  */
-export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, now: number, zone = 'UTC'): string {
+export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, rpcChains: ReadonlySet<number>, now: number, zone = 'UTC'): string {
   // Never analysed while paused, so promise nothing.
   if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
   // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
   if (c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null) return 'Downloading stored data · it is analysed once it has loaded.';
   if (c.downloadFile === 'transfers') return 'Waiting to download stored data · it is analysed once it has loaded.';
   if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
-  if (c.transfers === 0) return 'Waiting for its first transfers.';
+  if (c.transfers === 0) return rpcChains.has(c.chainId) ? 'Waiting for its first transfers.' : 'Nothing is read until its chain has an RPC.';
   const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
   const min = running === null ? '' : `${Math.floor((now - running.startedAt) / 60_000)} min`;
   if (running?.subjectId === c.id) return `First analysis running · started ${min} ago.`;

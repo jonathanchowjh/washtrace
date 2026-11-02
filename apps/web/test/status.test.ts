@@ -228,7 +228,7 @@ describe('status', () => {
     expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'paused' });
   });
 
-  it('says funding off is a choice, not a fault', () => {
+  it('says a missing key is information, not a fault', () => {
     const r = status(snapshot({ config: { ...CONFIG, funding: false } }), NOW);
     expect(r.notices.filter((n) => n.severity === 'needs-you')).toEqual([]);
     expect(r.notices).toContainEqual(expect.objectContaining({ severity: 'info', action: expect.objectContaining({ href: '/settings#etherscan.key' }) }));
@@ -236,15 +236,15 @@ describe('status', () => {
 
   it('never calls the money lenses unavailable with funding off when a collection loaded a stored money trail', () => {
     const off = { ...CONFIG, funding: false };
-    expect(texts(snapshot({ config: off }), 'info')).toContain('Funding is off, so Money loops back and Linked wallets are unavailable.');
-    const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: true }), 'info').find((t) => t.startsWith('Funding is off'));
-    expect(text).toBe('Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.');
+    expect(texts(snapshot({ config: off }), 'info')).toContain('Needs an Etherscan key: Money loops back and Linked wallets do not run without one.');
+    const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: true }), 'info').find((t) => t.startsWith('Needs an Etherscan key'));
+    expect(text).toBe('Needs an Etherscan key: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.');
   });
 
   it('asks whether a trail feeds the money lenses as the worker page and Settings do, not whether one loaded', () => {
     // Loaded, but it checked no wallet: the money lenses do not run on it.
     const s = snapshot({ config: { ...CONFIG, funding: false }, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: false });
-    expect(texts(s, 'info')).toContain('Funding is off, so Money loops back and Linked wallets are unavailable.');
+    expect(texts(s, 'info')).toContain('Needs an Etherscan key: Money loops back and Linked wallets do not run without one.');
   });
 
   it('counts a backfill as work in progress with an ETA', () => {
@@ -285,19 +285,30 @@ describe('status', () => {
   it('says the error of a paused collection as information: the worker does not touch it until it resumes', () => {
     const s = snapshot({ collections: [collection({ pausedAt: NOW, error: 'RPC timed out' }), collection({ address: '0xbeef', chainId: 8453, pausedAt: NOW, error: 'No RPC is configured for chain 8453.' })] });
     expect(texts(s, 'needs-you')).toEqual([]);
-    expect(texts(s, 'info')).toEqual(expect.arrayContaining(['BAYC: Paused · last error before the pause: RPC timed out', 'BAYC: Paused · last error before the pause: No RPC is configured for chain 8453.']));
+    // On a chain with no RPC the old "No RPC" error says nothing new: the limit is.
+    expect(texts(s, 'info')).toEqual(expect.arrayContaining(['BAYC: Paused · last error before the pause: RPC timed out', 'BAYC: Paused · no RPC is set for Base.']));
   });
 
-  it('sends a collection failing for want of an RPC to its setting, not to the collection', () => {
+  it('a chain with no RPC is not backfilling, however far behind its old head leaves it', () => {
+    const s = snapshot({ config: { ...CONFIG, chains: [] }, collections: [collection({ cursorBlock: 0, headBlock: 1_000 })] });
+    expect(texts(s, 'working')).toEqual([]);
+    expect(status(s, NOW).collections[0]).toMatchObject({ turn: 'keeping-up' });
+  });
+
+  it('says a collection with no RPC as information that links to its setting, never as a fault', () => {
     const s = snapshot({ config: { ...CONFIG, chains: [] }, collections: [collection({ error: 'No RPC is configured for chain 1. Set WASHTRACE_RPC_1.' })] });
-    expect(status(s, NOW).notices.find((n) => n.severity === 'needs-you')).toMatchObject({ doThis: expect.stringContaining('Ethereum RPC URL'), href: '/settings#rpc.1' });
+    const notices = status(s, NOW).notices;
+    expect(notices.filter((n) => n.severity === 'needs-you')).toEqual([]);
+    expect(notices.find((n) => n.text.includes('no RPC is set'))).toEqual({ severity: 'info', text: 'BAYC: no RPC is set for Ethereum, so nothing is read.', action: { label: 'Add an RPC URL in Settings', href: '/settings#rpc.1' } });
   });
 
   it('says where to set an RPC for a chain the console has no field for', () => {
     const s = snapshot({ config: { ...CONFIG, chains: [] }, collections: [collection({ chainId: 8453, error: 'No RPC is configured for chain 8453.' })] });
-    const n = status(s, NOW).notices.find((x) => x.severity === 'needs-you');
-    expect(n).toMatchObject({ doThis: expect.stringContaining('WASHTRACE_RPC_8453') });
-    expect(n && 'href' in n ? n.href : undefined).toBeUndefined();
+    const notices = status(s, NOW).notices;
+    expect(notices.filter((x) => x.severity === 'needs-you')).toEqual([]);
+    const n = notices.find((x) => x.text.includes('no RPC is set'));
+    expect(n).toMatchObject({ severity: 'info', text: expect.stringContaining('Set WASHTRACE_RPC_8453 for the worker to read this chain.') });
+    expect(n && 'action' in n ? n.action : undefined).toBeUndefined();
   });
 
   describe('stored data with no RPC', () => {

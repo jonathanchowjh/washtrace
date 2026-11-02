@@ -55,14 +55,16 @@ export function Problem({ title, children, doThis = 'check that the store is run
  * What the worker has to say, by how serious it is. Only "needs you" is loud:
  * a neutral card with a warning icon and a "Do this" line. "Working" shows
  * progress; "info" is muted. The heading counts needs-you items only, so
- * "Nothing needs you" is the normal state even while hours of work remain.
+ * "Nothing has failed." is the normal state even while hours of work remain.
+ * It does not say the worker is reading: a missing key is an info notice, a
+ * limit to lift, so the notices below the heading matter too.
  */
 export function Notices({ notices }: { notices: Notice[] }) {
   const needs = notices.filter((n): n is Extract<Notice, { severity: 'needs-you' }> => n.severity === 'needs-you');
   const rest = notices.filter((n): n is Exclude<Notice, { severity: 'needs-you' }> => n.severity !== 'needs-you');
   return (
     <div className="space-y-2">
-      <h2 className="text-lg font-semibold text-foreground">{needs.length === 0 ? 'Nothing needs you' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}</h2>
+      <h2 className="text-lg font-semibold text-foreground">{needs.length === 0 ? 'Nothing has failed.' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}</h2>
       {needs.map((n, i) => (
         <div key={i} role="alert" className="flex gap-3 rounded-lg border border-fault/40 bg-card p-3 text-sm">
           <Warn className="mt-0.5 size-5 text-fault" />

@@ -1,9 +1,10 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
-import { ReadingPanel, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
-import { localTime } from '@/lib/format';
-import { coverage } from '@/lib/metrics';
+import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
+import { Pipeline, PipelineErrors, PipelineTable, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
+import { localTime, short } from '@/lib/format';
+import { coverage, progress } from '@/lib/metrics';
+import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensCards } from '@/components/methods';
 
 afterEach(cleanup);
@@ -13,11 +14,40 @@ const ON = new Set([1]);
 
 const row = (more: Partial<CollectionRow> = {}) => ({
   id: 1, chainId: 1, address: '0xabc', name: 'Demo', startBlock: 1, cursorBlock: 10, headBlock: 10, transfers: 5,
-  wallets: 0, fundedWallets: 0, latest: null, error: null, stale: false, pausedAt: null, priority: false, trailProgress: null, ...more,
+  wallets: 0, fundedWallets: 0, latest: null, error: null, stale: false, pausedAt: null, priority: false, trailProgress: null, analysisError: null,
+  storedThroughTime: null, storedThroughBlock: null, downloadFile: null, downloadProgress: null, downloadNote: null,
+  restoreProgress: null, restoreNote: null, trailNote: null, trailImportedSha: null, ...more,
 }) as unknown as CollectionRow;
 
-function panel(c: CollectionRow) {
-  return render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container;
+/** The manifest's entry for the stored data, as the worker would find it. */
+const entry = (more: Partial<StoredEntry> = {}) => ({
+  chainId: 1, address: '0xabc', name: 'Demo', startBlock: 1, throughBlock: 500, throughTime: 1,
+  transfers: { file: 'transfers.parquet', rows: 5, bytes: 2_000_000_000, sha256: 'abc' }, trail: null, ...more,
+}) as StoredEntry;
+const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 3_400_000_000, sha256: 'feed', checked: 1_612, of: 11_259 } as unknown as StoredEntry['trail'];
+/** Stored data the chain was read past (cursor 10) with a trail on top: stages 1 and 2 have the trail to do, if any. */
+const withTrail = () => entry({ throughBlock: 10, trail: TRAIL });
+
+interface View {
+  entry?: StoredEntry | null; rpc?: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null;
+  trailBytes?: number | null; transfersBytes?: number | null; trailComing?: boolean; now?: number; analyzing?: boolean;
+  /** What coverage() is told: the pill's clock, and whether a key is set (it says true unless told). */
+  covNow?: number; covFunding?: boolean;
+}
+
+/** The collection page's six stages for `c`, built the way the page builds them. */
+function view(c: CollectionRow, o: View = {}) {
+  const rpc = o.rpc ?? ON;
+  const funding = o.funding ?? true;
+  const stages = pipeline({ c, entry: o.entry ?? null, rpcChains: rpc, funding, analyzing: o.analyzing ?? false });
+  return render(
+    <Pipeline c={c} stages={stages} cov={coverage(c, rpc, o.covNow ?? 0, 'UTC', o.covFunding ?? true)} why="Waiting" rpcChains={rpc} funding={funding} funded={o.funded}
+      trail={o.trail} trailBytes={o.trailBytes} transfersBytes={o.transfersBytes} trailComing={o.trailComing} now={o.now} />,
+  ).container;
+}
+
+function panel(c: CollectionRow, e: StoredEntry | null = null) {
+  return view(c, { entry: e });
 }
 
 describe('a collection read before whose head is not known now', () => {
@@ -38,7 +68,7 @@ describe('a collection read before whose head is not known now', () => {
   });
 });
 
-describe('ReadingPanel step 1', () => {
+describe('Pipeline stage 4', () => {
   it('says the error of a paused collection as information, from before the pause', () => {
     const el = panel(row({ pausedAt: 5, error: 'RPC timed out' }));
     expect(el.textContent).toContain('Paused · last error before the pause: RPC timed out');
@@ -68,14 +98,14 @@ describe('loading stored data', () => {
     const text = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container.textContent!;
     expect(text).toContain('42%');
     expect(text).toContain('Loading stored data');
-    expect(panel(c).textContent).toContain('Loading stored data · 42%');
+    expect(panel(c, entry()).textContent).toContain('Loading stored data · 42%');
   });
 
   const NOTE = 'Stored data could not be loaded: its file does not match the manifest.';
   const said = (el: HTMLElement) => [...el.querySelectorAll('p')].find((p) => p.textContent!.startsWith(NOTE))!;
 
-  it('says why stored data was not loaded beside step 1, as information and not a fault, and that the chain is read meanwhile', () => {
-    const line = said(panel(row({ restoreNote: NOTE })));
+  it('says why stored data was not loaded beside stage 2, as information and not a fault, and that the chain is read meanwhile', () => {
+    const line = said(panel(row({ restoreNote: NOTE }), entry()));
     expect(line.textContent).toBe(`${NOTE} Reading from the chain instead; it is tried again when its stored file or its manifest entry changes.`);
     expect(line.className).not.toContain('text-fault');
   });
@@ -83,7 +113,7 @@ describe('loading stored data', () => {
   it('never claims the chain is read when its chain has no RPC: says what will make the stored data load', () => {
     const NONE = new Set<number>();
     const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, restoreNote: NOTE });
-    const line = said(render(<ReadingPanel c={c} cov={coverage(c, NONE, 0)} why="Waiting" rpcChains={NONE} />).container);
+    const line = said(view(c, { entry: entry(), rpc: NONE }));
     expect(line.textContent).toBe(`${NOTE} It is tried again when its stored file or its manifest entry changes.`);
     expect(line.textContent).not.toContain('chain');
   });
@@ -92,7 +122,7 @@ describe('loading stored data', () => {
     document.cookie = 'washtrace_tz=UTC; path=/';
     const at = Date.UTC(2026, 9, 23, 14, 35);
     const c = row({ restoreNote: 'Stored data could not be loaded.', restoreRetryAt: at });
-    const lineAt = (now: number) => [...render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} now={now} />).container.querySelectorAll('p')]
+    const lineAt = (now: number) => [...view(c, { entry: entry(), now }).querySelectorAll('p')]
       .find((p) => p.textContent!.startsWith('Stored data could not'))!;
     expect(lineAt(at - 20 * 60_000).textContent).toBe(`Stored data could not be loaded. Reading from the chain instead; it is tried again after ${localTime(at, 'time', 'UTC')}.`);
     // Past that time, before the worker's next pass: not a time already gone.
@@ -100,14 +130,14 @@ describe('loading stored data', () => {
   });
 
   it('says nothing of the last failure while the load is tried again: the progress says it', () => {
-    const text = panel(row({ restoreNote: NOTE, restoreRetryAt: 5, restoreProgress: 0.1 })).textContent!;
+    const text = panel(row({ restoreNote: NOTE, restoreRetryAt: 5, restoreProgress: 0.1 }), entry()).textContent!;
     expect(text).toContain('Loading stored data · 10%');
     expect(text).not.toContain(NOTE);
     expect(text).not.toContain('Reading from the chain instead');
   });
 
   it('says only why on a paused collection: nothing is read or tried until it is resumed', () => {
-    expect(said(panel(row({ restoreNote: NOTE, pausedAt: 5 }))).textContent).toBe(NOTE);
+    expect(said(panel(row({ restoreNote: NOTE, pausedAt: 5 }), entry())).textContent).toBe(NOTE);
   });
 });
 
@@ -116,26 +146,23 @@ describe('a collection whose latest analysis failed', () => {
   const NOW = Date.UTC(2026, 9, 23, 14, 15);
   const at = NOW + 20 * 60_000;
   const analysed = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
-  const step3 = (c: CollectionRow) => {
-    const el = render(<ReadingPanel c={c} cov={coverage(c, ON, NOW)} why="Waiting" rpcChains={ON} now={NOW} />).container;
-    return el.querySelectorAll('li')[2]!;
-  };
-  it('step 3 says the analysis runs again once the trail is in, not that nothing is new', () => {
-    const loading = step3(row({ latest: analysed, trailProgress: 0.3 })).textContent!;
+  const stage6 = (c: CollectionRow) => view(c, { covNow: NOW, now: NOW }).querySelectorAll('li')[5]!;
+  it('stage 6 says the analysis runs again once the trail is in, not that nothing is new', () => {
+    const loading = stage6(row({ latest: analysed, trailProgress: 0.3 })).textContent!;
     expect(loading).toContain('· money trail loading; analysed again once it has');
     expect(loading).not.toContain('nothing new since');
     cleanup();
-    expect(step3(row({ latest: analysed })).textContent).toContain('· nothing new since');
+    expect(stage6(row({ latest: analysed })).textContent).toContain('· nothing new since');
   });
-  it('step 3 of a paused collection says nothing of a trail loading', () => {
-    const text = step3(row({ latest: analysed, trailProgress: 0.4, pausedAt: 1 })).textContent!;
+  it('stage 6 of a paused collection says nothing of a trail loading', () => {
+    const text = stage6(row({ latest: analysed, trailProgress: 0.4, pausedAt: 1 })).textContent!;
     expect(text).not.toContain('money trail loading');
     expect(text).toContain('· nothing new since');
   });
   const failed = (el: Element) => [...el.querySelectorAll('p')].find((p) => /^(Latest analysis|Paused · latest analysis)/.test(p.textContent!))!;
 
   it('says the numbers shown stand, that the latest run failed and why, and when it is tried again, as a fault', () => {
-    const li = step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at }));
+    const li = stage6(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at }));
     expect(li.textContent).not.toContain('new data waiting for the next run');
     expect(li.textContent).toContain('took 1 ms · still shown: the latest analysis failed');
     const line = failed(li);
@@ -144,10 +171,10 @@ describe('a collection whose latest analysis failed', () => {
   });
 
   it('says it is due once its wait is over, and promises no retry while paused', () => {
-    expect(failed(step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }))).textContent)
+    expect(failed(stage6(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }))).textContent)
       .toBe('Latest analysis failed: out of memory · due to be tried again.');
     cleanup();
-    const paused = failed(step3(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at, pausedAt: 5 })));
+    const paused = failed(stage6(row({ latest: analysed, stale: true, analysisError: 'out of memory', analysisRetryAt: at, pausedAt: 5 })));
     expect(paused.textContent).toBe('Paused · latest analysis before the pause failed: out of memory');
     expect(paused.className).not.toContain('text-fault');
   });
@@ -174,7 +201,7 @@ describe('a collection read to its head before its first analysis', () => {
 describe('bars', () => {
   it('are never green for a paused collection, whatever the share', () => {
     const c = row({ pausedAt: 5 });
-    const a = render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container;
+    const a = panel(c);
     const b = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container;
     expect(a.querySelector('.bg-ok')).toBeNull();
     expect(b.querySelector('.bg-ok')).toBeNull();
@@ -200,7 +227,7 @@ describe('stored data with no RPC', () => {
   });
   const analysed = { ranAt: 0, tookMs: 1, throughBlock: 900, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
   const summaryOf = (c: CollectionRow) => render(<ReadingSummary c={c} cov={coverage(c, NONE, NOW)} href="#reading" />).container.textContent!;
-  const panelOf = (c: CollectionRow) => render(<ReadingPanel c={c} cov={coverage(c, NONE, NOW)} why="Waiting" rpcChains={NONE} />).container;
+  const panelOf = (c: CollectionRow) => view(c, { rpc: NONE, covNow: NOW });
 
   it('leads the page with where the data stops, never with finding where it begins', () => {
     const text = summaryOf(stored({ latest: analysed }));
@@ -211,7 +238,7 @@ describe('stored data with no RPC', () => {
     expect(text).not.toContain('no numbers yet');
   });
 
-  it('says in step 1 how many transfers came from stored data and through which block, with no fault', () => {
+  it('says in stage 4 how many transfers came from stored data and through which block, with no fault', () => {
     const el = panelOf(stored());
     expect(el.textContent).toContain(`76,054 transfers from stored data, through block 900 (${DAY})`);
     expect(el.textContent).not.toContain('Last read failed');
@@ -275,10 +302,9 @@ describe('a money trail loaded from stored data', () => {
     ranAt: 0, tookMs: 1, throughBlock: 10, totals: totals(available), missingData: 0, fundedWallets: 1_612, wallets: 11_259, truncatedSearches: 0,
   }) as unknown as CollectionRow['latest'];
   const loaded = (more: Partial<CollectionRow> = {}) => row({ trailImportedSha: 'feed', wallets: 11_259, fundedWallets: 1_612, latest: analysed(true), ...more });
-  const panelOf = (c: CollectionRow, funding: boolean, trail: { checked: number; of: number } | null) =>
-    render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} funding={funding} trail={trail} />).container;
+  const panelOf = (c: CollectionRow, funding: boolean, trail: { checked: number; of: number } | null) => view(c, { entry: withTrail(), funding, trail });
 
-  it('says in step 2 that the trail loaded, and how many traders it checked', () => {
+  it('says in stage 2 that the trail loaded, and how many traders it checked', () => {
     const text = panelOf(loaded(), true, { checked: 1_612, of: 11_259 }).textContent!;
     expect(text).toContain('Money trail loaded from stored data · 1,612 of 11,259 traders checked');
   });
@@ -307,16 +333,16 @@ describe('a money trail loaded from stored data', () => {
     expect(link?.getAttribute('href')).toBe('/settings#etherscan.key');
   });
 
-  it('tells the lens cards\' story in step 2 when the trail checked no wallet and there is no key: not run, not a bar at 0', () => {
+  it('tells the lens cards\' story in stage 5 when the trail checked no wallet and there is no key: not run, not a bar at 0', () => {
     const c = loaded({ latest: analysed(false), fundedWallets: 0 });
-    const el = render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} funding={false} funded={false} trail={null} />).container;
-    const text = el.textContent!;
-    expect(text).toContain('Off');
+    const text = view(c, { entry: withTrail(), funding: false, funded: false }).textContent!;
+    expect(text).toContain('Needs a key');
+    expect(text).not.toContain('Off');
     expect(text).toContain('The stored money trail checked no wallet, and no funding source is set (WASHTRACE_ETHERSCAN_KEY).');
     expect(text).not.toContain('0 of 11,259');
     expect(text).not.toContain('Using the stored money trail');
     // Funded by the trail: the count and the bar, as before.
-    const ok = render(<ReadingPanel c={loaded()} cov={coverage(loaded(), ON, 0)} why="Waiting" rpcChains={ON} funding={false} funded trail={null} />).container.textContent!;
+    const ok = view(loaded(), { entry: withTrail(), funding: false, funded: true }).textContent!;
     expect(ok).toContain('1,612 of 11,259 trading wallets');
   });
 
@@ -354,7 +380,7 @@ describe('a money trail loaded from stored data', () => {
     expect(cards(true, true)).not.toMatch(/no funding source/i);
     expect(cards(true, true)).toContain('The stored money trail is loaded');
     expect(cards(true, true)).toContain('the next analysis runs this lens');
-    expect(cards(false, false)).toMatch(/no funding source is set/i);
+    expect(cards(false, false)).toMatch(/it needs a key/i);
   });
 
   it('promises a money lens a run only when the next analysis will have funding for it, and otherwise says what is missing', () => {
@@ -388,7 +414,7 @@ describe('downloading stored data', () => {
     expect(text).toContain('of its stored data downloaded from Hugging Face');
   });
 
-  it('says a collection waiting its turn waits, in the pill, the summary and the step, never "Finding the deployment block"', () => {
+  it('says a collection waiting its turn waits, in the pill, the summary and stage 1, never "Finding the deployment block"', () => {
     const c = down({ downloadProgress: null });
     const cov = coverage(c, ON, 0);
     const pill = render(<ReadingPill cov={cov} />).container;
@@ -399,9 +425,9 @@ describe('downloading stored data', () => {
     expect(summary).toContain('to download its stored data from Hugging Face');
     expect(summary).not.toContain('still finding where this collection begins');
     cleanup();
-    const panel = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent!;
-    expect(panel).toContain('Waiting to download stored data');
-    expect(panel).not.toContain('Finding the deployment block');
+    const stages = view(c, { entry: entry() }).textContent!;
+    expect(stages).toContain('Waiting to download stored data');
+    expect(stages).not.toContain('Finding the deployment block');
   });
 
   it('a collection waiting its turn, with an analysis on screen, says its shares can move, not that it has none', () => {
@@ -412,29 +438,31 @@ describe('downloading stored data', () => {
     expect(said).not.toContain('no numbers');
   });
 
-  it('a trail download shows on the funding step, not as the reading', () => {
+  it('a trail download shows on stage 1, not as the reading', () => {
     const c = row({ downloadFile: 'trail', downloadProgress: 0.416 });
     const cov = coverage(c, ON, 0);
     expect(cov.reading).not.toBe('downloading');
-    const text = render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} trailBytes={3_400_000_000} />).container.textContent!;
+    const text = view(c, { entry: withTrail(), trailBytes: 3_400_000_000 }).textContent!;
     expect(text).toContain('Money trail downloading from stored data · 41% of 3.4 GB');
+    cleanup();
     // Without the manifest's size, no size is guessed.
-    expect(render(<ReadingPanel c={c} cov={cov} why="Waiting" rpcChains={ON} />).container.textContent).toContain('Money trail downloading from stored data · 41%');
+    const bare = view(c, { entry: withTrail() }).textContent!;
+    expect(bare).toContain('Money trail downloading from stored data · 41%');
+    expect(bare).not.toContain(' GB');
   });
 
-  it('a trail loading in the background shows on the funding step with its progress', () => {
+  it('a trail loading in the background shows on stage 2 with its progress', () => {
     const c = row({ trailProgress: 0.416 });
-    const text = render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    const text = panel(c, withTrail()).textContent!;
     expect(text).toContain('Money trail loading from stored data · 41%');
     cleanup();
-    const idle = row();
-    expect(render(<ReadingPanel c={idle} cov={coverage(idle, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent).not.toContain('Money trail loading');
+    expect(panel(row(), withTrail()).textContent).not.toContain('Money trail loading');
   });
 
   it('the note that a trail import failed shows only while it is tried again, the notes about the file always', () => {
     const failedNote = TRAIL_NOTES.failed;
     const mismatch = TRAIL_NOTES.mismatch;
-    const text = (c: CollectionRow) => render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    const text = (c: CollectionRow) => panel(c, withTrail()).textContent!;
     expect(text(row({ trailNote: failedNote }))).toContain(failedNote);
     cleanup();
     expect(text(row({ trailNote: failedNote, pausedAt: 1 }))).not.toContain(failedNote);
@@ -442,44 +470,336 @@ describe('downloading stored data', () => {
     expect(text(row({ trailNote: mismatch, pausedAt: 1 }))).toContain(mismatch);
   });
 
-  it('with no key, step 2 waits for a trail on its way that checked wallets, instead of saying funding is off', () => {
+  it('with no key, stage 5 waits for a trail on its way that checked wallets, instead of saying it needs a key', () => {
     // Analysed on the transfers alone, as a fresh install is before its trail is in: the money lenses did not run.
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 0, wallets: 9, truncatedSearches: 0,
       totals: { A: { available: true }, AU: { available: false }, AC: { available: false } } } as unknown as CollectionRow['latest'];
     const step2 = (more: Partial<CollectionRow>, trailComing: boolean) => {
       const c = row({ latest, ...more });
-      return [...render(<ReadingPanel c={c} cov={coverage(c, ON, 0, 'UTC', false)} why="Waiting" rpcChains={ON} funding={false} trailComing={trailComing} />).container.querySelectorAll('li')][1]!.textContent!;
+      return [...view(c, { entry: withTrail(), funding: false, covFunding: false, trailComing }).querySelectorAll('li')][4]!.textContent!;
     };
     for (const c of [{ trailProgress: 0.41 }, { downloadFile: 'trail' as const, downloadProgress: 0.2 }]) {
       const text = step2(c, true);
       expect(text).toContain('Waiting');
       expect(text).not.toContain('Off');
       expect(text).toContain('Funded by the stored money trail once it has loaded');
+      // Blocked all the same, with the line beneath its link and the figure saying it waits.
+      expect(text).toContain('Needs a key');
+      expect(text).toContain('Add an Etherscan key in Settings →');
+      expect(text.indexOf('Add an Etherscan key in Settings →')).toBeLessThan(text.indexOf('Funded by the stored money trail'));
+      expect(text).toContain('Waiting');
       cleanup();
     }
-    // Nothing on its way, a trail that checked no wallet, or paused: off, as before.
-    expect(step2({}, true)).toContain('Off');
-    cleanup();
-    expect(step2({ trailProgress: 0.41 }, false)).toContain('Off');
-    cleanup();
-    expect(step2({ trailProgress: 0.41, pausedAt: 1 }, true)).toContain('Off');
+    // Nothing on its way, a trail that checked no wallet, or paused: it needs a key, never "Off".
+    for (const [more, coming] of [[{}, true], [{ trailProgress: 0.41 }, false], [{ trailProgress: 0.41, pausedAt: 1 }, true]] as const) {
+      const text = step2(more, coming);
+      expect(text).toContain('pausedAt' in more ? 'Paused' : 'Needs a key');
+      expect(text).not.toContain('Off');
+      expect(text).not.toContain('Funded by the stored money trail once it has loaded');
+      cleanup();
+    }
   });
 
   it('a paused collection shows no trail loading', () => {
-    const c = row({ trailProgress: 0.4, pausedAt: 1 });
-    expect(render(<ReadingPanel c={c} cov={coverage(c, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent).not.toContain('Money trail loading');
+    expect(panel(row({ trailProgress: 0.4, pausedAt: 1 }), withTrail()).textContent).not.toContain('Money trail loading');
   });
 
   it('says nothing is downloading when paused, and the note only while it is tried again', () => {
     const note = 'Stored data could not be downloaded. Tried again later.';
     const paused = row({ downloadFile: 'trail', downloadProgress: 0.4, downloadNote: note, pausedAt: 1 });
-    const text = render(<ReadingPanel c={paused} cov={coverage(paused, ON, 0)} why="Waiting" rpcChains={ON} />).container.textContent!;
+    const text = panel(paused, withTrail()).textContent!;
     expect(text).not.toContain('downloading');
     expect(text).not.toContain(note);
     cleanup();
     const failed = row({ downloadNote: note });
-    const el = render(<ReadingPanel c={failed} cov={coverage(failed, ON, 0)} why="Waiting" rpcChains={ON} />).container;
+    const el = panel(failed, entry());
     expect(el.textContent).toContain(note);
-    expect(el.querySelector('.text-fault')).toBeNull();
+    // The stage's chip says Failed in the fault colour; the note itself is information, as before.
+    expect(el.querySelectorAll('li')[0]!.textContent).toContain('Failed');
+    expect([...el.querySelectorAll('p')].find((p) => p.textContent === note)!.className).not.toContain('text-fault');
+  });
+});
+
+const TITLES6 = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'];
+
+describe('the six stages', () => {
+  const NONE = new Set<number>();
+  const TITLES = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'];
+
+  it('shows the six stages in order, each with its state and what it feeds', () => {
+    const c = row();
+    const lis = [...panel(c).querySelectorAll('li')];
+    const stages = pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false });
+    expect(lis).toHaveLength(6);
+    lis.forEach((li, i) => {
+      expect(li.textContent).toContain(TITLES[i]);
+      expect(li.textContent).toContain('Feeds');
+      expect(li.textContent).not.toContain('Affects');
+      expect(li.textContent).toContain(STATE_WORDS[stages[i]!.state]);
+    });
+    // Each title sits in its own place: the second stage's is not in the first.
+    expect(lis[0]!.textContent).not.toContain(TITLES[1]);
+  });
+
+  it('a stage missing its key says so and links to Settings, never "Off"', () => {
+    const c = row();
+    const el = view(c, { rpc: NONE, funding: false });
+    const links = [...el.querySelectorAll('a')];
+    expect(links.find((a) => a.textContent === 'Add an RPC URL in Settings →')?.getAttribute('href')).toBe('/settings#rpc.1');
+    expect(links.find((a) => a.textContent === 'Add an Etherscan key in Settings →')?.getAttribute('href')).toBe('/settings#etherscan.key');
+    // The chip's word, once per blocked stage, and never repeated by a figure.
+    expect(el.textContent!.split('Needs a key')).toHaveLength(3);
+    expect(el.textContent).not.toMatch(/\bOff\b/);
+  });
+
+  it('a chain Settings does not offer names its variable, with no link', () => {
+    const c = row({ chainId: 8453 });
+    const el = view(c);
+    expect(el.textContent).toContain('Set WASHTRACE_RPC_8453 for the worker to read this chain.');
+    expect(el.querySelector('a[href^="/settings#rpc"]')).toBeNull();
+  });
+
+  it('stages 1–3 say there is no stored data when there is none', () => {
+    const lis = [...panel(row()).querySelectorAll('li')];
+    for (const li of lis.slice(0, 3)) expect(li.textContent).toContain('No stored data for this collection.');
+    expect(lis[3]!.textContent).not.toContain('No stored data for this collection.');
+  });
+
+  it('stages 1–3 say the chain was read past stored data it never needed', () => {
+    const lis = [...panel(row({ cursorBlock: 900 }), entry({ throughBlock: 500 })).querySelectorAll('li')];
+    for (const li of lis.slice(0, 3)) expect(li.textContent).toContain('Read past its stored data from the chain, so it was not needed.');
+    cleanup();
+    const early = [...panel(row({ cursorBlock: 5 }), entry({ startBlock: 100 })).querySelectorAll('li')];
+    for (const li of early.slice(0, 3)) expect(li.textContent).toContain('Its reading started before its stored data, so it was not needed.');
+  });
+
+  it('a live collection follows new blocks, never "done" on stage 4', () => {
+    const stage4 = panel(row()).querySelectorAll('li')[3]!;
+    expect(stage4.textContent).toContain('Following');
+    expect(stage4.textContent).toContain('Up to date · following new blocks');
+    expect(stage4.textContent).not.toContain('Done');
+  });
+
+  it('a stage that is waiting says on what, and one that is running says how far', () => {
+    const waiting = [...panel(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers' }), entry()).querySelectorAll('li')];
+    expect(waiting[1]!.textContent).toContain('Waiting for the stored data to download');
+    expect(waiting[3]!.textContent).toContain('Waiting for the stored data to load');
+    cleanup();
+    const running = [...panel(row({ cursorBlock: 251, headBlock: 1001 })).querySelectorAll('li')];
+    expect(running[3]!.textContent).toContain('blocks to go');
+  });
+
+  it('stage 3 says when the stored data was analysed, through which block, and how long it took', () => {
+    const latest = { ranAt: Date.UTC(2026, 9, 14, 8), tookMs: 25_000, throughBlock: 500, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+    const c = row({ storedThroughTime: 1, storedThroughBlock: 500, cursorBlock: 500, latest });
+    const li = panel(c, entry()).querySelectorAll('li')[2]!;
+    expect(li.textContent).toContain('Analysed');
+    expect(li.textContent).toContain('through block 500');
+    expect(li.textContent).toContain('took 25 s');
+  });
+
+  it('the bar is green only for done and live', () => {
+    const bar = (li: Element) => li.querySelector('[data-bar="stage"] i');
+    const lis = [...panel(row({ fundedWallets: 0, wallets: 4, latest: { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 4, truncatedSearches: 0 } as unknown as CollectionRow['latest'] })).querySelectorAll('li')];
+    // Stage 4 is live (full, green); stage 5 is running at 0 (not green).
+    expect(bar(lis[3]!)!.className).toContain('bg-ok');
+    expect(bar(lis[4]!)!.className).not.toContain('bg-ok');
+    cleanup();
+    // Blocked is never green, even at a full share.
+    const stored = [...view(row({ storedThroughTime: 1, storedThroughBlock: 10, headBlock: null }), { rpc: NONE }).querySelectorAll('li')];
+    expect(bar(stored[3]!)?.className ?? '').not.toContain('bg-ok');
+  });
+
+  it('a running download and a running load each show their bar', () => {
+    const down = [...panel(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.4 }), entry()).querySelectorAll('li')];
+    expect(down[0]!.querySelector('[data-bar="stage"]')).not.toBeNull();
+    cleanup();
+    const load = [...panel(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.5 }), entry()).querySelectorAll('li')];
+    expect(load[1]!.querySelector('[data-bar="stage"]')).not.toBeNull();
+  });
+
+  it('a missing RPC with no stored data is a limit to lift, never a fault', () => {
+    const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.' });
+    const li = view(c, { rpc: NONE }).querySelectorAll('li')[3]!;
+    expect(li.textContent).toContain('Needs a key');
+    expect(li.textContent).toContain('No RPC is set for Ethereum');
+    expect(li.textContent).not.toContain('Last read failed');
+    expect(li.textContent).not.toContain('Finding the deployment block');
+    expect(li.querySelector('.text-fault')).toBeNull();
+  });
+
+  it('stage 4 waits on stored data only while it is to load: after a failed load its own line returns', () => {
+    const failedLoad = row({ cursorBlock: null, startBlock: null, headBlock: null, restoreNote: 'Stored data could not be loaded.' });
+    const withRpc = view(failedLoad, { entry: entry() }).querySelectorAll('li')[3]!.textContent!;
+    expect(withRpc).not.toContain('Waiting for the stored data to load');
+    expect(withRpc).toContain('Finding the deployment block');
+    cleanup();
+    const noRpc = view(failedLoad, { entry: entry(), rpc: NONE }).querySelectorAll('li')[3]!.textContent!;
+    expect(noRpc).not.toContain('Waiting for the stored data to load');
+    expect(noRpc).toContain('No RPC is set for Ethereum');
+  });
+
+  it('a blocked stage 5 shows a dash unless a trail funds it or is on its way', () => {
+    const fig = (c: CollectionRow) => view(c, { funding: false, covFunding: false }).querySelectorAll('li')[4]!.querySelector('p.text-xl')!.textContent;
+    expect(fig(row({ latest: null }))).toBe('—');
+    cleanup();
+    expect(fig(row({ wallets: 9, fundedWallets: 3, latest: { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 3, wallets: 9, truncatedSearches: 0 } as unknown as CollectionRow['latest'] }))).toBe('—');
+  });
+
+  it('the summary says what blocks the reading, with the link', () => {
+    const c = row();
+    const stages = pipeline({ c, entry: null, rpcChains: NONE, funding: false, analyzing: false });
+    const el = render(<ReadingSummary c={c} cov={coverage(c, NONE, 0)} href="#reading" stages={stages} />).container;
+    expect(el.textContent).toContain('Add an RPC URL in Settings →');
+    expect([...el.querySelectorAll('a')].map((a) => a.textContent)).toContain('The six stages ↓');
+    expect(el.textContent).not.toContain('The three steps');
+    cleanup();
+    // Nothing blocked, nothing said; and a paused collection is blocked by nothing.
+    const free = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" stages={pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false })} />).container;
+    expect(free.textContent).not.toContain('Blocked');
+    cleanup();
+    const paused = row({ pausedAt: 5 });
+    const pausedEl = render(<ReadingSummary c={paused} cov={coverage(paused, NONE, 0)} href="#reading" stages={pipeline({ c: paused, entry: null, rpcChains: NONE, funding: false, analyzing: false })} />).container;
+    expect(pausedEl.textContent).not.toContain('Blocked');
+  });
+});
+
+describe('the reading, said once and truthfully', () => {
+  const NONE = new Set<number>();
+  const analysed = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+  const summary = (c: CollectionRow, o: { rpc?: ReadonlySet<number>; funding?: boolean; analyzing?: boolean } = {}) => {
+    const rpc = o.rpc ?? ON;
+    const stages = pipeline({ c, entry: null, rpcChains: rpc, funding: o.funding ?? true, analyzing: o.analyzing ?? false });
+    return render(<ReadingSummary c={c} cov={coverage(c, rpc, 0)} href="#reading" stages={stages} />).container.textContent!;
+  };
+
+  it('everything read, no key, and no analysis of money: the summary says the wallets wait for a key', () => {
+    const text = summary(row({ latest: analysed }), { funding: false });
+    expect(text).toContain('of transfers read. Wallets not yet checked for money wait for an Etherscan key');
+    cleanup();
+    // A key just added is also without money lenses: that is not waiting for a key.
+    expect(summary(row({ latest: analysed }), { funding: true })).toContain('read: every transfer, and every wallet the lenses need');
+  });
+
+  it('a chain with no RPC and nothing read says so, not "Finding where the collection begins"', () => {
+    const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0 });
+    const text = summary(c, { rpc: NONE });
+    expect(text).toContain('No RPC');
+    expect(text).toContain('Nothing is read until its chain has an RPC.');
+    expect(text).not.toContain('Finding where the collection begins');
+    cleanup();
+    expect(render(<ReadingPill cov={coverage(c, NONE, 0)} />).container.textContent).toBe('No RPC for its chain');
+  });
+
+  it('a first analysis being tried again reads Analyzing, not Failed', () => {
+    const c = row({ latest: null, analysisError: 'Ran out of memory.', wallets: 4 });
+    expect(summary(c)).toContain('Failed');
+    cleanup();
+    const text = summary(c, { analyzing: true });
+    expect(text).toContain('Analyzing');
+    expect(text).not.toContain('Failed');
+  });
+
+  it('stage 6 over a failed analysis says it is trying again now, and otherwise when it is due', () => {
+    const c = row({ latest: analysed, analysisError: 'Ran out of memory.', analysisRetryAt: 5 });
+    const six = (o: View) => view(c, o).querySelectorAll('li')[5]!.textContent!;
+    expect(six({ analyzing: true, now: 10 })).toContain('trying again now.');
+    expect(six({ analyzing: true, now: 10 })).not.toContain('due to be tried again');
+    cleanup();
+    expect(six({ now: 10 })).toContain('due to be tried again.');
+  });
+
+  it('transfers in with the money trail still to come: stage 1 says the trail is next', () => {
+    const loaded = row({ storedThroughTime: 1, storedThroughBlock: 500 });
+    const text = (c: CollectionRow) => view(c, { entry: entry({ trail: TRAIL }) }).querySelectorAll('li')[0]!.textContent!;
+    expect(text(loaded)).toContain('Transfers downloaded; the money trail is next.');
+    cleanup();
+    expect(text(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.4 }))).toContain('Transfers downloaded; the money trail is next.');
+    cleanup();
+    expect(text(row({ cursorBlock: null, startBlock: null }))).toContain('Waiting to download stored data');
+    cleanup();
+    expect(text(row({ storedThroughTime: 1, storedThroughBlock: 500, downloadFile: 'transfers' }))).toContain('Waiting to download stored data');
+  });
+
+  it('a paused collection with no RPC says that, in stage 4 and under the table, not "last error"', () => {
+    const c = row({ pausedAt: 5, error: 'No RPC is configured for chain 1.', cursorBlock: 5, startBlock: 1 });
+    const four = view(c, { rpc: NONE }).querySelectorAll('li')[3]!.textContent!;
+    expect(four).toContain('Paused · no RPC is set for Ethereum.');
+    expect(four).not.toContain('last error');
+    cleanup();
+    const rows = [{ chainId: 1, address: '0xa1', name: 'Demo', error: 'No RPC is configured for chain 1.', storedOnly: false, paused: true, rpc: false, stages: pipeline({ c, entry: null, rpcChains: NONE, funding: true, analyzing: false }) }];
+    const el = render(<PipelineErrors rows={rows} />).container;
+    expect(el.textContent).toContain('Paused · no RPC is set for Ethereum.');
+    expect(el.textContent).not.toContain('last error');
+  });
+
+  it('the table shows a running download rounded down, and its name cell opens the row from its whole width', () => {
+    const c = row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.416 });
+    const stages = pipeline({ c, entry: entry(), rpcChains: ON, funding: true, analyzing: false });
+    const el = render(<PipelineTable rows={[{ chainId: 1, address: '0xabc', name: 'Demo', stages }]} />).container;
+    expect(el.querySelector('tbody tr')!.textContent).toContain('41%');
+    expect(el.querySelector('tbody tr')!.textContent).not.toContain('42%');
+    const name = el.querySelector('tbody td')!;
+    expect(name.className).toContain('p-0');
+    expect(name.querySelector('a')!.className).toContain('block');
+  });
+});
+
+describe('the worker page\'s stages', () => {
+  const stages = (c: CollectionRow, o: { rpc?: ReadonlySet<number>; funding?: boolean } = {}) =>
+    pipeline({ c, entry: null, rpcChains: o.rpc ?? ON, funding: o.funding ?? true, analyzing: false });
+
+  it('PipelineTable shows one row per collection, a column per stage, each cell its state, the name linking to its stages', () => {
+    const running = pipeline({ c: row({ restoreProgress: 0.5, storedThroughTime: null }), entry: entry(), rpcChains: ON, funding: true, analyzing: false });
+    const rows = [
+      { chainId: 1, address: '0xabc', name: 'Demo', stages: running },
+      { chainId: 1, address: '0xdef', name: null, stages: stages(row()) },
+    ];
+    const el = render(<PipelineTable rows={rows} />).container;
+    expect(el.querySelector('.overflow-x-auto table')).not.toBeNull();
+    const heads = [...el.querySelectorAll('thead th')];
+    // The first column is the collection; then one per stage, its title on hover.
+    expect(heads.slice(1).map((h) => h.getAttribute('title'))).toEqual(TITLES6);
+    const body = [...el.querySelectorAll('tbody tr')];
+    expect(body).toHaveLength(2);
+    body.forEach((tr, i) => {
+      const cells = [...tr.querySelectorAll('td')].slice(1);
+      expect(cells).toHaveLength(6);
+      cells.forEach((td, j) => expect(td.textContent).toContain(STATE_WORDS[rows[i]!.stages[j]!.state]));
+    });
+    const running2 = rows[0]!.stages.find((s) => s.state === 'running')!;
+    expect(body[0]!.textContent).toContain(progress(running2.share!));
+    expect(body[0]!.querySelector('a')!.getAttribute('href')).toBe('/c/1/0xabc#reading');
+    // The whole row opens: every stage cell links to the same place, out of the tab order.
+    const cellLinks = [...body[0]!.querySelectorAll('td')].slice(1).map((td) => td.querySelector('a')!);
+    expect(cellLinks).toHaveLength(6);
+    cellLinks.forEach((a) => {
+      expect(a.getAttribute('href')).toBe('/c/1/0xabc#reading');
+      expect(a.getAttribute('tabindex')).toBe('-1');
+    });
+    // A collection with no name shows its short address.
+    expect(body[1]!.querySelector('a')!.textContent).toBe(short('0xdef'));
+  });
+
+  it('PipelineErrors lists a fault, a paused collection\'s error as information, and never a missing key as an error', () => {
+    const base = { chainId: 1, name: 'Demo', storedOnly: false, paused: false, rpc: true };
+    const blocked = stages(row(), { rpc: new Set() });
+    expect(blocked[3]!.state).toBe('blocked');
+    const rows = [
+      { ...base, address: '0xa1', error: 'boom', stages: stages(row()) },
+      { ...base, address: '0xa2', error: 'No RPC is configured for chain 1', stages: blocked },
+      { ...base, address: '0xa3', error: 'old', paused: true, stages: stages(row()) },
+      { ...base, address: '0xa4', error: 'No RPC', storedOnly: true, stages: stages(row()) },
+      { ...base, address: '0xa5', error: null, stages: stages(row()) },
+    ];
+    const el = render(<PipelineErrors rows={rows} />).container;
+    const items = [...el.querySelectorAll('li')];
+    expect(items).toHaveLength(2);
+    expect(items[0]!.textContent).toContain('Last read failed: boom · the worker tries again on its next pass.');
+    expect(items[0]!.className).toContain('text-fault');
+    expect(items[0]!.querySelector('a')!.getAttribute('href')).toBe('/c/1/0xa1#reading');
+    expect(items[1]!.textContent).toContain('Paused · last error before the pause: old');
+    expect(items[1]!.className).not.toContain('text-fault');
+    expect(el.textContent).not.toContain('No RPC is configured');
   });
 });

@@ -296,7 +296,7 @@ settings writes and Tests answer 403 while basic auth is off.
 | `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null`, so `.env` applies, else the default; clearing is always allowed. 409 for a non-null `etherscan.url` while its key comes from `.env`, 400 for one the worker could not use. |
 | `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
 | `GET /api/settings/check/{id}` | That Test: `{finished, ok, detail}`. Poll until `finished`. |
-| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding` is null while there is no Etherscan key. Its `perSecond`, and `followHops`, are null while the worker runs on its defaults. |
+| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding` is null while there is no Etherscan key. Its `perSecond`, and `followHops`, are null while the worker runs on its defaults. Each collection also carries `stages`: its six stages, each with a `state` and a `share`. |
 | `GET /api/status` | Each job's state (`never`, `running`, `ok`, `failed`, `stalled`) and last `outcome`, each collection's `turn` and lag, the funding backlog, and `notices` in plain sentences. |
 | `GET /api/health` | `{ok}`: whether the store answers. Unauthenticated, for the container's health check. |
 
@@ -304,7 +304,10 @@ A notice is `{severity, text}`, its severity `needs-you`, `working` or `info`.
 A `needs-you` one also says what to do (`doThis`, maybe with an `href`); the
 others may carry an `action: {label, href}`. Working and info notices are there
 while all is well, so a monitor alerts on
-`notices.some(n => n.severity === 'needs-you')`. In the funding backlog,
+`notices.some(n => n.severity === 'needs-you')`. An empty `needs-you` list
+does not mean the worker is reading: a missing RPC or Etherscan key is an
+`info` notice, a limit to lift and not a failure, so a monitor that wants to
+know the reading is moving looks at the other notices and at `stages` too. In the funding backlog,
 `pending` and `failed` count the wallets the worker will check, `etaMs` is how
 long the pending ones take at the last hour's rate (null until known), and
 `stranded` counts the ones held back while their collections are paused or
@@ -315,16 +318,15 @@ removed.
 | Route | Content | Refresh |
 |---|---|---|
 | `/` | One row per watched collection: the share of its sales and of its volume that looks washed, as a range from the strictest method to the widest, and how complete the reading under it is. A form to watch another. | 15 s |
-| `/c/{chain}/{address}` | One collection, top down: how far it has been read, in one line; the answer as that range; the three methods as cards, each a tab over the ten tokens and wallets it flags most; each method's share of sales month by month (or week or day) across the collection's life, with history not yet read shaded; then the reading step by step, with how the answer settled at each analysis. | 15 s |
+| `/c/{chain}/{address}` | One collection, top down: how far it has been read, in one line; the answer as that range; the three methods as cards, each a tab over the ten tokens and wallets it flags most; each method's share of sales month by month (or week or day) across the collection's life, with history not yet read shaded; then the reading as six stages, with how the answer settled at each analysis. | 15 s |
 | `/c/{chain}/{address}/flagged` | Every token or wallet one method flags, most flagged first, 50 a page. `?method=AU&kind=wallets&page=2`. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: whether its trades look washed and by which methods, the reason for each pattern once with the transfers it covers, the graph as in the paper's Figure 8 (transfers solid and coloured by verdict, money dashed, a pair traded more than six times drawn as one counted arrow each way), and every transfer. | On open |
 | `/w/{chain}/{address}` | One wallet: how many of its trades are flagged and whether its money has been read, its transfers in every watched collection, and who it moved money with. | On open |
 | `/tx/{chain}/{hash}` | One transaction's verdict: the console form of `/api/transfers`. | On open |
-| `/worker` | What needs a person, from the same reading as `/api/status`; the three jobs as the pipeline they form, each with what it feeds; the sources configured; how far behind each collection is. | 5 s |
+| `/worker` | What needs a person, from the same reading as `/api/status`; the three jobs as the pipeline they form, each with what it feeds; the sources configured; every collection's six stages in one table. | 5 s |
 
-The console names the methods by what they catch, with the paper's name
-beside each: **Round trips** (SCC A), **Money loops back** (SCC AU) and
-**Linked wallets** (SCC AC). The sidebar search takes a wallet, a collection or
+The console names the methods by what they catch: **Round trips**,
+**Money loops back** and **Linked wallets**. The sidebar search takes a wallet, a collection or
 a transaction hash. Times are clock times, never "ago", in the reader's time zone: detected in the
 browser and changeable at the foot of the sidebar. The server buckets a
 collection's history by that zone's calendar, so a month is the reader's month. Light or dark

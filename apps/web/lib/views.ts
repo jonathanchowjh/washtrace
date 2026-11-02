@@ -1,7 +1,8 @@
-import { EVERY, ZERO, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
+import { EVERY, ZERO, entryFor, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
 import { authConfigured, mayWrite } from './auth';
-import { storedOnly } from './metrics';
+import { analyzingOn, storedOnly } from './metrics';
 import { configFromSources, hopsFollowed, view } from './settings';
+import { pipeline } from './pipeline';
 import { status } from './status';
 import { store, storedManifest } from './store';
 
@@ -65,7 +66,8 @@ export async function workerView(zone = 'UTC') {
   // With no key, whether a loaded money trail still feeds the money lenses.
   const fed = config.funding ? false : await trailFunded(s, collections);
   // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
-  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed, manifest: await storedManifest() }, Date.now(), zone);
+  const manifest = await storedManifest();
+  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed, manifest }, Date.now(), zone);
   return {
     every: EVERY,
     rpcChains: config.chains,
@@ -84,6 +86,8 @@ export async function workerView(zone = 'UTC') {
       turn: report.collections.find((r) => r.chainId === c.chainId && r.address === c.address)?.turn ?? 'keeping-up',
       // Paused or not: its "No RPC" is no fault while its stored data is there.
       storedOnly: storedOnly(c, new Set(config.chains)),
+      stages: pipeline({ c, entry: manifest === null ? null : entryFor(manifest, c.chainId, c.address), rpcChains: new Set(config.chains), funding: config.funding, analyzing: analyzingOn(passes, c.id) })
+        .map(({ key, n, title, state, share }) => ({ key, n, title, state, share })),
       backfillEtaMs: c.readRate && c.headBlock !== null && c.cursorBlock !== null ? (Math.max(0, c.headBlock - c.cursorBlock) / c.readRate) * 1000 : null,
     })),
   };

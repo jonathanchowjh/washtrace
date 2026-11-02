@@ -10,6 +10,18 @@ import { storedManifest } from '@/lib/store';
 import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { CollectionRow } from '@/components/collection-row';
 import { CollectionTabs } from '@/components/tabs';
+import WorkerPage from '@/app/worker/page';
+
+// The worker page reads its view from the store: give it one, with the request-scoped imports it awaits.
+const view = vi.hoisted(() => ({ funding: null as null | { source: string; perSecond: number | null }, trailFunded: false }));
+vi.mock('@/lib/views', () => ({
+  workerView: async () => ({
+    every: { ingest: 1, fund: 1, analyze: 1 }, rpcChains: [1], funding: view.funding, followHops: null, trailFunded: view.trailFunded,
+    passes: [], jobs: [], notices: [], backlog: [], collections: [],
+  }),
+}));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock('next/server', () => ({ connection: async () => undefined }));
 
 const refresh = vi.fn();
 const push = vi.fn();
@@ -290,6 +302,17 @@ describe('CollectionRow', () => {
     expect(wrapper.classList.contains('z-10')).toBe(true);
   });
 
+  it('says a missing RPC as a key it needs, not a fault; a chain with an RPC keeps the fault line', () => {
+    const err = 'No RPC is configured for chain 1.';
+    const { container, unmount } = render(<CollectionRow c={{ ...base, error: err }} why="" rpcChains={new Set()} funding now={0} />);
+    expect(container.textContent).toContain('Needs a key: no RPC is set for Ethereum.');
+    expect(container.textContent).not.toContain(err);
+    expect(container.querySelector('.text-fault')).toBeNull();
+    unmount();
+    const live = render(<CollectionRow c={{ ...base, error: 'RPC timed out' }} why="" rpcChains={ON} funding now={0} />).container;
+    expect(live.querySelector('.text-fault')!.textContent).toContain('RPC timed out');
+  });
+
   it('stays on the list after deleting, refreshing in place', async () => {
     vi.stubGlobal('fetch', ok({ deleted: true }));
     render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} funding now={0} />);
@@ -388,9 +411,35 @@ describe('CollectionRow', () => {
     expect(container.querySelector('.text-fault')).toBeNull();
   });
 
+  it('a paused collection on a chain with no RPC says that, not its last error', () => {
+    const { container } = render(<CollectionRow c={{ ...base, pausedAt: 1, error: 'No RPC is configured for chain 1.' } as typeof base} why="Paused" rpcChains={new Set()} funding now={0} />);
+    expect(container.textContent).toContain('Paused · no RPC is set for Ethereum.');
+    expect(container.textContent).not.toContain('last error');
+  });
+
   it('offers Resume and Delete data when paused', () => {
     render(<CollectionRow c={{ ...base, pausedAt: 1 }} why="Paused" rpcChains={ON} funding now={0} />);
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Delete data/ })).toBeTruthy();
+  });
+});
+
+describe('the worker page\'s sources', () => {
+  const funding = async (more: Partial<typeof view>) => {
+    Object.assign(view, { funding: null, trailFunded: false }, more);
+    return render(await WorkerPage()).container;
+  };
+
+  it('a missing Etherscan key reads as the key it needs, in the colour of the RPC line, never grey', async () => {
+    for (const trailFunded of [false, true]) {
+      const el = await funding({ trailFunded });
+      const line = [...el.querySelectorAll('li')].find((li) => li.textContent!.includes('→ stage 5'))!;
+      expect(line.textContent).toContain('Needs a key:');
+      expect(line.querySelector('.text-money')).not.toBeNull();
+      expect(line.querySelector('.text-muted-foreground')?.textContent).toBe('→ stage 5');
+      const link = [...line.querySelectorAll('a')].find((a) => a.textContent === 'Add an Etherscan key in Settings →')!;
+      expect(link.getAttribute('href')).toBe('/settings#etherscan.key');
+      cleanup();
+    }
   });
 });

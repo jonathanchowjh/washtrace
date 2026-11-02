@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { analyzingOn, coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -69,7 +69,8 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
 }
 
 /** Coverage of a row on Ethereum with an RPC set, so the stored-only reading never applies. */
-const cov = (c: CollectionRow) => coverage(c, new Set([1]), 0);
+const ON = new Set([1]);
+const cov = (c: CollectionRow) => coverage(c, ON, 0);
 
 describe('coverage', () => {
   it('is complete at the finalized head with every wallet checked', () => {
@@ -111,7 +112,7 @@ describe('coverage', () => {
     expect(c.download).toBeNull();
     expect(cov(row({ downloadFile: 'transfers', downloadProgress: null, pausedAt: 5 })).reading).toBe('paused');
     expect(cov(row({ downloadFile: 'trail', downloadProgress: null })).reading).not.toBe('queued');
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), 0)).toBe('Waiting to download stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), ON, 0)).toBe('Waiting to download stored data · it is analysed once it has loaded.');
   });
 
   it('a trail download is no reading of its own', () => {
@@ -121,7 +122,7 @@ describe('coverage', () => {
   });
 
   it('says it waits for a download before the first analysis', () => {
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), 0)).toBe('Downloading stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), ON, 0)).toBe('Downloading stored data · it is analysed once it has loaded.');
   });
 
   it('never shows a load as done before it has committed', () => {
@@ -245,9 +246,33 @@ describe('coverage of stored data with no RPC', () => {
 
   it('is not stored-only once the chain has an RPC, or before stored data has landed', () => {
     expect(coverage(stored(), new Set([1]), NOW).reading).toBe('head-unknown');
-    expect(coverage(stored({ cursorBlock: null }), NONE, NOW).reading).toBe('starting');
-    expect(coverage(stored({ storedThroughTime: null, transfers: 0 }), NONE, NOW).reading).toBe('starting');
+    expect(coverage(stored({ cursorBlock: null }), ON, NOW).reading).toBe('starting');
+    expect(coverage(stored({ storedThroughTime: null, transfers: 0, cursorBlock: null }), ON, NOW).reading).toBe('starting');
     expect(coverage(stored(), new Set([1]), NOW).stops).toBeNull();
+  });
+});
+
+describe('coverage of a chain with no RPC, whatever it has read', () => {
+  const NONE = new Set<number>();
+  const NOW = Date.UTC(2026, 9, 23);
+  const bare = (more: Partial<CollectionRow> = {}) => row({ headBlock: null, ...more });
+
+  it('reads stored-only with nothing read, with no stops and no readTo', () => {
+    for (const c of [bare({ cursorBlock: null, startBlock: null, transfers: 0, latest: null }), bare({ storedThroughTime: null, transfers: 0, cursorBlock: 99 })]) {
+      const v = coverage(c, NONE, NOW);
+      expect([v.reading, v.stops, v.readTo, v.label]).toEqual(['stored-only', null, null, 'No RPC for its chain']);
+    }
+  });
+  it('reads stored-only before head-unknown and before catching-up, for history read from the chain', () => {
+    expect(coverage(bare({ cursorBlock: 900, transfers: 10 }), NONE, NOW).reading).toBe('stored-only');
+    expect(coverage(row({ cursorBlock: 500, headBlock: 1_000_000 }), NONE, NOW).reading).toBe('stored-only');
+    expect(coverage(row({ cursorBlock: 500, headBlock: 1_000_000 }), ON, NOW).reading).toBe('catching-up');
+  });
+  it('still gives way to paused, a load and a download', () => {
+    expect(coverage(bare({ pausedAt: 5 }), NONE, NOW).reading).toBe('paused');
+    expect(coverage(bare({ restoreProgress: 0.3 }), NONE, NOW).reading).toBe('restoring');
+    expect(coverage(bare({ downloadFile: 'transfers', downloadProgress: 0.3 }), NONE, NOW).reading).toBe('downloading');
+    expect(coverage(bare({ downloadFile: 'transfers', downloadProgress: null }), NONE, NOW).reading).toBe('queued');
   });
 });
 
@@ -270,41 +295,55 @@ describe('waiting', () => {
   const fresh = row({ latest: null });
 
   it('promises nothing for a paused collection', () => {
-    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, NOW)).toBe('Paused · it is not analysed until you resume it.');
+    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, ON, NOW)).toBe('Paused · it is not analysed until you resume it.');
   });
 
   it('waits for stored data to load, not for transfers to be read', () => {
-    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, NOW)).toBe('Loading stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW)).toBe('Loading stored data · it is analysed once it has loaded.');
   });
 
   it('waits for transfers when none are read', () => {
-    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, NOW)).toBe('Waiting for its first transfers.');
+    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, ON, NOW)).toBe('Waiting for its first transfers.');
+  });
+
+  it('says nothing is read while its chain has no RPC, but not once it has transfers', () => {
+    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, new Set(), NOW)).toBe('Nothing is read until its chain has an RPC.');
+    expect(waiting(row({ latest: null, transfers: 5 }), undefined, names, new Set(), NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
   });
 
   it('says its own first analysis is running', () => {
-    expect(waiting(fresh, pass(), names, NOW)).toBe('First analysis running · started 2 min ago.');
+    expect(waiting(fresh, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
   });
 
   it('names the collection it is queued behind', () => {
-    expect(waiting(fresh, pass({ subjectId: 7, startedAt: NOW - 14 * 60_000 }), names, NOW))
+    expect(waiting(fresh, pass({ subjectId: 7, startedAt: NOW - 14 * 60_000 }), names, ON, NOW))
       .toBe('Waiting for its first analysis · queued behind Terraforms (running 14 min).');
   });
 
   it('says the next pass is near when none is running', () => {
-    expect(waiting(fresh, undefined, names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
-    expect(waiting(fresh, pass({ finishedAt: NOW - 1_000 }), names, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(waiting(fresh, undefined, names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(waiting(fresh, pass({ finishedAt: NOW - 1_000 }), names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
   });
 
   it('says its analysis failed and when it is tried again, never that the next pass is near', () => {
     const at = NOW + 20 * 60_000;
     const failing = row({ latest: null, analysisError: 'out of memory', analysisRetryAt: at });
     const said = `Its analysis failed: out of memory · it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}.`;
-    expect(waiting(failing, undefined, names, NOW, 'Asia/Tokyo')).toBe(said);
+    expect(waiting(failing, undefined, names, ON, NOW, 'Asia/Tokyo')).toBe(said);
     // Queued behind another collection, the failure is still what holds it.
-    expect(waiting(failing, pass({ subjectId: 7 }), names, NOW, 'Asia/Tokyo')).toBe(said);
-    expect(waiting(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
+    expect(waiting(failing, pass({ subjectId: 7 }), names, ON, NOW, 'Asia/Tokyo')).toBe(said);
+    expect(waiting(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, ON, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
     // Being tried again now.
-    expect(waiting(failing, pass(), names, NOW)).toBe('First analysis running · started 2 min ago.');
+    expect(waiting(failing, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
+  });
+
+  it('knows which collection the running analyze pass is on', () => {
+    const other = pass({ job: 'ingest', subjectId: 9 });
+    expect(analyzingOn([other, pass({ subjectId: 3 })], 3)).toBe(true);
+    expect(analyzingOn([pass({ subjectId: 3 })], 4)).toBe(false);
+    expect(analyzingOn([pass({ subjectId: 3, finishedAt: NOW })], 3)).toBe(false);
+    expect(analyzingOn([pass({ job: 'ingest', subjectId: 3 })], 3)).toBe(false);
+    expect(analyzingOn([], 3)).toBe(false);
   });
 
   it('knows a pass is running only until it finishes', () => {

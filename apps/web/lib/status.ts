@@ -100,9 +100,11 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     // While stored data loads, the cursor jumps when it commits: how far behind it is now says nothing.
     const restoring = !paused && c.restoreProgress !== null;
     // No RPC, so nothing reads past the stored data: a limit to lift, not a fault.
+    const rpc = s.config.chains.includes(c.chainId);
     const stored = storedOnly(c, new Set(s.config.chains));
     const storedTurn = !paused && !restoring && stored;
-    const backfilling = !paused && !restoring && !stored && behind !== null && behind > BEHIND_BLOCKS;
+    // With no RPC nothing reads the blocks it is behind, so there is no work to announce.
+    const backfilling = !paused && !restoring && !stored && rpc && behind !== null && behind > BEHIND_BLOCKS;
     // A trail download is a working notice too: the transfers are there, the money trail is on its way.
     if (!paused && c.downloadFile !== null && c.downloadProgress !== null) {
       const e = s.manifest ? entryFor(s.manifest, c.chainId, c.address) : null;
@@ -135,11 +137,12 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     const error = stored ? null : c.error;
     if (error && paused) {
       // The worker does not touch a paused collection, so its error stays from before the pause: nothing is failing now.
-      notice('info', `${label}: Paused · last error before the pause: ${error}`);
-    } else if (error && !s.config.chains.includes(c.chainId)) {
-      // No RPC for its chain: the fix is a setting, not anything on the collection's page.
-      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) needsYou(`${label}: ${error}`, `Open Settings and set an ${chainName(c.chainId)} RPC URL.`, `/settings#rpc.${c.chainId}`);
-      else needsYou(`${label}: ${error}`, `Set WASHTRACE_RPC_${c.chainId} in the worker's environment, then restart it.`);
+      // On a chain with no RPC the error is the old "No RPC", so the limit is said instead.
+      notice('info', rpc ? `${label}: Paused · last error before the pause: ${error}` : `${label}: Paused · no RPC is set for ${chainName(c.chainId)}.`);
+    } else if (error && !rpc) {
+      // No RPC for its chain is a limit to lift, not a fault: the fix is a setting, not anything on the collection's page.
+      if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) notice('info', `${label}: no RPC is set for ${chainName(c.chainId)}, so nothing is read.`, { label: 'Add an RPC URL in Settings', href: `/settings#rpc.${c.chainId}` });
+      else notice('info', `${label}: no RPC is set for ${chainName(c.chainId)}. Set WASHTRACE_RPC_${c.chainId} for the worker to read this chain.`);
     } else if (error) {
       needsYou(`${label}: ${error}`, `Open ${label} to see what failed.`, `/c/${c.chainId}/${c.address}`);
     }
@@ -171,10 +174,10 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
   if (!s.config.funding) {
     // A money trail loaded from stored data is funding the worker does not have to fetch.
     notice('info', s.trailFunded
-      ? 'Funding is off: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.'
-      : 'Funding is off, so Money loops back and Linked wallets are unavailable.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
+      ? 'Needs an Etherscan key: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.'
+      : 'Needs an Etherscan key: Money loops back and Linked wallets do not run without one.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
   }
-  // With funding off nothing retries failed wallets, and the notice above says why.
+  // With no key nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {
     // No lane takes these, so they neither wait nor fail: resuming a collection brings its own back.
     if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);

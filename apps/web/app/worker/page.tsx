@@ -3,16 +3,17 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
-import { Head, Notices, Problem, Section, Warn } from '@/components/head';
+import { Head, Notices, Problem, Section } from '@/components/head';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
-import { LENSES, eta, plural, short, withoutKey } from '@/lib/format';
+import { LENSES, eta, plural, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
 import type { JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 import { Time } from '@/components/time';
+import { PipelineErrors, PipelineTable } from '@/components/coverage';
 
 export const metadata: Metadata = { title: 'Worker' };
 
@@ -103,41 +104,26 @@ export default async function WorkerPage() {
         </ol>
       </Section>
 
-      <Section id="sources" title="What it reads from" lead="Without a source, the steps that need it do not run, and the lenses they feed say so rather than showing 0%. Each one is set in Settings.">
+      <Section id="sources" title="What it reads from" lead="Without a source, the stages that need it do not run, and the lenses they feed say so rather than showing 0%. Each one is set in Settings.">
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
-            <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ step 1</span></span>
+            <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ stage 4</span></span>
             {v.rpcChains.length === 0
-              ? <Link href="/settings#rpc.1" className="flex items-start gap-1 text-fault underline"><Warn className="mt-0.5 size-3.5" />None. Set an Ethereum RPC URL in Settings.</Link>
+              ? <Link href="/settings#rpc.1" className="text-money underline">Needs a key. Add an RPC URL in Settings →</Link>
               : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
-            <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ step 2</span></span>
+            <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ stage 5</span></span>
             {v.funding === null
-              ? <span className="text-muted-foreground">{v.trailFunded ? `None: ${withoutKey(true)}.` : `None, so ${withoutKey(false)}.`} <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings</Link>.</span>
+              ? <span className="text-money">Needs a key: {withoutKey(v.trailFunded)}. <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings →</Link></span>
               : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'hop')}</Link> out of traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>
       </Section>
 
-      <Section title="How far along is each collection?">
-        <ul className="divide-y rounded-lg border bg-card">
-          {v.collections.map((c) => (
-            <li key={`${c.chainId}/${c.address}`} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5 text-sm">
-              <Link className="font-medium text-foreground hover:underline" href={`/c/${c.chainId}/${c.address}`}>{c.name ?? short(c.address)}</Link>
-              <span className="text-xs text-muted-foreground">
-                {c.turn === 'paused' ? 'paused' : c.turn === 'restoring' ? 'loading stored data' : c.turn === 'stored-only' ? 'no RPC for its chain, stored data loaded' : c.headBlock === null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock ? `read to block ${c.cursorBlock.toLocaleString('en-US')}, head not known` : c.cursorBlock === null || c.headBlock === null ? 'starting' : c.headBlock - c.cursorBlock <= 0 ? 'at the finalized head' : `${plural(c.headBlock - c.cursorBlock, 'block')} behind`}
-                {c.turn === 'paused' || c.turn === 'restoring' || c.turn === 'stored-only' ? null : <>{' · '}{c.turn === 'backfilling' ? `backfilling${c.backfillEtaMs === null ? '' : `, ${eta(c.backfillEtaMs)}`}` : 'keeping up'}</>}
-                {' · '}{c.analyzedAt === null ? 'not analyzed' : <>analyzed <Time ms={c.analyzedAt} /> ({c.analysisMs} ms)</>}{c.stale && c.turn !== 'paused' ? ' · new data waiting' : ''}
-              </span>
-              {/* A "No RPC" left from before stored data loaded is no fault, paused or not; the notice above says how to read on. */}
-              {/* Nor an error on a paused collection: the worker leaves it alone, so it is from before the pause. */}
-              {c.error && !c.storedOnly ? c.turn === 'paused'
-                ? <p className="basis-full text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
-                : <p className="flex basis-full items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
-            </li>
-          ))}
-        </ul>
+      <Section title="How far along is each collection?" lead="One row per collection, one column per stage of its reading. Open a row for what each stage means and what feeds what.">
+        <PipelineTable rows={v.collections} />
+        <PipelineErrors rows={v.collections.map((c) => ({ ...c, paused: c.turn === 'paused', rpc: v.rpcChains.includes(c.chainId) }))} />
       </Section>
     </>
   );

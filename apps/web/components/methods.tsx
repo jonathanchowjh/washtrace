@@ -135,7 +135,7 @@ export function LensCards({ totals, selected, href, floor, trail = false, funded
                 <p className="mt-auto text-sm text-muted-foreground">
                   {funded
                     ? (trail ? 'Not run yet. The stored money trail is loaded, so it says who paid whom, and the next analysis runs this lens on it.' : 'Not run yet. A funding source is set, and the next analysis runs this lens.')
-                    : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and no funding source is set: <code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>.</>}
+                    : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and it needs a key: add an Etherscan key in Settings (<code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>).</>}
                 </p>
               )}
               {on ? null : <span className="text-xs text-muted-foreground group-hover:text-foreground">Show what it flags</span>}

@@ -32,7 +32,7 @@ describe('Notices', () => {
 
   it('counts only needs-you items in the header', () => {
     const { rerender } = render(<Notices notices={[working, info]} />);
-    expect(screen.getByRole('heading').textContent).toBe('Nothing needs you');
+    expect(screen.getByRole('heading').textContent).toBe('Nothing has failed.');
     rerender(<Notices notices={[needs, working, info]} />);
     expect(screen.getByRole('heading').textContent).toBe('1 thing needs you');
     rerender(<Notices notices={[needs, { ...needs, text: 'second' }]} />);

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { ReadingPanel, ReadingSummary } from '@/components/coverage';
+import { Pipeline, ReadingSummary } from '@/components/coverage';
 import { Elsewhere, Empty, Head, Section } from '@/components/head';
 import { History, LensCards, RangeBar, RangeKey, Ranked, Trend } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
@@ -16,7 +16,8 @@ import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { analyzingOn, coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { pipeline } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { store, storedEntry } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
@@ -34,7 +35,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 /**
  * One collection, top down: how far the reading has got in one line, the
  * answer, the three lenses it is made of with the tokens and wallets behind
- * the chosen one, how it has moved, and last the reading step by step. Each
+ * the chosen one, how it has moved, and last the reading stage by stage. Each
  * section says which part of the answer it holds up.
  */
 export default async function CollectionPage({ params, searchParams }: Props) {
@@ -50,20 +51,21 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
-  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), Date.now(), zone);
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
   // The chains the worker can read: with none for this one, its stored data is all there is.
   const config = configFromSources(sources, settings);
   const rpcChains = new Set(config.chains);
+  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone);
   // The manifest entry: how many traders the loaded money trail checked (when it is the one loaded), and how big the trail is while it downloads.
   const entry = await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
-  // A trail with checked wallets not loaded yet: step 2 waits for it rather than saying funding is off.
+  // A trail with checked wallets not loaded yet: stage 5 waits for it rather than saying it needs a key.
   const trailComing = entry?.trail != null && entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
+  const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id) });
   const name = c.name ?? short(address);
   const lens = LENSES[method];
   const t = a?.totals[method];
@@ -80,7 +82,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       <About c={c} profile={profile} />
 
-      <div className="mb-4"><ReadingSummary c={c} cov={cov} href="#reading" /></div>
+      <div className="mb-4"><ReadingSummary c={c} cov={cov} href="#reading" stages={stages} /></div>
 
       {a === null ? (
         <Empty>{why}</Empty>
@@ -134,8 +136,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         </Section>
       ) : null}
 
-      <Section id="reading" title="How far has it read?" lead="The three steps under every number on this page, in the order the worker runs them, each with the numbers it holds up.">
-        <ReadingPanel c={c} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} trailComing={trailComing} now={Date.now()} />
+      <Section id="reading" title="How far has it read?" lead="The six stages under every number on this page. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
+        <Pipeline c={c} stages={stages} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} transfersBytes={entry?.transfers.bytes ?? null} trailComing={trailComing} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>

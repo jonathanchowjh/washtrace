@@ -49,8 +49,12 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
         {/* A "No RPC" left from before stored data loaded is no fault: the pill says where the data stops. */}
         {/* Nor an error on a paused collection: the worker leaves it alone, so nothing is failing now and nothing clears it. */}
         {c.error && !storedOnly(c, rpcChains) ? c.pausedAt !== null
-          ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">Paused · last error before the pause: {c.error}</p>
-          : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
+          // On a chain with no RPC the error is the old "No RPC": the limit is what to say.
+          ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{rpcChains.has(c.chainId) ? `Paused · last error before the pause: ${c.error}` : `Paused · no RPC is set for ${chainName(c.chainId)}.`}</p>
+          : !rpcChains.has(c.chainId)
+            // A missing RPC is a limit to lift, not a fault: the worker writes it as an error, but it reads as the key it needs.
+            ? <p className="mt-1 max-w-sm text-xs text-money">Needs a key: no RPC is set for {chainName(c.chainId)}.</p>
+            : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again. */}
         <RestoreNote c={c} rpcChains={rpcChains} now={now} className="mt-1 max-w-sm" />
         <DownloadNote c={c} className="mt-1 max-w-sm" />
