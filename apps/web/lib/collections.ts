@@ -32,6 +32,13 @@ export function configChange(body: Record<string, unknown>): Configure | string 
   return change;
 }
 
+/** Which of a collection's rules differ from the defaults, said with each default; null when none does. */
+export function changedRules(rules: Partial<Rules>): string | null {
+  const changed = RULE_NAMES.filter((k) => rules[k] !== undefined && rules[k] !== RULES[k]);
+  if (changed.length === 0) return null;
+  return `Rules changed for this collection: ${changed.map((k) => `${k} ${rules[k]} (default ${RULES[k]})`).join(', ')}. Its numbers are not the built-in lenses' numbers.`;
+}
+
 /** The rules a collection's analysis runs under. */
 export function effectiveRules(overrides: Partial<Rules>): Rules {
   return { ...RULES, ...overrides };

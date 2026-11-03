@@ -5,20 +5,22 @@ import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { Pipeline, ReadingSummary } from '@/components/coverage';
-import { Elsewhere, Empty, Head, Section } from '@/components/head';
+import { Elsewhere, Empty, Head, Section, Silent } from '@/components/head';
 import { History, LensCards, RangeBar, RangeKey, Ranked, Trend } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
 import { CollectionControls } from '@/components/watch';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
+import { changedRules } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { analyzingOn, coverage, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { analyzingOn, coverage, evidenceLead, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
 import { pipeline } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
+import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -53,6 +55,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
+  const rulesNote = changedRules(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
   const config = configFromSources(sources, settings);
   const rpcChains = new Set(config.chains);
@@ -64,6 +67,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // A trail with checked wallets not loaded yet: stage 5 waits for it rather than saying it needs a key.
   const trailComing = entry?.trail != null && entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
+  const silent = workerSilent(passes, Date.now());
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
   const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id) });
   const name = c.name ?? short(address);
@@ -81,6 +85,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       </Head>
 
       <About c={c} profile={profile} />
+
+      {silent ? <Silent silent={silent} /> : null}
 
       <div className="mb-4"><ReadingSummary c={c} cov={cov} href="#reading" stages={stages} /></div>
 
@@ -102,7 +108,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       )}
 
       {a ? (
-        <Section id="evidence" title="How was it found?" lead="Three lenses, strictest first; each is one end, or the middle, of the range above. Choose one to see the tokens and wallets it flags.">
+        <Section id="evidence" title="How was it found?" lead={evidenceLead(a.totals)}>
+          {/* These are the rules now set, which the latest analysis may not have run under yet. */}
+          {rulesNote ? <p className="mb-4 text-sm text-muted-foreground">{rulesNote}</p> : null}
           <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null} funded={funded}>
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available

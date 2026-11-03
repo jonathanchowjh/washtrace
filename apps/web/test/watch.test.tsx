@@ -372,15 +372,16 @@ describe('CollectionRow', () => {
   const lens = (available: boolean, flaggedSales: number) => ({ available, transfers: 10, flagged: flaggedSales, sales: 10, flaggedSales, volumeWei: '10000000000000000000', flaggedVolumeWei: '1000000000000000000', wallets: 4, tokens: 2 });
   const analysed = (money: boolean) => ({ ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0, totals: { A: lens(true, 2), AU: lens(money, 3), AC: lens(money, 4) } });
 
-  it('says money lenses can still rise only while wallets are being checked', () => {
+  it('says money lenses are not final yet only while wallets are being checked', () => {
     const c = { ...base, wallets: 80, fundedWallets: 20, trailImportedSha: 'feed', latest: analysed(true) } as unknown as typeof base;
     const idle = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding={false} now={0} />).container;
-    expect(idle.textContent).not.toContain('money lenses can still rise');
+    expect(idle.textContent).not.toContain('money lenses not final yet');
     expect(idle.textContent).not.toContain('Checking wallets');
     expect(idle.querySelector('.animate-pulse')).toBeNull();
     cleanup();
     const busy = render(<CollectionRow c={c} why="Waiting" rpcChains={ON} funding now={0} />).container;
-    expect(busy.textContent).toContain('money lenses can still rise');
+    expect(busy.textContent).toContain('money lenses not final yet');
+    expect(busy.textContent).not.toMatch(/rise/);
   });
 
   it('says an analysed collection\'s latest analysis failed, and when it is tried again', () => {

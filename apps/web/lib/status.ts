@@ -49,6 +49,35 @@ const FAILED: Record<Job, [string, string?]> = {
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 
 /**
+ * One job's state from its last pass. A running pass is stalled when the worker
+ * stopped beating or it ran past its ceiling; a finished one is stalled when it
+ * is long overdue (from when it finished, so a long pass is not overdue the
+ * moment it ends), else failed or ok.
+ */
+export function jobState(p: PassRow | undefined, job: Job, now: number): JobState {
+  if (!p) return 'never';
+  if (isRunning(p)) return now - (p.heartbeatAt ?? p.startedAt) > SILENT_MS || now - p.startedAt > STUCK_MS[job] ? 'stalled' : 'running';
+  if (now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS) return 'stalled';
+  return p.outcome === 'failed' ? 'failed' : 'ok';
+}
+
+/**
+ * The worker is silent when every job is stalled or never ran. One job that is
+ * running, on time, or failed (a failure is the worker saying so) means it is
+ * alive, and a stalled analysis beside a live ingest is that job's fault, said
+ * on the worker page. `since` is the last sign of life of any pass, null when
+ * none ever ran.
+ */
+export function workerSilent(passes: readonly PassRow[], now: number): { since: number | null } | null {
+  for (const job of JOBS) {
+    const state = jobState(passes.find((r) => r.job === job), job, now);
+    if (state !== 'stalled' && state !== 'never') return null;
+  }
+  const signs = passes.flatMap((p) => [p.heartbeatAt, p.finishedAt, p.startedAt]).filter((t): t is number => t !== null);
+  return { since: signs.length === 0 ? null : Math.max(...signs) };
+}
+
+/**
  * What the system is doing right now, from what the worker recorded in the
  * store. Any replica answers the same, worker or not. `notices` is the
  * report in sentences, each with how serious it is; only `needs-you` ones are
@@ -62,33 +91,24 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
 
   const jobs = JOBS.map((job) => {
     const p = s.passes.find((r) => r.job === job);
-    let state: JobState;
+    const state = jobState(p, job, now);
     if (!p) {
-      state = 'never';
       needsYou(`${job} has never run.`, WORKER_DOWN);
     } else if (isRunning(p)) {
       // Silent: the worker stopped beating. Past its ceiling with a fresh beat: the worker is up, and this pass is stuck.
       const lastSign = p.heartbeatAt ?? p.startedAt;
-      if (now - lastSign > SILENT_MS) {
-        state = 'stalled';
-        needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
-      } else if (now - p.startedAt > STUCK_MS[job]) {
-        state = 'stalled';
-        needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
-      } else {
-        state = 'running';
+      if (state === 'stalled') {
+        if (now - lastSign > SILENT_MS) needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
+        else needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
       }
     } else {
-      // From when it finished, so a long pass is not overdue the moment it ends. A failure is said either way.
-      const overdue = now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS;
       if (p.outcome === 'failed') {
         // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
         // the pass failed before it took one, the collection is gone, or the failure could not be written to it.
         const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
         if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
       }
-      if (overdue) needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
-      state = overdue ? 'stalled' : p.outcome === 'failed' ? 'failed' : 'ok';
+      if (state === 'stalled') needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
     }
     return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, outcome: p?.outcome ?? null, detail: p?.detail ?? null };
   });

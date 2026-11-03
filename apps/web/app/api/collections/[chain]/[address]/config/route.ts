@@ -1,5 +1,5 @@
 import type { CollectionRow } from '@washtrace/detect';
-import { ACTOR_HEADER } from '@/lib/auth';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { addressOf, bad, chainOf, handle, json, readJson } from '@/lib/api';
 import { configChange, effectiveRules } from '@/lib/collections';
 import { store } from '@/lib/store';
@@ -30,6 +30,7 @@ export async function GET(_req: Request, { params }: Ctx): Promise<Response> {
  */
 export async function POST(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     const raw = await readJson(req);
     if (raw instanceof Response) return raw;
     const p = await params;

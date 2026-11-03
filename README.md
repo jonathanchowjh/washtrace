@@ -172,6 +172,8 @@ shows the witness as a sentence, and the API returns it as data.
 A method that needs funding and has none reports itself **not run**, never
 0%.
 
+**The headline range is Round trips to Linked wallets.** Money loops back still runs and keeps its card, but it is not counted. In a placebo test on Terraforms and dotdotdot, with buyers relabelled at random among wallets of similar activity, it flagged as many sales as with the real buyers (Terraforms 71.7% against 74–75%, dotdotdot 59.5% against 58–59%), and its share follows `hubDegree` and `visitCap` more than the data. Linked wallets clears the same test, though between a third and a half of what it adds over Round trips is chance.
+
 ## Configuration
 
 Both services read the same variables. In Compose they share one `.env`.
@@ -183,7 +185,7 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_ETHERSCAN_KEY` | Etherscan API V2 key: one key for every chain. Without it, SCC AU and AC do not run. |
 | `WASHTRACE_ETHERSCAN_RPS` | Calls per second. Default 4; the free plan allows 5. |
 | `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. While the Etherscan key comes from `.env` and none is saved in the console, only this variable sets the URL: a URL saved in the console is ignored, so it can't receive that key. |
-| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. Without them, settings can be saved only from the machine itself (`Host` localhost, no proxy headers). Behind a reverse proxy, set basic auth. |
+| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. Without them, every write (settings, Tests, watching, pausing, resuming, deleting and a collection's rules) is accepted only from the machine itself (`Host` localhost, no proxy headers). Behind a reverse proxy, set basic auth. |
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
 | `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. A `stored.repo` value saved in the console wins over it. |
 | `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
@@ -208,10 +210,14 @@ docker build --target api    -t washtrace-api .
   `GET /api/health`, and both images declare a `HEALTHCHECK`. Only the api
   needs a public port; Compose publishes it on 127.0.0.1 only.
 - **Auth.** On a public host, set `WASHTRACE_USERNAME` and
-  `WASHTRACE_PASSWORD`. Without them the console is open to anyone, and
-  settings can be saved only from the machine itself (`Host` localhost, no
-  proxy). Behind a reverse proxy, set basic auth. Compose publishes the port
+  `WASHTRACE_PASSWORD`. Without them the console is open to anyone to read, and
+  every write (settings, Tests, watching, pausing, resuming, deleting and a
+  collection's rules) is accepted only from the machine itself (`Host`
+  localhost, no proxy). Behind a reverse proxy, set basic auth. Compose publishes the port
   to 127.0.0.1 only; publish it wider once basic auth is on.
+- **Project name.** Compose names the project after this folder, and its
+  volumes after the project. Renaming or moving the folder starts a new, empty
+  project: set COMPOSE_PROJECT_NAME in .env to the old name, or pass -p.
 - **Stored data.** Give the worker a writable volume at
   `WASHTRACE_STORED_DIR` and mount the same volume read only into the api.
 - **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds to
@@ -277,8 +283,10 @@ gives the columns and a pandas example.
 
 JSON throughout. Every route except `/api/health` sits behind basic auth when
 auth is configured. A write needs `Content-Type: application/json` and gets 415
-without it, which closes the CSRF path basic auth would otherwise open. The
-settings writes and Tests answer 403 while basic auth is off.
+without it, which closes the CSRF path basic auth would otherwise open. Every
+write (settings, Tests, watching, pausing, resuming, deleting and a
+collection's rules) answers 403 while basic auth is off, unless it comes from
+the machine itself.
 
 | Method and route | Returns |
 |---|---|
@@ -291,7 +299,7 @@ settings writes and Tests answer 403 while basic auth is off.
 | `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection settings: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}, priority?}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. `priority: true` checks its wallets' funding first, sharing those turns with any other prioritised collection. |
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses, and the money among its wallets. |
 | `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its counterparties and its transfers in every watched collection. |
-| `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, the `methods` that flag it, and the transfers. A transaction washtrace has not read is 404, never `false`. |
+| `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, `judged`, the `methods` that flagged it, and the transfers. `washTrade` is true when Round trips or Linked wallets flags it; Money loops back is listed in `methods` but not counted, and a lens that did not run is never listed. `washTrade: null` with `judged: false` is a transaction that is read but that no analysis has covered yet: not the same as clean. A transaction washtrace has not read is 404, never `false`. |
 | `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4 (an RPC URL also keeps its scheme and host). Each field also answers `env`, what `.env` holds for it (masked the same way), and the response says `open` when saving needs no login. |
 | `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null`, so `.env` applies, else the default; clearing is always allowed. 409 for a non-null `etherscan.url` while its key comes from `.env`, 400 for one the worker could not use. |
 | `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
@@ -317,7 +325,7 @@ removed.
 
 | Route | Content | Refresh |
 |---|---|---|
-| `/` | One row per watched collection: the share of its sales and of its volume that looks washed, as a range from the strictest method to the widest, and how complete the reading under it is. A form to watch another. | 15 s |
+| `/` | One row per watched collection: the share of its sales and of its volume that looks washed, as a range from Round trips to Linked wallets, and how complete the reading under it is. A form to watch another. | 15 s |
 | `/c/{chain}/{address}` | One collection, top down: how far it has been read, in one line; the answer as that range; the three methods as cards, each a tab over the ten tokens and wallets it flags most; each method's share of sales month by month (or week or day) across the collection's life, with history not yet read shaded; then the reading as six stages, with how the answer settled at each analysis. | 15 s |
 | `/c/{chain}/{address}/flagged` | Every token or wallet one method flags, most flagged first, 50 a page. `?method=AU&kind=wallets&page=2`. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: whether its trades look washed and by which methods, the reason for each pattern once with the transfers it covers, the graph as in the paper's Figure 8 (transfers solid and coloured by verdict, money dashed, a pair traded more than six times drawn as one counted arrow each way), and every transfer. | On open |
@@ -378,8 +386,15 @@ Three corrections, each with a test:
   same id.
 - **Funding is slow on purpose.** It takes four Etherscan calls per wallet at
   four calls per second, so a collection with 30,000 wallets needs about eight
-  hours. Until then the console states AU and AC as floors, along with the
-  share of wallets read so far.
+  hours. Until every wallet is checked, the money lenses' shares are not final.
+  Checking more wallets can move them either way, since a wallet can turn out to
+  be a hub. The console states the share of wallets checked so far.
+- **A wallet's money is checked once.** A payment it makes after its check is
+  not seen until the wallet is checked again, which the worker does not yet do.
+- **Money loops back is not in the headline range.** In a placebo test, with
+  buyers relabelled at random among wallets of similar activity, it flagged as
+  many sales as with the real buyers (Terraforms 71.7% against 74–75%,
+  dotdotdot 59.5% against 58–59%).
 
 ## Citing
 

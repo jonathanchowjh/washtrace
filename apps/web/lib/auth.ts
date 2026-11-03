@@ -88,7 +88,7 @@ export function localRequest(headers: Headers): boolean {
 }
 
 /**
- * Whether this request may change settings or run a Test: basic auth is on,
+ * Whether this request may change anything (settings, a Test, a watch, a pause, a delete, a collection's rules): basic auth is on,
  * so the proxy has checked who it is, or it comes from this machine. Without
  * either, anyone who can reach the console could change the sources or spend
  * the RPC quota.
@@ -96,6 +96,9 @@ export function localRequest(headers: Headers): boolean {
 export function mayWrite(env: Record<string, string | undefined>, headers: Headers): boolean {
   return authConfigured(env) || localRequest(headers);
 }
+
+/** The 403 for any write, from a request that is neither authenticated nor from this machine. */
+export const LOCAL_ONLY = 'Changes are only accepted from this machine until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
 
 export function authorize(
   env: Record<string, string | undefined>,

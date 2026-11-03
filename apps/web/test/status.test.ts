@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, PassRow } from '@washtrace/detect';
-import { status, type Notice, type Snapshot } from '@/lib/status';
+import { status, workerSilent, type Notice, type Snapshot } from '@/lib/status';
 import { eta, localTime } from '@/lib/format';
 
 const NOW = 1_800_000_000_000;
@@ -404,5 +404,51 @@ describe('status', () => {
     const report = status(snapshot(), NOW);
     expect(report.config).toEqual({ chains: [1], funding: true });
     expect(JSON.stringify(report)).not.toContain('secret');
+  });
+});
+
+describe('workerSilent', () => {
+  const stalledAnalyze = pass('analyze', 3 * MIN, { finishedAt: null, outcome: null, heartbeatAt: NOW - 3 * MIN });
+  const stale = 24 * 3_600_000;
+
+  it('is null while any job runs, ran on time, or just failed', () => {
+    // An analysis stalled beside an ingest that is ok: the worker is up.
+    const beside = [stalledAnalyze, pass('fund', stale), pass('ingest', 10_000)];
+    expect(workerSilent(beside, NOW)).toBeNull();
+    const running = [pass('analyze', 10_000, { finishedAt: null, outcome: null, heartbeatAt: NOW - 5_000 }), pass('fund', stale), pass('ingest', stale)];
+    expect(workerSilent(running, NOW)).toBeNull();
+    // Failed, finished recently: the worker is alive and said so.
+    const failed = ['analyze', 'fund', 'ingest'].map((j) => pass(j, 10_000, { outcome: 'failed', detail: 'boom' }));
+    expect(workerSilent(failed, NOW)).toBeNull();
+  });
+
+  it('says when it last reported once every job is stalled', () => {
+    const passes = [
+      pass('analyze', stale, { finishedAt: null, outcome: null, heartbeatAt: NOW - 3 * MIN }),
+      pass('fund', stale),
+      pass('ingest', stale + MIN),
+    ];
+    expect(workerSilent(passes, NOW)).toEqual({ since: NOW - 3 * MIN });
+  });
+
+  it('says never when no pass ran', () => {
+    expect(workerSilent([], NOW)).toEqual({ since: null });
+  });
+
+  it('agrees with status: null exactly when some job is running, ok or failed', () => {
+    const fixtures = [
+      snapshot().passes,
+      [pass('analyze', 10_000, { outcome: 'failed' }), pass('fund', stale), pass('ingest', stale)],
+      [stalledAnalyze, pass('fund', stale), pass('ingest', stale)],
+      [pass('analyze', 10_000, { finishedAt: null, outcome: null, heartbeatAt: NOW - 1_000 })],
+      [pass('analyze', stale), pass('fund', stale), pass('ingest', stale)],
+      [pass('ingest', 10_000)],
+      [],
+    ];
+    for (const passes of fixtures) {
+      const jobs = status(snapshot({ passes }), NOW).jobs;
+      const alive = jobs.some((j) => j.state === 'running' || j.state === 'ok' || j.state === 'failed');
+      expect(workerSilent(passes, NOW) === null).toBe(alive);
+    }
   });
 });

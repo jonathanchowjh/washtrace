@@ -1,15 +1,20 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS } from '@washtrace/detect';
+import { METHODS, type AnalysisRow } from '@washtrace/detect';
 import { Answer, Elsewhere, Empty, Head, Section } from '@/components/head';
 import { Transfers, Wallet } from '@/components/transfers';
 import { addressOf, chainOf } from '@/lib/api';
 import { chainName } from '@/lib/chains';
 import { LENSES, explorer, lensList, plural, short } from '@/lib/format';
 import { walletLinks } from '@/lib/links';
+import { HEADLINE, ranFlags } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { Time } from '@/components/time';
+
+/** What the page shows of the two long lists; the store is asked for one more of each. */
+const TRADES = 500;
+const COUNTERPARTIES = 50;
 
 type Props = { params: Promise<{ chain: string; address: string }> };
 
@@ -26,11 +31,19 @@ export default async function WalletPage({ params }: Props) {
   const address = addressOf(p.address);
   if (chainId === null || address === null) notFound();
   const s = store();
-  const [funding, counterparties, transfers] = await Promise.all([s.wallet(chainId, address), s.counterparties(chainId, address), s.walletTransfers(chainId, address)]);
-  const hit = transfers.filter((t) => METHODS.some((m) => t.flags[m]));
+  // One more than is shown, so a full list can tell a cut from a wallet that has exactly that many.
+  const [funding, counterRows, tradeRows] = await Promise.all([s.wallet(chainId, address), s.counterparties(chainId, address, COUNTERPARTIES + 1), s.walletTransfers(chainId, address, TRADES + 1)]);
+  const counterparties = counterRows.slice(0, COUNTERPARTIES);
+  const shown = tradeRows.slice(0, TRADES);
+  const cutTrades = tradeRows.length > TRADES, cutCounterparties = counterRows.length > COUNTERPARTIES;
+  // A lens counts only where it ran: with no funding the engine copies Round trips' flags into the money lenses.
+  const latest = new Map<string, AnalysisRow | null>(await Promise.all([...new Set(shown.map((t) => t.collection?.address ?? ''))].map(async (a) => [a, (await s.collection(chainId, a))?.latest ?? null] as const)));
+  const transfers = shown.map((t) => ranFlags(t, latest.get(t.collection?.address ?? '') ?? null));
+  const hit = transfers.filter((t) => HEADLINE.some((m) => t.flags[m]));
   const by = METHODS.filter((m) => hit.some((t) => t.flags[m]));
   const tokens = new Set(hit.map((t) => `${t.collection?.address}:${t.tokenId}`)).size;
   const linked = counterparties.filter((c) => c.watched).length;
+  const of = cutTrades ? `its latest ${TRADES}` : String(transfers.length);
 
   const money = funding === null ? 'Its money is not read: it never traded a watched collection.'
     : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
@@ -49,19 +62,19 @@ export default async function WalletPage({ params }: Props) {
 
       <Answer
         tone={by.includes('A') ? 'cycle' : by.length > 0 ? 'money' : 'clean'}
-        title={transfers.length === 0 ? 'Not in any watched collection' : hit.length === 0 ? 'None of its trades is flagged' : `In ${hit.length} flagged ${hit.length === 1 ? 'trade' : 'trades'} out of ${transfers.length}`}
+        title={transfers.length === 0 ? 'Not in any watched collection' : hit.length === 0 ? `None of its ${cutTrades ? `latest ${TRADES} trades is` : 'trades is'} flagged` : `In ${hit.length} flagged ${hit.length === 1 ? 'trade' : 'trades'} out of ${of}`}
       >
         {hit.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by)}.</p> : null}
         <p className="text-muted-foreground">{money}</p>
       </Answer>
 
-      <Section title="Which of its trades?" lead="Every transfer it sent or received in a watched collection. Tinted rows are flagged; open the token to see the pattern.">
+      <Section title="Which of its trades?" lead={<>{cutTrades ? `Its latest ${TRADES} trades are shown; older ones are not, so the verdict above covers these only.` : 'Every transfer it sent or received in a watched collection.'} Tinted rows are flagged; open the token to see the pattern.</>}>
         <Transfers chainId={chainId} transfers={transfers} collection />
       </Section>
 
       <Section
         title="Who did it move money with?"
-        lead={<>These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}.</>}
+        lead={<>{cutCounterparties ? `Its ${COUNTERPARTIES} busiest counterparties are shown; the rest are not. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}.</>}
         aside="native, internal and wrapped-native flows, both directions"
       >
         {counterparties.length === 0 ? <Empty>No money flows read for this wallet.</Empty> : (

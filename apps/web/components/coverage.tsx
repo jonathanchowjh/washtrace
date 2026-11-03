@@ -114,11 +114,11 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
   if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
   if (cov.reading === 'analyzing') return 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.';
   const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
-  // Floors with nothing checking: no key, so the rest wait for one.
-  if (cov.floor.length > 0 && cov.reading === 'complete') return `${checked} of wallets were checked for money, so ${lensList(cov.floor)} are floors: with no Etherscan key the rest go unchecked.`;
-  if (cov.floor.length > 0) return `${checked} of wallets checked for money so far, so ${lensList(cov.floor)} are floors: they can only rise.`;
+  // Not final with nothing checking: no key, so the rest wait for one.
+  if (cov.floor.length > 0 && cov.reading === 'complete') return `${checked} of wallets were checked for money, so ${lensList(cov.floor)} are not final: with no Etherscan key the rest go unchecked.`;
+  if (cov.floor.length > 0) return `${checked} of wallets checked for money so far, so ${lensList(cov.floor)} are not final: checking the rest can move them either way.`;
   if (!cov.money) return 'Every transfer is read. Money links were not checked, so only Round trips ran.';
-  return 'Every transfer to the finalized head is read, and every trading wallet checked for money.';
+  return 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.';
 }
 
 /**

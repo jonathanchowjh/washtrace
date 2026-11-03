@@ -1,4 +1,4 @@
-import { ACTOR_HEADER } from '@/lib/auth';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { addressOf, bad, chainOf, handle, json, methodOf, readJson } from '@/lib/api';
 import { store } from '@/lib/store';
 
@@ -30,6 +30,7 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
 /** DELETE: stop watching, and drop its transfers and analyses, but only once it is paused, so the worker is not serving what is being deleted. The pre-read gives 404 or 409; the store's own paused condition makes the delete safe against a concurrent resume, and a false from it is re-read once to answer 404 (gone) or 409 (resumed). Funding read for its wallets is kept: it is per chain. */
 export async function DELETE(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     // JSON is required here too, though there is no body worth sending: it is the CSRF defence.
     const body = await readJson(req);
     if (body instanceof Response) return body;

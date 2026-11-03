@@ -372,6 +372,36 @@ describe('a money trail loaded from stored data', () => {
     expect(line.className).not.toContain('text-fault');
   });
 
+  it('trust says the money lenses are not final while wallets are checked, never floors', () => {
+    const lens = (available: boolean) => ({ available, sales: 10, flaggedSales: 2, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 10, flagged: 2 });
+    const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+    const c = row({ latest, wallets: 80, fundedWallets: 20 });
+    const checking = trust(c, coverage(c, ON, 0))!;
+    expect(checking).toBe('25% of wallets checked for money so far, so Money loops back and Linked wallets are not final: checking the rest can move them either way.');
+    expect(checking).not.toMatch(/floors|rise|at least/);
+    const idle = trust(c, coverage(c, ON, 0, 'UTC', false))!;
+    expect(idle).toBe('25% of wallets were checked for money, so Money loops back and Linked wallets are not final: with no Etherscan key the rest go unchecked.');
+    expect(idle).not.toMatch(/floors|rise|at least/);
+  });
+
+  it("trust says each wallet's money is checked once", () => {
+    const lens = (available: boolean) => ({ available, sales: 10, flaggedSales: 2, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 10, flagged: 2 });
+    const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
+    const c = row({ latest, wallets: 80, fundedWallets: 80 });
+    expect(trust(c, coverage(c, ON, 0))).toBe("Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet's check is not seen.");
+  });
+
+  it('LensCards says shares are so far, and why Money loops back is not in the range', () => {
+    const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
+    const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
+    const text = render(<LensCards totals={all} selected="A" href={() => '#'} floor={['AU', 'AC']}>{null}</LensCards>).container.textContent!;
+    expect(text).not.toContain('at least');
+    expect(text).toContain('25%of salesso far');
+    expect(text).toContain('30%of salesso far');
+    expect(text.match(/so far/g)).toHaveLength(2);
+    expect(text).toContain('Not in the range above: on real data it flags about as many sales as randomly paired wallets do.');
+  });
+
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
@@ -689,6 +719,14 @@ describe('the reading, said once and truthfully', () => {
     expect(text).not.toContain('Finding where the collection begins');
     cleanup();
     expect(render(<ReadingPill cov={coverage(c, NONE, 0)} />).container.textContent).toBe('No RPC for its chain');
+  });
+
+  it('a chain read before its RPC went says where it was read to, never that nothing is read', () => {
+    const c = row({ startBlock: 1, cursorBlock: 700, headBlock: 1000, transfers: 5 });
+    expect(coverage(c, NONE, 0).readTo).toBe(700);
+    const text = summary(c, { rpc: NONE });
+    expect(text).toContain('Read to block 700. No newer block is read until its chain has an RPC.');
+    expect(text).not.toContain('Nothing is read');
   });
 
   it('a first analysis being tried again reads Analyzing, not Failed', () => {

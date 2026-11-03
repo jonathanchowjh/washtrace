@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf, type CollectionRow as Collection, type PassRow } from '@washtrace/detect';
-import { Empty, Head, Problem } from '@/components/head';
+import { Empty, Head, Problem, Silent } from '@/components/head';
 import { HowWeLook } from '@/components/methods';
 import { CollectionRow, COLS } from '@/components/collection-row';
 import { Refresh } from '@/components/refresh';
@@ -12,6 +12,7 @@ import { ConfigError } from '@/lib/config';
 import { short, storedSizes } from '@/lib/format';
 import { tabCounts, waiting } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
+import { workerSilent } from '@/lib/status';
 import { store, storedManifest } from '@/lib/store';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -20,7 +21,7 @@ export const metadata: Metadata = { title: 'Collections' };
 
 /**
  * Every watched collection with its answer: how much of its trading looks
- * like wash trading, from the strictest lens to the widest, and how far the
+ * like wash trading, as a range from Round trips to Linked wallets, and how far the
  * reading under that answer has got. The paper's Table 3, kept current.
  */
 export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
@@ -28,13 +29,15 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   const asked = (await searchParams).tab;
   const tab: Tab = asked === 'paused' || asked === 'all' ? asked : 'sync';
   let rows: Collection[];
+  let passes: readonly PassRow[];
   let analyze: PassRow | undefined;
   let rpcChains: ReadonlySet<number>;
   let funding: boolean;
   try {
     const s = store();
-    const [all, passes, sources, settings] = await Promise.all([s.collections(), s.passes(), s.sources(), s.settings()]);
+    const [all, read, sources, settings] = await Promise.all([s.collections(), s.passes(), s.sources(), s.settings()]);
     rows = all;
+    passes = read;
     analyze = passes.find((p) => p.job === 'analyze');
     // The chains the worker reports it can read, and a console RPC saved since: a collection on none shows its stored data only.
     const config = configFromSources(sources, settings);
@@ -55,6 +58,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   const shown = tab === 'all' ? rows : rows.filter((c) => (c.pausedAt !== null) === (tab === 'paused'));
   const names = new Map(rows.map((c) => [c.id, c.name ?? short(c.address)]));
   const now = Date.now();
+  const silent = workerSilent(passes, now);
   // The reader's zone, for when a failed analysis is tried again. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   return (
@@ -77,6 +81,8 @@ export default async function Collections({ searchParams }: { searchParams: Prom
           </div>
         </div>
       </WatchPanel>
+
+      {silent ? <div className="mt-4"><Silent silent={silent} /></div> : null}
 
       {rows.length > 0 ? <CollectionTabs counts={counts} current={tab} /> : null}
 

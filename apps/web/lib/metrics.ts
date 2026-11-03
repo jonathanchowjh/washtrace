@@ -1,11 +1,11 @@
-import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type MethodTotals, type PassRow } from '@washtrace/detect';
+import { BEHIND_BLOCKS, METHODS, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Method, type MethodTotals, type PassRow, type Transfer } from '@washtrace/detect';
 import { localTime, pct, plural } from './format';
 
 /**
- * The analysis, said the way a reader asks it. The three methods are three
- * lenses from strictest to widest, so one collection's answer is a range: the
- * share the strictest lens that ran finds, up to the share the widest finds.
- * A lens that did not run is left out of the range, never read as 0%.
+ * The analysis, said the way a reader asks it. One collection's answer is a
+ * range from Round trips to Linked wallets. Money loops back is left out: on
+ * real data it flags about as many sales as randomly paired wallets do. A lens
+ * that did not run is left out of the range, never read as 0%.
  */
 
 export type Measure = 'sales' | 'volume' | 'owners';
@@ -17,16 +17,57 @@ export function part(t: MethodTotals, measure: Measure): { part: number; whole: 
   return { part: Number(BigInt(t.flaggedVolumeWei) / 10n ** 12n), whole: Number(BigInt(t.volumeWei) / 10n ** 12n) };
 }
 
+/** The lenses the headline range reads, Round trips to Linked wallets. Money loops back runs and keeps its card, but is not counted. */
+export const HEADLINE: readonly Method[] = ['A', 'AC'];
+
+/** Whether an analysis covers a transfer: only one that ran through the transfer's block can have judged it. */
+export function judged(t: Pick<Transfer, 'blockNumber'>, latest: Pick<AnalysisRow, 'throughBlock'> | null): boolean {
+  return latest !== null && latest.throughBlock !== null && t.blockNumber <= latest.throughBlock;
+}
+
+/**
+ * The transfer with only the flags of lenses that ran in its collection's
+ * latest analysis. When no funding ran the engine copies Round trips' flags
+ * into the money lenses, so those copies must never be shown or counted. With
+ * no analysis (null) nothing is known to have run, so no flag is kept; such a
+ * transfer is not judged anyway.
+ */
+export function ranFlags<T extends Pick<FlaggedTransfer, 'flags'>>(t: T, latest: Pick<AnalysisRow, 'totals'> | null): T {
+  const flags = Object.fromEntries(Object.entries(t.flags).filter(([m, w]) => w && latest?.totals[m as Method]?.available === true));
+  return { ...t, flags };
+}
+
+export interface Verdict {
+  judged: boolean;
+  /** True when a headline lens that ran flags a transfer; null when none does but some transfer is not judged; else false. */
+  washTrade: boolean | null;
+  /** The lenses that flag any transfer and ran. The engine copies Round trips' flags into the money lenses when no funding ran, so a lens that did not run never counts. */
+  by: Method[];
+  /** Money loops back alone flags it: shown, but not counted. */
+  apartOnly: boolean;
+  /** The lenses that did not run in at least one of the analyses. */
+  notRun: Method[];
+}
+
+/** One answer for a set of transfers and the latest analysis of each one's collection (null: none yet). The tx page, the token page and their routes all read it. */
+export function verdict(rows: readonly { t: FlaggedTransfer; latest: AnalysisRow | null }[]): Verdict {
+  const by = METHODS.filter((m) => rows.some((r) => ranFlags(r.t, r.latest).flags[m]));
+  const notRun = METHODS.filter((m) => rows.some((r) => r.latest !== null && !r.latest.totals[m].available));
+  const all = rows.length > 0 && rows.every((r) => judged(r.t, r.latest));
+  const washTrade = by.some((m) => HEADLINE.includes(m)) ? true : all ? false : null;
+  return { judged: all, washTrade, by, apartOnly: by.length === 1 && by[0] === 'AU', notRun };
+}
+
 export interface Range { low: Method; high: Method; lowShare: number; highShare: number }
 
 /** Null when no lens ran or there is nothing to divide by, such as a collection with no priced sale. */
 export function range(totals: Record<Method, MethodTotals>, measure: Measure): Range | null {
-  const read = METHODS.filter((m) => totals[m].available)
+  const read = HEADLINE.filter((m) => totals[m].available)
     .map((m) => ({ m, ...part(totals[m], measure) }))
     .filter((r) => r.whole > 0)
     .map((r) => ({ m: r.m, share: r.part / r.whole }));
   if (read.length === 0) return null;
-  // Stable over METHODS' order, so a tie keeps the stricter lens low and the wider high.
+  // Stable over HEADLINE's order, so a tie keeps Round trips low and Linked wallets high.
   const sorted = [...read].sort((a, b) => a.share - b.share);
   const low = sorted[0]!, high = sorted[sorted.length - 1]!;
   return { low: low.m, high: high.m, lowShare: low.share, highShare: high.share };
@@ -38,19 +79,26 @@ export function rangeText(r: Range): string {
   return lo === hi ? hi : `${lo.replace('%', '')}–${hi}`;
 }
 
-/** The range in a sentence: what the strictest lens counts, and what following the money adds. */
+/** The range in a sentence: what Round trips counts, and what Linked wallets adds. */
 export function summary(totals: Record<Method, MethodTotals>): string {
   const a = totals.A;
   if (a.sales === 0) return `No sale read yet, so there is no share of sales. ${a.flagged.toLocaleString('en-US')} of ${a.transfers.toLocaleString('en-US')} changes of owner are round trips.`;
   const strict = a.flaggedSales === 0
     ? `None of the ${a.sales.toLocaleString('en-US')} sales is a round trip between the same wallets.`
     : `${a.flaggedSales.toLocaleString('en-US')} of ${a.sales.toLocaleString('en-US')} sales are round trips between the same wallets.`;
-  const money = (['AU', 'AC'] as const).filter((m) => totals[m].available);
-  if (money.length === 0) return `${strict} Money links between buyers and sellers were not checked, so this is the strict count alone.`;
-  const wide = Math.max(...money.map((m) => totals[m].flaggedSales));
+  if (!totals.AC.available) return `${strict} Money links between buyers and sellers were not checked, so this is the strict count alone.`;
+  const wide = totals.AC.flaggedSales;
   return wide > a.flaggedSales
     ? `${strict} Counting buyers and sellers linked by money, up to ${wide.toLocaleString('en-US')} are.`
     : `${strict} Following the money adds none.`;
+}
+
+/** The lead of "How was it found?": which lenses make the range above, and why Money loops back is shown apart. Linked wallets not run leaves Round trips as the whole range. */
+export function evidenceLead(totals: Record<Method, MethodTotals>): string {
+  const apart = 'Money loops back is shown apart: on real data it flags about as many sales as randomly paired wallets do, so it is not counted. Choose a lens to see the tokens and wallets it flags.';
+  return totals.AC.available
+    ? `Round trips and Linked wallets are the two ends of the range above. ${apart}`
+    : `Round trips is the whole range above: Linked wallets has not run. ${apart}`;
 }
 
 /** A share of progress: "100%" only when it is done, so 99.98% of history reads as unfinished. */
@@ -74,7 +122,7 @@ export interface Coverage {
   wallets: { checked: number; of: number };
   /** False when the money lenses did not run: no wallet is waiting to be checked. */
   money: boolean;
-  /** Lenses whose shares can only rise as the reading completes. */
+  /** Money lenses whose shares are not final while wallets are unchecked: checking more can move them either way. */
   floor: Method[];
   /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
   restore: number | null;
@@ -84,7 +132,7 @@ export interface Coverage {
   stops: number | null;
   /** How long ago that was, "9 days unsynced", whenever `stops` is set; else null. */
   unsynced: string | null;
-  /** Stored-only but read past the stored data before the RPC went: the block it was read to. Else null. */
+  /** Stored-only but read from the chain, past the stored data or with none, before the RPC went: the block it was read to. Else null. */
   readTo: number | null;
   label: string;
 }
@@ -141,9 +189,10 @@ function unsyncedFor(ms: number): string {
 /**
  * How far the reading the numbers rest on has got. History comes first: with
  * blocks unread, any share can still move either way. Then wallets: with
- * money unread, the money lenses have missed links but not invented any, so
- * their shares are floors. Before either, stored data may be loading: the
- * history it holds arrives at once, when the load commits. A paused
+ * money unread, the money lenses have missed links, and a wallet can turn out
+ * to be a hub, so their shares are not final and can move either way. Before
+ * either, stored data may be loading: the history it holds arrives at once,
+ * when the load commits. A paused
  * collection is none of these: its head stops moving, so "up to date" would
  * be a claim nobody is keeping true. Nor is one whose chain has no
  * RPC, whatever it has read: its numbers stop at the stored date, said in
@@ -154,7 +203,7 @@ function unsyncedFor(ms: number): string {
  *
  * `funding` is whether an Etherscan key is set (SourcesConfig.funding, as the
  * status report reads it). Without one nothing checks wallets, so unchecked
- * wallets leave the money lenses as floors but are not a step in progress.
+ * wallets leave the money lenses' shares not final but are not a step in progress.
  */
 export function coverage(
   c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'downloadFile' | 'downloadProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers' | 'analysisError'>>,
@@ -181,7 +230,9 @@ export function coverage(
   const past = stored && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
   const stops = stored && !past ? c.storedThroughTime! : null;
   const unsynced = stops === null ? null : unsyncedFor(now - stops);
-  const readTo = past ? c.cursorBlock : null;
+  // Read from the chain with no stored data before the RPC went: what was read stands, so it stops at its cursor too.
+  const chainRead = noRpc && !stored && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && (c.transfers ?? 0) > 0;
+  const readTo = past || chainRead ? c.cursorBlock : null;
   const base = { blocks, behind, wallets, money, floor, restore, download, stops, unsynced, readTo };
   if (download !== null) return { ...base, reading: 'downloading', label: `Downloading stored data · ${downloaded(download)}` };
   if (queued && restore === null) return { ...base, reading: 'queued', label: 'Waiting to download stored data' };

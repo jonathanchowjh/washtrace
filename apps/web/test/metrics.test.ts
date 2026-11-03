@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { analyzingOn, coverage, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { analyzingOn, coverage, judged, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -40,6 +40,17 @@ describe('range', () => {
     expect(rangeText(r)).toBe('18%');
   });
 
+  it('leaves Money loops back out: its top is Linked wallets even when Money loops back flags more', () => {
+    const t = { A: totals({ sales: 100, flaggedSales: 10 }), AU: totals({ sales: 100, flaggedSales: 70 }), AC: totals({ sales: 100, flaggedSales: 40 }) };
+    expect(range(t, 'sales')).toEqual({ low: 'A', high: 'AC', lowShare: 0.1, highShare: 0.4 });
+  });
+
+  it('with Linked wallets not run is Round trips alone, never Money loops back', () => {
+    const t = { A: totals({ sales: 100, flaggedSales: 10 }), AU: totals({ sales: 100, flaggedSales: 70 }), AC: totals({ available: false, sales: 100, flaggedSales: 0 }) };
+    const r = range(t, 'sales')!;
+    expect([r.low, r.high]).toEqual(['A', 'A']);
+  });
+
   it('is null when there is nothing to divide by', () => {
     const none = { A: totals({ sales: 0, flaggedSales: 0 }), AU: totals({ sales: 0, flaggedSales: 0 }), AC: totals({ sales: 0, flaggedSales: 0 }) };
     expect(range(none, 'sales')).toBeNull();
@@ -47,9 +58,26 @@ describe('range', () => {
   });
 });
 
+describe('evidenceLead', () => {
+  const apart = 'Money loops back is shown apart: on real data it flags about as many sales as randomly paired wallets do, so it is not counted. Choose a lens to see the tokens and wallets it flags.';
+  it('names Round trips and Linked wallets as the two ends when both ran', () => {
+    expect(evidenceLead(DEMO)).toBe(`Round trips and Linked wallets are the two ends of the range above. ${apart}`);
+  });
+  it('says Round trips is the whole range when Linked wallets has not run', () => {
+    expect(evidenceLead(OFF)).toBe(`Round trips is the whole range above: Linked wallets has not run. ${apart}`);
+  });
+});
+
 describe('summary', () => {
   it('states the strict count, then what following the money adds', () => {
     expect(summary(DEMO)).toBe('10 of 56 sales are round trips between the same wallets. Counting buyers and sellers linked by money, up to 14 are.');
+  });
+
+  it('counts Linked wallets only in its money sentence', () => {
+    const t = { A: totals({ sales: 100, flaggedSales: 10 }), AU: totals({ sales: 100, flaggedSales: 70 }), AC: totals({ sales: 100, flaggedSales: 40 }) };
+    const said = summary(t);
+    expect(said).toContain('up to 40 are');
+    expect(said).not.toContain('70');
   });
 
   it('says money links were not checked when no money lens ran', () => {
@@ -362,5 +390,30 @@ describe('formatBytes', () => {
 
   it('never says 0.0 MB for a file that is there', () => {
     expect(formatBytes(4_000)).toBe('<0.1 MB');
+  });
+});
+
+describe('judged', () => {
+  it('is true only for a transfer an analysis ran through', () => {
+    expect(judged({ blockNumber: 10 }, { throughBlock: 10 })).toBe(true);
+    expect(judged({ blockNumber: 11 }, { throughBlock: 10 })).toBe(false);
+    expect(judged({ blockNumber: 1 }, null)).toBe(false);
+    expect(judged({ blockNumber: 1 }, { throughBlock: null })).toBe(false);
+  });
+});
+
+describe('ranFlags', () => {
+  const w = { kind: 'scc', wallets: [], cycles: 2 } as never;
+  const t = { flags: { A: w, AU: w, AC: w } };
+  const latest = (ran: Method[]) => ({ totals: Object.fromEntries((['A', 'AU', 'AC'] as Method[]).map((m) => [m, totals({ available: ran.includes(m) })])) as Record<Method, MethodTotals> });
+
+  it('drops flags copied into lenses that did not run', () => {
+    expect(Object.keys(ranFlags(t, latest(['A'])).flags)).toEqual(['A']);
+  });
+  it('leaves flags alone when every lens ran', () => {
+    expect(ranFlags(t, latest(['A', 'AU', 'AC'])).flags).toEqual(t.flags);
+  });
+  it('keeps none without an analysis', () => {
+    expect(ranFlags(t, null).flags).toEqual({});
   });
 });

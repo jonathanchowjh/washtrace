@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { plural } from '@/lib/format';
 import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
+import { Time } from './time';
 
 /** A page's title, the trail back up to it, and whatever it states on the right. */
 export function Head({ title, crumb = [], sub, children }: {
@@ -86,6 +87,21 @@ export function Notices({ notices }: { notices: Notice[] }) {
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** Said above the numbers when every job has stalled: they are as of the worker's last pass, and nothing is keeping them current. */
+export function Silent({ silent }: { silent: { since: number | null } }) {
+  return (
+    <div role="alert" className="mb-4 flex gap-3 rounded-lg border border-fault/40 bg-card p-3 text-sm">
+      <Warn className="mt-0.5 size-5 text-fault" />
+      <p className="font-semibold text-foreground">
+        {silent.since === null
+          ? 'The worker has not run yet, so nothing has been read.'
+          : <>The worker has not reported since <Time ms={silent.since} />, so nothing on this page is being kept current.</>}
+        {' '}<Link className="font-normal text-fault underline" href="/worker">See the worker →</Link>
+      </p>
     </div>
   );
 }

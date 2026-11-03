@@ -124,7 +124,10 @@ override is stored as only the keys it sets.
 
 A method that needs funding and has none reports `available: false`, never 0%.
 A price that cannot be read is `null`, never 0. A transaction washtrace has not
-read is 404 from the API, never `washTrade: false`.
+read is 404 from the API, never `washTrade: false`. One that is read but that no
+analysis has covered yet (`judged: false`) answers `washTrade: null`. `washTrade`
+counts Round trips and Linked wallets only; `methods` lists every lens that ran
+and flagged it, Money loops back included.
 
 ### Two services, one store
 

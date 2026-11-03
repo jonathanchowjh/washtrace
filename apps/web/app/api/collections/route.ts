@@ -1,4 +1,4 @@
-import { ACTOR_HEADER } from '@/lib/auth';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { addressOf, bad, handle, json, readJson } from '@/lib/api';
 import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
@@ -15,6 +15,7 @@ export async function GET(): Promise<Response> {
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     const body = await readJson(req);
     if (body instanceof Response) return body;
     const chainId = typeof body.chainId === 'number' && Number.isInteger(body.chainId) && body.chainId > 0 ? body.chainId : null;
@@ -33,7 +34,7 @@ export async function POST(req: Request): Promise<Response> {
     // A console value counts too, so a URL saved a moment ago doesn't warn before the worker's next report.
     const hasRpc = (await s.sources())[`rpc.${chainId}`] !== undefined || Boolean((await s.settings()).get(`rpc.${chainId}`)?.trim());
     const where = FIELDS.some((f) => f.key === `rpc.${chainId}`) ? 'Set one in Settings' : `Set WASHTRACE_RPC_${chainId} for the worker`;
-    const warning = hasRpc ? undefined : `No RPC is configured for chain ${chainId}, so nothing will be read. ${where}.`;
+    const warning = hasRpc ? undefined : `No RPC is configured for chain ${chainId}, so only its stored data, if it has any, is read. ${where}.`;
     return json({ id, chainId, address, created, warning }, created ? 201 : 200);
   });
 }

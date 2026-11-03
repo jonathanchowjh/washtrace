@@ -1,4 +1,4 @@
-import { ACTOR_HEADER } from '@/lib/auth';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { addressOf, bad, chainOf, handle, json, readJson } from '@/lib/api';
 import { store } from '@/lib/store';
 
@@ -7,6 +7,7 @@ type Ctx = { params: Promise<{ chain: string; address: string }> };
 /** POST: stop the worker serving the collection, keeping its data. Idempotent: answers `{ paused }` as it now stands, and 404 only when the collection is not watched. */
 export async function POST(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     // JSON is required here too, though there is no body worth sending: it is the CSRF defence.
     const body = await readJson(req);
     if (body instanceof Response) return body;

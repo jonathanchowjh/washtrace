@@ -425,11 +425,17 @@ describe('GET /api/settings/check/[id]', () => {
 });
 
 describe('POST /api/collections, the no-RPC warning', () => {
-  const watch = () => collectionsRoute.POST(post({ chainId: 1, address: '0x' + 'ab'.repeat(20) }));
+  const watch = () => collectionsRoute.POST(post({ chainId: 1, address: '0x' + 'ab'.repeat(20) }, local));
 
   it('warns when the worker reports no RPC for the chain, whatever the API\'s own environment says', async () => {
     vi.stubEnv('WASHTRACE_RPC_1', RPC);
     expect((await (await watch()).json()).warning).toContain('No RPC is configured for chain 1');
+  });
+
+  it('the no-RPC warning says stored data is still read', async () => {
+    const warning = (await (await watch()).json()).warning;
+    expect(warning).toContain('No RPC is configured for chain 1, so only its stored data, if it has any, is read.');
+    expect(warning).not.toMatch(/nothing will be read/);
   });
 
   it('does not warn when the worker reports an RPC for the chain', async () => {

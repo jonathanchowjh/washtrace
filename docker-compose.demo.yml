@@ -22,9 +22,12 @@ services:
   seed:
     image: washtrace-demo
     command: ["node", "scripts/demo/seed.mjs"]
+    # Node's fetch cannot set Host, so the seeder shares the api's network and
+    # reaches it as localhost: writes are only accepted from this machine.
+    network_mode: "service:api"
     environment:
       RPC: http://anvil:8545
-      API: http://api:8080
+      API: http://localhost:8080
     depends_on: [anvil, explorer, api]
     restart: "no"
 

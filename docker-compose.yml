@@ -25,6 +25,7 @@ services:
     # A collection page runs its queries at once, and over a big money trail
     # (BAYC) they outgrew that and failed with "could not resize shared memory".
     shm_size: 256mb
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U washtrace -d washtrace"]
       interval: 5s

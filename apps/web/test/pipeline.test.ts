@@ -168,7 +168,7 @@ describe('pipeline', () => {
       'every lens: the history up to where the stored data stops, and the money trail for Money loops back and Linked wallets.',
       'every number on this page until the chain is read.',
       'every lens. Unread history can move any share either way.',
-      'Money loops back and Linked wallets. An unchecked wallet hides its links, so their shares can only rise.',
+      'Money loops back and Linked wallets. An unchecked wallet hides its links, so their shares are not final until it is checked.',
       'every number on this page: it turns stages 1 to 5 into them.',
     ]);
   });

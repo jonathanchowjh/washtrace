@@ -260,8 +260,8 @@ export function TimeChart(props: TimeChartProps) {
                   <li key={m} className="flex items-start gap-2">
                     <span className="pt-1"><Key m={m} /></span>
                     <span className="min-w-0">
-                      {s !== null && floor.includes(m) ? <span className="text-muted-foreground">at least </span> : null}
                       <span className="font-semibold text-foreground tabular-nums">{v === null ? 'not run' : s === null ? 'no sale' : pctText(s)}</span>{' '}
+                      {s !== null && floor.includes(m) ? <span className="text-muted-foreground">so far </span> : null}
                       <span className="text-muted-foreground">{NAME(m)}</span>
                       {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{v.part.toLocaleString()} of {v.whole.toLocaleString()} sales</span> : null}
                     </span>

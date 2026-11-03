@@ -81,7 +81,7 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
         <StoredStop cov={cov} />
         <RestoreProgress cov={cov} />
         <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
-        {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses can still rise</p> : null}
+        {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses not final yet</p> : null}
         {/* Above the link's whole-row overlay, so a press reaches the button and not the collection page. Prioritize stays on the collection page. */}
         <div className="relative z-10 mt-1"><CollectionControls chainId={c.chainId} address={c.address} paused={c.pausedAt !== null} priority={c.priority} compact /></div>
       </div>

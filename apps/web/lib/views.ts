@@ -1,6 +1,6 @@
-import { EVERY, ZERO, entryFor, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
+import { EVERY, ZERO, entryFor, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
 import { authConfigured, mayWrite } from './auth';
-import { analyzingOn, storedOnly } from './metrics';
+import { analyzingOn, ranFlags, storedOnly, verdict, type Verdict } from './metrics';
 import { configFromSources, hopsFollowed, view } from './settings';
 import { pipeline } from './pipeline';
 import { status } from './status';
@@ -18,6 +18,8 @@ export interface TokenView {
   /** Wallets that joined two holders by money without holding the token: AC's middles. */
   middles: string[];
   flows: Flow[];
+  /** Its collection's latest analysis: the transfers newer than it are not judged. */
+  latest: AnalysisRow | null;
 }
 
 export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | null> {
@@ -25,13 +27,25 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
   const c = await s.collection(chainId, address);
   if (!c) return null;
   const transfers = await s.token(c.id, tokenId);
+  if (transfers.length === 0) return null;
   const middles = [...new Set(transfers.flatMap((t) => {
     const w = t.flags.AC;
     return w?.kind === 'pair' && w.middle !== null ? [w.middle] : [];
   }))];
   const holders = [...new Set(transfers.flatMap((t) => [t.from, t.to]))].filter((a) => a !== ZERO);
   const flows = holders.length === 0 ? [] : await s.flowsAmong(chainId, [...holders, ...middles]);
-  return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers, middles, flows };
+  return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers, middles, flows, latest: c.latest };
+}
+
+/** A transaction's transfers and the one verdict the page and the route both give, from each collection's latest analysis. */
+export async function txView(chainId: number, tx: string): Promise<{ transfers: FlaggedTransfer[] } & Verdict> {
+  const s = store();
+  const transfers = await s.transaction(chainId, tx);
+  const addresses = [...new Set(transfers.map((t) => t.collection?.address ?? ''))];
+  const latest = new Map(await Promise.all(addresses.map(async (a) => [a, (await s.collection(chainId, a))?.latest ?? null] as const)));
+  const rows = transfers.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
+  // Rows carry only the lenses that ran, so the API and the page never name one that did not.
+  return { ...verdict(rows), transfers: rows.map((r) => ranFlags(r.t, r.latest)) };
 }
 
 /**

@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS } from '@washtrace/detect';
 import { Answer, Elsewhere, Head, Section } from '@/components/head';
 import { LensName } from '@/components/methods';
 import { TokenGraph } from '@/components/token-graph';
@@ -11,6 +10,7 @@ import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
 import { lensList, short } from '@/lib/format';
 import { tokenLinks } from '@/lib/links';
 import { layout } from '@/lib/layout';
+import { ranFlags, verdict } from '@/lib/metrics';
 import { tokenView } from '@/lib/views';
 
 type Props = { params: Promise<{ chain: string; address: string; tokenId: string }> };
@@ -33,11 +33,18 @@ export default async function TokenPage({ params }: Props) {
   if (chainId === null || address === null || tokenId === null) notFound();
   const view = await tokenView(chainId, address, tokenId);
   if (view === null) notFound();
-  const { collection, transfers, flows, middles } = view;
+  const { collection, flows, middles, latest } = view;
+  // Only the lenses that ran: the engine copies Round trips' flags into the money lenses when no funding ran.
+  const transfers = view.transfers.map((t) => ranFlags(t, latest));
   const name = collection.name ?? short(address);
   const base = `/c/${chainId}/${address}`;
-  const by = METHODS.filter((m) => transfers.some((t) => t.flags[m]));
-  const flagged = transfers.filter((t) => METHODS.some((m) => t.flags[m])).length;
+  const { washTrade, judged: judgedAll, by, apartOnly, notRun } = verdict(transfers.map((t) => ({ t, latest })));
+  const flagged = transfers.filter((t) => by.some((m) => t.flags[m])).length;
+  const title = washTrade === true ? (by.includes('A') ? 'Its trades go round in circles' : 'Its buyers and sellers are linked by money')
+    : washTrade === null ? 'Not judged yet'
+    : apartOnly ? 'Flagged only by Money loops back, which is not counted'
+    : notRun.length === 0 ? 'No sign of wash trading'
+    : 'Not flagged by the lenses that ran';
   const why = reasons(transfers);
 
   return (
@@ -52,17 +59,25 @@ export default async function TokenPage({ params }: Props) {
 
       <Answer
         tone={by.includes('A') ? 'cycle' : by.length > 0 ? 'money' : 'clean'}
-        title={by.includes('A') ? 'Its trades go round in circles' : by.length > 0 ? 'Its buyers and sellers are linked by money' : 'No sign of wash trading'}
+        title={title}
       >
-        {by.length === 0 ? (
-          <>None of its {transfers.length} transfers is flagged by any lens.</>
+        {washTrade === null ? (
+          <>
+            Its transfers are read, but no analysis has covered them yet. That is not the same as clean.
+            {by.length > 0 ? ` ${flagged} of ${transfers.length} transfers are flagged by ${lensList(by)}.` : ''}
+            {notRun.length > 0 ? ` ${lensList(notRun)} did not run.` : ''}
+          </>
+        ) : apartOnly ? (
+          <>{flagged} of {transfers.length} transfers flagged, by {lensList(by)}. It flags about as many sales as randomly paired wallets do, so it is not counted.</>
+        ) : by.length === 0 ? (
+          <>None of its {transfers.length} transfers is flagged by {notRun.length > 0 ? 'the lenses that ran' : 'any lens'}.{notRun.length > 0 ? ` ${lensList(notRun)} did not run.` : ''}</>
         ) : (
           <>
             {flagged} of {transfers.length} transfers flagged, by {lensList(by)}.{' '}
             They count toward <Link href={`${base}?method=${by[0]}`} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.
           </>
         )}
-        {by.length > 0 ? (
+        {by.length > 0 && !apartOnly ? (
           <p className="mt-2 text-muted-foreground">
             <b className="font-medium text-foreground">What this means:</b>{' '}
             {by.includes('A')
@@ -78,7 +93,7 @@ export default async function TokenPage({ params }: Props) {
         </Section>
         <Section title="Why it was flagged" lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it.'}>
           {why.length === 0 ? (
-            <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">No lens found a pattern: the token never returns to a wallet that held it, and no buyer and seller are linked by money.</p>
+            <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : 'No analysis has covered these transfers yet, so no lens has looked for a pattern.'}</p>
           ) : (
             <ul className="space-y-2">
               {why.map((r, i) => (

@@ -61,8 +61,8 @@ export function LensPicture({ m, className }: { m: Method; className?: string })
 }
 
 /**
- * A range as one bar: solid to the strictest lens's share, lighter on to the
- * widest's. Grey track only, so an empty bar is a reading of zero.
+ * A range as one bar: solid to Round trips' share, lighter on to Linked
+ * wallets'. Grey track only, so an empty bar is a reading of zero.
  */
 export function RangeBar({ range, className }: { range: Range; className?: string }) {
   const w = (s: number) => (s > 0 ? Math.max(1.5, s * 100) : 0);
@@ -79,8 +79,8 @@ export function RangeKey({ range }: { range: Range }) {
   if (range.low === range.high) return <span className="text-xs text-muted-foreground">by {LENSES[range.low].name}</span>;
   return (
     <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', DOT[LENSES[range.low].tone])} />strictest: {LENSES[range.low].name}</span>
-      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm opacity-45', DOT[LENSES[range.high].tone])} />widest: {LENSES[range.high].name}</span>
+      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', DOT[LENSES[range.low].tone])} />{LENSES[range.low].name}</span>
+      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm opacity-45', DOT[LENSES[range.high].tone])} />{LENSES[range.high].name}</span>
     </span>
   );
 }
@@ -119,12 +119,13 @@ export function LensCards({ totals, selected, href, floor, trail = false, funded
                 <LensPicture m={m} className={on ? undefined : 'opacity-70 group-hover:opacity-100'} />
               </div>
               <p className="text-sm text-muted-foreground">{LENSES[m].says}</p>
+              {m === 'AU' ? <p className="text-xs text-muted-foreground">Not in the range above: on real data it flags about as many sales as randomly paired wallets do.</p> : null}
               {t.available ? (
                 <div className="mt-auto">
                   <p className="flex items-baseline gap-1.5">
-                    {floor.includes(m) ? <span className="text-xs text-muted-foreground">at least</span> : null}
                     <span className={cn('text-2xl font-semibold tabular-nums', t.flaggedSales > 0 ? TEXT[LENSES[m].tone] : 'text-foreground')}>{pct(s.part, s.whole)}</span>
                     <span className="text-sm text-muted-foreground">of sales</span>
+                    {floor.includes(m) ? <span className="text-xs text-muted-foreground">so far</span> : null}
                   </p>
                   <p className="text-xs text-muted-foreground tabular-nums">
                     {t.flaggedSales.toLocaleString()} of {t.sales.toLocaleString()} sales · {eth(t.flaggedVolumeWei)} · {t.tokens.toLocaleString()} tokens · {t.wallets.toLocaleString()} wallets
@@ -207,8 +208,8 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
           </div>
         ))}
         <p className="text-xs text-muted-foreground md:col-span-3">
-          Solid arrows are the token changing hands; dashed arrows are money. A collection's answer is a range: the strictest lens's share up to the widest's.
-          The two money lenses need to know who paid whom, which the worker reads wallet by wallet, so until every wallet is checked their shares are floors.
+          Solid arrows are the token changing hands; dashed arrows are money. A collection's answer is a range: Round trips' share up to Linked wallets'.
+          The two money lenses need to know who paid whom, which the worker reads wallet by wallet, so until every wallet is checked their shares are not final.
         </p>
       </div>
     </details>
