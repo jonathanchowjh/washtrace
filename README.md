@@ -118,7 +118,7 @@ store) lives in [packages/detect](packages/detect), which both import.
 
 ## Quick start
 
-Requires Docker.
+Requires Docker with Compose 2.24 or later.
 
 **The demo needs no keys.** It runs a local chain with a scripted market, wash
 trading of each kind hidden among honest trades, and an Etherscan-shaped API
@@ -152,6 +152,33 @@ curl -X POST localhost:8080/api/collections -H 'content-type: application/json' 
 The worker finds the contract's deployment block and reads forward to the
 finalized head. Then it reads the funding of every wallet that traded the
 collection, busiest wallets first.
+
+**With no keys at all**, skip `cp .env.example .env`: Compose starts without
+it, and `docker compose up -d --build` works on a fresh clone (the first build
+takes a few minutes). Watch one of the six collections in
+[Stored data](#stored-data), Terraforms for example. The answer carries a
+warning that no RPC is set for the chain, so only its stored data is read.
+The worker downloads the collection from Hugging Face and loads it. The console
+shows Round trips first, and Linked wallets once the money trail is downloaded
+and loaded (about an hour for Terraforms), marked "Stored data · stops <date>".
+Terraforms took about 40 seconds for its transfers, then about
+25 minutes to download its 621.8 MB money trail and about 35 to load it, on
+one home connection. Nothing newer than the stored data is read until an RPC
+URL is set in Settings, and wallets newer than the stored trail go unchecked
+until an Etherscan key is.
+
+The console and API are published on port 8080 of this machine only, and the
+port is fixed: Compose has no variable to move it. If 8080 is taken, stop what
+holds it, or save this as `docker-compose.port.yml`:
+
+```yaml
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:8081:8080"
+```
+
+and pass it after the main file: `docker compose -f docker-compose.yml -f docker-compose.port.yml up --build`.
 
 ## The methods
 

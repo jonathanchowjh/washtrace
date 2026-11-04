@@ -10,7 +10,7 @@ export default defineConfig({
         resolve: { alias: { '@washtrace/detect': fileURLToPath(new URL('./packages/detect/src/index.ts', import.meta.url)) } },
         test: {
           name: 'unit',
-          include: ['packages/**/test/**/*.test.ts', 'apps/worker/test/**/*.test.ts'],
+          include: ['packages/**/test/**/*.test.ts', 'apps/worker/test/**/*.test.ts', 'scripts/**/*.test.mjs'],
           exclude: ['**/*.int.test.ts'],
           environment: 'node',
         },

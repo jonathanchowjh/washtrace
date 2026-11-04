@@ -34,7 +34,7 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
   }))];
   const holders = [...new Set(transfers.flatMap((t) => [t.from, t.to]))].filter((a) => a !== ZERO);
   const flows = holders.length === 0 ? [] : await s.flowsAmong(chainId, [...holders, ...middles]);
-  return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers, middles, flows, latest: c.latest };
+  return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers: transfers.map((t) => ranFlags(t, c.latest)), middles, flows, latest: c.latest };
 }
 
 /** A transaction's transfers and the one verdict the page and the route both give, from each collection's latest analysis. */

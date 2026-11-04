@@ -194,7 +194,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
   return (
     <details open={open} className="group rounded-lg border bg-card">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm [&::-webkit-details-marker]:hidden">
-        <span><span className="font-medium text-foreground">How washtrace spots wash trading.</span> <span className="text-muted-foreground">Three lenses, from strictest to widest. Every share on this console is one of them.</span></span>
+        <span><span className="font-medium text-foreground">How washtrace spots wash trading.</span> <span className="text-muted-foreground">Three lenses. The answer is the range from Round trips to Linked wallets; Money loops back is shown apart.</span></span>
         <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
       </summary>
       <div className="grid gap-4 border-t px-4 py-4 md:grid-cols-3">

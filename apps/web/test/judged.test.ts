@@ -18,6 +18,7 @@ const fake = {
   transaction: vi.fn(async () => fake.transfers),
   collection: vi.fn(async (_c: number, a: string) => (a in fake.latest ? { id: 1, latest: fake.latest[a] } : null)),
   token: vi.fn(async () => fake.transfers),
+  flowsAmong: vi.fn(async () => []),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
@@ -59,6 +60,14 @@ describe('what a transaction answers', () => {
     fake.latest = { [A1]: analysis(10, ['A']) };
     expect(await txView(1, TX)).toMatchObject({ washTrade: true, by: ['A'], apartOnly: false, notRun: ['AU', 'AC'] });
     expect(Object.keys((await txView(1, TX)).transfers[0]!.flags)).toEqual(['A']);
+  });
+
+  it('the token route carries only the lenses that ran, as the token page does', async () => {
+    fake.transfers = [tr(A1, 5, { A: flag, AU: flag, AC: flag })];
+    fake.latest = { [A1]: analysis(10, ['A']) };
+    const res = await tokenRoute(new Request('http://x'), { params: Promise.resolve({ chain: '1', address: A1, tokenId: '1' }) });
+    const body = await res.json();
+    expect(Object.keys(body.transfers[0].flags)).toEqual(['A']);
   });
 
   it('a token with no transfers is 404, saying No transfer of this token is read.', async () => {

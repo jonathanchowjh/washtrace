@@ -40,6 +40,8 @@ export default async function WalletPage({ params }: Props) {
   const latest = new Map<string, AnalysisRow | null>(await Promise.all([...new Set(shown.map((t) => t.collection?.address ?? ''))].map(async (a) => [a, (await s.collection(chainId, a))?.latest ?? null] as const)));
   const transfers = shown.map((t) => ranFlags(t, latest.get(t.collection?.address ?? '') ?? null));
   const hit = transfers.filter((t) => HEADLINE.some((m) => t.flags[m]));
+  // Shown tinted with a chip, yet outside the verdict: say so, or the title and the rows contradict each other.
+  const apart = transfers.filter((t) => t.flags.AU && !HEADLINE.some((m) => t.flags[m])).length;
   const by = METHODS.filter((m) => hit.some((t) => t.flags[m]));
   const tokens = new Set(hit.map((t) => `${t.collection?.address}:${t.tokenId}`)).size;
   const linked = counterparties.filter((c) => c.watched).length;
@@ -65,10 +67,11 @@ export default async function WalletPage({ params }: Props) {
         title={transfers.length === 0 ? 'Not in any watched collection' : hit.length === 0 ? `None of its ${cutTrades ? `latest ${TRADES} trades is` : 'trades is'} flagged` : `In ${hit.length} flagged ${hit.length === 1 ? 'trade' : 'trades'} out of ${of}`}
       >
         {hit.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by)}.</p> : null}
+        {apart > 0 ? <p className="text-muted-foreground">{apart} more {apart === 1 ? 'is' : 'are'} flagged only by {LENSES.AU.name}, which is not counted.</p> : null}
         <p className="text-muted-foreground">{money}</p>
       </Answer>
 
-      <Section title="Which of its trades?" lead={<>{cutTrades ? `Its latest ${TRADES} trades are shown; older ones are not, so the verdict above covers these only.` : 'Every transfer it sent or received in a watched collection.'} Tinted rows are flagged; open the token to see the pattern.</>}>
+      <Section title="Which of its trades?" lead={<>{cutTrades ? `Its latest ${TRADES} trades are shown; older ones are not, so the verdict above covers these only.` : 'Every transfer it sent or received in a watched collection.'} Rows tinted for {LENSES.A.name} or {LENSES.AC.name} are flagged; rows tinted only for {LENSES.AU.name} are shown but not counted. Open the token to see the pattern.</>}>
         <Transfers chainId={chainId} transfers={transfers} collection />
       </Section>
 

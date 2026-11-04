@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 let funding: object | null = null;
 let trades = 0;
 let flaggedTrades = 0;
+let moneyOnlyTrades = 0;
 let counterparties = 0;
 const asked: { trades: number | undefined; counterparties: number | undefined } = { trades: undefined, counterparties: undefined };
 const totals = Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: true }]));
@@ -19,7 +20,7 @@ vi.mock('@/lib/store', () => ({
       asked.trades = limit;
       return Array.from({ length: Math.min(trades, limit ?? 500) }, (_, i) => ({
         txHash: '0x' + i, logIndex: 0, blockNumber: 1, tokenId: String(i), from: '0x1', to: '0x2', blockTime: null, marketplace: null, priceWei: null, currency: null,
-        flags: i < flaggedTrades ? { A: { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 } } : {}, collection: { chainId: 1, address: '0x' + 'b'.repeat(40), name: null },
+        flags: i < flaggedTrades ? { A: { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 } } : i < flaggedTrades + moneyOnlyTrades ? { AU: { kind: 'pair', pair: ['0x1', '0x2'], middle: null, flowTx: '0xf' } } : {}, collection: { chainId: 1, address: '0x' + 'b'.repeat(40), name: null },
       }));
     },
   }),
@@ -27,7 +28,7 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); trades = 0; flaggedTrades = 0; counterparties = 0; funding = null; });
+afterEach(() => { cleanup(); trades = 0; flaggedTrades = 0; moneyOnlyTrades = 0; counterparties = 0; funding = null; });
 
 const params = Promise.resolve({ chain: '1', address: `0x${'a'.repeat(40)}` });
 
@@ -62,6 +63,15 @@ describe('the wallet page', () => {
     trades = 501;
     flaggedTrades = 1;
     expect(await page()).toContain('In 1 flagged trade out of its latest 500');
+  });
+
+  it('a trade flagged only by Money loops back leaves the title clean, and the body says it is not counted', async () => {
+    trades = 1;
+    moneyOnlyTrades = 1;
+    const text = await page();
+    expect(text).toContain('None of its trades is flagged');
+    expect(text).toContain('1 more is flagged only by Money loops back, which is not counted.');
+    expect(text).toContain('rows tinted only for Money loops back are shown but not counted.');
   });
 
   it('more than 50 counterparties says the list is cut', async () => {

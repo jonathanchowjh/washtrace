@@ -60,7 +60,7 @@ describe('pause and resume', () => {
 
   it('refuses a body that is not JSON', async () => {
     const res = await pause(new Request('http://x/api', { method: 'POST', body: '{}', headers: { host: 'localhost:8080' } }), ctx);
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(415);
     expect(fake.pause).not.toHaveBeenCalled();
   });
 });

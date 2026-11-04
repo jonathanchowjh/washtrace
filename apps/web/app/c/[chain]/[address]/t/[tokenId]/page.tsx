@@ -10,7 +10,7 @@ import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
 import { lensList, short } from '@/lib/format';
 import { tokenLinks } from '@/lib/links';
 import { layout } from '@/lib/layout';
-import { ranFlags, verdict } from '@/lib/metrics';
+import { verdict } from '@/lib/metrics';
 import { tokenView } from '@/lib/views';
 
 type Props = { params: Promise<{ chain: string; address: string; tokenId: string }> };
@@ -33,9 +33,8 @@ export default async function TokenPage({ params }: Props) {
   if (chainId === null || address === null || tokenId === null) notFound();
   const view = await tokenView(chainId, address, tokenId);
   if (view === null) notFound();
-  const { collection, flows, middles, latest } = view;
-  // Only the lenses that ran: the engine copies Round trips' flags into the money lenses when no funding ran.
-  const transfers = view.transfers.map((t) => ranFlags(t, latest));
+  // tokenView has already dropped the lenses that did not run.
+  const { collection, flows, middles, latest, transfers } = view;
   const name = collection.name ?? short(address);
   const base = `/c/${chainId}/${address}`;
   const { washTrade, judged: judgedAll, by, apartOnly, notRun } = verdict(transfers.map((t) => ({ t, latest })));
