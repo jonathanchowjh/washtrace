@@ -2,7 +2,7 @@ import { BEHIND_BLOCKS, TRAIL_NOTES, reaches, type CollectionRow, type StoredEnt
 import { LENSES } from './format';
 
 export type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
-export type StageState = 'waiting' | 'running' | 'done' | 'not-needed' | 'blocked' | 'failed' | 'paused' | 'live';
+export type StageState = 'waiting' | 'running' | 'done' | 'not-needed' | 'blocked' | 'failed' | 'paused' | 'live' | 'silent';
 
 export interface Stage {
   key: StageKey;
@@ -28,12 +28,14 @@ export interface PipelineInput {
   funding: boolean;
   /** The analyze pass is running on this collection now. */
   analyzing: boolean;
+  /** No pass has shown a sign of life (workerSilent): nothing is being kept current. */
+  silent: boolean;
 }
 
 /** The chip's word for each state; a missing key reads as the action it needs, never as Off. */
 export const STATE_WORDS: Record<StageState, string> = {
   waiting: 'Waiting', running: 'Running', done: 'Done', 'not-needed': 'Not needed',
-  blocked: 'Needs a key', failed: 'Failed', paused: 'Paused', live: 'Following',
+  blocked: 'Needs a key', failed: 'Failed', paused: 'Paused', live: 'Following', silent: 'Worker silent',
 };
 
 export const TITLES = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'] as const;
@@ -73,8 +75,11 @@ const KEYS: StageKey[] = ['download', 'load', 'stored-analysis', 'chain', 'money
  * does not retry a mismatch or unreadable trail until the file changes, so
  * Waiting would last forever. Stage 3 is about stored data that is loaded: after
  * a failed load the worker analyses what it has, and that shows at stage 6.
+ * A silent worker keeps nothing current, so a stage that would be running or
+ * following reads silent with no share; paused still wins, and a stage that is
+ * done or not needed stands.
  */
-export function pipeline({ c, entry, rpcChains, funding, analyzing }: PipelineInput): Stage[] {
+export function pipeline({ c, entry, rpcChains, funding, analyzing, silent }: PipelineInput): Stage[] {
   const transfers = c.storedThroughTime !== null ? 'loaded'
     : entry === null ? 'none'
     : !reaches(c, entry) ? 'read-past'
@@ -143,17 +148,30 @@ export function pipeline({ c, entry, rpcChains, funding, analyzing }: PipelineIn
 
   return [download, load, stored, chain, money, analysis].map((part, i) => {
     const paused = c.pausedAt !== null && part.state !== 'done' && part.state !== 'not-needed';
+    const quiet = !paused && silent && (part.state === 'running' || part.state === 'live');
     return {
       key: KEYS[i]!,
       n: (i + 1) as Stage['n'],
       title: TITLES[i]!,
-      state: paused ? 'paused' : part.state,
-      share: paused ? null : part.share ?? null,
-      file: paused ? null : part.file ?? null,
+      state: paused ? 'paused' : quiet ? 'silent' : part.state,
+      share: paused || quiet ? null : part.share ?? null,
+      file: paused || quiet ? null : part.file ?? null,
       feeds: FEEDS[i]!,
       needs: paused ? null : part.needs ?? null,
       // Paused leaves a not-needed stage alone, so its sentence stays.
       skipped: part.state === 'not-needed' ? skipped : null,
     };
   });
+}
+
+/**
+ * Whether a stored money trail with checked wallets is on its way: the manifest
+ * has one that is not the one loaded, on a collection that is not paused. The
+ * worker does not retry a mismatched or unreadable one until the file changes,
+ * so "on its way" would last forever; a failed import it does retry.
+ */
+export function trailComing(c: Pick<CollectionRow, 'trailImportedSha' | 'pausedAt' | 'trailNote'>, entry: StoredEntry | null): boolean {
+  if (entry?.trail == null || c.pausedAt !== null) return false;
+  if (c.trailNote === TRAIL_NOTES.mismatch || c.trailNote === TRAIL_NOTES.unreadable) return false;
+  return entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
 }

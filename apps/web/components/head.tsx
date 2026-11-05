@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { plural } from '@/lib/format';
+import type { Tone } from '@/lib/metrics';
 import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import { Time } from './time';
@@ -126,10 +127,10 @@ export function Section({ title, lead, aside, id, children }: { title: string; l
 }
 
 /** The one-line answer a page exists to give, in its verdict's hue. */
-export function Answer({ tone, title, children, aside }: { tone: 'cycle' | 'money' | 'clean'; title: ReactNode; children?: ReactNode; aside?: ReactNode }) {
+export function Answer({ tone, title, children, aside }: { tone: Tone; title: ReactNode; children?: ReactNode; aside?: ReactNode }) {
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-4 rounded-lg border p-4 sm:p-5',
-      tone === 'cycle' ? 'border-cycle/30 bg-cycle-surface' : tone === 'money' ? 'border-money/30 bg-money-surface' : 'bg-card')}>
+      tone === 'cycle' ? 'border-cycle/30 bg-cycle-surface' : tone === 'money' ? 'border-money/30 bg-money-surface' : tone === 'apart' ? 'border-dashed bg-card' : 'bg-card')}>
       <div className="min-w-0 max-w-3xl">
         <p className={cn('text-lg font-semibold', tone === 'cycle' ? 'text-cycle' : tone === 'money' ? 'text-money' : 'text-foreground')}>{title}</p>
         {children ? <div className="mt-1 text-sm">{children}</div> : null}

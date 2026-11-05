@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/head';
+import { LOCAL_ONLY } from '@/lib/auth';
 import { LENSES, withoutKey } from '@/lib/format';
-import { FIELDS, OPEN, READ_ONLY, variableOf, type FieldView } from '@/lib/settings';
+import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 
 const INPUT = 'rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none disabled:opacity-60';
 const BUTTON = 'rounded-[5px] border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50 disabled:hover:bg-transparent';
@@ -68,7 +69,7 @@ async function save(key: string, value: string | null): Promise<string | null> {
 export function Settings({ fields, writable, open = false, trailFunded = false }: { fields: FieldView[]; writable: boolean; open?: boolean; trailFunded?: boolean }) {
   return (
     <div className="max-w-3xl">
-      {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{READ_ONLY}</p>}
+      {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{LOCAL_ONLY}</p>}
       {open ? <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{OPEN}</p> : null}
       {GROUPS.map((g) => (
         <Section key={g.title} title={g.title} lead={g.lead(trailFunded)}>
@@ -115,7 +116,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const hintId = `${id}-hint`;
   /** .env also sets this field, so clearing what is saved here is a Reset to that value. */
   const reset = field.env !== null;
-  const lockedWhy = writable ? (field.pinned ?? '') : READ_ONLY;
+  const lockedWhy = writable ? (field.pinned ?? '') : LOCAL_ONLY;
   /** A button's accessible name: what it does, then which field. */
   const named = (verb: string, after = '') => `${verb} ${field.label}${after}`;
 
@@ -187,7 +188,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
     );
   }
 
-  const testWhy = !writable ? READ_ONLY : !field.set ? 'Nothing to test: set it first.' : null;
+  const testWhy = !writable ? LOCAL_ONLY : !field.set ? 'Nothing to test: set it first.' : null;
   return (
     <div id={field.key} role="group" aria-labelledby={labelId} aria-describedby={hintId} className="scroll-mt-6 space-y-1.5 px-4 py-3 target:bg-muted/50">
       <div>

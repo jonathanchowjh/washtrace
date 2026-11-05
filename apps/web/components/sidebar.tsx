@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { short } from '@/lib/format';
+import { SearchBox } from './search-box';
 import { ThemeToggle } from './theme';
 import { ZonePicker } from './zone';
 
@@ -11,8 +12,8 @@ const ITEM = 'flex items-center gap-2 rounded-[5px] px-2 py-1 whitespace-nowrap 
 
 /**
  * Collections, each watched collection by name, the worker and its settings, and a search box
- * that takes a wallet, a collection or a transaction. Under 768 px it is one
- * row that scrolls sideways, above the page.
+ * that takes a collection name, a token number, a wallet or a transaction. Under 768 px the
+ * search box is a row of its own above one row that scrolls sideways, above the page.
  */
 export function Sidebar({ watched }: { watched: { chainId: number; address: string; name: string | null }[] }) {
   const path = usePathname();
@@ -20,18 +21,14 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
   return (
     // The wrapper stretches to the grid row, so the sidebar's ground and edge run the page's full height; the aside inside stays put while the page scrolls.
     <div className="bg-sidebar md:border-r">
+      {/* Under 768 px the search box has a row of its own, so a type-ahead list under it is not clipped by the row below, which scrolls sideways. */}
+      <SearchBox id="q-top" className="border-b p-2 md:hidden" />
       <aside className="flex items-center gap-1 overflow-x-auto border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
         <Link href="/" className="px-2 md:pb-1">
           <span className="block font-mono font-semibold text-foreground">washtrace</span>
           <span className="block text-xs text-muted-foreground max-md:hidden">NFT wash trading detector</span>
         </Link>
-        <form action="/go" className="max-md:hidden">
-          <label className="sr-only" htmlFor="q">Wallet, collection or transaction</label>
-          <input
-            id="q" name="q" placeholder="Search address or tx"
-            className="w-full rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
-          />
-        </form>
+        <SearchBox id="q" className="max-md:hidden" />
         <nav aria-label="Collections" className="flex gap-px md:flex-col">
           <Link href="/" aria-current={current('/', true)} className={ITEM}>All collections</Link>
           {watched.map((c) => {

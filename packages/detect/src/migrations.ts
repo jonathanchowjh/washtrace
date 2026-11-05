@@ -299,4 +299,22 @@ DELETE FROM washtrace.settings s USING washtrace.setting_sources r WHERE r.key =
 -- that lacks '••••'.
 ALTER TABLE washtrace.setting_sources ADD COLUMN IF NOT EXISTS env_value text;
 `,
+  `
+-- How far a money trail import's flows got: the trail's sha and the count of
+-- its flows committed, written with each batch of them. An import of the same
+-- trail cut off (a restart, a stop) goes on from there instead of from the
+-- first flow; the import's last statement deletes the row. A table of its own,
+-- so writing it locks no collection row.
+CREATE TABLE IF NOT EXISTS washtrace.trail_resume (
+  collection_id int PRIMARY KEY REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  sha           text NOT NULL,
+  flows         bigint NOT NULL
+);
+`,
+  `
+-- The console's search finds wallets by the start of their address. The image's
+-- collation is not C, so a prefix LIKE can only use an index built with
+-- text_pattern_ops.
+CREATE INDEX IF NOT EXISTS wallets_address_prefix_idx ON washtrace.wallets (chain_id, address text_pattern_ops);
+`,
 ];

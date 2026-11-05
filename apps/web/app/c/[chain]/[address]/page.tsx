@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { Pipeline, ReadingSummary } from '@/components/coverage';
@@ -12,13 +12,14 @@ import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
 import { CollectionControls } from '@/components/watch';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
-import { changedRules } from '@/lib/collections';
+import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
+import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
 import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
 import { analyzingOn, coverage, evidenceLead, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
-import { pipeline } from '@/lib/pipeline';
+import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
@@ -53,23 +54,24 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
+  const writable = mayWrite(process.env, await headers());
   const base = `/c/${chainId}/${address}`;
   const a = c.latest;
-  const rulesNote = changedRules(c.rules);
+  const rules = rulesNote(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
   const config = configFromSources(sources, settings);
   const rpcChains = new Set(config.chains);
-  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone);
   // The manifest entry: how many traders the loaded money trail checked (when it is the one loaded), and how big the trail is while it downloads.
   const entry = await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
-  // A trail with checked wallets not loaded yet: stage 5 waits for it rather than saying it needs a key.
-  const trailComing = entry?.trail != null && entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
+  // A trail with checked wallets not loaded yet: stage 5 and the lens cards wait for it rather than saying they need a key.
+  const coming = trailComing(c, entry);
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedFunding(c.id));
   const silent = workerSilent(passes, Date.now());
-  const cov = coverage(c, rpcChains, Date.now(), zone, config.funding);
-  const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id) });
+  const why = waiting(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone, silent !== null);
+  const cov = coverage(c, rpcChains, Date.now(), zone, config.funding, silent !== null);
+  const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
   const name = c.name ?? short(address);
   const lens = LENSES[method];
   const t = a?.totals[method];
@@ -110,8 +112,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       {a ? (
         <Section id="evidence" title="How was it found?" lead={evidenceLead(a.totals)}>
           {/* These are the rules now set, which the latest analysis may not have run under yet. */}
-          {rulesNote ? <p className="mb-4 text-sm text-muted-foreground">{rulesNote}</p> : null}
-          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} floor={cov.floor} trail={c.trailImportedSha !== null} funded={funded}>
+          {rules ? <p className="mb-4 text-sm text-muted-foreground">{rules}</p> : null}
+          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} notFinal={cov.notFinal} trail={c.trailImportedSha !== null} funded={funded} coming={coming} silent={silent !== null}>
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available
                 ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
@@ -140,12 +142,12 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           title="When did it happen?"
           lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} floor={cov.floor} now={Date.now()} zone={zone} />
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} />
         </Section>
       ) : null}
 
       <Section id="reading" title="How far has it read?" lead="The six stages under every number on this page. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
-        <Pipeline c={c} stages={stages} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} transfersBytes={entry?.transfers.bytes ?? null} trailComing={trailComing} now={Date.now()} />
+        <Pipeline c={c} stages={stages} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} transfersBytes={entry?.transfers.bytes ?? null} trailComing={coming} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
             <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">How the answer settled as the reading filled in, at each of {history.length} analyses</summary>
@@ -155,7 +157,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       </Section>
 
       <Section title="Reading this collection" lead={c.pausedAt === null ? 'Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
-        <CollectionControls chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
+        {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
+        <CollectionControls writable={writable} chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>
     </>
   );

@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { download, fetchManifest, hubUrl, partPath } from '../src/hub.js';
+import { download, fetchManifest, hubUrl, partPath, removeStaleParts } from '../src/hub.js';
+import { storedFile, type StoredEntry } from '../src/stored.js';
 
 const body = Buffer.from(Array.from({ length: 5_000 }, (_, i) => i % 251));
 const sha = createHash('sha256').update(body).digest('hex');
@@ -192,5 +193,41 @@ describe('download', () => {
     await expect(run).rejects.toThrow();
     expect(await exists(dest)).toBe(false);
     expect((await readFile(partPath(dest, sha))).length).toBeGreaterThan(0);
+  });
+});
+
+describe('removeStaleParts', () => {
+  const A = `0x${'a1'.repeat(20)}`, B = `0x${'b2'.repeat(20)}`;
+  const entry = (address: string, t: string, r: string | null): StoredEntry => ({
+    chainId: 1, address, name: 'X', startBlock: 1, throughBlock: 2, throughTime: 0,
+    transfers: { file: storedFile(1, address, 'transfers'), rows: 1, bytes: 1, sha256: t.repeat(64) },
+    trail: r === null ? null : { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 1, sha256: r.repeat(64) },
+  });
+
+  it('removes the part of a file the manifest names no more, and keeps every other file', async () => {
+    const d = join(dir, 'parts');
+    await mkdir(d, { recursive: true });
+    const at = (file: string) => join(d, file);
+    const keep = [
+      // The manifest's own, still to resume.
+      partPath(at(storedFile(1, A, 'transfers')), 'a'.repeat(64)),
+      partPath(at(storedFile(1, A, 'trail')), 'b'.repeat(64)),
+      // Whole files, the manifest's write and a local cut's: none is a download's part.
+      at(storedFile(1, A, 'transfers')), at('manifest.json.part'), at(`${storedFile(1, B, 'trail')}.part`),
+    ];
+    const stale = [
+      // Its file published again with other content.
+      partPath(at(storedFile(1, A, 'trail')), 'c'.repeat(64)),
+      // A collection the manifest no longer has, or another dataset's.
+      partPath(at(storedFile(1, B, 'transfers')), 'd'.repeat(64)),
+    ];
+    for (const f of [...keep, ...stale]) await writeFile(f, 'x');
+    const removed = await removeStaleParts(d, { version: 2, collections: [entry(A, 'a', 'b')] });
+    expect(removed.sort()).toEqual(stale.map((f) => f.slice(d.length + 1)).sort());
+    expect((await readdir(d)).sort()).toEqual(keep.map((f) => f.slice(d.length + 1)).sort());
+  });
+
+  it('finds nothing to do in a folder that is not there yet', async () => {
+    expect(await removeStaleParts(join(dir, 'none'), { version: 2, collections: [] })).toEqual([]);
   });
 });

@@ -7,17 +7,23 @@ import { Time } from '@/components/time';
 import { CollectionControls } from '@/components/watch';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
-import { coverage, range, rangeText, storedOnly, type Range } from '@/lib/metrics';
+import { coverage, range, rangeEnds, storedOnly, type Range } from '@/lib/metrics';
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
 
-function Share({ r, label, detail }: { r: Range | null; label: string; detail: string }) {
+/** Each end of a range opens the collection's evidence for the lens at that end. Above the row's whole-row link, like the controls. */
+function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: string; href: string }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
+  const e = rangeEnds(r);
+  const end = (text: string, lens: Range['low']) => (
+    <Link href={`${href}?method=${lens}#evidence`} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
+  );
   return (
     <div className="min-w-0">
       <p className="flex items-baseline gap-1.5">
-        <span className="text-xl font-semibold text-foreground tabular-nums">{rangeText(r)}</span>
+        {/* One link when both ends agree. */}
+        <span className="text-xl font-semibold text-foreground tabular-nums">{e.same ? end(e.high, r.high) : <>{end(e.low, r.low)}–{end(e.high, r.high)}</>}</span>
         <span className="text-xs text-muted-foreground md:hidden">{label}</span>
       </p>
       <RangeBar range={r} className="mt-1.5 max-w-56" />
@@ -31,11 +37,14 @@ function Share({ r, label, detail }: { r: Range | null; label: string; detail: s
  * done with it (pause, resume, delete data). `rpcChains` are the chains the
  * worker can read, so a collection showing stored data with none says so.
  * `funding` is whether an Etherscan key is set: without one no wallet is
- * being checked, whatever is left unchecked.
+ * being checked, whatever is left unchecked. `silent` is whether no pass has
+ * reported (workerSilent): the pill then says so instead of a reading that
+ * claims progress. `writable` goes to its controls, which say why they are
+ * disabled; the page says the sentence once, above the Watch panel, not each row.
  */
-export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collection; why: string; rpcChains: ReadonlySet<number>; funding: boolean; now: number }) {
+export function CollectionRow({ c, why, rpcChains, funding, silent, writable, now }: { c: Collection; why: string; rpcChains: ReadonlySet<number>; funding: boolean; silent: boolean; writable: boolean; now: number }) {
   const a = c.latest;
-  const cov = coverage(c, rpcChains, now, 'UTC', funding);
+  const cov = coverage(c, rpcChains, now, 'UTC', funding, silent);
   const sales = a && range(a.totals, 'sales');
   const volume = a && range(a.totals, 'volume');
   const href = `/c/${c.chainId}/${c.address}`;
@@ -66,11 +75,11 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
       ) : (
         <>
           <Share
-            r={sales} label="of sales"
+            r={sales} label="of sales" href={href}
             detail={sales ? sales.low === sales.high ? LENSES[sales.low].name : `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
           />
           <Share
-            r={volume} label="of volume"
+            r={volume} label="of volume" href={href}
             detail={volume ? `${ethRange(a.totals[volume.low].flaggedVolumeWei, a.totals[volume.high].flaggedVolumeWei)} of ${eth(a.totals.A.volumeWei)}` : 'No priced sale read yet'}
           />
         </>
@@ -83,7 +92,7 @@ export function CollectionRow({ c, why, rpcChains, funding, now }: { c: Collecti
         <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
         {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses not final yet</p> : null}
         {/* Above the link's whole-row overlay, so a press reaches the button and not the collection page. Prioritize stays on the collection page. */}
-        <div className="relative z-10 mt-1"><CollectionControls chainId={c.chainId} address={c.address} paused={c.pausedAt !== null} priority={c.priority} compact /></div>
+        <div className="relative z-10 mt-1"><CollectionControls writable={writable} chainId={c.chainId} address={c.address} paused={c.pausedAt !== null} priority={c.priority} compact /></div>
       </div>
     </li>
   );

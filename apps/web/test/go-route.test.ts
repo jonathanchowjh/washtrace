@@ -1,0 +1,60 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const ADDR = '0x' + 'a'.repeat(40);
+const TX = '0x' + 'c'.repeat(64);
+const none = { collections: [], tokens: [], wallets: [], trades: [], more: { collections: false, tokens: false, wallets: false, trades: false } };
+const state = { watched: false, hits: none as Record<string, unknown> };
+vi.mock('@/lib/store', () => ({
+  store: () => ({ collection: async () => (state.watched ? { id: 1 } : null), search: async () => state.hits }),
+}));
+vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), connection: async () => {} }));
+
+afterEach(() => { Object.assign(state, { watched: false, hits: none }); });
+
+async function go(q: string): Promise<string> {
+  const { GET } = await import('@/app/go/route');
+  const { NextRequest } = await import('next/server');
+  const res = await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}`));
+  expect(res.status).toBe(303);
+  const to = new URL(res.headers.get('location')!);
+  return to.pathname + to.search;
+}
+const coll = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA' };
+
+describe('/go', () => {
+  it('sends a transaction hash to its transaction, even when search would find more', async () => {
+    state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }, { chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '2' }] };
+    expect(await go(TX.toUpperCase().replace('0X', '0x'))).toBe(`/tx/1/${TX}`);
+  });
+
+  it('sends an address as before: a watched collection to it, any other to the wallet', async () => {
+    expect(await go(ADDR)).toBe(`/w/1/${ADDR}`);
+    state.watched = true;
+    expect(await go(ADDR)).toBe(`/c/1/${ADDR}`);
+  });
+
+  it('redirects to the one thing a name finds', async () => {
+    state.hits = { ...none, collections: [coll] };
+    expect(await go('terraforms')).toBe(`/c/1/${ADDR}`);
+  });
+
+  it('redirects to a token or a wallet when that is the only hit', async () => {
+    state.hits = { ...none, tokens: [{ chainId: 1, address: ADDR, name: 'T', tokenId: '7', transfers: 3 }] };
+    expect(await go('#7')).toBe(`/c/1/${ADDR}/t/7`);
+    state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 3 }] };
+    expect(await go('0xaaaa')).toBe(`/w/1/${ADDR}`);
+  });
+
+  it('sends two hits, or a hit cut by its limit, to the results page', async () => {
+    state.hits = { ...none, collections: [coll, { ...coll, chainId: 10 }] };
+    expect(await go('terraforms')).toBe('/search?q=terraforms');
+    state.hits = { ...none, collections: [coll], more: { ...none.more, collections: true } };
+    expect(await go('terraforms')).toBe('/search?q=terraforms');
+  });
+
+  it('never lands on /?q=: no hit, empty and junk all go to the results page', async () => {
+    expect(await go('terraforms')).toBe('/search?q=terraforms');
+    expect(await go('')).toBe('/search?q=');
+    expect(await go('0xzz')).toBe('/search?q=0xzz');
+  });
+});

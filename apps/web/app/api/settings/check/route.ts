@@ -1,6 +1,6 @@
-import { mayWrite } from '@/lib/auth';
+import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { bad, handle, json, readJson } from '@/lib/api';
-import { FIELDS, READ_ONLY } from '@/lib/settings';
+import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
 
 /**
@@ -11,7 +11,7 @@ import { store } from '@/lib/store';
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(READ_ONLY, 403);
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     const body = await readJson(req);
     if (body instanceof Response) return body;
     if (body.kind === 'etherscan') return json({ id: await store().requestCheck('etherscan', null) }, 201);

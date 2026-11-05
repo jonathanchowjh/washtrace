@@ -17,8 +17,6 @@ async function main() {
   const lines = createInterface({ input: createReadStream(join(DIR, 'sales.csv.gz')).pipe(createGunzip()), crlfDelay: Infinity });
   const out = createWriteStream(join(DIR, 'survey.csv'));
   const rows = [];
-  let ties = 0;
-  let skipped = 0;
   let peak = 0;
 
   for await (const g of byCollection(lines)) {
@@ -29,21 +27,19 @@ async function main() {
     } catch (e) {
       throw new Error(`analyze failed for contract ${g.contract}: ${e.message}`, { cause: e });
     }
-    const row = surveyRow(g.contract, g.transfers, analysis, performance.now() - t0);
+    const row = surveyRow(g, analysis, performance.now() - t0);
     if (!rows.length) out.write(`${Object.keys(row).join(',')}\n`);
     out.write(`${Object.values(row).join(',')}\n`);
     rows.push(row);
-    ties += g.ties;
-    skipped += g.skipped;
     peak = Math.max(peak, process.memoryUsage().rss);
     if (rows.length % 1000 === 0) console.error(`${rows.length} collections, peak ${Math.round(peak / 1e6)} MB`);
   }
   await new Promise((done) => out.end(done));
 
-  const text = markdown({ ...summarize(rows), ties }, peak / 1e6);
+  // maxRSS is in KiB; decimal MB, so the peak compares with the earlier run's.
+  const text = markdown(summarize(rows), process.resourceUsage().maxRSS * 1024 / 1e6);
   writeFileSync(join(DIR, 'summary.md'), text);
   console.log(text);
-  if (skipped) console.error(`skipped ${skipped} rows with no token, seller, buyer or time`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

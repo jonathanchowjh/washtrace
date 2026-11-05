@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type Method, type Witness } from '@washtrace/detect';
-import { verdictOf } from '@/lib/layout';
 import { LENSES, eth, explorer, short } from '@/lib/format';
+import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 
@@ -64,14 +64,17 @@ export function rowList(rows: readonly number[]): string {
   return run && sorted.length > 2 ? `${sorted[0]}–${sorted[sorted.length - 1]}` : sorted.join(', ');
 }
 
-const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', clean: '' } as const;
+const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
+const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', clean: '' } as const;
 
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
- * token page's order: the number is the arrow's label in its graph.
+ * token page's order: the number is the arrow's label in its graph. A page or
+ * a filter shows only some of a token's rows, so `numbers` gives each shown
+ * row its place in the whole chain order.
  */
-export function Transfers({ chainId, transfers, numbered = false, collection = false }: {
-  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; collection?: boolean;
+export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false }: {
+  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean;
 }) {
   if (transfers.length === 0) return <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">No transfers read yet.</p>;
   return (
@@ -90,11 +93,12 @@ export function Transfers({ chainId, transfers, numbered = false, collection = f
         </thead>
         <tbody>
           {transfers.map((t, i) => {
-            const v = verdictOf(t);
+            const tone = toneOf(t);
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
+            const n = numbers?.[i] ?? i + 1;
             return (
-              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${i + 1}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[v])}>
-                {numbered ? <td className="px-3 py-2 tabular-nums text-muted-foreground">{i + 1}</td> : null}
+              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
+                {numbered ? <td className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
                 <td className="px-3 py-2 whitespace-nowrap">
                   <a className="text-xs tabular-nums hover:underline" href={`${explorer(chainId)}/tx/${t.txHash}`} target="_blank" rel="noreferrer">
                     {t.blockTime === null ? `block ${t.blockNumber.toLocaleString()}` : <Time ms={t.blockTime * 1000} />}
@@ -117,7 +121,7 @@ export function Transfers({ chainId, transfers, numbered = false, collection = f
                   {METHODS.some((m) => t.flags[m]) ? (
                     <span className="flex flex-wrap gap-1">
                       {METHODS.filter((m) => t.flags[m]).map((m) => (
-                        <span key={m} className={cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', m === 'A' || t.flags.A ? 'bg-cycle' : 'bg-money')}>
+                        <span key={m} className={cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[tone])}>
                           {LENSES[m].name}
                         </span>
                       ))}

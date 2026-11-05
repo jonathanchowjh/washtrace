@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '@/components/settings';
-import { OPEN, READ_ONLY, type FieldView } from '@/lib/settings';
+import { LOCAL_ONLY } from '@/lib/auth';
+import { OPEN, type FieldView } from '@/lib/settings';
 import { withoutKey } from '@/lib/format';
 
 const refresh = vi.fn();
@@ -44,7 +45,7 @@ function checks(polls: unknown[]) {
 describe('Settings, read-only', () => {
   it('says why in one line at the top, and disables every input and button', () => {
     render(<Settings writable={false} fields={fields({ ...RPC_SET, 'follow.hops': { set: true, shown: '3', source: 'console' } }, true)} />);
-    expect(screen.getByText(READ_ONLY)).toBeTruthy();
+    expect(screen.getByText(LOCAL_ONLY)).toBeTruthy();
     const controls = [...document.querySelectorAll('input, button')] as (HTMLInputElement | HTMLButtonElement)[];
     expect(controls.length).toBeGreaterThan(0);
     for (const c of controls) expect(c.disabled).toBe(true);
@@ -52,12 +53,12 @@ describe('Settings, read-only', () => {
 
   it('says why each Test is off', () => {
     render(<Settings writable={false} fields={fields(RPC_SET, true)} />);
-    for (const b of screen.getAllByRole('button', { name: /^Test\b/ })) expect(b.getAttribute('title')).toBe(READ_ONLY);
+    for (const b of screen.getAllByRole('button', { name: /^Test\b/ })) expect(b.getAttribute('title')).toBe(LOCAL_ONLY);
   });
 
   it('shows no read-only line when writable', () => {
     render(<Settings writable fields={fields()} />);
-    expect(screen.queryByText(READ_ONLY)).toBeNull();
+    expect(screen.queryByText(LOCAL_ONLY)).toBeNull();
   });
 });
 
@@ -140,7 +141,7 @@ describe('Settings, each field', () => {
 
   it('says why it is read-only', () => {
     render(<Settings writable={false} fields={fields({}, true)} />);
-    expect(screen.getByRole('note').textContent).toBe(READ_ONLY);
+    expect(screen.getByRole('note').textContent).toBe(LOCAL_ONLY);
   });
 
   it('locks the Etherscan URL while the key is from the environment, and says why and what the worker uses', () => {

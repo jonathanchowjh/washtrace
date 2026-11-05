@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { homeHref } from '@/lib/links';
 
 export type Tab = 'sync' | 'paused' | 'all';
 
@@ -25,8 +26,10 @@ function remembered(): Tab {
  * The collections list split by whether the worker is reading each one. The
  * server filters the rows by `?tab=`; this draws the tabs with their counts,
  * and sends a visit with no `?tab=` to the tab this browser chose to open on.
+ * `find`, `sort` and `dir` are the list's other view settings: every tab link
+ * and that redirect carry them, so changing tab does not drop a search.
  */
-export function CollectionTabs({ counts, current }: { counts: { sync: number; paused: number; all: number; behind: number }; current: Tab }) {
+export function CollectionTabs({ counts, current, find, sort, dir }: { counts: { sync: number; paused: number; all: number; behind: number }; current: Tab; find?: string; sort?: string; dir?: string }) {
   const router = useRouter();
   const named = useSearchParams().has('tab');
   // Storage is read after mount, so the server's markup and the first client render agree.
@@ -36,8 +39,8 @@ export function CollectionTabs({ counts, current }: { counts: { sync: number; pa
   useEffect(() => {
     if (named) return;
     const tab = remembered();
-    if (tab !== 'sync') router.replace(`/?tab=${tab}`);
-  }, [named, router]);
+    if (tab !== 'sync') router.replace(homeHref({ tab, find, sort, dir }));
+  }, [named, router, find, sort, dir]);
 
   const label: Record<Tab, string> = {
     sync: `In sync (${counts.sync}${counts.behind > 0 ? ` · ${counts.behind} behind` : ''})`,
@@ -55,7 +58,7 @@ export function CollectionTabs({ counts, current }: { counts: { sync: number; pa
       <nav aria-label="Collections by whether the worker is reading them" className="flex max-w-full gap-1 overflow-x-auto">
         {TABS.map((t) => (
           <Link
-            key={t} href={`/?tab=${t}`} aria-current={t === current ? 'page' : undefined}
+            key={t} href={homeHref({ tab: t, find, sort, dir })} aria-current={t === current ? 'page' : undefined}
             className={`whitespace-nowrap rounded-md border px-3 py-1.5 text-sm font-medium ${t === current ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
           >{label[t]}</Link>
         ))}

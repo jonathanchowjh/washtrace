@@ -49,16 +49,21 @@ const FAILED: Record<Job, [string, string?]> = {
 const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
 
 /**
- * One job's state from its last pass. A running pass is stalled when the worker
- * stopped beating or it ran past its ceiling; a finished one is stalled when it
- * is long overdue (from when it finished, so a long pass is not overdue the
- * moment it ends), else failed or ok.
+ * One job's state from its last pass, and when it is stalled, why. A running
+ * pass is stalled when the worker stopped beating (silent) or it ran past its
+ * ceiling (stuck); a finished one is stalled when it is long overdue (from
+ * when it finished, so a long pass is not overdue the moment it ends), else
+ * failed or ok.
  */
-export function jobState(p: PassRow | undefined, job: Job, now: number): JobState {
-  if (!p) return 'never';
-  if (isRunning(p)) return now - (p.heartbeatAt ?? p.startedAt) > SILENT_MS || now - p.startedAt > STUCK_MS[job] ? 'stalled' : 'running';
-  if (now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS) return 'stalled';
-  return p.outcome === 'failed' ? 'failed' : 'ok';
+export function jobState(p: PassRow | undefined, job: Job, now: number): { state: JobState; why: 'silent' | 'stuck' | 'overdue' | null } {
+  if (!p) return { state: 'never', why: null };
+  if (isRunning(p)) {
+    if (now - (p.heartbeatAt ?? p.startedAt) > SILENT_MS) return { state: 'stalled', why: 'silent' };
+    if (now - p.startedAt > STUCK_MS[job]) return { state: 'stalled', why: 'stuck' };
+    return { state: 'running', why: null };
+  }
+  if (now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS) return { state: 'stalled', why: 'overdue' };
+  return { state: p.outcome === 'failed' ? 'failed' : 'ok', why: null };
 }
 
 /**
@@ -70,7 +75,7 @@ export function jobState(p: PassRow | undefined, job: Job, now: number): JobStat
  */
 export function workerSilent(passes: readonly PassRow[], now: number): { since: number | null } | null {
   for (const job of JOBS) {
-    const state = jobState(passes.find((r) => r.job === job), job, now);
+    const { state } = jobState(passes.find((r) => r.job === job), job, now);
     if (state !== 'stalled' && state !== 'never') return null;
   }
   const signs = passes.flatMap((p) => [p.heartbeatAt, p.finishedAt, p.startedAt]).filter((t): t is number => t !== null);
@@ -91,16 +96,13 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
 
   const jobs = JOBS.map((job) => {
     const p = s.passes.find((r) => r.job === job);
-    const state = jobState(p, job, now);
+    const { state, why } = jobState(p, job, now);
     if (!p) {
       needsYou(`${job} has never run.`, WORKER_DOWN);
     } else if (isRunning(p)) {
-      // Silent: the worker stopped beating. Past its ceiling with a fresh beat: the worker is up, and this pass is stuck.
-      const lastSign = p.heartbeatAt ?? p.startedAt;
-      if (state === 'stalled') {
-        if (now - lastSign > SILENT_MS) needsYou(`${job} has been silent for ${minutes(now - lastSign)}.`, WORKER_DOWN);
-        else needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
-      }
+      // Silent: the worker stopped beating. Stuck: past its ceiling with a fresh beat, so the worker is up and this pass is not.
+      if (why === 'silent') needsYou(`${job} has been silent for ${minutes(now - (p.heartbeatAt ?? p.startedAt))}.`, WORKER_DOWN);
+      else if (why === 'stuck') needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
     } else {
       if (p.outcome === 'failed') {
         // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
@@ -108,7 +110,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
         const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
         if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
       }
-      if (state === 'stalled') needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
+      if (why === 'overdue') needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
     }
     return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, outcome: p?.outcome ?? null, detail: p?.detail ?? null };
   });

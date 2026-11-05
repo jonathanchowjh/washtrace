@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { chainName } from '@/lib/chains';
 import { formatBytes, lensList, plural, short } from '@/lib/format';
-import { downloaded, progress, restoreNext, storedOnly, type Coverage } from '@/lib/metrics';
+import { TRAIL_LOADING, downloaded, progress, restoreNext, storedOnly, type Coverage } from '@/lib/metrics';
 import { Warn } from '@/components/head';
 import { STATE_WORDS, TITLES, type Stage, type StageState } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
@@ -23,12 +23,14 @@ const PILL = {
   // Neutral: what was read stands, and the collection's error says why the head is not known.
   'head-unknown': 'bg-muted text-muted-foreground',
   paused: 'bg-muted text-muted-foreground',
+  // Neutral like paused: nothing reports, so there is no progress to colour.
+  silent: 'bg-muted text-muted-foreground',
   // Neutral like paused: a limit to lift, neither a fault nor done.
   'stored-only': 'bg-muted text-muted-foreground',
 } as const;
 
 /** Readings where nothing is moving, so the pill's dot does not pulse. */
-const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', 'stored-only', 'head-unknown', 'queued']);
+const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', 'stored-only', 'head-unknown', 'queued', 'silent']);
 
 /**
  * How far the reading under a collection's numbers has got, as one word or
@@ -36,7 +38,8 @@ const STILL: ReadonlySet<Coverage['reading']> = new Set(['complete', 'paused', '
  * data stops goes on the line under it (StoredStop).
  */
 export function ReadingPill({ cov }: { cov: Coverage }) {
-  const text = cov.reading !== 'stored-only' ? cov.label : cov.stops !== null ? `Stored data · ${cov.unsynced}` : 'No RPC for its chain';
+  const stored = cov.stops !== null ? `Stored data · ${cov.unsynced}` : 'No RPC for its chain';
+  const text = cov.reading !== 'stored-only' ? cov.label : cov.trail !== null ? `${stored}${TRAIL_LOADING}` : stored;
   return (
     // Wraps inside its column rather than running past it: a radius that is round on one line, and the dot kept on the first.
     <span className={cn('inline-flex max-w-full items-start gap-1.5 rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL[cov.reading])}>
@@ -105,6 +108,7 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
   if (cov.reading === 'queued') return 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
   if (cov.reading === 'downloading') return 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
   if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
+  if (cov.reading === 'silent') return 'The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.';
   if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
   if (cov.reading === 'stored-only') return cov.stops !== null
     ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
@@ -115,8 +119,8 @@ export function trust(c: CollectionRow, cov: Coverage): string | null {
   if (cov.reading === 'analyzing') return 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.';
   const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
   // Not final with nothing checking: no key, so the rest wait for one.
-  if (cov.floor.length > 0 && cov.reading === 'complete') return `${checked} of wallets were checked for money, so ${lensList(cov.floor)} are not final: with no Etherscan key the rest go unchecked.`;
-  if (cov.floor.length > 0) return `${checked} of wallets checked for money so far, so ${lensList(cov.floor)} are not final: checking the rest can move them either way.`;
+  if (cov.notFinal.length > 0 && cov.reading === 'complete') return `${checked} of wallets that traded it were checked for money, so ${lensList(cov.notFinal)} are not final: with no Etherscan key the rest go unchecked.`;
+  if (cov.notFinal.length > 0) return `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`;
   if (!cov.money) return 'Every transfer is read. Money links were not checked, so only Round trips ran.';
   return 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.';
 }
@@ -137,17 +141,18 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
   const retrying = (stages ?? []).some((x) => (x.key === 'stored-analysis' || x.key === 'analysis') && x.state === 'running');
   const failed = c.analysisError && !retrying;
   // Everything is read but no key checks the wallets: the same sentence as when links are missing, since a key just added is also without money lenses.
-  const waitsForKey = cov.floor.length > 0 || (stages ?? []).some((x) => x.key === 'money' && x.state === 'blocked');
+  const waitsForKey = cov.notFinal.length > 0 || (stages ?? []).some((x) => x.key === 'money' && x.state === 'blocked');
   const stage: { share: number; of: ReactNode; figure?: string } | null = cov.stops !== null ? { share: 1, figure: 'Stored data', of: <>stops <Time ms={cov.stops} style="date" /> · {cov.unsynced}. No newer block is read until its chain has an RPC.</> }
     : cov.readTo !== null ? { share: 1, figure: 'No RPC', of: `Read to block ${cov.readTo.toLocaleString('en-US')}. No newer block is read until its chain has an RPC.` }
     : cov.reading === 'stored-only' ? { share: 0, figure: 'No RPC', of: 'Nothing is read until its chain has an RPC.' }
+    : cov.reading === 'silent' ? { share: cov.blocks ?? 0, figure: 'Silent', of: 'The worker is not reporting, so nothing here is kept current' }
     : cov.reading === 'queued' ? { share: 0, figure: 'Waiting', of: 'to download its stored data from Hugging Face' }
     : cov.reading === 'downloading' ? { share: cov.download ?? 0, figure: downloaded(cov.download ?? 0), of: 'of its stored data downloaded from Hugging Face' }
     : cov.reading === 'restoring' ? { share: cov.restore ?? 0, of: 'Loading stored data: history cut ahead of time, so the chain is read only from where it stops' }
     : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     // Stage 6 says when a failed first analysis is tried again.
     : cov.reading === 'analyzing' ? { share: 0, figure: failed ? 'Failed' : 'Analyzing', of: failed ? 'the first analysis of every transfer read failed' : 'the first analysis of every transfer read' }
-    : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of trading wallets checked for money' }
+    : cov.reading === 'checking' ? { share: cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of, of: 'of wallets that traded it checked for money' }
     : cov.reading === 'paused' ? { share: cov.blocks ?? 0, of: 'of its history read when paused' }
     : cov.reading === 'head-unknown' ? { share: 1, figure: 'Head unknown', of: `${cov.label}. The chain's newest block is not known right now, so how far behind that is cannot be said.` }
     : cov.reading === 'complete' && waitsForKey ? { share: 1, of: 'of transfers read. Wallets not yet checked for money wait for an Etherscan key' }
@@ -164,7 +169,7 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
         <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : stage.figure ?? progress(stage.share)}</span>
         <div className="min-w-[11rem] flex-1">
           <p className="text-xs text-muted-foreground">{stage === null ? 'Finding where the collection begins' : stage.of}</p>
-          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'stored-only' || cov.reading === 'head-unknown'} /></div>
+          <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'silent' || cov.reading === 'stored-only' || cov.reading === 'head-unknown'} /></div>
         </div>
       </div>
       <p className="max-w-xl text-xs text-muted-foreground">{trust(c, cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The six stages ↓</a></p>
@@ -207,6 +212,7 @@ const CHIP: Record<StageState, string> = {
   waiting: 'bg-muted text-muted-foreground',
   'not-needed': 'bg-muted text-muted-foreground',
   paused: 'bg-muted text-muted-foreground',
+  silent: 'bg-muted text-muted-foreground',
 };
 
 /** A stage's state in one word, for the stage on the collection page and for any other list of stages. */
@@ -333,6 +339,8 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
   if (cov.stops !== null) return <>{plural(c.transfers, 'transfer')} from stored data, through block {c.cursorBlock!.toLocaleString('en-US')} (<Time ms={cov.stops} style="date" />)</>;
   if (cov.readTo !== null) return `${plural(c.transfers, 'transfer')} · read to block ${cov.readTo.toLocaleString('en-US')} · no RPC for its chain`;
   if (c.pausedAt !== null) return unread ? 'Not read yet · paused' : `${plural(c.transfers, 'transfer')} · read to block ${c.cursorBlock!.toLocaleString('en-US')} when paused`;
+  // A silent worker finds and follows nothing: say what was read, not that it is current.
+  if (cov.reading === 'silent') return c.cursorBlock === null ? 'Not read yet · the worker is silent' : `${plural(c.transfers, 'transfer')} read, to block ${c.cursorBlock.toLocaleString()}, before the worker went silent`;
   if (c.cursorBlock === null) return 'Finding the deployment block…';
   if (cov.behind === null) return `${plural(c.transfers, 'transfer')} so far · block ${c.cursorBlock.toLocaleString()}, head not known yet`;
   if (cov.behind === 0) return `${plural(c.transfers, 'transfer')}, through the finalized head (block ${c.cursorBlock.toLocaleString()})`;
@@ -376,6 +384,8 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     // The transfers are in (or loading) and a trail is still to come: the file that is waited for is the trail, not the transfers.
     : s1.state === 'waiting' ? ((c.storedThroughTime !== null || c.restoreProgress !== null) && c.downloadFile !== 'transfers' ? 'Transfers downloaded; the money trail is next.' : 'Waiting to download stored data')
     : s1.state === 'paused' ? 'Paused · stored data is not downloaded until you resume it.'
+    // Silent: no claim that anything is under way, only that it stopped saying.
+    : s1.state === 'silent' ? 'Download stopped reporting · the worker is silent'
     : null;
   const trailed = c.trailImportedSha != null;
   const v2 = s2.state === 'not-needed' ? s2.skipped
@@ -383,6 +393,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : s2.state === 'done' ? 'Loaded into the database.'
     : s2.state === 'waiting' ? (s1.state === 'done' ? 'Downloaded; waiting for the load to start.' : 'Waiting for the stored data to download.')
     : s2.state === 'paused' ? 'Paused · stored data is not loaded until you resume it.'
+    : s2.state === 'silent' ? 'Load stopped reporting · the worker is silent'
     : null;
 
   // Stage 3: with no analysis yet, `why` says what it waits on, or why it failed and when it is tried again.
@@ -391,12 +402,13 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : s3.state === 'done' ? <>Analysed <Time ms={a.ranAt} />{a.throughBlock === null ? '' : ` through block ${a.throughBlock.toLocaleString('en-US')}`} · took {took(a.tookMs)}</>
     : s3.state === 'running' ? 'Analysing the stored data now.'
     : s3.state === 'paused' ? 'Paused · the stored data is not analysed until you resume it.'
+    : s3.state === 'silent' ? 'Analysis stopped reporting · the worker is silent'
     : s3.state === 'waiting' ? (c.storedThroughTime === null ? 'Waiting for the stored data to load, then it is analysed.' : 'Waiting for the next analysis pass.')
     : null;
 
   // Stage 4: the chain. While the stored transfers are still to load, it waits on them.
   // After a failed load or download the worker reads the chain as if there were no stored data, so nothing is waited for; a failed load being retried is a load, so it is waited for.
-  const loading = c.storedThroughTime === null && c.downloadNote === null && (c.restoreNote === null || c.restoreProgress !== null) && s3.state !== 'not-needed' && (s1.state === 'waiting' || s1.state === 'running' || s2.state === 'waiting' || s2.state === 'running');
+  const loading = c.storedThroughTime === null && c.downloadNote === null && (c.restoreNote === null || c.restoreProgress !== null) && s3.state !== 'not-needed' && (s1.state === 'waiting' || s1.state === 'running' || s1.state === 'silent' || s2.state === 'waiting' || s2.state === 'running' || s2.state === 'silent');
   const v4 = loading && s4.state === 'waiting' ? 'Waiting for the stored data to load, then the chain is read from where it stops.'
     : loading && s4.state === 'blocked' && cov.stops === null && cov.readTo === null ? 'Waiting for the stored data to load.'
     // Blocked with nothing read: nothing is looking for a deployment block; the sentence under it says why.
@@ -407,11 +419,12 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
   const fed = funded ?? (funding || trailed);
   const money = cov.money || fed;
   // No funding for now, but not for good: the trail on its way funds the lenses once loaded, so stage 5 waits for it.
-  const awaited = !money && trailComing && c.pausedAt === null && ((c.downloadFile === 'trail' && c.downloadProgress !== null) || c.trailProgress !== null);
+  const awaited = !money && trailComing;
   const checked = cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of;
 
   // Stage 6: the answer. It keeps what the last run said while the next is waited for.
   const v6 = a === null ? why
+    : s6.state === 'silent' ? <>took {took(a.tookMs)} · the worker is silent, so nothing new is read</>
     : s6.state === 'running' ? <>Analysing now · the numbers shown are from the run before, which took {took(a.tookMs)}</>
     : <>took {took(a.tookMs)}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.pausedAt === null && c.trailProgress !== null ? ' · money trail loading; analysed again once it has' : ' · nothing new since'}</>;
 
@@ -423,7 +436,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
       <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? downloaded(s2.share!) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
         {trailed ? (
           <p className="text-xs text-muted-foreground">
-            Money trail loaded from stored data{trail ? ` · ${trail.checked.toLocaleString('en-US')} of ${trail.of.toLocaleString('en-US')} traders checked` : ''}
+            Money trail loaded from stored data{trail ? ` · ${trail.checked.toLocaleString('en-US')} of ${trail.of.toLocaleString('en-US')} traders in the trail checked` : ''}
           </p>
         ) : null}
         <RestoreNote c={c} rpcChains={rpcChains} now={now} />
@@ -455,7 +468,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
         value={awaited ? 'Funded by the stored money trail once it has loaded. No funding source is set (WASHTRACE_ETHERSCAN_KEY) for wallets it did not check.'
           : !money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
           : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
-          : `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} trading wallets, busiest first`}
+          : `${cov.wallets.checked.toLocaleString('en-US')} of ${cov.wallets.of.toLocaleString('en-US')} wallets that traded it, busiest first`}
       >
         {trailed && !funding && fed ? (
           <p className="text-xs text-muted-foreground">

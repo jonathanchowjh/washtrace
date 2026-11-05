@@ -6,6 +6,7 @@ import { LensName } from '@/components/methods';
 import { Transfers } from '@/components/transfers';
 import { chainOf, txOf } from '@/lib/api';
 import { explorer, lensList, short } from '@/lib/format';
+import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer } from '@/lib/metrics';
 import { txView } from '@/lib/views';
 
 type Props = { params: Promise<{ chain: string; hash: string }> };
@@ -19,18 +20,14 @@ export default async function TxPage({ params }: Props) {
   const chainId = chainOf(p.chain);
   const tx = txOf(p.hash);
   if (chainId === null || tx === null) notFound();
-  const { transfers, washTrade, by, apartOnly, notRun } = await txView(chainId, tx);
+  const v = await txView(chainId, tx);
+  const { transfers, washTrade, by, apartOnly, notRun } = v;
   const unread = transfers.length === 0;
-  const title = unread ? 'Not judged'
-    : washTrade === true ? 'Flagged as a wash trade'
-    : washTrade === null ? 'Not judged yet'
-    : apartOnly ? 'Flagged only by Money loops back, which is not counted'
-    : notRun.length === 0 ? 'Not a wash trade by any lens'
-    : 'Not flagged by the lenses that ran';
+  const { title, tone } = unread ? { title: 'Not judged', tone: 'clean' as const } : answer(v, 'Flagged as a wash trade');
   const body = unread ? 'No watched collection has a transfer in this transaction, so washtrace has not read it. That is not the same as clean.'
-    : washTrade === null ? 'Its transfers are read, but no analysis has covered them yet. That is not the same as clean.'
+    : washTrade === null ? NOT_JUDGED
     : washTrade ? 'The lenses on the right flag it. The reason is beside each transfer below; open its token to see the whole pattern.'
-    : by.length > 0 ? 'The lens on the right flags it, but Money loops back flags about as many sales as randomly paired wallets do, so it is not counted. The reason is beside each transfer below.'
+    : apartOnly ? `The lens on the right flags it: ${APART_WHY}. The reason is beside each transfer below.`
     : `Its ${transfers.length === 1 ? 'transfer is' : `${transfers.length} transfers are`} read, and no lens that ran flags ${transfers.length === 1 ? 'it' : 'them'}.`;
   return (
     <>
@@ -40,13 +37,13 @@ export default async function TxPage({ params }: Props) {
         sub={<>Transaction · <a className="font-mono hover:underline" href={`${explorer(chainId)}/tx/${tx}`} target="_blank" rel="noreferrer">{tx}</a></>}
       />
       <Answer
-        tone={washTrade ? (by.includes('A') ? 'cycle' : 'money') : by.length > 0 ? 'money' : 'clean'}
+        tone={tone}
         title={title}
         aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} />)}</span> : undefined}
       >
         {body}{notRun.length > 0 && !unread ? ` ${lensList(notRun)} did not run.` : ''}
       </Answer>
-      {transfers.length > 0 ? <Section title="What it moved"><Transfers chainId={chainId} transfers={transfers} collection /></Section> : null}
+      {transfers.length > 0 ? <Section title="What it moved" lead={TINT_LEAD}><Transfers chainId={chainId} transfers={transfers} collection /></Section> : null}
     </>
   );
 }

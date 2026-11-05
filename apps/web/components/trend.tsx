@@ -30,16 +30,17 @@ export interface TimePoint {
  * market. `analyses`: the answer at each run of the worker.
  */
 export type TimeChartProps =
-  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; floor: Lens[]; zone: string }
+  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Lens[]; zone: string }
   | { kind: 'analyses'; points: TimePoint[]; zone: string };
 
 const LENSES = Object.keys(LENS_INFO) as Lens[];
 const NAME = (m: Lens) => LENS_INFO[m].name;
-// Literal class names for Tailwind. Red and amber are close for deutan
-// readers, so Money loops back is also dashed and every series has its own
-// marker shape: identity never rests on hue alone.
-const STROKE: Record<Lens, string> = { A: 'stroke-cycle', AU: 'stroke-money', AC: 'stroke-foreground' };
-const FILL: Record<Lens, string> = { A: 'fill-cycle', AU: 'fill-money', AC: 'fill-foreground' };
+// Literal class names for Tailwind. Money loops back is grey, as everywhere
+// it is shown apart (its lens's tone), never the money hue. It is also dashed
+// and every series has its own marker shape, so identity never rests on hue
+// alone, which deutan readers could not tell apart.
+const STROKE: Record<Lens, string> = { A: 'stroke-cycle', AU: 'stroke-muted-foreground', AC: 'stroke-foreground' };
+const FILL: Record<Lens, string> = { A: 'fill-cycle', AU: 'fill-muted-foreground', AC: 'fill-foreground' };
 const DASH: Record<Lens, string | undefined> = { A: undefined, AU: '5 3', AC: undefined };
 
 const W = 720, H = 230, L = 48, R = 16, T = 12, B = 30;
@@ -161,7 +162,7 @@ export function TimeChart(props: TimeChartProps) {
   const stripMax = history ? Math.max(1, ...points.map((p) => p.sales)) : 1;
   const sy = (v: number) => ST + (1 - v / stripMax) * (SH - ST - SB);
   const ticks = xTicks(from, to, zone);
-  const floor = history ? props.floor : [];
+  const notFinal = history ? props.notFinal : [];
 
   function nearest(clientX: number): number {
     const box = svg.current!.getBoundingClientRect();
@@ -261,7 +262,7 @@ export function TimeChart(props: TimeChartProps) {
                     <span className="pt-1"><Key m={m} /></span>
                     <span className="min-w-0">
                       <span className="font-semibold text-foreground tabular-nums">{v === null ? 'not run' : s === null ? 'no sale' : pctText(s)}</span>{' '}
-                      {s !== null && floor.includes(m) ? <span className="text-muted-foreground">so far </span> : null}
+                      {s !== null && notFinal.includes(m) ? <span className="text-muted-foreground">so far </span> : null}
                       <span className="text-muted-foreground">{NAME(m)}</span>
                       {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{v.part.toLocaleString()} of {v.whole.toLocaleString()} sales</span> : null}
                     </span>

@@ -1,6 +1,5 @@
 import { ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
-
-export type Verdict = 'cycle' | 'money' | 'clean';
+import { toneOf, type Tone } from './metrics';
 
 /** Unordered: A→B and B→A are one pair, and share one fan. */
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -10,15 +9,11 @@ const FAN_MAX = 6;
 
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it. */
 export interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
-export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; verdict: Verdict; title: string; ref: number | null; lx: number; ly: number; label: string }
+export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone; title: string; ref: number | null; lx: number; ly: number; label: string }
 export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[] }
 
-/** Which verdict a transfer's flags amount to. A cycle of the token itself outranks a link through money. */
-export function verdictOf(t: Pick<FlaggedTransfer, 'flags'>): Verdict {
-  if (t.flags.A) return 'cycle';
-  if (t.flags.AU || t.flags.AC) return 'money';
-  return 'clean';
-}
+/** What an edge's title says of its flags: nothing for a clean one, and that an apart lens alone does not count. */
+const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ' · flagged only by Money loops back, not counted' : ' · flagged');
 
 /**
  * One token's graph, as the paper draws it in Figure 8: wallets as nodes,
@@ -73,25 +68,25 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const key = pairKey(t.from, t.to);
     pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
   }
-  const bundles = new Map<string, { first: number; rows: number[]; verdict: Verdict }>();
-  const RANK: Record<Verdict, number> = { clean: 0, money: 1, cycle: 2 };
+  const bundles = new Map<string, { first: number; rows: number[]; tone: Tone }>();
+  const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
 
   const edges: DrawnEdge[] = [];
   transfers.forEach((t, i) => {
     if (t.from === ZERO || t.to === ZERO) return;
     if (pairCount.get(pairKey(t.from, t.to))! > FAN_MAX) {
-      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], verdict: 'clean' as Verdict };
+      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], tone: 'clean' as Tone };
       b.rows.push(i + 1);
-      const v = verdictOf(t);
-      if (RANK[v] > RANK[b.verdict]) b.verdict = v;
+      const v = toneOf(t);
+      if (RANK[v] > RANK[b.tone]) b.tone = v;
       bundles.set(`${t.from}>${t.to}`, b);
       return;
     }
     const k = nextIn(t.from, t.to);
-    const verdict = verdictOf(t);
+    const tone = toneOf(t);
     edges.push({
-      key: `t${i}`, kind: 'asset', verdict, ref: i, label: String(i + 1),
-      title: `#${i + 1} ${t.marketplace ? `sale on ${t.marketplace}` : 'transfer'}${verdict === 'clean' ? '' : ' · flagged'}`,
+      key: `t${i}`, kind: 'asset', tone, ref: i, label: String(i + 1),
+      title: `#${i + 1} ${t.marketplace ? `sale on ${t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
   });
@@ -103,8 +98,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     // Money between the pair keeps the fan, and starts in the middle.
     const k = from < to ? 1 : 2;
     edges.push({
-      key: `b${key}`, kind: 'asset', verdict: b.verdict, ref: b.first, label: `×${b.rows.length}`,
-      title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${b.verdict === 'clean' ? '' : ' · flagged'}`,
+      key: `b${key}`, kind: 'asset', tone: b.tone, ref: b.first, label: `×${b.rows.length}`,
+      title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${flaggedNote(b.tone)}`,
       ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }
@@ -119,7 +114,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const [from, to] = key.split('>') as [string, string];
     const k = nextIn(from, to);
     edges.push({
-      key: `m${key}`, kind: 'money', verdict: 'money', ref: null, label: count > 1 ? `×${count}` : '',
+      key: `m${key}`, kind: 'money', tone: 'money', ref: null, label: count > 1 ? `×${count}` : '',
       title: `${count} money ${count === 1 ? 'flow' : 'flows'}`, ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }

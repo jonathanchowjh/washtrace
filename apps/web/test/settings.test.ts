@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { shownSecret as workerShownSecret, type SettingSource } from '@washtrace/detect';
+import { LOCAL_ONLY } from '@/lib/auth';
 import { FIELDS, configFromSources, shownSecret, variableOf, view } from '@/lib/settings';
 
 type Sources = Record<string, SettingSource & { reportedAt: number }>;
@@ -25,7 +26,6 @@ const checkIdRoute = await import('@/app/api/settings/check/[id]/route');
 const collectionsRoute = await import('@/app/api/collections/route');
 
 const RPC = 'https://eth-mainnet.g.alchemy.com/v2/sEcReTkEyA1B2';
-const READ_ONLY = 'Settings can only be changed from this machine until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
 const PIN = 'The Etherscan key comes from .env, so its URL can only come from .env too. Save an Etherscan key here to change the URL.';
 const MASKED_RPC = 'https://eth-mainnet.g.alchemy.com/••••A1B2';
 const src = (source: 'env' | 'console', value: string | null, env: string | null = null): SettingSource & { reportedAt: number } => ({ source, value, env, reportedAt: 1 });
@@ -322,7 +322,7 @@ describe('POST /api/settings', () => {
     fake.reported = { 'follow.hops': src('env', '3') };
     const res = await settingsRoute.POST(post({ key: 'follow.hops', value: 'many' }));
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe(READ_ONLY);
+    expect((await res.json()).error).toBe(LOCAL_ONLY);
     expect(fake.setSetting).not.toHaveBeenCalled();
   });
 
@@ -395,7 +395,7 @@ describe('POST /api/settings/check', () => {
     auth(false);
     const res = await checkRoute.POST(post({ kind: 'rpc', chainId: 1 }));
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe(READ_ONLY);
+    expect((await res.json()).error).toBe(LOCAL_ONLY);
     expect(fake.requestCheck).not.toHaveBeenCalled();
   });
 });
@@ -419,7 +419,7 @@ describe('GET /api/settings/check/[id]', () => {
     auth(false);
     const res = await checkIdRoute.GET(get(), ctx('42'));
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe(READ_ONLY);
+    expect((await res.json()).error).toBe(LOCAL_ONLY);
     expect(fake.check).not.toHaveBeenCalled();
   });
 });

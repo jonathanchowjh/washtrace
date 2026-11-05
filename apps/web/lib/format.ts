@@ -70,13 +70,14 @@ export function localTime(ms: number, style: TimeStyle = 'datetime', zone?: stri
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 /**
- * The three methods as lenses, strictest first. The paper's names (SCC A, AU,
+ * The three methods as lenses, in the order they are shown. The paper's names (SCC A, AU,
  * AC) stay in the API and README; a reader sees only these.
- * `tone` is the verdict hue: the token's own cycle, or a link through money.
+ * `tone` is the lens's standing as a hue: the token's own cycle, a link
+ * through money, or apart (never counted, so grey everywhere).
  */
 export const LENSES = {
   A: { name: 'Round trips', tone: 'cycle', says: 'The token keeps coming back to wallets that already held it.' },
-  AU: { name: 'Money loops back', tone: 'money', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
+  AU: { name: 'Money loops back', tone: 'apart', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
   AC: { name: 'Linked wallets', tone: 'money', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
 } as const;
 

@@ -71,6 +71,7 @@ export type StoredDataFault = 'missing' | 'mismatch' | 'unreadable' | 'disk';
 export const DOWNLOAD_NOTES = {
   failed: 'Stored data could not be downloaded. Tried again later.',
   disk: 'Not enough disk space to download its stored data. Tried again later.',
+  mismatch: 'Stored data on Hugging Face does not match its manifest. Tried again once it is published again.',
 } as const;
 
 /** Stored data that is missing, changed or malformed. Callers fall back to reading the chain. */
@@ -466,15 +467,16 @@ export async function writeTrail(path: string, trail: { checked: Rows<string>; f
 /**
  * A money trail from `path`, in batches of up to 5,000 rows, checked
  * addresses first. Checked against `sha256` before the first batch, as
- * `readTransfers` is.
+ * `readTransfers` is, unless `verify` is false: the caller found it matching
+ * already, and knows it has not changed since.
  */
-export async function* readTrail(path: string, sha256: string): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
+export async function* readTrail(path: string, sha256: string, verify = true): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
   let checked: string[] = [];
   let flows: Flow[] = [];
   // Where in the file: before a section, at its header, or in its rows.
   let section: typeof CHECKED | typeof FLOWS | null = null;
   let header = false;
-  for await (const text of readLines(path, sha256)) {
+  for await (const text of readLines(path, sha256, verify)) {
     if (text === CHECKED || text === FLOWS) {
       if (text === FLOWS && checked.length > 0) {
         yield { checked, flows: [] };
@@ -560,9 +562,9 @@ async function writeCompressed(path: string, lines: AsyncIterable<string>): Prom
   return { bytes, sha256: hash.digest('hex') };
 }
 
-/** The decompressed lines of `path`, after its sha256 is checked. Empty lines (the last newline) are skipped. */
-async function* readLines(path: string, sha256: string): AsyncIterable<string> {
-  const actual = await sha256File(path);
+/** The decompressed lines of `path`, after its sha256 is checked (unless `verify` is false). Empty lines (the last newline) are skipped. */
+async function* readLines(path: string, sha256: string, verify = true): AsyncIterable<string> {
+  const actual = verify ? await sha256File(path) : sha256;
   if (actual !== sha256) throw new StoredDataError(`${path} does not match its checksum (sha256 ${actual}, expected ${sha256})`, 'mismatch');
   const decompress = createZstdDecompress();
   const source = createReadStream(path);

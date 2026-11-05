@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ZERO, type FlaggedTransfer } from '@washtrace/detect';
-import { layout, verdictOf } from '@/lib/layout';
+import { layout } from '@/lib/layout';
 
 const a = '0x' + 'a'.repeat(40), b = '0x' + 'b'.repeat(40), x = '0x' + 'c'.repeat(40);
 
@@ -8,17 +8,24 @@ function t(from: string, to: string, flags: FlaggedTransfer['flags'] = {}): Flag
   return { txHash: '0x1', logIndex: 0, blockNumber: 1, blockTime: null, tokenId: '1', from, to, marketplace: null, priceWei: null, currency: null, flags };
 }
 
-describe('verdictOf', () => {
-  it('ranks a cycle of the token above a link through money', () => {
-    const scc = { kind: 'scc' as const, wallets: [a, b], cycles: 2 };
-    const pair = { kind: 'pair' as const, pair: [a, b] as [string, string], middle: null, flowTx: '0x2' };
-    expect(verdictOf(t(a, b, { A: scc, AC: scc }))).toBe('cycle');
-    expect(verdictOf(t(a, b, { AC: pair }))).toBe('money');
-    expect(verdictOf(t(a, b))).toBe('clean');
-  });
-});
-
 describe('layout', () => {
+  it('draws a transfer flagged only by Money loops back as apart, saying it is not counted', () => {
+    const pair = { kind: 'pair' as const, pair: [a, b] as [string, string], middle: null, flowTx: '0x2' };
+    const e = layout([t(a, b, { AU: pair })], [], []).edges[0]!;
+    expect(e.tone).toBe('apart');
+    expect(e.title).toContain('not counted');
+    expect(e.title.endsWith(' · flagged')).toBe(false);
+  });
+
+  it('takes the strongest tone for a bundle of more than 6 transfers between one pair', () => {
+    const pair = { kind: 'pair' as const, pair: [a, b] as [string, string], middle: null, flowTx: '0x2' };
+    const scc = { kind: 'scc' as const, wallets: [a, b], cycles: 2 };
+    const ts = [t(a, b, { AU: pair }), t(a, b, { A: scc }), ...Array.from({ length: 5 }, () => t(a, b))];
+    const edges = layout(ts, [], []).edges.filter((e) => e.kind === 'asset');
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.tone).toBe('cycle');
+  });
+
   it('draws no node for the zero address and no edge for a mint', () => {
     const d = layout([t(ZERO, a), t(a, b)], [], []);
     expect(d.nodes.map((n) => n.id)).toEqual([a, b]);

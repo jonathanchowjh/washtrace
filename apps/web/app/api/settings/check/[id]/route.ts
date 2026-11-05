@@ -1,6 +1,5 @@
-import { mayWrite } from '@/lib/auth';
+import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { bad, handle, json } from '@/lib/api';
-import { READ_ONLY } from '@/lib/settings';
 import { store } from '@/lib/store';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -12,7 +11,7 @@ type Ctx = { params: Promise<{ id: string }> };
  */
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(READ_ONLY, 403);
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     const { id } = await params;
     const row = /^\d{1,15}$/.test(id) ? await store().check(Number(id)) : null;
     return row ? json(row) : bad('No such check.', 404);

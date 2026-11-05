@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { Pipeline, PipelineErrors, PipelineTable, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime, short } from '@/lib/format';
-import { coverage, progress } from '@/lib/metrics';
+import { APART_WHY, TRAIL_LOADING, coverage, progress } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensCards } from '@/components/methods';
+import { TimeChart } from '@/components/trend';
 
 afterEach(cleanup);
 
@@ -30,7 +31,7 @@ const withTrail = () => entry({ throughBlock: 10, trail: TRAIL });
 
 interface View {
   entry?: StoredEntry | null; rpc?: ReadonlySet<number>; funding?: boolean; funded?: boolean; trail?: { checked: number; of: number } | null;
-  trailBytes?: number | null; transfersBytes?: number | null; trailComing?: boolean; now?: number; analyzing?: boolean;
+  trailBytes?: number | null; transfersBytes?: number | null; trailComing?: boolean; now?: number; analyzing?: boolean; silent?: boolean;
   /** What coverage() is told: the pill's clock, and whether a key is set (it says true unless told). */
   covNow?: number; covFunding?: boolean;
 }
@@ -39,9 +40,9 @@ interface View {
 function view(c: CollectionRow, o: View = {}) {
   const rpc = o.rpc ?? ON;
   const funding = o.funding ?? true;
-  const stages = pipeline({ c, entry: o.entry ?? null, rpcChains: rpc, funding, analyzing: o.analyzing ?? false });
+  const stages = pipeline({ c, entry: o.entry ?? null, rpcChains: rpc, funding, analyzing: o.analyzing ?? false, silent: o.silent ?? false });
   return render(
-    <Pipeline c={c} stages={stages} cov={coverage(c, rpc, o.covNow ?? 0, 'UTC', o.covFunding ?? true)} why="Waiting" rpcChains={rpc} funding={funding} funded={o.funded}
+    <Pipeline c={c} stages={stages} cov={coverage(c, rpc, o.covNow ?? 0, 'UTC', o.covFunding ?? true, o.silent ?? false)} why="Waiting" rpcChains={rpc} funding={funding} funded={o.funded}
       trail={o.trail} trailBytes={o.trailBytes} transfersBytes={o.transfersBytes} trailComing={o.trailComing} now={o.now} />,
   ).container;
 }
@@ -306,7 +307,7 @@ describe('a money trail loaded from stored data', () => {
 
   it('says in stage 2 that the trail loaded, and how many traders it checked', () => {
     const text = panelOf(loaded(), true, { checked: 1_612, of: 11_259 }).textContent!;
-    expect(text).toContain('Money trail loaded from stored data · 1,612 of 11,259 traders checked');
+    expect(text).toContain('Money trail loaded from stored data · 1,612 of 11,259 traders in the trail checked');
   });
 
   it('says how many money searches stopped at the visit cap, in plain English', () => {
@@ -320,7 +321,7 @@ describe('a money trail loaded from stored data', () => {
   it('leaves the numbers out when the manifest no longer describes the trail that loaded', () => {
     const text = panelOf(loaded(), true, null).textContent!;
     expect(text).toContain('Money trail loaded from stored data');
-    expect(text).not.toContain('traders checked');
+    expect(text).not.toContain('traders in the trail checked');
   });
 
   it('never says no funding source is set while the trail feeds the money lenses, and says what a key adds', () => {
@@ -343,7 +344,7 @@ describe('a money trail loaded from stored data', () => {
     expect(text).not.toContain('Using the stored money trail');
     // Funded by the trail: the count and the bar, as before.
     const ok = view(loaded(), { entry: withTrail(), funding: false, funded: true }).textContent!;
-    expect(ok).toContain('1,612 of 11,259 trading wallets');
+    expect(ok).toContain('1,612 of 11,259 wallets that traded it, busiest first');
   });
 
   it('never says wallets are being checked when nothing checks them', () => {
@@ -377,11 +378,13 @@ describe('a money trail loaded from stored data', () => {
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ latest, wallets: 80, fundedWallets: 20 });
     const checking = trust(c, coverage(c, ON, 0))!;
-    expect(checking).toBe('25% of wallets checked for money so far, so Money loops back and Linked wallets are not final: checking the rest can move them either way.');
+    expect(checking).toBe('25% of wallets that traded it checked for money so far, so Money loops back and Linked wallets are not final: checking the rest can move them either way.');
     expect(checking).not.toMatch(/floors|rise|at least/);
     const idle = trust(c, coverage(c, ON, 0, 'UTC', false))!;
-    expect(idle).toBe('25% of wallets were checked for money, so Money loops back and Linked wallets are not final: with no Etherscan key the rest go unchecked.');
+    expect(idle).toBe('25% of wallets that traded it were checked for money, so Money loops back and Linked wallets are not final: with no Etherscan key the rest go unchecked.');
     expect(idle).not.toMatch(/floors|rise|at least/);
+    // The summary names the same set as stage 5.
+    expect(render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container.textContent).toContain('25%of wallets that traded it checked for money');
   });
 
   it("trust says each wallet's money is checked once", () => {
@@ -394,19 +397,20 @@ describe('a money trail loaded from stored data', () => {
   it('LensCards says shares are so far, and why Money loops back is not in the range', () => {
     const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
     const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const text = render(<LensCards totals={all} selected="A" href={() => '#'} floor={['AU', 'AC']}>{null}</LensCards>).container.textContent!;
+    const { container } = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={['AU', 'AC']}>{null}</LensCards>);
+    const text = container.textContent!;
     expect(text).not.toContain('at least');
-    expect(text).toContain('25%of salesso far');
-    expect(text).toContain('30%of salesso far');
-    expect(text.match(/so far/g)).toHaveLength(2);
-    expect(text).toContain('Not in the range above: on real data it flags about as many sales as randomly paired wallets do.');
+    // Each share reads as its own parts, in order: the figure, what it is of, and that it is so far.
+    const parts = [...container.querySelectorAll('p')].filter((p) => p.textContent!.includes('so far')).map((p) => [...p.querySelectorAll('span')].map((x) => x.textContent));
+    expect(parts).toEqual([['25%', 'of sales', 'so far'], ['30%', 'of sales', 'so far']]);
+    expect(text).toContain(`Not in the range above: ${APART_WHY}.`);
   });
 
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
     const cards = (trail: boolean, funded: boolean) =>
-      render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+      render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
     expect(cards(true, true)).not.toMatch(/no funding source/i);
     expect(cards(true, true)).toContain('The stored money trail is loaded');
     expect(cards(true, true)).toContain('the next analysis runs this lens');
@@ -417,7 +421,7 @@ describe('a money trail loaded from stored data', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
     const cards = (trail: boolean, funded: boolean) =>
-      render(<LensCards totals={all} selected="A" href={() => '#'} floor={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+      render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
     // Its trail checked no wallet, and there is no key: nothing to run on.
     const empty = cards(true, false);
     expect(empty).not.toContain('next analysis');
@@ -508,7 +512,8 @@ describe('downloading stored data', () => {
       const c = row({ latest, ...more });
       return [...view(c, { entry: withTrail(), funding: false, covFunding: false, trailComing }).querySelectorAll('li')][4]!.textContent!;
     };
-    for (const c of [{ trailProgress: 0.41 }, { downloadFile: 'trail' as const, downloadProgress: 0.2 }]) {
+    // A trail queued but not yet downloading waits for it too.
+    for (const c of [{ trailProgress: 0.41 }, { downloadFile: 'trail' as const, downloadProgress: 0.2 }, {}]) {
       const text = step2(c, true);
       expect(text).toContain('Waiting');
       expect(text).not.toContain('Off');
@@ -521,7 +526,7 @@ describe('downloading stored data', () => {
       cleanup();
     }
     // Nothing on its way, a trail that checked no wallet, or paused: it needs a key, never "Off".
-    for (const [more, coming] of [[{}, true], [{ trailProgress: 0.41 }, false], [{ trailProgress: 0.41, pausedAt: 1 }, true]] as const) {
+    for (const [more, coming] of [[{}, false], [{ trailProgress: 0.41 }, false], [{ trailProgress: 0.41, pausedAt: 1 }, false]] as const) {
       const text = step2(more, coming);
       expect(text).toContain('pausedAt' in more ? 'Paused' : 'Needs a key');
       expect(text).not.toContain('Off');
@@ -559,7 +564,7 @@ describe('the six stages', () => {
   it('shows the six stages in order, each with its state and what it feeds', () => {
     const c = row();
     const lis = [...panel(c).querySelectorAll('li')];
-    const stages = pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false });
+    const stages = pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false, silent: false });
     expect(lis).toHaveLength(6);
     lis.forEach((li, i) => {
       expect(li.textContent).toContain(TITLES[i]);
@@ -678,18 +683,18 @@ describe('the six stages', () => {
 
   it('the summary says what blocks the reading, with the link', () => {
     const c = row();
-    const stages = pipeline({ c, entry: null, rpcChains: NONE, funding: false, analyzing: false });
+    const stages = pipeline({ c, entry: null, rpcChains: NONE, funding: false, analyzing: false, silent: false });
     const el = render(<ReadingSummary c={c} cov={coverage(c, NONE, 0)} href="#reading" stages={stages} />).container;
     expect(el.textContent).toContain('Add an RPC URL in Settings →');
     expect([...el.querySelectorAll('a')].map((a) => a.textContent)).toContain('The six stages ↓');
     expect(el.textContent).not.toContain('The three steps');
     cleanup();
     // Nothing blocked, nothing said; and a paused collection is blocked by nothing.
-    const free = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" stages={pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false })} />).container;
+    const free = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" stages={pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false, silent: false })} />).container;
     expect(free.textContent).not.toContain('Blocked');
     cleanup();
     const paused = row({ pausedAt: 5 });
-    const pausedEl = render(<ReadingSummary c={paused} cov={coverage(paused, NONE, 0)} href="#reading" stages={pipeline({ c: paused, entry: null, rpcChains: NONE, funding: false, analyzing: false })} />).container;
+    const pausedEl = render(<ReadingSummary c={paused} cov={coverage(paused, NONE, 0)} href="#reading" stages={pipeline({ c: paused, entry: null, rpcChains: NONE, funding: false, analyzing: false, silent: false })} />).container;
     expect(pausedEl.textContent).not.toContain('Blocked');
   });
 });
@@ -699,7 +704,7 @@ describe('the reading, said once and truthfully', () => {
   const analysed = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
   const summary = (c: CollectionRow, o: { rpc?: ReadonlySet<number>; funding?: boolean; analyzing?: boolean } = {}) => {
     const rpc = o.rpc ?? ON;
-    const stages = pipeline({ c, entry: null, rpcChains: rpc, funding: o.funding ?? true, analyzing: o.analyzing ?? false });
+    const stages = pipeline({ c, entry: null, rpcChains: rpc, funding: o.funding ?? true, analyzing: o.analyzing ?? false, silent: false });
     return render(<ReadingSummary c={c} cov={coverage(c, rpc, 0)} href="#reading" stages={stages} />).container.textContent!;
   };
 
@@ -765,7 +770,7 @@ describe('the reading, said once and truthfully', () => {
     expect(four).toContain('Paused · no RPC is set for Ethereum.');
     expect(four).not.toContain('last error');
     cleanup();
-    const rows = [{ chainId: 1, address: '0xa1', name: 'Demo', error: 'No RPC is configured for chain 1.', storedOnly: false, paused: true, rpc: false, stages: pipeline({ c, entry: null, rpcChains: NONE, funding: true, analyzing: false }) }];
+    const rows = [{ chainId: 1, address: '0xa1', name: 'Demo', error: 'No RPC is configured for chain 1.', storedOnly: false, paused: true, rpc: false, stages: pipeline({ c, entry: null, rpcChains: NONE, funding: true, analyzing: false, silent: false }) }];
     const el = render(<PipelineErrors rows={rows} />).container;
     expect(el.textContent).toContain('Paused · no RPC is set for Ethereum.');
     expect(el.textContent).not.toContain('last error');
@@ -773,7 +778,7 @@ describe('the reading, said once and truthfully', () => {
 
   it('the table shows a running download rounded down, and its name cell opens the row from its whole width', () => {
     const c = row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.416 });
-    const stages = pipeline({ c, entry: entry(), rpcChains: ON, funding: true, analyzing: false });
+    const stages = pipeline({ c, entry: entry(), rpcChains: ON, funding: true, analyzing: false, silent: false });
     const el = render(<PipelineTable rows={[{ chainId: 1, address: '0xabc', name: 'Demo', stages }]} />).container;
     expect(el.querySelector('tbody tr')!.textContent).toContain('41%');
     expect(el.querySelector('tbody tr')!.textContent).not.toContain('42%');
@@ -785,10 +790,10 @@ describe('the reading, said once and truthfully', () => {
 
 describe('the worker page\'s stages', () => {
   const stages = (c: CollectionRow, o: { rpc?: ReadonlySet<number>; funding?: boolean } = {}) =>
-    pipeline({ c, entry: null, rpcChains: o.rpc ?? ON, funding: o.funding ?? true, analyzing: false });
+    pipeline({ c, entry: null, rpcChains: o.rpc ?? ON, funding: o.funding ?? true, analyzing: false, silent: false });
 
   it('PipelineTable shows one row per collection, a column per stage, each cell its state, the name linking to its stages', () => {
-    const running = pipeline({ c: row({ restoreProgress: 0.5, storedThroughTime: null }), entry: entry(), rpcChains: ON, funding: true, analyzing: false });
+    const running = pipeline({ c: row({ restoreProgress: 0.5, storedThroughTime: null }), entry: entry(), rpcChains: ON, funding: true, analyzing: false, silent: false });
     const rows = [
       { chainId: 1, address: '0xabc', name: 'Demo', stages: running },
       { chainId: 1, address: '0xdef', name: null, stages: stages(row()) },
@@ -839,5 +844,100 @@ describe('the worker page\'s stages', () => {
     expect(items[1]!.textContent).toContain('Paused · last error before the pause: old');
     expect(items[1]!.className).not.toContain('text-fault');
     expect(el.textContent).not.toContain('No RPC is configured');
+  });
+});
+
+describe('a silent worker', () => {
+  const silent = (c: CollectionRow) => coverage(c, ON, 0, 'UTC', true, true);
+  const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 4, wallets: 4, truncatedSearches: 0,
+    totals: { A: { available: true }, AU: { available: true }, AC: { available: true } } } as unknown as CollectionRow['latest'];
+
+  it('the summary says Silent, with its own sentences, and none of the progress ones', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 4, cursorBlock: null, startBlock: null });
+    const text = render(<ReadingSummary c={c} cov={silent(c)} href="#reading" />).container.textContent!;
+    expect(text).toContain('Silent');
+    expect(text).toContain('The worker is not reporting, so nothing here is kept current');
+    expect(text).toContain('The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.');
+    expect(text).not.toContain('Finding where the collection begins');
+    expect(text).not.toContain('Every transfer to the finalized head is read');
+  });
+
+  it('the stages show no chip reading Running or Following, and no up-to-date line', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 2 });
+    const el = view(c, { silent: true });
+    const chips = [...el.querySelectorAll('li > p > span.ml-auto')].map((x) => x.textContent);
+    expect(chips).toContain('Worker silent');
+    expect(chips).not.toContain('Running');
+    expect(chips).not.toContain('Following');
+    expect(el.textContent).not.toContain('Up to date · following new blocks');
+  });
+
+  it('a silent load still says the chain waits on it, and stages 1 to 3 each give a sentence', () => {
+    const c = row({ cursorBlock: null, startBlock: null, latest: null, restoreProgress: 0.5 });
+    const items = [...view(c, { entry: entry(), silent: true }).querySelectorAll('li')].map((x) => x.textContent!);
+    expect(items.join()).not.toContain('Finding the deployment block');
+    expect(items[3]).toContain('Waiting for the stored data to load');
+    expect(items[1]).toContain('Load stopped reporting · the worker is silent');
+    expect(items[1]).not.toContain('Loading');
+    expect(items[0]).toContain('Downloaded from stored data.');
+    const down = row({ cursorBlock: null, startBlock: null, latest: null, downloadFile: 'transfers', downloadProgress: 0.4 });
+    const first = [...view(down, { entry: entry(), silent: true }).querySelectorAll('li')][0]!.textContent!;
+    expect(first).toContain('Download stopped reporting · the worker is silent');
+    expect(first).not.toContain('Downloading');
+    cleanup();
+    const third = [...view(row({ latest: { ...latest!, throughBlock: 3 }, storedThroughTime: 1, storedThroughBlock: 5, wallets: 4, fundedWallets: 4 }), { entry: entry(), silent: true, analyzing: true }).querySelectorAll('li')][2]!.textContent!;
+    expect(third).toContain('Analysis stopped reporting · the worker is silent');
+    expect(third).not.toContain('Analysing');
+  });
+
+  it('a caught-up stage 4 says what was read, not that it is the finalized head; stage 6 does not say nothing is new', () => {
+    const el = view(row({ latest, wallets: 4, fundedWallets: 4 }), { silent: true, analyzing: true });
+    const items = [...el.querySelectorAll('li')].map((x) => x.textContent!);
+    expect(items[3]).toContain('5 transfers read, to block 10, before the worker went silent');
+    expect(items[3]).not.toContain('finalized head');
+    expect(items[5]).toContain('the worker is silent, so nothing new is read');
+    expect(items[5]).not.toContain('nothing new since');
+  });
+
+  it('the pill says it, and its dot does not pulse', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 4 });
+    const el = render(<ReadingPill cov={silent(c)} />).container;
+    expect(el.textContent).toBe('Worker silent · not kept current');
+    expect(el.querySelector('.animate-pulse')).toBeNull();
+  });
+});
+
+describe('a money trail on its way', () => {
+  it('the pill of a stored-only collection ends money trail loading', () => {
+    const c = row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, trailProgress: 0.3 });
+    const text = render(<ReadingPill cov={coverage(c, new Set(), Date.UTC(2026, 9, 23))} />).container.textContent!;
+    expect(text).toBe(`Stored data · 9 days unsynced${TRAIL_LOADING}`);
+    expect(text.endsWith('money trail loading')).toBe(true);
+  });
+
+  it('the lens cards of a collection with no funding say it is on its way, never that a key is needed', () => {
+    const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
+    const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
+    const text = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} coming>{null}</LensCards>).container.textContent!;
+    expect(text).toContain('Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it.');
+    expect(text).not.toContain('once the worker reports again');
+    expect(text).not.toMatch(/needs a key/i);
+  });
+
+  it('the lens cards say the trail waits on the worker while it is silent', () => {
+    const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
+    const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
+    const text = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} coming silent>{null}</LensCards>).container.textContent!;
+    expect(text).toContain('Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it, once the worker reports again.');
+  });
+});
+
+describe('the time chart', () => {
+  it('draws Money loops back grey, as it is everywhere it is shown apart, keeping its dash and its square', () => {
+    const point = (at: number) => ({ at, lens: { A: { part: 1, whole: 10 }, AU: { part: 2, whole: 10 }, AC: { part: 3, whole: 10 } }, sales: 10, transfers: 10 });
+    const el = render(<TimeChart kind="analyses" points={[point(0), point(86_400_000)]} zone="UTC" />).container;
+    expect(el.querySelector('.stroke-money, .fill-money')).toBeNull();
+    expect(el.querySelector('polyline.stroke-muted-foreground')?.getAttribute('stroke-dasharray')).toBe('5 3');
+    expect(el.querySelector('rect.fill-muted-foreground')).not.toBeNull();
   });
 });

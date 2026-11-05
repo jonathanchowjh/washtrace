@@ -212,6 +212,26 @@ export type CheckKind = 'rpc' | 'etherscan';
 /** The channel `requestCheck` notifies, so a listening worker runs the check at once rather than next pass. */
 export const CHECKS_CHANNEL = 'washtrace_checks';
 
+/** What was typed into a search, read: the console's `parseSearch` makes it, and `Store.search` answers it. */
+export type Parsed =
+  | { kind: 'tx'; tx: string }
+  | { kind: 'address'; address: string }
+  | { kind: 'prefix'; prefix: string }
+  | { kind: 'token'; tokenId: string; text: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'empty' };
+
+export type SearchKind = 'collections' | 'tokens' | 'wallets' | 'trades';
+
+export interface SearchHits {
+  collections: { chainId: number; address: string; name: string | null; symbol: string | null }[];
+  tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number }[];
+  wallets: { chainId: number; address: string; transfers: number }[];
+  trades: { chainId: number; txHash: string; address: string; name: string | null; tokenId: string }[];
+  /** That kind had a row past `limit`: it is cut, and says so. */
+  more: Record<SearchKind, boolean>;
+}
+
 /** A collection waiting for analysis, as `Store.stale` reads it. */
 export type StaleRow = Awaited<ReturnType<Store['stale']>>[number];
 
@@ -674,7 +694,10 @@ export class Store {
    * Only then is the trail's sha recorded, its progress cleared and every
    * collection on the chain queued for analysis, in one statement. A load
    * cut off anywhere is safe to run again from the start, and ends as one
-   * clean run does. Returns how many wallets and flows the trail held.
+   * clean run does. It need not start there: each batch of flows commits with
+   * the count of the trail's flows in so far (trail_resume), so a run of the
+   * same trail skips those, still counting them for `onFlows`, and the last
+   * statement deletes the count. Returns how many wallets and flows the trail held.
    *
    * It runs for an hour on a big trail, in the background (see
    * Worker.startTrailImport), so `onFlows` hears the running count of flows
@@ -689,11 +712,29 @@ export class Store {
     id: number, chainId: number, sha256: string, open: () => AsyncIterable<{ checked: string[]; flows: Flow[] }>,
     opts: { onFlows?: (flows: number) => void; signal?: AbortSignal } = {},
   ): Promise<{ wallets: number; flows: number }> {
+    // Flows an earlier import of this same trail committed: skipped, not written again.
+    // On a connection of its own, as each of the import's statements is.
+    const { rows: resumed } = await this.trailStatement((c) => c.query<{ flows: string }>('SELECT flows FROM washtrace.trail_resume WHERE collection_id = $1 AND sha = $2', [id, sha256]));
+    const done = Number(resumed[0]?.flows ?? 0);
     let flows = 0;
     for await (const batch of open()) {
       opts.signal?.throwIfAborted();
-      await deadlockRetried(() => this.trailStatement((c) => insertFlows(c, chainId, batch.flows))).catch((err) => { throw asDataFault(err); });
+      const fresh = batch.flows.slice(Math.max(0, done - flows));
       flows += batch.flows.length;
+      // Still said, so the progress moves through what is skipped: those flows are in.
+      if (flows <= done && done > 0) {
+        opts.onFlows?.(flows);
+        continue;
+      }
+      // The count goes in with the flows it counts, so it never says more than committed.
+      await deadlockRetried(() => this.trailStatement(async (c) => {
+        await insertFlows(c, chainId, fresh);
+        await c.query(
+          `INSERT INTO washtrace.trail_resume (collection_id, sha, flows) VALUES ($1, $2, $3)
+           ON CONFLICT (collection_id) DO UPDATE SET sha = EXCLUDED.sha, flows = EXCLUDED.flows`,
+          [id, sha256, flows],
+        );
+      })).catch((err) => { throw asDataFault(err); });
       opts.onFlows?.(flows);
     }
     let wallets = 0;
@@ -720,14 +761,18 @@ export class Store {
       wallets += addresses.length;
     }
     // Locked in id order, so two writers of the chain's collections never wait on each other in a circle.
-    await deadlockRetried(() => this.trailStatement((c) => c.query(
-      `UPDATE washtrace.collections SET version = version + 1,
-         trail_imported_sha = CASE WHEN id = $2 THEN $3 ELSE trail_imported_sha END,
-         trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END,
-         trail_progress = CASE WHEN id = $2 THEN NULL ELSE trail_progress END
-       WHERE id IN (SELECT id FROM washtrace.collections WHERE chain_id = $1 ORDER BY id FOR NO KEY UPDATE)`,
-      [chainId, id, sha256],
-    )));
+    await deadlockRetried(() => this.trailStatement(async (c) => {
+      await c.query(
+        `UPDATE washtrace.collections SET version = version + 1,
+           trail_imported_sha = CASE WHEN id = $2 THEN $3 ELSE trail_imported_sha END,
+           trail_note = CASE WHEN id = $2 THEN NULL ELSE trail_note END,
+           trail_progress = CASE WHEN id = $2 THEN NULL ELSE trail_progress END
+         WHERE id IN (SELECT id FROM washtrace.collections WHERE chain_id = $1 ORDER BY id FOR NO KEY UPDATE)`,
+        [chainId, id, sha256],
+      );
+      // Loaded whole: nothing to go on from.
+      await c.query('DELETE FROM washtrace.trail_resume WHERE collection_id = $1', [id]);
+    }));
     return { wallets, flows };
   }
 
@@ -1386,6 +1431,64 @@ export class Store {
       [chainId, txHash],
     );
     return rows.map(toFlagged);
+  }
+
+  /**
+   * What a search finds, by what was typed: each kind fetches `limit + 1` so
+   * `more` can say it was cut. `only` reads one kind, for its own paged view.
+   */
+  async search(p: Parsed, opts: { limit?: number; offset?: number; only?: SearchKind } = {}): Promise<SearchHits> {
+    const limit = opts.limit ?? 20;
+    const want = (k: SearchKind) => opts.only === undefined || opts.only === k;
+    const more: SearchHits['more'] = { collections: false, tokens: false, wallets: false, trades: false };
+    const hits: SearchHits = { collections: [], tokens: [], wallets: [], trades: [], more };
+    const cut = <T>(rows: T[], k: SearchKind): T[] => { more[k] = rows.length > limit; return rows.slice(0, limit); };
+    const page = [limit + 1, opts.offset ?? 0];
+    const collections = async (where: string, arg: string) => cut((await this.pool.query(
+      `SELECT c.chain_id, c.address, c.name, c.symbol FROM washtrace.collections c WHERE ${where} ORDER BY c.name, c.id LIMIT $2 OFFSET $3`,
+      [arg, ...page],
+    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, symbol: r.symbol })), 'collections');
+    // The wallet index leads with chain_id, and only a chain with a watched collection can hold a wallet.
+    const wallets = async (where: string, arg: string) => cut((await this.pool.query(
+      `SELECT chain_id, address, transfers FROM washtrace.wallets
+       WHERE chain_id IN (SELECT DISTINCT chain_id FROM washtrace.collections) AND ${where}
+       ORDER BY transfers DESC, chain_id, address LIMIT $2 OFFSET $3`,
+      [arg, ...page],
+    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, transfers: r.transfers })), 'wallets');
+
+    if ((p.kind === 'text' || p.kind === 'token') && want('collections')) {
+      // `%`, `_` and `\` are only themselves in what a person typed.
+      const like = `%${p.text.replace(/[\\%_]/g, '\\$&')}%`;
+      hits.collections = await collections('(c.name ILIKE $1 OR c.contract_name ILIKE $1 OR c.symbol ILIKE $1)', like);
+    }
+    if (p.kind === 'token' && want('tokens')) {
+      // One index probe per collection: Postgres 17 has no skip scan over transfers_token_idx.
+      const { rows } = await this.pool.query(
+        `SELECT c.chain_id, c.address, c.name, x.n FROM washtrace.collections c CROSS JOIN LATERAL (
+           SELECT count(*)::int AS n FROM washtrace.transfers t WHERE t.collection_id = c.id AND t.token_id = $1::numeric) x
+         WHERE x.n > 0 ORDER BY x.n DESC, c.id LIMIT $2 OFFSET $3`,
+        [p.tokenId, ...page],
+      );
+      hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n })), 'tokens');
+    }
+    if (p.kind === 'address') {
+      if (want('collections')) hits.collections = await collections('c.address = $1', p.address);
+      if (want('wallets')) hits.wallets = await wallets('address = $1', p.address);
+    }
+    if (p.kind === 'prefix') {
+      // Hex has no `%` or `_`, so the prefix needs no escaping.
+      if (want('collections')) hits.collections = await collections(`c.address LIKE $1 || '%'`, p.prefix);
+      if (want('wallets')) hits.wallets = await wallets(`address LIKE $1 || '%'`, p.prefix);
+    }
+    if (p.kind === 'tx' && want('trades')) {
+      const { rows } = await this.pool.query(
+        `SELECT c.chain_id, t.tx_hash, c.address, c.name, t.token_id::text AS token_id ${TRANSFERS}
+         WHERE t.tx_hash = $1 ORDER BY c.id, t.log_index LIMIT $2 OFFSET $3`,
+        [p.tx, ...page],
+      );
+      hits.trades = cut(rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades');
+    }
+    return hits;
   }
 
   // ---- worker passes ------------------------------------------------------

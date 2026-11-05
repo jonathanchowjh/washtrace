@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, PassRow } from '@washtrace/detect';
-import { status, workerSilent, type Notice, type Snapshot } from '@/lib/status';
+import { jobState, status, workerSilent, type Notice, type Snapshot } from '@/lib/status';
 import { eta, localTime } from '@/lib/format';
 
 const NOW = 1_800_000_000_000;
@@ -404,6 +404,22 @@ describe('status', () => {
     const report = status(snapshot(), NOW);
     expect(report.config).toEqual({ chains: [1], funding: true });
     expect(JSON.stringify(report)).not.toContain('secret');
+  });
+});
+
+describe('jobState', () => {
+  const running = (more: Partial<PassRow>) => pass('analyze', 10 * MIN, { finishedAt: null, outcome: null, heartbeatAt: NOW - 5_000, ...more });
+
+  it('says why a pass is stalled', () => {
+    expect(jobState(running({ heartbeatAt: NOW - 3 * MIN }), 'analyze', NOW)).toEqual({ state: 'stalled', why: 'silent' });
+    expect(jobState(running({ startedAt: NOW - 24 * 3_600_000, heartbeatAt: NOW - 5_000 }), 'analyze', NOW)).toEqual({ state: 'stalled', why: 'stuck' });
+    expect(jobState(pass('fund', 24 * 3_600_000), 'fund', NOW)).toEqual({ state: 'stalled', why: 'overdue' });
+  });
+
+  it('gives no reason when it is not stalled', () => {
+    expect(jobState(running({}), 'analyze', NOW)).toEqual({ state: 'running', why: null });
+    expect(jobState(undefined, 'analyze', NOW)).toEqual({ state: 'never', why: null });
+    expect(jobState(pass('fund', 2_000), 'fund', NOW)).toEqual({ state: 'ok', why: null });
   });
 });
 

@@ -5,6 +5,7 @@ import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { Empty, Head } from '@/components/head';
 import { LensName, Ranked } from '@/components/methods';
+import { Pager } from '@/components/pager';
 import { Wallet } from '@/components/transfers';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
 import { LENSES, short } from '@/lib/format';
@@ -87,21 +88,7 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
         )}
       </div>
 
-      {pages > 1 ? (
-        <nav aria-label="Pages" className="mt-4 flex max-w-3xl flex-wrap items-center justify-between gap-3 text-sm">
-          <span className="text-muted-foreground tabular-nums">{(offset + 1).toLocaleString()}–{Math.min(total, offset + PAGE).toLocaleString()} of {total.toLocaleString()}</span>
-          <span className="flex items-center gap-1">
-            <PageLink to={page > 1 ? href({ page: page - 1 }) : null}>← Previous</PageLink>
-            <span className="px-2 text-muted-foreground tabular-nums">Page {page} of {pages.toLocaleString()}</span>
-            <PageLink to={page < pages ? href({ page: page + 1 }) : null}>Next →</PageLink>
-          </span>
-        </nav>
-      ) : null}
+      {pages > 1 ? <div className="max-w-3xl"><Pager total={total} page={page} size={PAGE} href={(n) => href({ page: n })} label={kind} /></div> : null}
     </>
   );
-}
-
-function PageLink({ to, children }: { to: string | null; children: React.ReactNode }) {
-  if (to === null) return <span className="rounded-md border px-2.5 py-1 text-muted-foreground opacity-50">{children}</span>;
-  return <Link href={to} className="rounded-md border bg-card px-2.5 py-1 font-medium text-foreground hover:bg-muted">{children}</Link>;
 }

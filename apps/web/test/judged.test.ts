@@ -24,6 +24,7 @@ vi.mock('@/lib/store', () => ({ store: () => fake }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { txView } = await import('@/lib/views');
+const { toneOf, answer } = await import('@/lib/metrics');
 const { GET: transfersRoute } = await import('@/app/api/transfers/[chain]/[tx]/route');
 const { GET: tokenRoute } = await import('@/app/api/collections/[chain]/[address]/tokens/[tokenId]/route');
 
@@ -68,6 +69,9 @@ describe('what a transaction answers', () => {
     const res = await tokenRoute(new Request('http://x'), { params: Promise.resolve({ chain: '1', address: A1, tokenId: '1' }) });
     const body = await res.json();
     expect(Object.keys(body.transfers[0].flags)).toEqual(['A']);
+    expect(body).toMatchObject({ washTrade: true, judged: true, methods: ['A'], apartOnly: false, notRun: ['AU', 'AC'] });
+    expect(body).not.toHaveProperty('latest');
+    expect(body).not.toHaveProperty('by');
   });
 
   it('a token with no transfers is 404, saying No transfer of this token is read.', async () => {
@@ -78,5 +82,28 @@ describe('what a transaction answers', () => {
     expect(await res.json()).toEqual({ error: 'No transfer of this token is read.' });
     const unwatched = await tokenRoute(new Request('http://x'), { params: Promise.resolve({ chain: '1', address: A2, tokenId: '7' }) });
     expect(await unwatched.json()).toEqual({ error: 'This collection is not watched.' });
+  });
+});
+
+describe('toneOf', () => {
+  const w = flag;
+  it('reads a trade by the strongest counted lens, and AU alone as apart', () => {
+    expect(toneOf({ flags: { A: w } })).toBe('cycle');
+    expect(toneOf({ flags: { AC: w } })).toBe('money');
+    expect(toneOf({ flags: { AU: w } })).toBe('apart');
+    expect(toneOf({ flags: { AU: w, AC: w } })).toBe('money');
+    expect(toneOf({ flags: {} })).toBe('clean');
+  });
+});
+
+describe('answer', () => {
+  const v = { judged: true, washTrade: false, by: [] as Method[], apartOnly: false, notRun: [] as Method[] };
+  it('says one title and tone per rung', () => {
+    expect(answer({ ...v, washTrade: true, by: ['AC'] }, 'X')).toEqual({ title: 'X', tone: 'money' });
+    expect(answer({ ...v, washTrade: true, by: ['A', 'AC'] }, 'X')).toEqual({ title: 'X', tone: 'cycle' });
+    expect(answer({ ...v, judged: false, washTrade: null }, 'X')).toEqual({ title: 'Not judged yet', tone: 'clean' });
+    expect(answer({ ...v, by: ['AU'], apartOnly: true }, 'X')).toEqual({ title: 'Flagged only by Money loops back, which is not counted', tone: 'apart' });
+    expect(answer(v, 'X')).toEqual({ title: 'Not flagged by any lens', tone: 'clean' });
+    expect(answer({ ...v, notRun: ['AU', 'AC'] }, 'X')).toEqual({ title: 'Not flagged by the lenses that ran', tone: 'clean' });
   });
 });

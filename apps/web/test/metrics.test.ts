@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { analyzingOn, coverage, judged, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { APART_WHY, TRAIL_LOADING, analyzingOn, coverage, judged, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -59,9 +59,9 @@ describe('range', () => {
 });
 
 describe('evidenceLead', () => {
-  const apart = 'Money loops back is shown apart: on real data it flags about as many sales as randomly paired wallets do, so it is not counted. Choose a lens to see the tokens and wallets it flags.';
+  const apart = `Money loops back is shown apart: ${APART_WHY}. Choose a lens to see the tokens and wallets it flags.`;
   it('names Round trips and Linked wallets as the two ends when both ran', () => {
-    expect(evidenceLead(DEMO)).toBe(`Round trips and Linked wallets are the two ends of the range above. ${apart}`);
+    expect(evidenceLead(DEMO)).toBe(`Round trips and Linked wallets are the two ends of the range above. Between a third and a half of what Linked wallets adds over Round trips is chance. ${apart}`);
   });
   it('says Round trips is the whole range when Linked wallets has not run', () => {
     expect(evidenceLead(OFF)).toBe(`Round trips is the whole range above: Linked wallets has not run. ${apart}`);
@@ -104,13 +104,13 @@ describe('coverage', () => {
   it('is complete at the finalized head with every wallet checked', () => {
     const c = cov(row());
     expect(c.reading).toBe('complete');
-    expect(c.floor).toEqual([]);
+    expect(c.notFinal).toEqual([]);
   });
 
   it('marks the money lenses as floors while wallets are still being checked', () => {
     const c = cov(row({ fundedWallets: 20 }));
     expect(c.reading).toBe('checking');
-    expect(c.floor).toEqual(['AU', 'AC']);
+    expect(c.notFinal).toEqual(['AU', 'AC']);
   });
 
   it('is loading stored data while a load runs, with how far it has got', () => {
@@ -165,7 +165,7 @@ describe('coverage', () => {
 
   it('is analyzing, not up to date, once every transfer is read but before the first analysis counts the wallets', () => {
     const c = cov(row({ latest: null, wallets: 0, fundedWallets: 0 }));
-    expect([c.reading, c.label, c.floor]).toEqual(['analyzing', 'Analyzing', []]);
+    expect([c.reading, c.label, c.notFinal]).toEqual(['analyzing', 'Analyzing', []]);
     expect(cov(row({ latest: null, analysisError: 'out of memory' })).label).toBe('First analysis failed');
   });
 
@@ -210,7 +210,7 @@ describe('coverage', () => {
       expect(idle.reading).toBe('complete');
       expect(idle.label).toBe('Up to date');
       // Still floors: an unchecked wallet hides links, key or not.
-      expect(idle.floor).toEqual(['AU', 'AC']);
+      expect(idle.notFinal).toEqual(['AU', 'AC']);
     }
     expect(coverage(row({ fundedWallets: 20 }), new Set([1]), 0, 'UTC', true).reading).toBe('checking');
   });
@@ -228,6 +228,54 @@ describe('coverage', () => {
 
   it('is starting before the deployment block is known', () => {
     expect(cov(row({ startBlock: null, cursorBlock: null })).reading).toBe('starting');
+  });
+});
+
+describe('coverage of a silent worker', () => {
+  const silent = (c: CollectionRow, rpc: ReadonlySet<number> = ON) => coverage(c, rpc, 0, 'UTC', true, true);
+
+  it('reads a complete collection as silent, never as up to date', () => {
+    const c = silent(row());
+    expect(c).toMatchObject({ reading: 'silent', label: 'Worker silent · not kept current' });
+  });
+
+  it('reads a download as silent and draws no bar for it', () => {
+    const c = silent(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers', downloadProgress: 0.4 }));
+    expect(c.reading).toBe('silent');
+    expect(c.download).toBeNull();
+    expect(silent(row({ restoreProgress: 0.4 })).restore).toBeNull();
+  });
+
+  it('keeps the readings that claim no progress', () => {
+    expect(silent(row({ pausedAt: 5 })).reading).toBe('paused');
+    const stored = row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, trailProgress: 0.3 });
+    const c = silent(stored, new Set());
+    expect(c.reading).toBe('stored-only');
+    expect(c.label).toMatch(/^Stored data · stops /);
+    expect(c.trail).toBeNull();
+    expect(c.label).not.toContain(TRAIL_LOADING);
+  });
+});
+
+describe('coverage of a money trail on its way', () => {
+  const stored = (more: Partial<CollectionRow> = {}) => row({ startBlock: 100, cursorBlock: 900, headBlock: null, storedThroughTime: Date.UTC(2026, 9, 14), storedThroughBlock: 900, ...more });
+
+  it('carries the trail share and says so on a stored-only label', () => {
+    const c = coverage(stored({ trailProgress: 0.3 }), new Set(), 0);
+    expect(c.trail).toBe(0.3);
+    expect(c.label.endsWith(TRAIL_LOADING)).toBe(true);
+  });
+
+  it('reads a trail download too, and caps it below done', () => {
+    expect(cov(row({ downloadFile: 'trail', downloadProgress: 0.4 })).trail).toBe(0.4);
+    expect(cov(row({ trailProgress: 1 })).trail).toBe(0.99);
+    expect(cov(row({ downloadFile: 'trail', downloadProgress: 0.4 })).label).toBe(`Up to date${TRAIL_LOADING}`);
+  });
+
+  it('is null with no trail, for a transfers download, and when paused', () => {
+    expect(cov(row()).trail).toBeNull();
+    expect(cov(row({ downloadFile: 'transfers', downloadProgress: 0.4 })).trail).toBeNull();
+    expect(cov(row({ trailProgress: 0.3, pausedAt: 5 })).trail).toBeNull();
   });
 });
 
@@ -363,6 +411,16 @@ describe('waiting', () => {
     expect(waiting(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, ON, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
     // Being tried again now.
     expect(waiting(failing, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
+  });
+
+  it('claims no download, load or analysis while the worker is silent, but still says a pause', () => {
+    const said = 'Not analysed yet · the worker is silent, so nothing is read or analysed until it reports again.';
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    // A stalled pass on it is not an analysis running.
+    expect(waiting(fresh, pass({ startedAt: NOW - 47 * 60_000, heartbeatAt: NOW - 40 * 60_000 }), names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(waiting(fresh, undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(waiting(row({ latest: null, pausedAt: 1 }), undefined, names, ON, NOW, 'UTC', true)).toBe('Paused · it is not analysed until you resume it.');
   });
 
   it('knows which collection the running analyze pass is on', () => {

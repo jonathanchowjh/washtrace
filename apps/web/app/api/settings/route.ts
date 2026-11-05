@@ -1,6 +1,6 @@
-import { ACTOR_HEADER, mayWrite } from '@/lib/auth';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { bad, handle, json, readJson } from '@/lib/api';
-import { FIELDS, READ_ONLY, pinned } from '@/lib/settings';
+import { FIELDS, pinned } from '@/lib/settings';
 import { store } from '@/lib/store';
 import { settingsView } from '@/lib/views';
 
@@ -24,7 +24,7 @@ export async function GET(req: Request): Promise<Response> {
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(READ_ONLY, 403);
+    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
     const body = await readJson(req);
     if (body instanceof Response) return body;
     const field = FIELDS.find((f) => f.key === body.key);

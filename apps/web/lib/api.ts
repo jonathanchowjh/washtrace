@@ -65,7 +65,7 @@ export function tokenIdOf(raw: string): string | null {
   return /^\d{1,78}$/.test(raw) ? BigInt(raw).toString() : null;
 }
 
-/** AC by default: the paper's widest method, and a superset of A. */
+/** AC by default: the lens that counts the most, and a superset of Round trips. */
 export function methodOf(raw: string | null | undefined): Method {
   return METHODS.includes(raw as Method) ? (raw as Method) : 'AC';
 }

@@ -2,13 +2,13 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
 import { LENSES, eth, pct } from '@/lib/format';
-import { part, type Range } from '@/lib/metrics';
+import { APART, APART_WHY, part, type Range } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
-const DOT = { cycle: 'bg-cycle', money: 'bg-money' } as const;
-const TEXT = { cycle: 'text-cycle', money: 'text-money' } as const;
+const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
+const TEXT = { cycle: 'text-cycle', money: 'text-money', apart: 'text-muted-foreground' } as const;
 
 /** A lens by its name, with its verdict hue. */
 export function LensName({ m, className }: { m: Method; className?: string }) {
@@ -27,8 +27,8 @@ export function LensName({ m, className }: { m: Method; className?: string }) {
  */
 export function LensPicture({ m, className }: { m: Method; className?: string }) {
   const node = 'fill-card stroke-foreground';
-  const asset = LENSES[m].tone === 'cycle' ? 'stroke-cycle' : 'stroke-money';
-  const head = LENSES[m].tone === 'cycle' ? 'fill-cycle' : 'fill-money';
+  const asset = m === 'A' ? 'stroke-cycle' : 'stroke-money';
+  const head = m === 'A' ? 'fill-cycle' : 'fill-money';
   return (
     <svg viewBox="0 0 72 36" className={cn('h-9 w-[72px] shrink-0', className)} aria-hidden>
       <defs>
@@ -85,7 +85,7 @@ export function RangeKey({ range }: { range: Range }) {
   );
 }
 
-const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money' } as const;
+const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground' } as const;
 const SEAM = { A: 'md:rounded-tl-none', AU: '', AC: 'md:rounded-tr-none' } as const;
 
 /**
@@ -94,12 +94,16 @@ const SEAM = { A: 'md:rounded-tl-none', AU: '', AC: 'md:rounded-tr-none' } as co
  * panel, so what is listed is visibly that card's, with nothing between them.
  * A lens that could not run says why in grey.
  */
-export function LensCards({ totals, selected, href, floor, trail = false, funded = false, children }: {
-  totals: Record<Method, MethodTotals>; selected: Method; href: (m: Method) => string; floor: readonly Method[];
+export function LensCards({ totals, selected, href, notFinal, trail = false, funded = false, coming = false, silent = false, children }: {
+  totals: Record<Method, MethodTotals>; selected: Method; href: (m: Method) => string; notFinal: readonly Method[];
   /** This collection loaded a money trail from stored data. */
   trail?: boolean;
   /** The next analysis has funding to run the money lenses on: a key, or this collection's trail with checked wallets. */
   funded?: boolean;
+  /** A stored money trail with checked wallets is on its way (trailComing): the money lenses run on it once it has loaded. */
+  coming?: boolean;
+  /** No pass has reported (workerSilent): a trail on its way loads only once the worker reports again. */
+  silent?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -119,13 +123,13 @@ export function LensCards({ totals, selected, href, floor, trail = false, funded
                 <LensPicture m={m} className={on ? undefined : 'opacity-70 group-hover:opacity-100'} />
               </div>
               <p className="text-sm text-muted-foreground">{LENSES[m].says}</p>
-              {m === 'AU' ? <p className="text-xs text-muted-foreground">Not in the range above: on real data it flags about as many sales as randomly paired wallets do.</p> : null}
+              {APART.includes(m) ? <p className="text-xs text-muted-foreground">Not in the range above: {APART_WHY}.</p> : null}
               {t.available ? (
                 <div className="mt-auto">
                   <p className="flex items-baseline gap-1.5">
                     <span className={cn('text-2xl font-semibold tabular-nums', t.flaggedSales > 0 ? TEXT[LENSES[m].tone] : 'text-foreground')}>{pct(s.part, s.whole)}</span>
                     <span className="text-sm text-muted-foreground">of sales</span>
-                    {floor.includes(m) ? <span className="text-xs text-muted-foreground">so far</span> : null}
+                    {notFinal.includes(m) ? <span className="text-xs text-muted-foreground">so far</span> : null}
                   </p>
                   <p className="text-xs text-muted-foreground tabular-nums">
                     {t.flaggedSales.toLocaleString()} of {t.sales.toLocaleString()} sales · {eth(t.flaggedVolumeWei)} · {t.tokens.toLocaleString()} tokens · {t.wallets.toLocaleString()} wallets
@@ -134,7 +138,9 @@ export function LensCards({ totals, selected, href, floor, trail = false, funded
                 </div>
               ) : (
                 <p className="mt-auto text-sm text-muted-foreground">
-                  {funded
+                  {coming && !funded
+                    ? `Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it${silent ? ', once the worker reports again' : ''}.`
+                    : funded
                     ? (trail ? 'Not run yet. The stored money trail is loaded, so it says who paid whom, and the next analysis runs this lens on it.' : 'Not run yet. A funding source is set, and the next analysis runs this lens.')
                     : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and it needs a key: add an Etherscan key in Settings (<code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>).</>}
                 </p>
@@ -178,15 +184,15 @@ function sales(totals: Record<Method, MethodTotals>, m: Method): { part: number;
  * period they happened in. A lens that did not run in the latest analysis
  * is drawn as not run in every period, never as 0%.
  */
-export function History({ timeline, totals, floor, now, zone }: {
-  timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; floor: Method[]; now: number; zone: string;
+export function History({ timeline, totals, notFinal, now, zone }: {
+  timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; notFinal: Method[]; now: number; zone: string;
 }) {
   if (timeline.points.length === 0) return null;
   const points: TimePoint[] = timeline.points.map((q) => {
     const lens = (m: Method) => (totals[m].available ? { part: q.flaggedSales[m], whole: q.sales } : null);
     return { at: q.at, lens: { A: lens('A'), AU: lens('AU'), AC: lens('AC') }, sales: q.sales, transfers: q.transfers };
   });
-  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} floor={floor} zone={zone} />;
+  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} />;
 }
 
 /** The three lenses side by side: what washtrace looks for, before any number. */
@@ -221,7 +227,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
  * with the share of its own trades flagged. `start` numbers a later page.
  */
 export function Ranked({ title, unit, rows, tone, empty, more = null, start = 0 }: {
-  title: string; unit: string; empty: string; tone: 'cycle' | 'money'; more?: { href: string; label: string } | null; start?: number;
+  title: string; unit: string; empty: string; tone: 'cycle' | 'money' | 'apart'; more?: { href: string; label: string } | null; start?: number;
   rows: { key: string; label: ReactNode; flagged: number; of: number }[];
 }) {
   return (
@@ -236,7 +242,7 @@ export function Ranked({ title, unit, rows, tone, empty, more = null, start = 0 
             <li key={r.key} className="grid grid-cols-[minmax(0,1fr)_6rem_5.5rem] items-center gap-3 border-b px-3 py-2 last:border-b-0">
               <span className="flex min-w-0 items-baseline gap-2"><span className="w-6 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{start + i + 1}</span><span className="truncate">{r.label}</span></span>
               <span aria-hidden className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <i className={cn('block h-full rounded-full', tone === 'cycle' ? 'bg-cycle' : 'bg-money')} style={{ width: `${(r.flagged / Math.max(1, r.of)) * 100}%` }} />
+                <i className={cn('block h-full rounded-full', DOT[tone])} style={{ width: `${(r.flagged / Math.max(1, r.of)) * 100}%` }} />
               </span>
               <span className="text-right text-xs tabular-nums"><span className="font-medium text-foreground">{r.flagged}</span> of {r.of}</span>
             </li>

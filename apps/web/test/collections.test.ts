@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RULES } from '@washtrace/detect';
-import { changedRules, configChange, effectiveRules } from '@/lib/collections';
+import { RULE_LABELS, configChange, effectiveRules, rulesNote } from '@/lib/collections';
 
 describe('configChange', () => {
   it('passes rules through, with null meaning back to the default', () => {
@@ -38,19 +38,25 @@ describe('effectiveRules', () => {
   });
 });
 
-describe('changedRules', () => {
+describe('rulesNote', () => {
   it('says each changed rule with its default', () => {
-    expect(changedRules({ minCycles: 50 })).toBe(`Rules changed for this collection: minCycles 50 (default ${RULES.minCycles}). Its numbers are not the built-in lenses' numbers.`);
+    expect(rulesNote({ minCycles: 50 })).toBe(`Rules changed for this collection: ${RULE_LABELS.minCycles} 50 (default ${RULES.minCycles}). Analyses from the change on run under them, so their numbers are not the built-in lenses' numbers.`);
+  });
+
+  it('names a rule for a reader, never by its key', () => {
+    const text = rulesNote({ minCycles: 3 })!;
+    expect(text).toContain('(default 2)');
+    expect(text).not.toContain('minCycles');
   });
 
   it('joins two changed rules in RULE_NAMES order', () => {
     const [first, second] = Object.keys(RULES) as [keyof typeof RULES, keyof typeof RULES];
-    const text = changedRules({ [second]: RULES[second] + 1, [first]: RULES[first] + 1 })!;
-    expect(text).toContain(`${first} ${RULES[first] + 1} (default ${RULES[first]}), ${second} ${RULES[second] + 1} (default ${RULES[second]})`);
+    const text = rulesNote({ [second]: RULES[second] + 1, [first]: RULES[first] + 1 })!;
+    expect(text).toContain(`${RULE_LABELS[first]} ${RULES[first] + 1} (default ${RULES[first]}), ${RULE_LABELS[second]} ${RULES[second] + 1} (default ${RULES[second]})`);
   });
 
   it('is null when nothing differs from its default', () => {
-    expect(changedRules({})).toBeNull();
-    expect(changedRules({ minCycles: RULES.minCycles })).toBeNull();
+    expect(rulesNote({})).toBeNull();
+    expect(rulesNote({ minCycles: RULES.minCycles })).toBeNull();
   });
 });

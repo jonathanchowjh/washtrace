@@ -1,4 +1,5 @@
 import { bad, chainOf, handle, json, txOf } from '@/lib/api';
+import { verdictFields } from '@/lib/metrics';
 import { txView } from '@/lib/views';
 
 /**
@@ -17,8 +18,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chain: 
     const chainId = chainOf(p.chain);
     const tx = txOf(p.tx);
     if (chainId === null || tx === null) return bad('Not a chain id and transaction hash.', 404);
-    const { transfers, washTrade, judged, by } = await txView(chainId, tx);
-    if (transfers.length === 0) return bad('No watched collection has a transfer in this transaction.', 404);
-    return json({ chainId, tx, washTrade, judged, methods: by, transfers });
+    const view = await txView(chainId, tx);
+    if (view.transfers.length === 0) return bad('No watched collection has a transfer in this transaction.', 404);
+    return json({ chainId, tx, ...verdictFields(view), transfers: view.transfers });
   });
 }

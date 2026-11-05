@@ -212,9 +212,6 @@ export function view(settings: ReadonlyMap<string, string>, sources: Record<stri
   });
 }
 
-/** The 403 every settings write and Test answers to someone who may not change settings: anyone could otherwise change them, or spend the RPC quota. */
-export const READ_ONLY = 'Settings can only be changed from this machine until basic auth is on: set WASHTRACE_USERNAME and WASHTRACE_PASSWORD.';
-
 /** What the page says to someone who may change settings with no basic auth on: they can only be on this machine, but it is open to anyone there. */
 export const OPEN = 'Anyone who can reach this console on this machine can change these. Set WASHTRACE_USERNAME and WASHTRACE_PASSWORD before putting it online.';
 

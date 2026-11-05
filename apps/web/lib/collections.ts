@@ -1,8 +1,10 @@
 import { RULES, type Configure, type Rules } from '@washtrace/detect';
 
 /**
- * The body of a change to a collection's settings: what to store, or the
- * sentence that says what is wrong with it, which the route answers as a 400.
+ * A collection's rules: the body of a change to them, the sentence that says
+ * what is wrong with one, and how a reader is told which differ from the
+ * defaults. Here, not in format.ts: the values come from the detect package,
+ * which the client components that import format.ts must not pull in.
  */
 
 const RULE_NAMES = Object.keys(RULES) as (keyof Rules)[];
@@ -32,11 +34,20 @@ export function configChange(body: Record<string, unknown>): Configure | string 
   return change;
 }
 
+/** Each rule as a reader names it, from what the rule's doc in detect's methods.ts says it limits. */
+export const RULE_LABELS: Record<keyof Rules, string> = {
+  minCycles: 'cycles a pattern needs',
+  reachDepth: 'longest money path followed',
+  hubDegree: 'most wallets one wallet may link before it counts as an exchange or router',
+  visitCap: 'wallets one money search may visit',
+};
+
 /** Which of a collection's rules differ from the defaults, said with each default; null when none does. */
-export function changedRules(rules: Partial<Rules>): string | null {
+export function rulesNote(rules: Partial<Rules>): string | null {
   const changed = RULE_NAMES.filter((k) => rules[k] !== undefined && rules[k] !== RULES[k]);
   if (changed.length === 0) return null;
-  return `Rules changed for this collection: ${changed.map((k) => `${k} ${rules[k]} (default ${RULES[k]})`).join(', ')}. Its numbers are not the built-in lenses' numbers.`;
+  const list = changed.map((k) => `${RULE_LABELS[k]} ${rules[k]} (default ${RULES[k]})`).join(', ');
+  return `Rules changed for this collection: ${list}. Analyses from the change on run under them, so their numbers are not the built-in lenses' numbers.`;
 }
 
 /** The rules a collection's analysis runs under. */

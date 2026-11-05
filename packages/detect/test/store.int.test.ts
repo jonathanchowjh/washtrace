@@ -9,7 +9,7 @@ import { Chain } from '../src/chain.js';
 import { Etherscan } from '../src/etherscan.js';
 import { workerConfig } from '../src/env.js';
 import { HttpRequestError } from 'viem';
-import { chain, flow, input, w } from './fixtures.js';
+import { chain, flow, input, transfer, w } from './fixtures.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,12 +63,12 @@ describe('Store.schemaVersion', () => {
 
 describe('Store', () => {
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(18);
-    expect(await store.schemaVersion()).toBe(18);
-    expect(await store.migrate()).toBe(18);
-    expect(await store.migrate()).toBe(18);
+    expect(await store.migrate()).toBe(20);
+    expect(await store.schemaVersion()).toBe(20);
+    expect(await store.migrate()).toBe(20);
+    expect(await store.migrate()).toBe(20);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 18 }]);
+    expect(rows).toEqual([{ version: 20 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -77,7 +77,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(18);
+      expect(await store.migrate()).toBe(20);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -91,7 +91,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
-      expect(await store.migrate()).toBe(18);
+      expect(await store.migrate()).toBe(20);
       const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
       expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
     } finally {
@@ -110,7 +110,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(18);
+      expect(await store.migrate()).toBe(20);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -1473,6 +1473,36 @@ describe('Store', () => {
       expect(totals).toEqual([0, 2, 3]);
     });
 
+    it('importTrail cut off in its flows goes on from the last batch that committed, not from the start', async () => {
+      const id = await before(40, w('40c1'));
+      const pairs = async () => (await flowRows(40)).map((r) => [r.from_address, r.to_address]);
+      const abort = new AbortController();
+      await store.importTrail(id, 40, 'feed', trailOf(...trail), { onFlows: (n) => { if (n >= 2) abort.abort('stopped'); }, signal: abort.signal }).catch(() => {});
+      // Gone behind the import's back: a run from the start would put it back.
+      await store.pool.query('DELETE FROM washtrace.flows WHERE chain_id = 40 AND from_address = $1 AND to_address = $2', [q, m]);
+      const totals: number[] = [];
+      await store.importTrail(id, 40, 'feed', trailOf(...trail), { onFlows: (n) => totals.push(n) });
+      // The progress moves through the batches that committed, and only the third is written.
+      expect(totals).toEqual([0, 2, 3]);
+      expect(await pairs()).not.toContainEqual([q, m]);
+      expect(await pairs()).toContainEqual([m, p]);
+      expect(await store.collection(40, w('40c1'))).toMatchObject({ trailImportedSha: 'feed' });
+      // A finished import leaves nothing to go on from: loaded again, it reads from the start.
+      await store.importTrail(id, 40, 'feed', trailOf(...trail));
+      expect(await pairs()).toContainEqual([q, m]);
+    });
+
+    it('importTrail starts another trail from its start, whatever an earlier one got to', async () => {
+      const id = await before(41, w('41c1'));
+      const abort = new AbortController();
+      await store.importTrail(id, 41, 'feed', trailOf(...trail), { onFlows: (n) => { if (n >= 2) abort.abort('stopped'); }, signal: abort.signal }).catch(() => {});
+      await store.pool.query('DELETE FROM washtrace.flows WHERE chain_id = 41 AND from_address = $1 AND to_address = $2', [q, m]);
+      const totals: number[] = [];
+      await store.importTrail(id, 41, 'cafe', trailOf(...trail), { onFlows: (n) => totals.push(n) });
+      expect(totals).toEqual([0, 2, 3]);
+      expect((await flowRows(41)).map((r) => [r.from_address, r.to_address])).toContainEqual([q, m]);
+    });
+
     it('importTrail retries a statement that deadlocks', async () => {
       const clean = await before(24, w('24c1'));
       await store.importTrail(clean, 24, 'feed', trailOf(...trail));
@@ -1713,5 +1743,71 @@ describe('Store', () => {
         });
       });
     });
+  });
+});
+
+describe('Store.search', () => {
+  const hex = (s: string) => '0x' + s.padEnd(40, '0');
+  const c1 = hex('5ea0'), c2 = hex('5eb0');
+  const tx = '0x' + 'd'.repeat(64);
+  const alice = hex('ab12'), bob = hex('ab34'), carol = hex('cd56');
+
+  it('finds collections by name, tokens by number in each collection, wallets by the start of their address, and trades by hash', async () => {
+    await store.migrate();
+    const one = (await store.addCollection(1, c1, 'Searchable Apes', 1)).id;
+    const two = (await store.addCollection(10, c2, 'Searchable Cats', 1)).id;
+    await store.ingest(one, 1, [...chain('7', alice, bob), ...chain('8', alice)], 100, [alice, bob, alice]);
+    await store.ingest(two, 10, [transfer('7', carol, alice, { txHash: tx })], 100, [carol, alice]);
+    try {
+      // A name, on every chain, in any case; `%` and `_` are only themselves.
+      const byName = await store.search({ kind: 'text', text: 'SEARCHABLE' });
+      expect(byName.collections.map((r) => r.address).sort()).toEqual([c1, c2]);
+      expect(byName.more.collections).toBe(false);
+      expect((await store.search({ kind: 'text', text: '100%' })).collections).toEqual([]);
+      expect((await store.search({ kind: 'text', text: '%' })).collections).toEqual([]);
+
+      // Token 7 is in both collections, token 8 in one; busiest first.
+      const tokens = (await store.search({ kind: 'token', tokenId: '7', text: '7' })).tokens;
+      expect(tokens.map((r) => [r.address, r.tokenId, r.transfers])).toEqual([[c1, '7', 2], [c2, '7', 1]]);
+      expect((await store.search({ kind: 'token', tokenId: '8', text: '8' })).tokens.map((r) => r.address)).toEqual([c1]);
+      expect((await store.search({ kind: 'token', tokenId: '999', text: '999' })).tokens).toEqual([]);
+
+      // Wallets by the start of their address, collections by the start of theirs.
+      const wallets = (await store.search({ kind: 'prefix', prefix: '0xab' })).wallets;
+      // A wallet is per chain: alice is on both, busiest first.
+      expect(wallets.map((r) => [r.chainId, r.address, r.transfers])).toEqual([[1, alice, 2], [1, bob, 1], [10, alice, 1]]);
+      expect((await store.search({ kind: 'prefix', prefix: '0x5ea' })).collections.map((r) => r.address)).toEqual([c1]);
+      expect((await store.search({ kind: 'address', address: c2 })).collections.map((r) => r.address)).toEqual([c2]);
+      expect((await store.search({ kind: 'address', address: carol })).wallets.map((r) => r.address)).toEqual([carol]);
+
+      // A transaction.
+      expect((await store.search({ kind: 'tx', tx })).trades).toEqual([{ chainId: 10, txHash: tx, address: c2, name: 'Searchable Cats', tokenId: '7' }]);
+      expect(await store.search({ kind: 'empty' })).toMatchObject({ collections: [], tokens: [], wallets: [], trades: [] });
+    } finally {
+      await drop(1, c1);
+      await drop(10, c2);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[alice, bob, carol]]);
+    }
+  });
+
+  it('pages a kind: one more than the limit says there is more, an offset moves on, and `only` leaves the other kinds alone', async () => {
+    await store.migrate();
+    const addrs: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const a = hex(`5ec${i}`);
+      addrs.push(a);
+      await store.addCollection(1, a, `Pageable ${i}`, 1);
+    }
+    try {
+      const first = await store.search({ kind: 'text', text: 'pageable' }, { limit: 2 });
+      expect(first.collections.map((r) => r.name)).toEqual(['Pageable 0', 'Pageable 1']);
+      expect(first.more.collections).toBe(true);
+      const last = await store.search({ kind: 'text', text: 'pageable' }, { limit: 2, offset: 4 });
+      expect(last.collections.map((r) => r.name)).toEqual(['Pageable 4']);
+      expect(last.more.collections).toBe(false);
+      expect((await store.search({ kind: 'address', address: addrs[0]! }, { only: 'wallets' })).collections).toEqual([]);
+    } finally {
+      for (const a of addrs) await drop(1, a);
+    }
   });
 });

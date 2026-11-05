@@ -185,6 +185,13 @@ describe('stored money trail', () => {
     await expect(collect(readTrail(path, written.sha256.replace(/^./, (ch) => (ch === '0' ? '1' : '0'))))).rejects.toBeInstanceOf(StoredDataError);
   });
 
+  it('readTrail told the file was checked already reads it without its sha256', async () => {
+    const path = join(dir, 'checked.trail.csv.zst');
+    await writeTrail(path, { checked, flows });
+    const batches = await collect(readTrail(path, 'f'.repeat(64), false));
+    expect(batches.flatMap((x) => x.flows)).toEqual(flows);
+  });
+
   it('refuses a value with a comma on write', async () => {
     const path = join(dir, 'comma.trail.csv.zst');
     await expect(writeTrail(path, { checked, flows: [flow(a, b, { token: 'x,y' })] })).rejects.toBeInstanceOf(StoredDataError);

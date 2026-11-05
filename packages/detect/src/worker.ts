@@ -6,7 +6,7 @@ import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisReques
 import { Chain } from './chain.js';
 import { Etherscan, WALLET_MS } from './etherscan.js';
 import { ZERO } from './graph.js';
-import { HUB, download, fetchManifest, hubUrl, partPath } from './hub.js';
+import { HUB, download, fetchManifest, hubUrl, partPath, removeStaleParts } from './hub.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { CHECKS_CHANNEL, type CheckKind, type CollectionRow, type FundingLane, type SettingSource, type StaleRow, type Store } from './store.js';
 import {
@@ -357,6 +357,14 @@ export class Worker {
   private hubFailing = false;
   /** The download running in this process, outside every pass (see startDownload). One at a time. */
   private downloading: { id: number; file: 'transfers' | 'trail'; abort: AbortController; done: Promise<void> } | null = null;
+  /**
+   * The URLs of downloads whose bytes did not match the manifest's sha256. A
+   * URL names one file at one publish, so it is not fetched again until the
+   * Hub publishes again (a new revision, so a new URL) or the worker
+   * restarts: tried each back-off, a broken publish of a trail would be a
+   * gigabyte an hour for as long as it stays up.
+   */
+  private readonly mismatched = new Set<string>();
   /** Downloads that failed, by collection, timed as the store times them: kept here too, as restoreFailed is, since the write that records the back-off can fail with the download (a full disk). */
   private readonly downloadsFailed = new Map<number, { failures: number; retryAt: number }>();
   /** Analyses that failed, by collection, timed as Store.analysisFailed times them: kept here too, as downloadsFailed is, since the write that records the wait can fail with the analysis. */
@@ -467,9 +475,10 @@ export class Worker {
   /**
    * Read each collection's next spans of finalized transfers. Collections at
    * the head first, then each backfill within its own slice of the budget.
-   * Before any of that, and outside the budget, load the stored data of any
-   * collection it reaches further for: it needs no RPC, and is the head
-   * start the chain is then read on from. Stored data not on disk yet is
+   * Before any of that, and outside the budget, load the stored data of one
+   * collection it reaches further for (see restore): it needs no RPC, and is
+   * the head start the chain is then read on from. A collection whose load
+   * waits for a later pass is not read meanwhile. Stored data not on disk yet is
    * downloaded in the background, and a collection waiting for its
    * transfers is not read meanwhile (see downloads). A money trail on disk
    * imports in the background too, and holds nothing (see trails).
@@ -479,7 +488,7 @@ export class Worker {
     let collections = await this.store.collections();
     await this.askHub(collections, storedRepo);
     const manifest = await this.storedManifest();
-    const restored = manifest === null ? 0 : await this.restore(collections, manifest);
+    const { loaded: restored, waiting } = manifest === null ? { loaded: 0, waiting: new Set<number>() } : await this.restore(collections, manifest);
     // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
     if (restored > 0) collections = await this.store.collections();
     // After every load of stored data, so a trail waits for its collection's transfers.
@@ -489,6 +498,8 @@ export class Worker {
     // A chain with no RPC has nothing to read, so its collections are settled here and hold no slice of the budget.
     const readable: CollectionRow[] = [];
     for (const c of collections) {
+      // Its load is next pass's: read now, it would be read from its deploy block for nothing.
+      if (waiting.has(c.id)) continue;
       if (held.has(c.id)) {
         // Its stored data is on the way: read from where that stops, not from here. Not a fault meanwhile: clears a "No RPC" left from before.
         this.logged.delete(c.id);
@@ -571,13 +582,29 @@ export class Worker {
     this.hubAskedAt = now;
     this.hubRepo = repo;
     try {
-      const manifest = await this.fetchHubManifest(repo);
+      const manifest = await this.fetchHubManifest(repo) ?? { version: 2, collections: [] };
       await mkdir(this.stored, { recursive: true });
-      await writeManifest(join(this.stored, 'manifest.json'), manifest ?? { version: 2, collections: [] });
+      await writeManifest(join(this.stored, 'manifest.json'), manifest);
       this.hubFailing = false;
+      await this.sweepParts(manifest);
     } catch (err) {
       if (!this.hubFailing) console.warn('[washtrace] stored data not fetched from Hugging Face: %s. The manifest on disk is used, if there is one.', this.scrubbed(err));
       this.hubFailing = true;
+    }
+  }
+
+  /**
+   * Delete the download parts the manifest just fetched names no file for
+   * (removeStaleParts). Under the download lock, so never a part a download
+   * in any replica is writing; one held means a download runs, and the sweep
+   * waits for the next ask. Fail-soft.
+   */
+  private async sweepParts(manifest: Manifest): Promise<void> {
+    try {
+      const removed = await this.store.locked(DOWNLOAD_JOB, false, () => removeStaleParts(this.stored, manifest));
+      if (removed !== 'skipped' && removed.length > 0) console.info('[washtrace] removed %d stale download parts: %s', removed.length, removed.join(', '));
+    } catch (err) {
+      console.warn('[washtrace] stale download parts not removed: %s', this.scrubbed(err));
     }
   }
 
@@ -596,15 +623,18 @@ export class Worker {
   }
 
   /**
-   * Load the stored data of every collection that needs it (see
-   * needsRestore), one at a time, and say how many loaded. This runs in
-   * the ingest pass, under its lock, so no span is read into a collection
-   * while it loads. A load that fails has said why on the collection, and
+   * Load the stored data of the first collection that needs it (see
+   * needsRestore), and say how many loaded and which others wait their turn.
+   * One a pass: this runs in the ingest pass, under its lock, so no span is
+   * read into a collection while it loads, and every other collection's
+   * reading waits for it; with six to load, they would wait for all six. A load that fails has said why on the collection, and
    * its chain is read as if there were no stored data. A note about stored
    * data the collection no longer reaches for says nothing true, and goes.
    */
-  private async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<number> {
+  private async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<{ loaded: number; waiting: Set<number> }> {
     let loaded = 0;
+    let tried = false;
+    const waiting = new Set<number>();
     for (const c of collections) {
       if (c.pausedAt !== null) continue;
       const entry = entryFor(manifest, c.chainId, c.address);
@@ -620,6 +650,11 @@ export class Worker {
       if (!this.restoreDue(c, entry, noted, Date.now())) continue;
       // Not on disk yet, and the Hub has it: it is downloaded first (see downloads). Loaded now, it would only be noted missing.
       if (await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) continue;
+      if (tried) {
+        waiting.add(c.id);
+        continue;
+      }
+      tried = true;
       // Taken before the load, so a file replaced while it runs is tried again.
       const key = noted ?? await this.restoreKey(entry);
       await this.beat('ingest', `Loading stored data for ${c.name ?? entry.name}`, c.id);
@@ -637,7 +672,7 @@ export class Worker {
         }
       }
     }
-    return loaded;
+    return { loaded, waiting };
   }
 
   /** Whether to load a collection's stored data now: needsRestore, and no back-off held here (restoreFailed) still running. */
@@ -701,6 +736,12 @@ export class Worker {
       if (c.pausedAt !== null) continue;
       if (entry?.trail == null) {
         // No trail in the manifest any more: a note about one says nothing true.
+        if (c.trailNote !== null) await this.noteTrail(c.id, null);
+        continue;
+      }
+      // Imported already: the file has nothing more to give, so it is not hashed (a gigabyte, at every start).
+      // Its import cleared any note; one written since is about a file that no longer matters.
+      if (c.trailImportedSha === entry.trail.sha256) {
         if (c.trailNote !== null) await this.noteTrail(c.id, null);
         continue;
       }
@@ -806,14 +847,15 @@ export class Worker {
     let movedAt = Date.now();
     const watch = setInterval(() => { if (Date.now() - movedAt >= TRAIL_STALL_MS) abort.abort('stalled' satisfies Halt); }, STALL_CHECK_MS);
     watch.unref?.();
-    const read = () => this.storedTrail(path, file.sha)[Symbol.asyncIterator]();
+    // Found matching moments ago (shaOnDisk): hashed again only if it has changed since, as that cache trusts.
+    const read = async () => this.storedTrail(path, file.sha, (await statKey(path)) !== file.key)[Symbol.asyncIterator]();
     // The store asks for a batch once the one before it committed: that is the import moving. Each pass ends
     // only once the progress written so far has landed, so none lands after the last statement clears it.
     // A read is raced against the abort, so one that never returns is still given up; no statement runs
     // during a read, so none is left running under the lock. A statement waiting on a lock ends by
     // its own timeout (Store.trailLockTimeout).
     const open = () => (async function* () {
-      const batches = read();
+      const batches = await read();
       try {
         for (;;) {
           const next = await orAborted(batches.next(), abort.signal);
@@ -884,14 +926,8 @@ export class Worker {
    * file changes.
    */
   private async shaOnDisk(path: string): Promise<{ key: string; sha: string } | null> {
-    let key: string;
-    try {
-      const s = await stat(path);
-      key = `${s.mtimeMs} ${s.size}`;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
+    const key = await statKey(path);
+    if (key === null) return null;
     const known = this.shas.get(path);
     if (known?.file === key) return { key, sha: known.sha };
     const sha = await this.fileSha(path);
@@ -904,9 +940,9 @@ export class Worker {
     return sha256File(path);
   }
 
-  /** A money trail, checked against `sha256` first, as each read of it is. Tests override it on the instance. */
-  storedTrail(path: string, sha256: string): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
-    return readTrail(path, sha256);
+  /** A money trail, checked against `sha256` first unless `verify` is false (see readTrail). Tests override it on the instance. */
+  storedTrail(path: string, sha256: string, verify: boolean): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
+    return readTrail(path, sha256, verify);
   }
 
   /** The stored-data manifest; empty when there is none. Tests override it on the instance. */
@@ -960,13 +996,15 @@ export class Worker {
       for (const c of collections) {
         const entry = entryFor(manifest, c.chainId, c.address);
         if (c.pausedAt !== null || entry === null) continue;
-        const due = !this.downloadWaits(c, now);
+        const waits = this.downloadWaits(c, now);
+        // A file whose bytes did not match at this publish: the same bytes would come again (see mismatched).
+        const due = (file: 'transfers' | 'trail') => !waits && !this.mismatched.has(hubUrl(repo, revision, storedFile(entry.chainId, entry.address, file)));
         // No key: a note on an earlier load is about the file as it stood, which the download replaces.
         if (needsRestore(c, entry, null, now) && await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) {
           // Downloading in some replica (the row says so to all of them), or about to here.
-          if (due || c.downloadFile === 'transfers') held.add(c.id);
-          if (due) transfers ??= { c, entry, file: 'transfers' };
-        } else if (due && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256 && this.importing?.id !== c.id
+          if (due('transfers') || c.downloadFile === 'transfers') held.add(c.id);
+          if (due('transfers')) transfers ??= { c, entry, file: 'transfers' };
+        } else if (due('trail') && trail === null && entry.trail !== null && c.trailImportedSha !== entry.trail.sha256 && this.importing?.id !== c.id
           // Not over the file an import is still reading: it stops this pass (see trails), and the download starts the next.
           && await this.fetchable(manifest, trailPath(this.stored, entry), entry.trail.sha256)) {
           trail = { c, entry, file: 'trail' };
@@ -1052,7 +1090,8 @@ export class Worker {
    * it, as the next pass would. A part file that does not grow for STALL_MS
    * stops it too, as a failure. A failure is noted and waits its back-off (a
    * full disk says so); one that did not match its checksum has the
-   * manifest asked for again, as a new publish is the likely cause. A
+   * manifest asked for again, as a new publish is the likely cause, and is
+   * not fetched again at the same publish (mismatched). A
    * download stopped is no failure: only its progress goes, and its part is
    * kept to resume. Once whole, the next ingest pass loads it as it would
    * one put there by hand.
@@ -1095,6 +1134,9 @@ export class Worker {
     const watch = watchStall(partPath(dest, sha256), abort);
     try {
       await this.downloadFile(url, dest, sha256, progress, abort.signal, bytes);
+      // Checked as it was written: the next pass need not hash it again to know it.
+      const key = await statKey(dest).catch(() => null);
+      if (key !== null) this.shas.set(dest, { file: key, sha: sha256 });
       await writes;
       this.downloadsFailed.delete(id);
       await this.store.downloadDone(id).catch(logged('finished download not noted'));
@@ -1109,10 +1151,14 @@ export class Worker {
       const why = halt === 'stalled' ? `nothing came for ${STALL_MS / 60_000} minutes`
         : halt === 'lost' ? `the connection holding its lock was lost (${this.scrubbed(lost)})` : this.scrubbed(err);
       console.error('[washtrace] collection %d: stored %s not downloaded: %s', id, file, why);
-      if (err instanceof StoredDataError && err.kind === 'mismatch') this.hubAskedAt = -Infinity;
+      const mismatch = err instanceof StoredDataError && err.kind === 'mismatch';
+      if (mismatch) {
+        this.hubAskedAt = -Infinity;
+        this.mismatched.add(url);
+      }
       const failures = (this.downloadsFailed.get(id)?.failures ?? 0) + 1;
       this.downloadsFailed.set(id, { failures, retryAt: Date.now() + retryMs(failures) });
-      const note = err instanceof StoredDataError && err.kind === 'disk' ? DOWNLOAD_NOTES.disk : DOWNLOAD_NOTES.failed;
+      const note = mismatch ? DOWNLOAD_NOTES.mismatch : err instanceof StoredDataError && err.kind === 'disk' ? DOWNLOAD_NOTES.disk : DOWNLOAD_NOTES.failed;
       await this.store.downloadFailed(id, note).catch(logged('failed download not noted'));
     } finally {
       clearInterval(watch);
@@ -1510,6 +1556,17 @@ export class Worker {
  * 1%, which for gigabytes on a slow line can be minutes apart. A stat every
  * STALL_CHECK_MS, not a wait, so it costs nothing.
  */
+/** What shaOnDisk keys a file's sha256 on: its modified time and size; null when there is no file. */
+async function statKey(path: string): Promise<string | null> {
+  try {
+    const s = await stat(path);
+    return `${s.mtimeMs} ${s.size}`;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
 function watchStall(part: string, abort: AbortController): ReturnType<typeof setInterval> {
   let size = -1;
   let grewAt = Date.now();

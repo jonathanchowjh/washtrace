@@ -167,24 +167,16 @@ one home connection. Nothing newer than the stored data is read until an RPC
 URL is set in Settings, and wallets newer than the stored trail go unchecked
 until an Etherscan key is.
 
-The console and API are published on port 8080 of this machine only, and the
-port is fixed: Compose has no variable to move it. If 8080 is taken, stop what
-holds it, or save this as `docker-compose.port.yml`:
-
-```yaml
-services:
-  api:
-    ports: !override
-      - "127.0.0.1:8081:8080"
-```
-
-and pass it after the main file: `docker compose -f docker-compose.yml -f docker-compose.port.yml up --build`.
+The console and API are published on port 8080 of this machine only. To use
+another port, set `WASHTRACE_PORT` in `.env` (for example `WASHTRACE_PORT=8081`)
+before `docker compose up`, and open that port instead of 8080.
 
 ## The methods
 
 Each method flags transfers. A collection's **wash trade share** is the flagged
 share of its changes of owner, as in the paper's Tables 3 and 4. It is also
-stated for sales alone and for sale volume.
+stated for sales alone and for sale volume. The console names them Round trips
+(SCC A), Money loops back (SCC AU) and Linked wallets (SCC AC).
 
 | Method | Flags a transfer when | Needs funding |
 |---|---|---|
@@ -216,6 +208,7 @@ Both services read the same variables. In Compose they share one `.env`.
 | `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
 | `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. A `stored.repo` value saved in the console wins over it. |
 | `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
+| `WASHTRACE_PORT` | The port Compose publishes the console and API on, on this machine only. Defaults to `8080`. |
 | `PORT` | The api's listen port. `8080` in the image. |
 | `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
 
@@ -296,6 +289,12 @@ gives the columns and a pandas example.
   fetches the dataset's manifest about hourly, and at once when a collection is
   newly watched, and keeps the last one, so an unreachable Hub only means the
   chain is read instead.
+- **If the worker stops.** A download picks up from the bytes it already has,
+  and a money trail that was loading picks up from the last batch it wrote, so
+  a restart does not start either over. Half-downloaded files the
+  manifest no longer names are deleted. A file that does not match its
+  checksum is downloaded again only once the dataset is published again; the
+  chain is read meanwhile.
 - **What is published.** Chain data only: transfers, the money trail's flows,
   the checked wallets' addresses, and each collection's address, chain and
   contract name. Never a wallet's status or errors, a label you gave a
@@ -324,9 +323,10 @@ the machine itself.
 | `POST /api/collections/{chain}/{address}/resume` | The worker serves it again. `{paused: false}`, and again if not paused. |
 | `DELETE /api/collections/{chain}/{address}` | Stops watching and drops its transfers and analyses: `{removed: true}`. 409 unless paused first. Funding read for its wallets is kept, as it is per chain. |
 | `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection settings: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}, priority?}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. `priority: true` checks its wallets' funding first, sharing those turns with any other prioritised collection. |
-| `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses, and the money among its wallets. |
-| `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its counterparties and its transfers in every watched collection. |
-| `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, `judged`, the `methods` that flagged it, and the transfers. `washTrade` is true when Round trips or Linked wallets flags it; Money loops back is listed in `methods` but not counted, and a lens that did not run is never listed. `washTrade: null` with `judged: false` is a transaction that is read but that no analysis has covered yet: not the same as clean. A transaction washtrace has not read is 404, never `false`. |
+| `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses (only the lenses that ran), and the money among its wallets. It carries `washTrade`, `judged`, `methods`, `apartOnly` and `notRun`, as the transaction route does. A token with no transfers is 404. |
+| `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its 50 busiest counterparties and its latest 500 trades in every watched collection, with `cut` saying which list had more, and the same verdict fields as the token route. A wallet with no trades answers `washTrade: null, judged: false`: no watched collection holds a trade of it, so nothing has judged it. |
+| `GET /api/search?q=&kind=&page=` | What the console's search finds for `q`: a collection name, a token number (`#1234`), a wallet address or its start (`0x` and at least 4 hex), or a transaction hash. Answers `collections`, `tokens`, `wallets` and `trades`, each at most 20, and `more` saying which kind had another. `kind` (one of those four) with `page` reads that kind alone, 20 a page. Text that is not understood finds nothing, never an error. |
+| `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, `judged`, the `methods` that flagged it, `apartOnly` (only Money loops back flags it, so it is shown but not counted), `notRun` (the lenses that did not run in some transfer's analysis), and the transfers. `washTrade` is true when Round trips or Linked wallets flags it; Money loops back is listed in `methods` but not counted, and a lens that did not run is never listed. `washTrade: null` with `judged: false` is a transaction that is read but that no analysis has covered yet: not the same as clean. A transaction washtrace has not read is 404, never `false`. |
 | `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4 (an RPC URL also keeps its scheme and host). Each field also answers `env`, what `.env` holds for it (masked the same way), and the response says `open` when saving needs no login. |
 | `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null`, so `.env` applies, else the default; clearing is always allowed. 409 for a non-null `etherscan.url` while its key comes from `.env`, 400 for one the worker could not use. |
 | `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |

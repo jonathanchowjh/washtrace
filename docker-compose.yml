@@ -64,7 +64,7 @@ services:
     # `Host: localhost` to an all-interfaces port. To serve others, set
     # WASHTRACE_USERNAME and WASHTRACE_PASSWORD and publish it wider.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${WASHTRACE_PORT:-8080}:8080"
     # The worker's stored data, read only: the console describes the manifest the worker fetched.
     volumes:
       - stored:/app/data/stored:ro

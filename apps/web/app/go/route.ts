@@ -1,11 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { connection } from 'next/server';
 import { addressOf, chainOf, txOf } from '@/lib/api';
+import { parseSearch } from '@/lib/search';
 import { store } from '@/lib/store';
 
 /**
  * The sidebar's search: a transaction hash goes to its transaction, a watched
  * collection's address to the collection, any other address to the wallet.
+ * Anything else goes straight to the one thing it finds, or to the results
+ * when it finds none or several, so a search never ends on a blank page.
  */
 export async function GET(req: NextRequest): Promise<Response> {
   await connection();
@@ -15,7 +18,20 @@ export async function GET(req: NextRequest): Promise<Response> {
   const tx = txOf(q);
   if (tx) return to(`/tx/${chainId}/${tx}`);
   const address = addressOf(q);
-  if (!address) return to(`/?q=${encodeURIComponent(q)}`);
-  const watched = await store().collection(chainId, address).catch(() => null);
-  return to(watched ? `/c/${chainId}/${address}` : `/w/${chainId}/${address}`);
+  if (address) {
+    const watched = await store().collection(chainId, address).catch(() => null);
+    return to(watched ? `/c/${chainId}/${address}` : `/w/${chainId}/${address}`);
+  }
+  const results = `/search?q=${encodeURIComponent(q)}`;
+  const parsed = parseSearch(q);
+  if (parsed.kind === 'empty') return to(results);
+  const hits = await store().search(parsed).catch(() => null);
+  if (hits === null || Object.values(hits.more).some(Boolean)) return to(results);
+  const found = [
+    ...hits.collections.map((h) => `/c/${h.chainId}/${h.address}`),
+    ...hits.tokens.map((h) => `/c/${h.chainId}/${h.address}/t/${h.tokenId}`),
+    ...hits.wallets.map((h) => `/w/${h.chainId}/${h.address}`),
+    ...hits.trades.map((h) => `/tx/${h.chainId}/${h.txHash}`),
+  ];
+  return to(found.length === 1 ? found[0]! : results);
 }

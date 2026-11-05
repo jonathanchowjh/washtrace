@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { pipeline, STATE_WORDS } from '@/lib/pipeline';
+import { pipeline, STATE_WORDS, trailComing } from '@/lib/pipeline';
 
 const LATEST = { throughBlock: 1000 };
 const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 30, sha256: 'feed' } as unknown as StoredEntry['trail'];
@@ -19,8 +19,8 @@ const entry = (more: Partial<StoredEntry> = {}) => ({
 
 const states = (s: ReturnType<typeof pipeline>) => s.map((x) => x.state);
 const ON = new Set([1]);
-const run = (c: CollectionRow, e: StoredEntry | null = null, more: { analyzing?: boolean; funding?: boolean; rpcChains?: ReadonlySet<number> } = {}) =>
-  pipeline({ c, entry: e, rpcChains: ON, funding: true, analyzing: false, ...more });
+const run = (c: CollectionRow, e: StoredEntry | null = null, more: { analyzing?: boolean; funding?: boolean; silent?: boolean; rpcChains?: ReadonlySet<number> } = {}) =>
+  pipeline({ c, entry: e, rpcChains: ON, funding: true, analyzing: false, silent: false, ...more });
 
 describe('pipeline', () => {
   it('a caught-up collection with no stored data needs stages 1–3 not at all, and follows new blocks', () => {
@@ -173,6 +173,43 @@ describe('pipeline', () => {
     ]);
   });
   it('has a chip word for every state', () => {
-    expect(STATE_WORDS).toEqual({ waiting: 'Waiting', running: 'Running', done: 'Done', 'not-needed': 'Not needed', blocked: 'Needs a key', failed: 'Failed', paused: 'Paused', live: 'Following' });
+    expect(STATE_WORDS).toEqual({ waiting: 'Waiting', running: 'Running', done: 'Done', 'not-needed': 'Not needed', blocked: 'Needs a key', failed: 'Failed', paused: 'Paused', live: 'Following', silent: 'Worker silent' });
+  });
+});
+
+describe('pipeline of a silent worker', () => {
+  it('reads a live stage 4 and a running stage 5 as silent, with no share', () => {
+    const s = run(row({ fundedWallets: 2 }), null, { silent: true });
+    expect(s[3]).toMatchObject({ state: 'silent', share: null });
+    expect(s[4]).toMatchObject({ state: 'silent', share: null });
+    expect(STATE_WORDS.silent).toBe('Worker silent');
+  });
+
+  it('leaves a stage that is done or not needed alone', () => {
+    expect(states(run(row(), null, { silent: true }))).toEqual(['not-needed', 'not-needed', 'not-needed', 'silent', 'done', 'done']);
+  });
+
+  it('reads a paused collection as paused', () => {
+    expect(states(run(row({ pausedAt: 5, fundedWallets: 2 }), null, { silent: true })).slice(3, 5)).toEqual(['paused', 'paused']);
+  });
+});
+
+describe('trailComing', () => {
+  const T = (more = {}) => entry({ trail: { ...TRAIL, checked: 5, ...more } as NonNullable<StoredEntry['trail']> });
+  const c = (more: Partial<CollectionRow> = {}) => row({ trailImportedSha: null, trailNote: null, ...more });
+
+  it('is true for a trail with checked wallets that is not the one loaded, also after a failed import', () => {
+    expect(trailComing(c(), T({ sha256: 'x' }))).toBe(true);
+    expect(trailComing(c({ trailNote: TRAIL_NOTES.failed }), T({ sha256: 'x' }))).toBe(true);
+  });
+
+  it('is false when paused, with no checked wallet, when loaded, or when the worker will not retry', () => {
+    expect(trailComing(c({ pausedAt: 5 }), T({ sha256: 'x' }))).toBe(false);
+    expect(trailComing(c(), T({ sha256: 'x', checked: 0 }))).toBe(false);
+    expect(trailComing(c({ trailImportedSha: 'x' }), T({ sha256: 'x' }))).toBe(false);
+    expect(trailComing(c({ trailNote: TRAIL_NOTES.mismatch }), T({ sha256: 'x' }))).toBe(false);
+    expect(trailComing(c({ trailNote: TRAIL_NOTES.unreadable }), T({ sha256: 'x' }))).toBe(false);
+    expect(trailComing(c(), entry())).toBe(false);
+    expect(trailComing(c(), null)).toBe(false);
   });
 });

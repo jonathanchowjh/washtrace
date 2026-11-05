@@ -267,6 +267,25 @@ describe('Worker.ingest restoring stored data', () => {
     expect(events.indexOf('error 1')).toBeGreaterThan(events.indexOf('restore 1 1 0xbc4c'));
   });
 
+  it('loads one collection\'s stored data a pass, and holds the chain reading of the next until its turn', async () => {
+    const second: StoredEntry = { ...ENTRY, address: '0xb2', transfers: { ...ENTRY.transfers, file: '1-0xb2.transfers.csv.zst' } };
+    const fresh = { cursorBlock: null, startBlock: null, contract: {} as any };
+    const { w, events } = setup(
+      [row({ ...fresh }), row({ id: 2, address: '0xb2', ...fresh })],
+      [row({ cursorBlock: 900, contract: {} as any }), row({ id: 2, address: '0xb2', ...fresh })],
+      new Map([[1, 'http://rpc']]),
+    );
+    (w as any).manifest = async () => ({ version: 2, collections: [ENTRY, second] });
+    (w as any).chain = () => ({ finalized: async () => 1_000, deployBlock: async () => 100, transfers: async () => ({ transfers: [], through: 1_000 }) });
+    await w.ingest();
+    expect(events.filter((e) => e.startsWith('restore'))).toEqual(['restore 1 1 0xbc4c']);
+    // The one loaded is read on from where its data stops; the next is not read from its deploy block meanwhile.
+    expect(events).toContain('served 1');
+    expect(events).not.toContain('served 2');
+    await w.ingest();
+    expect(events.filter((e) => e.startsWith('restore'))).toEqual(['restore 1 1 0xbc4c', 'restore 2 1 0xb2']);
+  });
+
   it('never loads stored data for a paused collection', async () => {
     const { w, events } = setup([row({ cursorBlock: null, pausedAt: 5 })], []);
     await w.ingest();
@@ -440,7 +459,10 @@ describe('Worker.ingest loading a money trail', () => {
     (w as any).storedTransfers = async function* () { yield []; };
     const hashed: string[] = [];
     w.fileSha = async (path: string) => { hashed.push(path); return sha; };
-    (w as any).storedTrail = async function* (path: string, sha256: string) { events.push(`read ${path.slice(dir.length + 1)} ${sha256}`); yield { checked: [], flows: [] }; };
+    (w as any).storedTrail = async function* (path: string, sha256: string, verify: boolean) {
+      events.push(`read ${path.slice(dir.length + 1)} ${sha256}`, `verify ${verify}`);
+      yield { checked: [], flows: [] };
+    };
     const settle = async () => { await (w as any).importing?.done; };
     /** From now on each import waits for the test. An abort rejects it with `onAbort(reason)`, as the store throws the signal's reason between batches. */
     const hold = (onAbort: (reason: unknown) => unknown = (reason) => reason) => {
@@ -878,8 +900,37 @@ describe('Worker.ingest loading a money trail', () => {
     expect(done.events.some((e) => e.startsWith('import') || e === 'lock 6')).toBe(false);
   });
 
-  it('hashes a trail once while the file stays the same, and again once it changes', async () => {
+  it('hashes no trail already imported: the file on disk has nothing more to give', async () => {
     const { w, hashed } = await setup([row({ trailImportedSha: 'feed' })], 'feed');
+    await w.ingest();
+    expect(hashed).toEqual([]);
+  });
+
+  it('reads a trail found matching without hashing it again, and checks one changed since', async () => {
+    const { w, events, store, settle } = await setup([row()], 'feed');
+    // Both passes of the import, as the store reads it.
+    store.importTrail = async (_id: number, _chainId: number, _sha: string, open: () => AsyncIterable<unknown>) => {
+      for (const _ of [1, 2]) for await (const __ of open()) events.push('batch');
+      return { wallets: 0, flows: 0 };
+    };
+    await w.ingest();
+    await settle();
+    expect(events.filter((e) => e.startsWith('verify'))).toEqual(['verify false', 'verify false']);
+    // Replaced after it was found to match: the next read checks it.
+    const changed = await setup([row()], 'feed');
+    changed.store.importTrail = async (_id: number, _chainId: number, _sha: string, open: () => AsyncIterable<unknown>) => {
+      await writeFile(trailPath(dir, TRAILED), 'another trail');
+      for await (const _ of open()) changed.events.push('batch');
+      return { wallets: 0, flows: 0 };
+    };
+    await changed.w.ingest();
+    await changed.settle();
+    expect(changed.events.filter((e) => e.startsWith('verify'))).toEqual(['verify true']);
+  });
+
+  it('hashes a trail once while the file stays the same, and again once it changes', async () => {
+    // Not the manifest's trail, so never imported: each pass looks at it.
+    const { w, hashed } = await setup([row()], 'beef');
     await w.ingest();
     await w.ingest();
     expect(hashed).toHaveLength(1);
@@ -1065,11 +1116,24 @@ describe('Worker downloading stored data', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('takes the sha256 a download checked, and does not hash the file again to load it', async () => {
+    const { w, events, calls } = setup([watched(1, A)], [stored(A, 'a')]);
+    const hashed: string[] = [];
+    const read = w.fileSha;
+    w.fileSha = (path: string) => { hashed.push(path); return read(path); };
+    await w.ingest();
+    await calls[0]!.finish();
+    await w.ingest();
+    expect(events).toContain('restore 1');
+    expect(hashed).toEqual([]);
+  });
+
   it('downloads nothing for a collection already read past its stored data', async () => {
     const { w, events, calls } = setup([watched(1, A, { cursorBlock: 950 })], [stored(A, 'a')], RPC);
     await w.ingest();
     expect(calls).toEqual([]);
-    expect(events.some((e) => e.startsWith('lock'))).toBe(false);
+    // Only the sweep of stale parts, once the manifest is fetched: no download's.
+    expect(events.filter((e) => e.startsWith('lock'))).toEqual(['lock 5']);
     expect(events).toContain('served 1');
   });
 
@@ -1186,7 +1250,8 @@ describe('Worker downloading stored data', () => {
     await settle();
     await w.ingest();
     await settle();
-    expect(events.filter((e) => e === 'lock 5')).toHaveLength(2);
+    // One download tried each pass, and the first pass's sweep of stale parts.
+    expect(events.filter((e) => e === 'lock 5')).toHaveLength(3);
     expect(calls).toEqual([]);
     // The other replica's download holds the chain reading here too.
     expect(events).not.toContain('served 2');
@@ -1381,6 +1446,45 @@ describe('Worker downloading stored data', () => {
     expect(hub.asked).toBe(2);
     await w.ingest();
     expect(hub.asked).toBe(2);
+  });
+
+  it('downloads a file that did not match its checksum again only once the Hub publishes again, reading the chain meanwhile', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { w, events, calls, hub } = setup([watched(1, A)], [stored(A, 'a')], RPC);
+    await w.ingest();
+    await calls[0]!.fail(new StoredDataError('does not match its checksum', 'mismatch'));
+    expect(events).toContain(`failed 1 ${DOWNLOAD_NOTES.mismatch}`);
+    // Its back-off long over, and the Hub asked again: the same publish, so the same bytes.
+    now += 2 * 60 * 60_000;
+    await w.ingest();
+    expect(calls).toHaveLength(1);
+    expect(events).toContain('served 1');
+    const REV2 = 'beef'.padEnd(40, '0');
+    hub.answer = async () => ({ version: 2, revision: REV2, collections: [stored(A, 'a')] });
+    now += 61 * 60_000;
+    await w.ingest();
+    expect(calls.map((c) => c.url)).toEqual([hubUrl('u/d', REV, storedFile(1, A, 'transfers')), hubUrl('u/d', REV2, storedFile(1, A, 'transfers'))]);
+    await calls[1]!.finish();
+  });
+
+  it('removes the parts the fetched manifest names no file for, under the download lock, and none while another replica holds it', async () => {
+    const stale = partPath(join(dir, storedFile(1, B, 'transfers')), sha('d'));
+    const kept = partPath(join(dir, storedFile(1, A, 'trail')), sha('b'));
+    await writeFile(stale, 'old');
+    await writeFile(kept, 'half');
+    // Read past its stored data: nothing downloads, so the lock is the sweep's alone.
+    const { w, events, hub } = setup([watched(1, A, { cursorBlock: 950, trailImportedSha: sha('b') })], [stored(A, 'a', 'b')], RPC);
+    hub.lock = false;
+    await w.ingest();
+    expect(events).toContain('lock 5');
+    await expect(readFile(stale, 'utf8')).resolves.toBe('old');
+    hub.lock = true;
+    (w as any).hubAskedAt = -Infinity;
+    await w.ingest();
+    await expect(readFile(stale, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(kept, 'utf8')).resolves.toBe('half');
   });
 
   it('a stalled download is given up after two minutes', async () => {

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Warn } from '@/components/head';
+import { LOCAL_ONLY } from '@/lib/auth';
 import { CHAINS } from '@/lib/chains';
 import { storedLine, type StoredSize } from '@/lib/format';
 
@@ -60,9 +61,12 @@ const keyOf = (chainId: number, address: string) => `${chainId}/${address.toLowe
  * watched collection; those link to their page instead. The list is the
  * paper's collections, then every other collection with stored data on the
  * Hub (`stored`, the manifest's sizes; null while none is cached). A row says
- * how big its stored data is, because watching downloads it.
+ * how big its stored data is, because watching downloads it. `writable` is
+ * whether a write would be accepted (mayWrite): when it is not, the buttons
+ * are disabled and say why, rather than failing on a click. The page says the
+ * sentence once; a row's button only carries it as its title.
  */
-export function Suggested({ watched, stored }: { watched: string[]; stored: StoredSize[] | null }) {
+export function Suggested({ writable, watched, stored }: { writable: boolean; watched: string[]; stored: StoredSize[] | null }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<Said | null>(null);
@@ -105,7 +109,7 @@ export function Suggested({ watched, stored }: { watched: string[]; stored: Stor
               </div>
               {watched.includes(key)
                 ? <Link href={`/c/${key}`} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
-                : <button type="button" disabled={busy !== null} onClick={() => add(s)} className={BUTTON}>{busy === s.address ? 'Adding…' : 'Watch'}</button>}
+                : <button type="button" disabled={busy !== null || !writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => add(s)} className={BUTTON}>{busy === s.address ? 'Adding…' : 'Watch'}</button>}
             </li>
           );
         })}
@@ -115,8 +119,8 @@ export function Suggested({ watched, stored }: { watched: string[]; stored: Stor
   );
 }
 
-/** Watch any collection by its contract address. */
-export function AddCollection({ stored }: { stored: StoredSize[] | null }) {
+/** Watch any collection by its contract address. `writable` as in Suggested. */
+export function AddCollection({ writable, stored }: { writable: boolean; stored: StoredSize[] | null }) {
   const router = useRouter();
   // What is typed, for the size of its stored data; the form itself is still read from its fields on submit.
   const [chain, setChain] = useState('1');
@@ -156,7 +160,7 @@ export function AddCollection({ stored }: { stored: StoredSize[] | null }) {
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">From block
         <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className={`${FIELD} w-28 font-mono text-xs`} />
       </label>
-      <button type="submit" disabled={busy} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
+      <button type="submit" disabled={busy || !writable} title={writable ? undefined : LOCAL_ONLY} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
  {/* Watching it downloads this, so it is said before the press. */}
       {size ? <p className="basis-full text-xs text-muted-foreground">{storedLine(size)}</p> : null}
       {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
@@ -178,8 +182,9 @@ async function send(method: string, path: string, body: unknown = {}): Promise<s
  * Paused: resume it, or delete its data, which asks inline first and is only
  * offered here because the API refuses to delete a collection still in sync.
  * `compact` is for a list row: no Prioritize, which lives on the collection's page.
+ * `writable` as in Suggested: every button is disabled when a write would be refused.
  */
-export function CollectionControls({ chainId, address, paused, priority, compact = false }: { chainId: number; address: string; paused: boolean; priority: boolean; compact?: boolean }) {
+export function CollectionControls({ writable, chainId, address, paused, priority, compact = false }: { writable: boolean; chainId: number; address: string; paused: boolean; priority: boolean; compact?: boolean }) {
   const router = useRouter();
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -195,15 +200,16 @@ export function CollectionControls({ chainId, address, paused, priority, compact
     if (after) after(); else router.refresh();
   }
 
+  const no = !writable;
   const fail = error ? <span role="alert" className="text-fault"><Warn className="mr-1 size-3.5 align-text-bottom" />{error}</span> : null;
 
   if (!paused) {
     return (
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <button type="button" disabled={busy} onClick={() => run('POST', `${path}/pause`)} className={BUTTON}
-          title="Stop reading new blocks for this collection; keeps its data">Pause</button>
-        {compact ? null : <button type="button" disabled={busy} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className={BUTTON}
-          title={priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
+        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/pause`)} className={BUTTON}
+          title={no ? LOCAL_ONLY : 'Stop reading new blocks for this collection; keeps its data'}>Pause</button>
+        {compact ? null : <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className={BUTTON}
+          title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
         {fail}
       </span>
     );
@@ -211,10 +217,10 @@ export function CollectionControls({ chainId, address, paused, priority, compact
   if (!armed) {
     return (
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <button type="button" disabled={busy} onClick={() => run('POST', `${path}/resume`)} className={BUTTON}
-          title="Start reading new blocks for this collection again, from where it stopped">Resume</button>
-        <button type="button" onClick={() => setArmed(true)} className={`${BUTTON} border-foreground`}
-          title="Remove this collection's transfers and analyses from the store. Asks first.">Delete data…</button>
+        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/resume`)} className={BUTTON}
+          title={no ? LOCAL_ONLY : 'Start reading new blocks for this collection again, from where it stopped'}>Resume</button>
+        <button type="button" disabled={no} onClick={() => setArmed(true)} className={`${BUTTON} border-foreground`}
+          title={no ? LOCAL_ONLY : "Remove this collection's transfers and analyses from the store. Asks first."}>Delete data…</button>
         {fail}
       </span>
     );
@@ -222,7 +228,7 @@ export function CollectionControls({ chainId, address, paused, priority, compact
   return (
     <span className="flex flex-wrap items-center gap-2 text-xs">
       <span>Delete its transfers and analyses? Wallet funding is kept. Watching it again starts over (or restores stored data).</span>
-      <button type="button" disabled={busy} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className={`${BUTTON} border-foreground`}>Delete</button>
+      <button type="button" disabled={busy || no} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className={`${BUTTON} border-foreground`}>Delete</button>
       <button type="button" onClick={() => { setArmed(false); setError(null); }} className={BUTTON}>Keep</button>
       {fail}
     </span>

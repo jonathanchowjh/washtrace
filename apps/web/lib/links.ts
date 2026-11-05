@@ -73,3 +73,11 @@ export function venues(marketplaces: readonly { name: string; sales: number }[])
   for (const m of marketplaces) by.set(venueName(m.name), (by.get(venueName(m.name)) ?? 0) + m.sales);
   return [...by].map(([name, sales]) => ({ name, sales })).sort((a, b) => b.sales - a.sales || a.name.localeCompare(b.name));
 }
+
+/** The collections list with its view: the tab, the Find text, and the sort. Empty parts are left out, so the plain list is `/`. */
+export function homeHref(q: { tab?: string; find?: string; sort?: string; dir?: string }): string {
+  const p = new URLSearchParams();
+  for (const k of ['tab', 'find', 'sort', 'dir'] as const) if (q[k]) p.set(k, q[k]);
+  const s = p.toString();
+  return s ? `/?${s}` : '/';
+}

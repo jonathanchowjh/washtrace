@@ -1,9 +1,9 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { parseManifest, sha256File, StoredDataError, type Manifest } from './stored.js';
+import { parseManifest, sha256File, storedFile, StoredDataError, type Manifest } from './stored.js';
 
 /**
  * Hugging Face as the place stored data is downloaded from: the manifest, then
@@ -43,6 +43,29 @@ export async function fetchManifest(repo: string, endpoint = HUB, signal?: Abort
 /** Where a download is written until it is whole. Named for the checksum, so the part of another publish of the file is never resumed. */
 export function partPath(dest: string, sha256: string): string {
   return `${dest}.${sha256.slice(0, 16)}.part`;
+}
+
+/** A download's part, as partPath names it: never the manifest's own write, nor a local cut's (`<file>.part`). */
+const PART = /\.csv\.zst\.[0-9a-f]{16}\.part$/;
+
+/**
+ * Delete the download parts in `dir` that `manifest` names no file for: one
+ * whose file was published again with other content, or whose collection (or
+ * dataset) is gone. Each is kept to resume only while its checksum is the
+ * manifest's, so these would never be resumed, and a trail's is a gigabyte.
+ * Says which went. The caller holds the download lock, so no part removed is
+ * one a download is writing.
+ */
+export async function removeStaleParts(dir: string, manifest: Manifest): Promise<string[]> {
+  const wanted = new Set<string>();
+  for (const e of manifest.collections) {
+    wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'transfers'), e.transfers.sha256)));
+    if (e.trail !== null) wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'trail'), e.trail.sha256)));
+  }
+  const names = await readdir(dir).catch((err) => { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; });
+  const stale = names.filter((n) => PART.test(n) && !wanted.has(n));
+  for (const n of stale) await rm(join(dir, n), { force: true });
+  return stale;
 }
 
 /**
