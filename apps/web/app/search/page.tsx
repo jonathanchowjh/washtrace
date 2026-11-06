@@ -66,7 +66,7 @@ export default async function SearchPage({ searchParams }: Props) {
         {head}
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
-          {outside ? <> <a className="underline" href={outside} target="_blank" rel="noreferrer">Look it up on Etherscan ↗</a></> : null}
+          {outside ? <> <a className="underline" href={outside} target="_blank" rel="noopener noreferrer">Look it up on Etherscan ↗</a></> : null}
         </Empty>
       </>
     );

@@ -15,14 +15,25 @@ import type { Flow, FlowKind, Transfer } from './types.js';
  * store that has read them and shipped as files, so a fresh install starts
  * from them instead of from the deploy block.
  *
- * A file is CSV compressed with zstd (Node 22.15+ has it in node:zlib). Its
- * columns are the table's, in migrations.ts order, without the store's own
+ * A file is CSV compressed with zstd (Node 22.15+ has it in node:zlib). A
+ * collection has three: its transfers, the wallets its trail checked, and the
+ * flows those checks found, each a plain table the Hub's dataset viewer reads.
+ * Its columns are the table's, in migrations.ts order, without the store's own
  * keys (collection_id, chain_id): the manifest says which collection and
  * chain. Null is an empty field. No value ever holds a comma or a line
  * break (hex, numbers, marketplace slugs), so writing asserts that rather
  * than quoting. Writing and reading both stream: a big collection is
  * millions of rows.
  */
+
+/** What a stored file is, for the manifest: its size on disk and the sha256 of those bytes. */
+export interface StoredFileMeta { bytes: number; sha256: string }
+
+/** The two files of a money trail. */
+export interface TrailFiles { wallets: StoredFileMeta; flows: StoredFileMeta }
+
+/** The three tables a collection's stored data has, each its own file. */
+export type StoredPart = 'transfers' | 'wallets' | 'flows';
 
 /** One collection's stored data, as the manifest lists it. */
 export interface StoredEntry {
@@ -38,18 +49,20 @@ export interface StoredEntry {
   transfers: { file: string; rows: number; bytes: number; sha256: string };
   /**
    * The money trail: published beside the transfers, downloaded next to the
-   * manifest, and loaded when it is there and matches `sha256`. It holds
-   * chain data only (the wallets read to the end, and the flows they found). `rows` counts
-   * flows, `wallets` the checked list's length. `checked` of `of` is how many
-   * of the collection's traders are on that list.
+   * manifest, and loaded when both files are there and match `files`. It
+   * holds chain data only (the wallets read to the end, and the flows they
+   * found). `rows` counts flows, `wallets` the checked list's length.
+   * `checked` of `of` is how many of the collection's traders are on that
+   * list. `bytes` is the two files' sizes added, and `sha256` is `trailSha`
+   * of them: what a load records as the trail it holds.
    */
-  trail: { rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string } | null;
+  trail: { rows: number; wallets: number; checked: number; of: number; bytes: number; sha256: string; files: TrailFiles } | null;
 }
 
 /** Every collection with stored data. Fetched from Hugging Face, and cached in the stored folder as manifest.json. */
 export interface Manifest {
-  /** 2: the trail carries chain data only. A version 1 manifest (wallet bookkeeping in the trail) is not read. */
-  version: 2;
+  /** 3: a trail is two files. Version 1 and 2 manifests are not read. */
+  version: 3;
   /** The Hub commit (a 40-hex sha, as it goes into download URLs) this manifest was fetched at, so what is fetched next stays on it. Absent in a manifest cut here. */
   revision?: string;
   collections: StoredEntry[];
@@ -99,27 +112,28 @@ export const FLOW_COLUMNS = ['tx_hash', 'kind', 'from_address', 'to_address', 'v
 /** Errors of the process, not of the file (out of descriptors or memory): a load that meets one backs off, and is not noted as bad stored data. */
 const PROCESS_FAULTS = new Set(['EMFILE', 'ENFILE', 'EAGAIN', 'ENOMEM']);
 
-/** The trail's two sections, each a marker line then its header. */
-const CHECKED = '#checked';
-const FLOWS = '#flows';
-
 /** The stored-data folder: `WASHTRACE_STORED_DIR`, else data/stored under the working directory (the repo root, or /app in the image). */
 export function storedDir(env: Record<string, string | undefined>, cwd = process.cwd()): string {
   return env.WASHTRACE_STORED_DIR?.trim() || join(cwd, 'data', 'stored');
 }
 
 /** A stored file's name. Lowercase, so a checksummed address names the same file. */
-export function storedFile(chainId: number, address: string, part: 'transfers' | 'trail'): string {
+export function storedFile(chainId: number, address: string, part: StoredPart): string {
   return `${chainId}-${address.toLowerCase()}.${part}.csv.zst`;
 }
 
 /**
- * Where a collection's money trail is on disk: beside the manifest, under
- * the name the cut gave it. The manifest names no trail file; only its
- * sha256 says which file it is.
+ * Where a collection's money trail is on disk: its two files beside the
+ * manifest, under the names the cut gave them. The manifest names no trail
+ * file; only its sha256s say which files they are.
  */
-export function trailPath(dir: string, e: Pick<StoredEntry, 'chainId' | 'address'>): string {
-  return join(dir, storedFile(e.chainId, e.address, 'trail'));
+export function trailPaths(dir: string, e: Pick<StoredEntry, 'chainId' | 'address'>): { wallets: string; flows: string } {
+  return { wallets: join(dir, storedFile(e.chainId, e.address, 'wallets')), flows: join(dir, storedFile(e.chainId, e.address, 'flows')) };
+}
+
+/** What identifies a trail as a whole: the sha256 of its two files' sha256s joined by a colon. */
+export function trailSha(files: TrailFiles): string {
+  return createHash('sha256').update(`${files.wallets.sha256}:${files.flows.sha256}`).digest('hex');
 }
 
 /** The manifest's entry for a collection. Addresses compare case-insensitively: a URL may carry a checksummed one. */
@@ -132,7 +146,7 @@ export function entryFor(m: Manifest, chainId: number, address: string): StoredE
 export function upsertEntry(m: Manifest, e: StoredEntry): Manifest {
   const others = m.collections.filter((x) => !(x.chainId === e.chainId && x.address.toLowerCase() === e.address.toLowerCase()));
   const collections = [...others, e].sort((x, y) => x.chainId - y.chainId || x.address.toLowerCase().localeCompare(y.address.toLowerCase()));
-  return { version: 2, collections };
+  return { version: 3, collections };
 }
 
 /**
@@ -142,24 +156,51 @@ export function upsertEntry(m: Manifest, e: StoredEntry): Manifest {
  * The remote's `revision` is dropped: it names the commit this one follows.
  */
 export function mergeManifest(remote: Manifest | null, cut: StoredEntry[]): Manifest {
-  let m: Manifest = { version: 2, collections: remote?.collections ?? [] };
+  let m: Manifest = { version: 3, collections: remote?.collections ?? [] };
   for (const e of cut) m = upsertEntry(m, e);
   return m;
 }
 
 /**
- * The dataset's README on the Hub: front matter, what the files hold and how
- * to read them. Built from the manifest, so it can never list a collection
- * the manifest does not, nor columns other than the ones written here.
+ * The dataset's README on the Hub: front matter declaring its tables, what the
+ * files hold and how to read them. Built from the manifest, so it can never
+ * list a collection the manifest does not, nor columns other than the ones
+ * written here. `repo` is the dataset's own name, for the example that loads
+ * it.
  */
-export function datasetCard(m: Manifest): string {
+export function datasetCard(m: Manifest, repo: string): string {
   const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
   const rows = m.collections.map((e) =>
     `| ${cell(e.name)} | ${e.address} | ${e.chainId} | ${e.throughBlock} | ${new Date(e.throughTime).toISOString().slice(0, 10)} | ${e.trail ? e.trail.wallets : '—'} | ${formatBytes(e.transfers.bytes)} | ${e.trail ? formatBytes(e.trail.bytes) : 'none'} |`);
+  const splits = splitNames(m);
+  const withTrail = m.collections.filter((e) => e.trail !== null);
+  const tables: [StoredPart, readonly string[], StoredEntry[]][] = [
+    ['transfers', TRANSFER_COLUMNS, m.collections], ['wallets', CHECKED_COLUMNS, withTrail], ['flows', FLOW_COLUMNS, withTrail],
+  ];
+  const used = tables.filter(([, , entries]) => entries.length > 0);
+  const configs = used.map(([part, , entries]) =>
+    `- config_name: ${part}\n  data_files:\n${entries.map((e) => `  - split: "${splits.get(e)}"\n    path: "${storedFile(e.chainId, e.address, part)}"`).join('\n')}`);
+  const infos = used.map(([part, columns]) =>
+    `- config_name: ${part}\n  features:\n${columns.map((c) => `  - name: ${c}\n    dtype: string`).join('\n')}`);
+  const example = withTrail[0] ?? m.collections[0];
+  const table = withTrail.length > 0 ? 'flows' : 'transfers';
+  const loadExample = example === undefined ? '' : `
+
+The tables load through the \`datasets\` library, one config per table and one split per collection:
+
+\`\`\`python
+from datasets import load_dataset
+
+data = load_dataset("${repo}", "${table}", split="${splits.get(example)}")
+\`\`\``;
   return `---
 license: cc-by-4.0
 pretty_name: washtrace data
-tags: [ethereum, nft, wash-trading]
+tags: [ethereum, nft, wash-trading]${used.length > 0 ? `
+configs:
+${configs.join('\n')}
+dataset_info:
+${infos.join('\n')}` : ''}
 ---
 
 # washtrace data
@@ -185,22 +226,22 @@ its row count, size and sha256.
 
 ## Files
 
-Each file is CSV compressed with zstd. Null is an empty field.
+Each file is CSV compressed with zstd. Null is an empty field. A collection has up to three, one per table.
 
-\`<chainId>-<address>.transfers.csv.zst\` has the columns
+\`<chainId>-<address>.transfers.csv.zst\` has the collection's transfers, with the columns
 
 \`\`\`
 ${TRANSFER_COLUMNS.join(',')}
 \`\`\`
 
-\`<chainId>-<address>.trail.csv.zst\` has two sections. First \`#checked\`, the wallets whose payments were read to the end of
+\`<chainId>-<address>.wallets.csv.zst\` has the wallets whose payments were read to the end of
 their history when checked, with the column
 
 \`\`\`
 ${CHECKED_COLUMNS.join(',')}
 \`\`\`
 
-then \`#flows\`, the payments those wallets made or received, with the columns
+\`<chainId>-<address>.flows.csv.zst\` has the payments those wallets made or received, with the columns
 
 \`\`\`
 ${FLOW_COLUMNS.join(',')}
@@ -213,27 +254,34 @@ pip install pandas zstandard
 \`\`\`
 
 \`\`\`python
-import json
 import pandas as pd
 
 transfers = pd.read_csv("1-0x....transfers.csv.zst", compression='zstd', dtype=str)
-
-m = json.load(open("manifest.json"))
-e = next(c for c in m["collections"] if c["address"] == "0x...")
-n = e["trail"]["wallets"]
-path = f"{e['chainId']}-{e['address']}.trail.csv.zst"
-checked = pd.read_csv(path, compression='zstd', skiprows=1, nrows=n)
-flows = pd.read_csv(path, compression='zstd', skiprows=n + 3, dtype=str)
+wallets = pd.read_csv("1-0x....wallets.csv.zst", compression='zstd', dtype=str)
+flows = pd.read_csv("1-0x....flows.csv.zst", compression='zstd', dtype=str)
 \`\`\`
 
-pandas decompresses as it reads, so the file is never held whole as text; the largest trails hold tens of millions of
+pandas decompresses as it reads, so a file is never held whole as text; the largest trails hold tens of millions of
 flows: pass \`chunksize=\` to read them in parts.
 
-\`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.
+\`dtype=str\` keeps \`price_wei\`, \`value_wei\` and \`token_id\` at full precision, which a number column would round.${loadExample}
 
 Licence: CC-BY-4.0. How to cite the data, and the paper, is in the washtrace README under
 [Citing](https://github.com/jonathanchowjh/washtrace#citing).
 `;
+}
+
+/**
+ * Each collection's split name on the card: its name lowercased, with runs of
+ * other characters made one underscore. A name that leaves nothing, or that
+ * another collection's leaves too, falls back to `c<chainId>_<address>`, so
+ * two collections never share a split.
+ */
+function splitNames(m: Manifest): Map<StoredEntry, string> {
+  const named = m.collections.map((e) => ({ e, name: e.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') }));
+  const count = new Map<string, number>();
+  for (const { name } of named) count.set(name, (count.get(name) ?? 0) + 1);
+  return new Map(named.map(({ e, name }) => [e, name === '' || count.get(name)! > 1 ? `c${e.chainId}_${e.address}` : name]));
 }
 
 /** `<chainId>/<address>` as the maintainer's commands take it, the address lowercased; null when it is not one. */
@@ -262,12 +310,13 @@ export async function cutCollection(store: Store, dir: string, chainId: number, 
 
   let cutTrail: StoredEntry['trail'] = null;
   if (trail) {
-    const trailFile = storedFile(chainId, address, 'trail');
     const begun = Date.now();
     const { checked, of, addresses, flows } = await store.trail(head.id, chainId);
-    const written = await writeTrail(join(dir, trailFile), { checked: addresses, flows });
-    cutTrail = { rows: written.rows, wallets: written.wallets, checked, of, bytes: written.bytes, sha256: written.sha256 };
-    console.info('[stored] %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds', trailFile, written.wallets, written.rows, checked, of, formatBytes(written.bytes), seconds(begun));
+    const written = await writeTrail(trailPaths(dir, { chainId, address }), { checked: addresses, flows });
+    const bytes = written.files.wallets.bytes + written.files.flows.bytes;
+    cutTrail = { rows: written.rows, wallets: written.wallets, checked, of, bytes, sha256: trailSha(written.files), files: written.files };
+    console.info('[stored] %s and %s: %d wallets, %d flows, %d of %d traders checked, %s, in %ds',
+      storedFile(chainId, address, 'wallets'), storedFile(chainId, address, 'flows'), written.wallets, written.rows, checked, of, formatBytes(bytes), seconds(begun));
   }
   return {
     chainId, address,
@@ -288,7 +337,7 @@ export async function readManifest(path: string): Promise<Manifest> {
   try {
     text = await readFile(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 2, collections: [] };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 3, collections: [] };
     throw err;
   }
   try {
@@ -306,14 +355,14 @@ export async function readManifest(path: string): Promise<Manifest> {
  * gives, and an address is lowercase hex.
  */
 export function parseManifest(text: string): Manifest {
-  const bad = (what: string): never => { throw new StoredDataError(`not a version 2 manifest: ${what}`); };
+  const bad = (what: string): never => { throw new StoredDataError(`not a version 3 manifest: ${what}`); };
   let raw: any;
   try {
     raw = JSON.parse(text);
   } catch {
     return bad('it is not JSON');
   }
-  if (raw === null || typeof raw !== 'object' || raw.version !== 2 || !Array.isArray(raw.collections)) return bad('its version is not 2');
+  if (raw === null || typeof raw !== 'object' || raw.version !== 3 || !Array.isArray(raw.collections)) return bad('its version is not 3');
   if (raw.revision !== undefined && (typeof raw.revision !== 'string' || !/^[0-9a-f]{40}$/.test(raw.revision))) bad('its revision is not a commit sha');
   const count = (v: unknown, what: string): number => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : bad(what));
   const sha = (v: unknown, what: string): string => (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : bad(what));
@@ -334,14 +383,29 @@ export function parseManifest(text: string): Manifest {
         file: e.transfers.file, rows: count(e.transfers.rows, 'a transfers row count is not a count'),
         bytes: count(e.transfers.bytes, 'a transfers size is not a count'), sha256: sha(e.transfers.sha256, 'a transfers sha256 is not a sha256'),
       },
-      trail: t === null ? null : {
-        rows: count(t.rows, 'a trail row count is not a count'), wallets: count(t.wallets, 'a trail wallet count is not a count'),
-        checked: count(t.checked, 'a trail checked count is not a count'), of: count(t.of, 'a trail trader count is not a count'),
-        bytes: count(t.bytes, 'a trail size is not a count'), sha256: sha(t.sha256, 'a trail sha256 is not a sha256'),
-      },
+      trail: t === null ? null : parseTrail(t, count, sha),
     };
   });
-  return raw.revision === undefined ? { version: 2, collections } : { version: 2, revision: raw.revision, collections };
+  return raw.revision === undefined ? { version: 3, collections } : { version: 3, revision: raw.revision, collections };
+}
+
+/** A manifest's trail: its counts, and its two files, whose sizes and checksum the trail's own must add up to. */
+function parseTrail(t: any, count: (v: unknown, what: string) => number, sha: (v: unknown, what: string) => string): NonNullable<StoredEntry['trail']> {
+  const bad = (what: string): never => { throw new StoredDataError(`not a version 3 manifest: ${what}`); };
+  if (t.files === null || typeof t.files !== 'object') bad('a trail has no files');
+  const file = (f: any, which: string): StoredFileMeta => {
+    if (f === null || typeof f !== 'object') return bad(`a trail's ${which} file is not an object`);
+    return { bytes: count(f.bytes, `a trail ${which} file size is not a count`), sha256: sha(f.sha256, `a trail ${which} file sha256 is not a sha256`) };
+  };
+  const files = { wallets: file(t.files.wallets, 'wallets'), flows: file(t.files.flows, 'flows') };
+  const trail = {
+    rows: count(t.rows, 'a trail row count is not a count'), wallets: count(t.wallets, 'a trail wallet count is not a count'),
+    checked: count(t.checked, 'a trail checked count is not a count'), of: count(t.of, 'a trail trader count is not a count'),
+    bytes: count(t.bytes, 'a trail size is not a count'), sha256: sha(t.sha256, 'a trail sha256 is not a sha256'), files,
+  };
+  if (trail.bytes !== files.wallets.bytes + files.flows.bytes) bad("a trail size is not its files'");
+  if (trail.sha256 !== trailSha(files)) bad("a trail sha256 is not its files'");
+  return trail;
 }
 
 /** Write the manifest whole, through a temporary file, so a reader never sees half of one. */
@@ -437,78 +501,91 @@ export async function* readTransfers(path: string, sha256: string): AsyncIterabl
 }
 
 /**
- * Write a collection's money trail to `path`: the wallets checked to the end
- * (addresses only), then every flow those checks found, as two sections of
- * one file. Nothing of how a wallet was read goes in (its status, depth,
- * time or errors): the file holds what the chain says, so it can be
+ * Write a collection's money trail as two files: the wallets checked to the
+ * end (addresses only) at `paths.wallets`, then every flow those checks found
+ * at `paths.flows`. Nothing of how a wallet was read goes in (its status,
+ * depth, time or errors): the files hold what the chain says, so they can be
  * published. The addresses are read to the end before the flows are started.
  */
-export async function writeTrail(path: string, trail: { checked: Rows<string>; flows: Rows<Flow> }): Promise<Written & { wallets: number }> {
+export async function writeTrail(paths: { wallets: string; flows: string }, trail: { checked: Rows<string>; flows: Rows<Flow> }): Promise<{ rows: number; wallets: number; files: TrailFiles }> {
   let wallets = 0;
   let flows = 0;
-  async function* lines(): AsyncIterable<string> {
-    yield CHECKED;
+  async function* walletLines(): AsyncIterable<string> {
     yield CHECKED_COLUMNS.join(',');
     for await (const address of trail.checked) {
       wallets++;
       yield line(CHECKED_COLUMNS, [address]);
     }
-    yield FLOWS;
+  }
+  async function* flowLines(): AsyncIterable<string> {
     yield FLOW_COLUMNS.join(',');
     for await (const r of trail.flows) {
       flows++;
       yield line(FLOW_COLUMNS, [r.txHash, r.kind, r.from, r.to, r.valueWei, r.token, r.blockNumber, r.blockTime]);
     }
   }
-  const { bytes, sha256 } = await writeCompressed(path, lines());
-  return { rows: flows, wallets, bytes, sha256 };
+  const walletsFile = await writeCompressed(paths.wallets, walletLines());
+  let flowsFile: { bytes: number; sha256: string };
+  try {
+    flowsFile = await writeCompressed(paths.flows, flowLines());
+  } catch (err) {
+    // A trail is both files or neither: the wallets alone would read as a trail with no flows.
+    await rm(paths.wallets, { force: true });
+    throw err;
+  }
+  return { rows: flows, wallets, files: { wallets: walletsFile, flows: flowsFile } };
 }
 
 /**
- * A money trail from `path`, in batches of up to 5,000 rows, checked
- * addresses first. Checked against `sha256` before the first batch, as
- * `readTransfers` is, unless `verify` is false: the caller found it matching
- * already, and knows it has not changed since.
+ * A money trail from its two files, in batches of up to 5,000 rows, checked
+ * addresses first. Both files are checked against `files` before the first
+ * batch, as `readTransfers` checks its file, unless `verify` is false: the
+ * caller found them matching already, and knows they have not changed since.
  */
-export async function* readTrail(path: string, sha256: string, verify = true): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
-  let checked: string[] = [];
-  let flows: Flow[] = [];
-  // Where in the file: before a section, at its header, or in its rows.
-  let section: typeof CHECKED | typeof FLOWS | null = null;
-  let header = false;
-  for await (const text of readLines(path, sha256, verify)) {
-    if (text === CHECKED || text === FLOWS) {
-      if (text === FLOWS && checked.length > 0) {
-        yield { checked, flows: [] };
-        checked = [];
-      }
-      section = text;
-      header = true;
-      continue;
+export async function* readTrail(paths: { wallets: string; flows: string }, files: TrailFiles, verify = true): AsyncIterable<{ checked: string[]; flows: Flow[] }> {
+  if (verify) {
+    for (const which of ['wallets', 'flows'] as const) {
+      const actual = await sha256File(paths[which]);
+      if (actual !== files[which].sha256) throw mismatch(paths[which], actual, files[which].sha256);
     }
-    if (section === null) throw new StoredDataError(`${path} does not start with ${CHECKED}`);
+  }
+  let checked: string[] = [];
+  let header = true;
+  for await (const text of readLines(paths.wallets, files.wallets.sha256, false)) {
     if (header) {
-      expectHeader(path, text, section === CHECKED ? CHECKED_COLUMNS : FLOW_COLUMNS);
+      expectHeader(paths.wallets, text, CHECKED_COLUMNS);
       header = false;
       continue;
     }
-    if (section === CHECKED) {
-      checked.push(fields(path, text, CHECKED_COLUMNS.length)[0]!);
-    } else {
-      const f = fields(path, text, FLOW_COLUMNS.length);
-      flows.push({
-        txHash: f[0]!, kind: f[1] as FlowKind, from: f[2]!, to: f[3]!, valueWei: f[4]!, token: f[5]!,
-        blockNumber: Number(f[6]), blockTime: Number(f[7]),
-      });
-    }
-    if (checked.length + flows.length === BATCH) {
-      yield { checked, flows };
+    checked.push(fields(paths.wallets, text, CHECKED_COLUMNS.length)[0]!);
+    if (checked.length === BATCH) {
+      yield { checked, flows: [] };
       checked = [];
+    }
+  }
+  if (header) throw new StoredDataError(`${paths.wallets} is empty`);
+  if (checked.length > 0) yield { checked, flows: [] };
+
+  let flows: Flow[] = [];
+  header = true;
+  for await (const text of readLines(paths.flows, files.flows.sha256, false)) {
+    if (header) {
+      expectHeader(paths.flows, text, FLOW_COLUMNS);
+      header = false;
+      continue;
+    }
+    const f = fields(paths.flows, text, FLOW_COLUMNS.length);
+    flows.push({
+      txHash: f[0]!, kind: f[1] as FlowKind, from: f[2]!, to: f[3]!, valueWei: f[4]!, token: f[5]!,
+      blockNumber: Number(f[6]), blockTime: Number(f[7]),
+    });
+    if (flows.length === BATCH) {
+      yield { checked: [], flows };
       flows = [];
     }
   }
-  if (section !== FLOWS) throw new StoredDataError(`${path} has no ${FLOWS} section`);
-  if (checked.length + flows.length > 0) yield { checked, flows };
+  if (header) throw new StoredDataError(`${paths.flows} is empty`);
+  if (flows.length > 0) yield { checked: [], flows };
 }
 
 /** One CSV line. Throws on a comma or a line break, which would shift or split the row on read. */
@@ -565,7 +642,7 @@ async function writeCompressed(path: string, lines: AsyncIterable<string>): Prom
 /** The decompressed lines of `path`, after its sha256 is checked (unless `verify` is false). Empty lines (the last newline) are skipped. */
 async function* readLines(path: string, sha256: string, verify = true): AsyncIterable<string> {
   const actual = verify ? await sha256File(path) : sha256;
-  if (actual !== sha256) throw new StoredDataError(`${path} does not match its checksum (sha256 ${actual}, expected ${sha256})`, 'mismatch');
+  if (actual !== sha256) throw mismatch(path, actual, sha256);
   const decompress = createZstdDecompress();
   const source = createReadStream(path);
   source.on('error', (err) => decompress.destroy(err));
@@ -580,6 +657,10 @@ async function* readLines(path: string, sha256: string, verify = true): AsyncIte
     source.destroy();
     decompress.destroy();
   }
+}
+
+function mismatch(path: string, actual: string, expected: string): StoredDataError {
+  return new StoredDataError(`${path} does not match its checksum (sha256 ${actual}, expected ${expected})`, 'mismatch');
 }
 
 function expectHeader(path: string, text: string, columns: readonly string[]): void {

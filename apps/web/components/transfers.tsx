@@ -22,39 +22,9 @@ export function because(w: Witness, chainId: number): React.ReactNode {
     <>
       <Wallet chainId={chainId} address={a} /> and <Wallet chainId={chainId} address={b} />{' '}
       {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} /></>}{' '}
-      (<a className="hover:underline" href={`${explorer(chainId)}/tx/${w.flowTx}`} target="_blank" rel="noreferrer">tx</a>)
+      (<a className="hover:underline" href={`${explorer(chainId)}/tx/${w.flowTx}`} target="_blank" rel="noopener noreferrer">tx ↗</a>)
     </>
   );
-}
-
-/** Two witnesses that would read as the same sentence share a key. */
-function witnessKey(w: Witness): string {
-  if (w.kind === 'pair') return `pair|${w.pair.join(',')}|${w.middle}|${w.flowTx}`;
-  const base = `${[...w.wallets].sort().join(',')}|${w.cycles}`;
-  return w.kind === 'scc' ? `scc|${base}` : `flow|${base}|${w.via.length}`;
-}
-
-export interface Reason { witness: Witness; methods: Method[]; rows: number[] }
-
-/**
- * A token's flags grouped by reason, so a pattern that four transfers share
- * is said once with the four rows it covers, and the lenses that agree on it
- * are named together. Rows are 1-based, as the graph labels them.
- */
-export function reasons(transfers: readonly FlaggedTransfer[]): Reason[] {
-  const by = new Map<string, Reason>();
-  transfers.forEach((t, i) => {
-    for (const m of METHODS) {
-      const w = t.flags[m];
-      if (!w) continue;
-      const key = witnessKey(w);
-      const r = by.get(key) ?? { witness: w, methods: [], rows: [] };
-      if (!r.methods.includes(m)) r.methods.push(m);
-      if (!r.rows.includes(i + 1)) r.rows.push(i + 1);
-      by.set(key, r);
-    }
-  });
-  return [...by.values()];
 }
 
 /** "2–5", "2, 4, 7". */
@@ -65,16 +35,18 @@ export function rowList(rows: readonly number[]): string {
 }
 
 const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
-const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', clean: '' } as const;
+// A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
+const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
 
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
  * token page's order: the number is the arrow's label in its graph. A page or
  * a filter shows only some of a token's rows, so `numbers` gives each shown
- * row its place in the whole chain order.
+ * row its place in the whole chain order. A lens chip opens that lens's tab of
+ * the row's collection, or of `base` when the rows carry none (one token's page).
  */
-export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false }: {
-  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean;
+export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base }: {
+  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string;
 }) {
   if (transfers.length === 0) return <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">No transfers read yet.</p>;
   return (
@@ -98,11 +70,12 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const n = numbers?.[i] ?? i + 1;
             return (
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
-                {numbered ? <td className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
+                {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
                 <td className="px-3 py-2 whitespace-nowrap">
-                  <a className="text-xs tabular-nums hover:underline" href={`${explorer(chainId)}/tx/${t.txHash}`} target="_blank" rel="noreferrer">
+                  <Link className="text-xs tabular-nums hover:underline" href={`/tx/${chainId}/${t.txHash}`} title="Open this trade">
                     {t.blockTime === null ? `block ${t.blockNumber.toLocaleString()}` : <Time ms={t.blockTime * 1000} />}
-                  </a>
+                  </Link>
+                  <a className="ml-1 text-xs text-muted-foreground hover:underline" href={`${explorer(chainId)}/tx/${t.txHash}`} target="_blank" rel="noopener noreferrer" title="Open the transaction on the block explorer">↗</a>
                 </td>
                 {collection && t.collection ? (
                   <td className="px-3 py-2">
@@ -114,16 +87,14 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                 <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} /> → <Wallet chainId={chainId} address={t.to} /></td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</span></>
+                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={`/tx/${chainId}/${t.txHash}`} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
                 <td className="px-3 py-2">
                   {METHODS.some((m) => t.flags[m]) ? (
                     <span className="flex flex-wrap gap-1">
                       {METHODS.filter((m) => t.flags[m]).map((m) => (
-                        <span key={m} className={cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[tone])}>
-                          {LENSES[m].name}
-                        </span>
+                        <Chip key={m} m={m} base={t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base} />
                       ))}
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
@@ -136,4 +107,11 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
       </table>
     </div>
   );
+}
+
+/** A lens's name on a coloured chip in its own tone; a link to that lens's tab where the collection is known. */
+function Chip({ m, base }: { m: Method; base?: string }) {
+  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[LENSES[m].tone]);
+  return base === undefined ? <span className={cls}>{LENSES[m].name}</span>
+    : <Link href={`${base}?method=${m}#evidence`} title={`Open the evidence for ${LENSES[m].name}`} className={cn(cls, 'hover:underline')}>{LENSES[m].name}</Link>;
 }

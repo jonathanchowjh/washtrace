@@ -1,21 +1,25 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
-import { LENSES, eth, pct } from '@/lib/format';
+import { LENSES, eth, pct, plural } from '@/lib/format';
 import { APART, APART_WHY, part, type Range } from '@/lib/metrics';
+import { tradesHref } from '@/lib/trades';
+import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
-const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
+export const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
 const TEXT = { cycle: 'text-cycle', money: 'text-money', apart: 'text-muted-foreground' } as const;
 
-/** A lens by its name, with its verdict hue. */
-export function LensName({ m, className }: { m: Method; className?: string }) {
+/** A lens by its name, with its verdict hue; `href` makes the name open that lens's tab (leave it off inside a link). */
+export function LensName({ m, className, href }: { m: Method; className?: string; href?: string }) {
+  const name = LENSES[m].name;
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
       <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[LENSES[m].tone])} />
-      <span className="font-medium text-foreground">{LENSES[m].name}</span>
+      {href === undefined ? <span className="font-medium text-foreground">{name}</span>
+        : <Link href={href} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
     </span>
   );
 }
@@ -85,6 +89,41 @@ export function RangeKey({ range }: { range: Range }) {
   );
 }
 
+const FIGURE = 'font-medium text-foreground tabular-nums hover:underline';
+
+/**
+ * The chosen lens in numbers, at the top of its panel: every figure opens the
+ * list it counts. It lives outside the cards because each card is one link,
+ * and a link cannot hold links. `loops` is the lens's own count, null for an
+ * analysis saved before loops were counted; a lens that did not run has no
+ * numbers, and its card says why.
+ */
+export function LensStats({ m, t, loops, base, notFinal }: {
+  m: Method; t: MethodTotals; loops: { loops: number; pairs: number } | null; base: string; notFinal: readonly Method[];
+}) {
+  if (!t.available) return null;
+  const s = part(t, 'sales'), o = part(t, 'owners');
+  const caught = tradesHref(base, { caught: [m] });
+  const priciest = { sort: 'price', dir: 'desc' } as const;
+  const flagged = (kind: 'tokens' | 'wallets') => `${base}/flagged?method=${m}&kind=${kind}`;
+  return (
+    <div aria-label={`${LENSES[m].name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
+      <p>
+        <Link href={caught} className={cn('text-lg', FIGURE)}>{pct(s.part, s.whole)}</Link> of sales
+        {APART.includes(m) ? ' (not counted)' : ''}{notFinal.includes(m) ? ' so far' : ''}
+        {' · '}<Link href={caught} className={FIGURE}>{t.flaggedSales.toLocaleString()}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{t.sales.toLocaleString()}</Link>
+        {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
+      </p>
+      <p>
+        <Link href={flagged('tokens')} className={FIGURE}>{plural(t.tokens, 'token')}</Link>
+        {' · '}<Link href={flagged('wallets')} className={FIGURE}>{plural(t.wallets, 'wallet')}</Link>
+        {loops ? <>{' · '}<Link href={flagged('tokens')} className={FIGURE}>{loops.pairs > 0 ? `${plural(loops.loops, 'loop')} and ${plural(loops.pairs, 'linked pair')}` : plural(loops.loops, 'loop')}</Link></> : null}
+      </p>
+      <p><Link href={tradesHref(base, { caught: [m], kind: 'all' })} className={FIGURE}>{pct(o.part, o.whole)}</Link> of every change of owner, sold or not</p>
+    </div>
+  );
+}
+
 const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground' } as const;
 const SEAM = { A: 'md:rounded-tl-none', AU: '', AC: 'md:rounded-tr-none' } as const;
 
@@ -111,7 +150,7 @@ export function LensCards({ totals, selected, href, notFinal, trail = false, fun
       <nav aria-label="Lens" className="grid gap-3 md:grid-cols-3">
         {METHODS.map((m) => {
           const t = totals[m];
-          const s = part(t, 'sales'), o = part(t, 'owners');
+          const s = part(t, 'sales');
           const on = m === selected;
           return (
             <Link key={m} href={href(m)} scroll={false} aria-current={on ? 'page' : undefined}
@@ -131,10 +170,6 @@ export function LensCards({ totals, selected, href, notFinal, trail = false, fun
                     <span className="text-sm text-muted-foreground">of sales</span>
                     {notFinal.includes(m) ? <span className="text-xs text-muted-foreground">so far</span> : null}
                   </p>
-                  <p className="text-xs text-muted-foreground tabular-nums">
-                    {t.flaggedSales.toLocaleString()} of {t.sales.toLocaleString()} sales · {eth(t.flaggedVolumeWei)} · {t.tokens.toLocaleString()} tokens · {t.wallets.toLocaleString()} wallets
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">{pct(o.part, o.whole)} of every change of owner, sold or not</p>
                 </div>
               ) : (
                 <p className="mt-auto text-sm text-muted-foreground">
@@ -184,15 +219,29 @@ function sales(totals: Record<Method, MethodTotals>, m: Method): { part: number;
  * period they happened in. A lens that did not run in the latest analysis
  * is drawn as not run in every period, never as 0%.
  */
-export function History({ timeline, totals, notFinal, now, zone }: {
+export function History({ timeline, totals, notFinal, now, zone, base }: {
   timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; notFinal: Method[]; now: number; zone: string;
+  /** The collection's path: each period opens its trades under it. */
+  base: string;
 }) {
   if (timeline.points.length === 0) return null;
   const points: TimePoint[] = timeline.points.map((q) => {
     const lens = (m: Method) => (totals[m].available ? { part: q.flaggedSales[m], whole: q.sales } : null);
     return { at: q.at, lens: { A: lens('A'), AU: lens('AU'), AC: lens('AC') }, sales: q.sales, transfers: q.transfers };
   });
-  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} />;
+  // A period is the span its bar covers: from its start to the next period's start, whether or not that one has trades. Instants, so they round-trip.
+  const spans = timeline.points.map((q) => ({ fromMs: q.at, toMs: nextStart(q.at, timeline.bucket, zone) }));
+  const periodHrefs = spans.map((r) => tradesHref(base, r));
+  // A lens's share of a period opens what that lens caught in it; a lens that did not run has no share, so no link.
+  const lensHrefs = spans.map((r) => Object.fromEntries(METHODS.filter((m) => totals[m].available).map((m) => [m, tradesHref(base, { ...r, caught: [m] })])) as Partial<Record<Method, string>>);
+  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} />;
+}
+
+/** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */
+function nextStart(at: number, bucket: Bucket, zone: string): number {
+  if (bucket === 'hour') return at + 3_600_000;
+  const { y, m, d } = dateIn(at, zone);
+  return bucket === 'month' ? midnight(y, m + 1, 1, zone) : midnight(y, m, d + (bucket === 'week' ? 7 : 1), zone);
 }
 
 /** The three lenses side by side: what washtrace looks for, before any number. */
@@ -219,37 +268,5 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
         </p>
       </div>
     </details>
-  );
-}
-
-/**
- * Tokens or wallets ranked by how many of their trades a lens flags, each
- * with the share of its own trades flagged. `start` numbers a later page.
- */
-export function Ranked({ title, unit, rows, tone, empty, more = null, start = 0 }: {
-  title: string; unit: string; empty: string; tone: 'cycle' | 'money' | 'apart'; more?: { href: string; label: string } | null; start?: number;
-  rows: { key: string; label: ReactNode; flagged: number; of: number }[];
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between text-xs text-muted-foreground">
-        <span className="font-medium text-body">{title}</span>
-        <span>flagged of {unit}</span>
-      </div>
-      {rows.length === 0 ? <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{empty}</p> : (
-        <ol start={start + 1} className="rounded-lg border bg-card">
-          {rows.map((r, i) => (
-            <li key={r.key} className="grid grid-cols-[minmax(0,1fr)_6rem_5.5rem] items-center gap-3 border-b px-3 py-2 last:border-b-0">
-              <span className="flex min-w-0 items-baseline gap-2"><span className="w-6 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{start + i + 1}</span><span className="truncate">{r.label}</span></span>
-              <span aria-hidden className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <i className={cn('block h-full rounded-full', DOT[tone])} style={{ width: `${(r.flagged / Math.max(1, r.of)) * 100}%` }} />
-              </span>
-              <span className="text-right text-xs tabular-nums"><span className="font-medium text-foreground">{r.flagged}</span> of {r.of}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-      {more ? <Link href={more.href} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">{more.label} →</Link> : null}
-    </div>
   );
 }

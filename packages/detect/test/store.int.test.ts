@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { SECRET_KEYS, Store } from '../src/store.js';
+import { SECRET_KEYS, Store, type ListOpts, type TokenSort, type WalletSort } from '../src/store.js';
 import { analyze } from '../src/methods.js';
 import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
@@ -9,13 +9,15 @@ import { Chain } from '../src/chain.js';
 import { Etherscan } from '../src/etherscan.js';
 import { workerConfig } from '../src/env.js';
 import { HttpRequestError } from 'viem';
-import { chain, flow, input, transfer, w } from './fixtures.js';
+import { LAB, LAB_MIXED, MONEY, at, chain, flow, input, transfer, w, type Fact } from './fixtures.js';
+import { ZERO } from '../src/graph.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { StoredDataError, readTrail, trailPath, writeTrail, type StoredEntry } from '../src/stored.js';
+import { StoredDataError, readTrail, trailPaths, trailSha, writeTrail, type StoredEntry, type TrailFiles } from '../src/stored.js';
 import { needsRestore } from '../src/worker.js';
-import type { Flow, Transfer } from '../src/types.js';
+import type { Flow, Method, Transfer } from '../src/types.js';
+import { NO_FILTER, type TradeQuery } from '../src/trades.js';
 import type { Payments } from '../src/payments.js';
 
 let pg: StartedPostgreSqlContainer;
@@ -62,13 +64,17 @@ describe('Store.schemaVersion', () => {
 });
 
 describe('Store', () => {
+  // Funding ran in this block's analysis, so every lens did.
+  const RAN = { money: new Set(['']), ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
+  const LIST = { sort: 'caught' as const, find: null, limit: 50, offset: 0 };
+
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(20);
-    expect(await store.schemaVersion()).toBe(20);
-    expect(await store.migrate()).toBe(20);
-    expect(await store.migrate()).toBe(20);
+    expect(await store.migrate()).toBe(25);
+    expect(await store.schemaVersion()).toBe(25);
+    expect(await store.migrate()).toBe(25);
+    expect(await store.migrate()).toBe(25);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 20 }]);
+    expect(rows).toEqual([{ version: 25 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -77,7 +83,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(20);
+      expect(await store.migrate()).toBe(25);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -91,7 +97,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
-      expect(await store.migrate()).toBe(20);
+      expect(await store.migrate()).toBe(25);
       const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
       expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
     } finally {
@@ -110,7 +116,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(20);
+      expect(await store.migrate()).toBe(25);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -292,7 +298,7 @@ describe('Store', () => {
     const d1 = w('d1'), d2 = w('d2'), d3 = w('d3');
     const { id } = await store.addCollection(1, w('dedu'), null, 1);
     const ts = chain('5', d1, d2);
-    await store.ingest(id, 1, ts, 10, []);
+    await store.ingest(id, 1, ts, 1_000_000, []);
     const saleTx = ts[1]!.txHash;
     await store.fund(1, d1, [
       flow(d1, d3, { blockNumber: 900, txHash: '0xdedu1' }), flow(d1, d3, { blockNumber: 800, txHash: '0xdedu2' }),
@@ -308,7 +314,7 @@ describe('Store', () => {
   it('analysisInput reads payments in batches, no matter how many', async () => {
     const d1 = w('b1'), d2 = w('b2');
     const { id } = await store.addCollection(1, w('batch'), null, 1);
-    await store.ingest(id, 1, chain('6', d1, d2), 10, []);
+    await store.ingest(id, 1, chain('6', d1, d2), 1_000_000, []);
     await store.fund(1, d1, [1, 2, 3, 4, 5, 6, 7].map((i) => flow(d1, w(`b1p${i}`), { txHash: `0xbatch${i}` })), false);
     const request = { storeUrl: '', id, chainId: 1, rules: {}, fundingAvailable: true, custodians: new Set<string>(), contracts: new Set<string>(), money: new Set(['']) };
     const whole = await analyzeStored(store, request);
@@ -336,7 +342,7 @@ describe('Store', () => {
   it('analysisInput releases its client and rolls back when a read fails mid-cursor', async () => {
     const d1 = w('r1'), d2 = w('r2');
     const { id } = await store.addCollection(1, w('rollb'), null, 1);
-    await store.ingest(id, 1, chain('7', d1, d2), 10, []);
+    await store.ingest(id, 1, chain('7', d1, d2), 1_000_000, []);
     await store.fund(1, d1, [1, 2, 3, 4, 5].map((i) => flow(d1, w(`r1p${i}`), { txHash: `0xrollb${i}` })), false);
     const out = () => store.pool.totalCount - store.pool.idleCount;
     const before = out();
@@ -376,7 +382,7 @@ describe('Store', () => {
 
   it('stores funding and takes the wallet off the queue', async () => {
     await store.fund(1, x, [flow(x, a), flow(x, b)], false);
-    expect(await store.counterparties(1, x)).toHaveLength(2);
+    expect(await store.counterparties(1, x, 50, 0, 'flows')).toHaveLength(2);
   });
 
   it('counts the wallets finished in the last hour, for the funding wait', async () => {
@@ -395,13 +401,14 @@ describe('Store', () => {
     // X funded both, but never traded here: it is a middle, not one of the collection's wallets.
     expect(read.funded).toEqual(new Set());
     const result = analyze({ ...input(read.transfers), payments: read.payments, funded: read.funded });
-    await store.saveAnalysis(stale!.id, stale!.version, result, 5, read.through);
+    await store.saveAnalysis(stale!.id, stale!.version, result, 5, read.through, new Set(['']));
 
     expect(await store.stale()).toEqual([]);
     const c = (await store.collection(1, collection))!;
     expect(c.latest?.totals.A).toMatchObject({ transfers: 3, flagged: 3, sales: 3 });
-    expect(await store.topTokens(c.id, 'A')).toEqual([{ tokenId: '1', transfers: 4, flagged: 3 }]);
-    expect((await store.topWallets(c.id, 'A')).map((r) => r.address).sort()).toEqual([a, b].sort());
+    // The mint is no trade: token 1's three sales are its counted trades, and all three are caught.
+    expect((await store.lensTokens(c.id, 'A', LIST, RAN)).rows).toEqual([expect.objectContaining({ tokenId: '1', trades: 3, caught: 3 })]);
+    expect((await store.lensWallets(c.id, 'A', LIST, RAN)).rows.map((r) => r.address).sort()).toEqual([a, b].sort());
     const token = await store.token(c.id, '1');
     expect(token.map((t) => Object.keys(t.flags).sort())).toEqual([[], ['A', 'AC', 'AU'], ['A', 'AC', 'AU'], ['A', 'AC', 'AU']]);
     expect(await store.transaction(1, token[1]!.txHash)).toEqual([expect.objectContaining({ collection: { chainId: 1, address: collection, name: 'Test' } })]);
@@ -410,9 +417,11 @@ describe('Store', () => {
 
   it('pages the ranked reads', async () => {
     const c = (await store.collection(1, collection))!;
-    const all = await store.topWallets(c.id, 'A');
-    expect(await store.topWallets(c.id, 'A', 1, 1)).toEqual([all[1]]);
-    expect(await store.topTokens(c.id, 'A', 10, 1)).toEqual([]);
+    const all = (await store.lensWallets(c.id, 'A', LIST, RAN)).rows;
+    expect(await store.lensWallets(c.id, 'A', { ...LIST, limit: 1, offset: 1 }, RAN)).toEqual({ rows: [all[1]], total: 2 });
+    expect(await store.lensTokens(c.id, 'A', { ...LIST, limit: 10, offset: 1 }, RAN)).toEqual({ rows: [], total: 1 });
+    // A whole address finds that one wallet.
+    expect((await store.lensWallets(c.id, 'A', { ...LIST, find: a.toUpperCase().replace('0X', '0x') }, RAN)).rows.map((r) => r.address)).toEqual([a]);
   });
 
   it('buckets the collection\'s own history by when its sales happened, with what each method flags', async () => {
@@ -436,7 +445,7 @@ describe('Store', () => {
     await store.fund(1, a, [flow(a, b)], false);
     const [stale] = await store.stale();
     await store.fund(1, b, [], false);
-    await store.saveAnalysis(c!.id, stale!.version, analyze(input([])), 1, null);
+    await store.saveAnalysis(c!.id, stale!.version, analyze(input([])), 1, null, new Set(['']));
     expect(await store.stale()).toHaveLength(1);
   });
 
@@ -445,7 +454,7 @@ describe('Store', () => {
     const due = (await store.stale()).find((s) => s.id === id)!;
     expect(due).toMatchObject({ name: 'Gone', ranAt: null, tookMs: null });
     await drop(1, w('90e'));
-    await expect(store.saveAnalysis(id, due.version, analyze(input([])), 1, null)).resolves.toBeUndefined();
+    await expect(store.saveAnalysis(id, due.version, analyze(input([])), 1, null, new Set(['']))).resolves.toBeUndefined();
     expect(await store.history(id)).toEqual([]);
   });
 
@@ -483,7 +492,7 @@ describe('Store', () => {
     expect((await store.stale()).find((s) => s.id === id)!.retryAt).toBeNull();
     expect(await failures()).toBe(2001);
     const due = (await store.stale()).find((s) => s.id === id)!;
-    await store.saveAnalysis(id, due.version, analyze(input([])), 1, null);
+    await store.saveAnalysis(id, due.version, analyze(input([])), 1, null, new Set(['']));
     expect(await store.collection(1, coll)).toMatchObject({ analysisError: null, analysisRetryAt: null });
     expect(await failures()).toBe(0);
     await drop(1, coll);
@@ -1297,6 +1306,21 @@ describe('Store', () => {
       await drop(chainId, coll);
     });
 
+    it('downloadFailed keeps the URL that did not match until another does, whatever fails or goes through meanwhile', async () => {
+      const coll = w('9d5');
+      const { id } = await store.addCollection(chainId, coll, null, 10);
+      expect((await store.collection(chainId, coll))!.downloadMismatch).toBeNull();
+      await store.downloadFailed(id, 'bad bytes', 'https://hub/r1/t');
+      expect((await store.collection(chainId, coll))!.downloadMismatch).toBe('https://hub/r1/t');
+      // The other file failing for another reason, or going through, says nothing of those bytes.
+      await store.downloadFailed(id, 'could not');
+      await store.downloadDone(id);
+      expect((await store.collection(chainId, coll))!.downloadMismatch).toBe('https://hub/r1/t');
+      await store.downloadFailed(id, 'bad bytes', 'https://hub/r2/t');
+      expect((await store.collection(chainId, coll))!.downloadMismatch).toBe('https://hub/r2/t');
+      await drop(chainId, coll);
+    });
+
     it('a collection waiting its turn is a file with no progress, and a restart clears it', async () => {
       const coll = w('9d5');
       const { id } = await store.addCollection(chainId, coll, null, 10);
@@ -1676,16 +1700,17 @@ describe('Store', () => {
       let dir: string;
       beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'washtrace-trail-int-')); });
       afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
-      const entry = (chainId: number, address: string, sha256: string): StoredEntry => ({
+      const entry = (chainId: number, address: string, files: TrailFiles): StoredEntry => ({
         // Through block 40: a collection read to 50 (see before) is past its transfers, and only its trail is due.
         chainId, address, name: 'Trailed', startBlock: 5, throughBlock: 40, throughTime: 1_700_000_100_000,
         transfers: { file: `${chainId}-${address}.transfers.csv.zst`, rows: 0, bytes: 0, sha256: '' },
-        trail: { rows: 3, wallets: 3, checked: 2, of: 2, bytes: 0, sha256 },
+        trail: { rows: 3, wallets: 3, checked: 2, of: 2, bytes: files.wallets.bytes + files.flows.bytes, sha256: trailSha(files), files },
       });
       const worker = (key: string | null) => new Worker(
         store, () => ({ rpc: new Map(), etherscanKey: key, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir,
       );
-      const written = async (e: StoredEntry) => writeTrail(trailPath(dir, e), {
+      const none: TrailFiles = { wallets: { bytes: 0, sha256: '' }, flows: { bytes: 0, sha256: '' } };
+      const written = async (e: StoredEntry) => writeTrail(trailPaths(dir, e), {
         checked: trail.flatMap((b) => b.checked).sort(),
         flows: trail.flatMap((b) => b.flows),
       });
@@ -1693,14 +1718,15 @@ describe('Store', () => {
       it('loads a trail that matches the manifest once, and the money lenses run on it with no key', async () => {
         const coll = w('14c1');
         const id = await before(14, coll);
-        const { sha256 } = await written(entry(14, coll, ''));
-        const e = entry(14, coll, sha256);
+        const { files } = await written(entry(14, coll, none));
+        const e = entry(14, coll, files);
+        const sha256 = trailSha(files);
         const w14 = worker(null);
         const mine = async () => (await store.collections()).filter((c) => c.chainId === 14);
         // Another collection on the chain, with no trail of its own.
         const z = (await store.addCollection(14, w('14c2'), null, 10)).id;
         expect(await store.importedFunding(id)).toBe(false);
-        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 2, collections: [e] });
+        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 3, collections: [e] });
         // The import runs in the background: wait for it.
         await (w14 as any).importing?.done;
         expect(await store.collection(14, coll)).toMatchObject({ trailImportedSha: sha256, trailNote: null });
@@ -1710,8 +1736,8 @@ describe('Store', () => {
         expect(await store.importedFunding(z)).toBe(false);
         // Loaded: not loaded again.
         let read = 0;
-        (w14 as any).storedTrail = (path: string, sha: string) => { read += 1; return readTrail(path, sha); };
-        await (w14 as any).trails(await mine(), { version: 2, collections: [e] });
+        (w14 as any).storedTrail = (e: StoredEntry, verify: boolean) => { read += 1; return readTrail(trailPaths(dir, e), e.trail!.files, verify); };
+        await (w14 as any).trails(await mine(), { version: 3, collections: [e] });
         expect(read).toBe(0);
 
         // No key, but checked wallets from the trail: the money lenses run.
@@ -1732,9 +1758,9 @@ describe('Store', () => {
       it('loads nothing from a trail that does not match the manifest, and says so', async () => {
         const coll = w('15c1');
         await store.addCollection(15, coll, null, 10);
-        await written(entry(15, coll, ''));
+        const { files } = await written(entry(15, coll, none));
         const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        await (worker(null) as any).trails([(await store.collection(15, coll))!], { version: 2, collections: [entry(15, coll, 'beef')] });
+        await (worker(null) as any).trails([(await store.collection(15, coll))!], { version: 3, collections: [entry(15, coll, { ...files, flows: { ...files.flows, sha256: 'b'.repeat(64) } })] });
         logged.mockRestore();
         expect(await walletRows(15)).toEqual([]);
         expect(await flowRows(15)).toEqual([]);
@@ -1809,5 +1835,614 @@ describe('Store.search', () => {
     } finally {
       for (const a of addrs) await drop(1, a);
     }
+  });
+});
+
+describe('trade facts', () => {
+  const labAddress = w('lab1');
+  // Idempotent; lets this block run alone.
+  beforeAll(async () => { await store.migrate(); });
+
+  /** The collection's facts keyed by fixture key, the bigints as numbers. */
+  async function factsOf(id: number): Promise<Record<string, Fact>> {
+    const { rows } = await store.pool.query(
+      'SELECT tx_hash, counted, held_s, buyer_age_s, floor_ratio FROM washtrace.trade_facts WHERE collection_id = $1', [id]);
+    return Object.fromEntries(rows.map((r) => [LAB.keyOf(r.tx_hash), {
+      counted: r.counted,
+      heldS: r.held_s === null ? null : Number(r.held_s),
+      buyerAgeS: r.buyer_age_s === null ? null : Number(r.buyer_age_s),
+      floorRatio: r.floor_ratio,
+    }]));
+  }
+
+  async function lab(address: string): Promise<number> {
+    const { id } = await store.addCollection(1, address, null, 1);
+    await store.ingest(id, 1, LAB.transfers, LAB.cursor, []);
+    return id;
+  }
+
+  it('reads no transfer past the cursor it reports, so a trade ingested meanwhile is not judged', async () => {
+    const id = await lab(labAddress);
+    // As an ingest running during the analysis would leave it: LATE stored, the cursor where it was read.
+    await store.pool.query(
+      `INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, block_time, token_id, from_address, to_address, marketplace, price_wei, currency)
+       VALUES ($1, $2, 0, $3, to_timestamp($4), $5, $6, $7, $8, $9, $10)`,
+      [id, LAB.late.txHash, LAB.late.blockNumber, LAB.late.blockTime, LAB.late.tokenId, LAB.late.from, LAB.late.to, LAB.late.marketplace, LAB.late.priceWei, LAB.late.currency],
+    );
+    const read = await store.analysisInput(id, 1);
+    expect(read.through).toBe(600);
+    expect(read.transfers.map((t) => t.blockNumber)).not.toContain(900);
+    expect(read.transfers).toHaveLength(LAB.transfers.length);
+    await drop(1, labAddress);
+  });
+
+  it('writes trade facts with the analysis, through its cursor only', async () => {
+    const id = await lab(labAddress);
+    await store.ingest(id, 1, [LAB.late], LAB.cursor, []);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+    const facts = await factsOf(id);
+    expect(facts).toEqual(LAB.facts);
+    expect(facts).not.toHaveProperty('LATE');
+    await drop(1, labAddress);
+  });
+
+  it('a second analysis replaces the facts, and removing the collection removes them', async () => {
+    const id = await lab(labAddress);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+    // Judged again with nothing uncounted, and the cursor past everything: M1 is counted now and LATE has a row.
+    await store.ingest(id, 1, [LAB.late], 900, []);
+    await store.saveAnalysis(id, 2, { ...LAB.analysis, uncounted: [] }, 5, 900, MONEY);
+    const facts = await factsOf(id);
+    expect(Object.keys(facts).sort()).toEqual([...Object.keys(LAB.facts), 'LATE'].sort());
+    expect(facts.M1!.counted).toBe(true);
+    // LATE: its buyer W4 is new there (age 0), the token last moved on day 51, and no priced sale in days 53-59 gives a floor.
+    expect(facts.LATE).toMatchObject({ counted: true, heldS: 9 * 86_400, buyerAgeS: 0, floorRatio: null });
+    await drop(1, labAddress);
+    const { rows } = await store.pool.query('SELECT 1 FROM washtrace.trade_facts WHERE collection_id = $1', [id]);
+    expect(rows).toEqual([]);
+  });
+
+  it('writes facts for every transfer when the analysis has no cursor', async () => {
+    const id = await lab(labAddress);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, null, MONEY);
+    expect(Object.keys(await factsOf(id))).toHaveLength(LAB.transfers.length);
+    await drop(1, labAddress);
+  });
+});
+
+describe('loops', () => {
+  const address = w('lab2');
+  beforeAll(async () => { await store.migrate(); });
+
+  async function mixed(): Promise<number> {
+    const { id } = await store.addCollection(1, address, null, 1);
+    await store.ingest(id, 1, LAB_MIXED.transfers, LAB_MIXED.cursor, []);
+    await store.saveAnalysis(id, 1, LAB_MIXED.analysis, 5, LAB_MIXED.cursor, MONEY);
+    return id;
+  }
+
+  it('counts the loops and pairs each lens found, and stores each loop once', async () => {
+    const id = await mixed();
+    const latest = (await store.collection(1, address))!.latest!;
+    expect(latest.loops).toEqual({ A: { loops: 1, pairs: 0 }, AU: { loops: 1, pairs: 0 }, AC: { loops: 1, pairs: 1 } });
+    const { rows } = await store.pool.query('SELECT kind, wallets, cycles, middle FROM washtrace.witnesses WHERE collection_id = $1 ORDER BY id', [id]);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.kind)).toEqual(['scc', 'pair']);
+    // Wallet order carries no meaning: compare as sets.
+    expect(rows[0].wallets.slice().sort()).toEqual([w('w10'), w('w11')].sort());
+    expect(rows[0].cycles).toBe(2);
+    expect(rows[1].wallets.slice().sort()).toEqual([w('w11'), w('w12'), w('w13')].sort());
+    expect(rows[1].middle).toBe(w('w13'));
+    const flags = await store.pool.query('SELECT method, tx_hash, witness_id FROM washtrace.flags WHERE collection_id = $1', [id]);
+    expect(flags.rows).toHaveLength(LAB_MIXED.analysis.flags.length);
+    // Ids go by first appearance: the scc is 0, the pair 1. Q1-Q3 are in the scc under every lens; Q4 is the pair, under Linked wallets only.
+    const pointed = flags.rows.map((r) => `${r.method} ${LAB.keyOf(r.tx_hash)} ${r.witness_id}`).sort();
+    const expected = [
+      ...['A', 'AU', 'AC'].flatMap((m) => ['Q1', 'Q2', 'Q3'].map((q) => `${m} ${q} 0`)), 'AC Q4 1',
+    ].sort();
+    expect(pointed).toEqual(expected);
+    await drop(1, address);
+  });
+
+  it('a lens that did not run counts no loops, though its flags carry Round trips\' copy', async () => {
+    const { id } = await store.addCollection(1, address, null, 1);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, null, MONEY);
+    const latest = (await store.collection(1, address))!.latest!;
+    expect(latest.totals.AU.available).toBe(false);
+    expect(latest.loops!.A).toEqual({ loops: 1, pairs: 0 });
+    expect(latest.loops!.AU).toEqual({ loops: 0, pairs: 0 });
+    expect(latest.loops!.AC).toEqual({ loops: 0, pairs: 0 });
+    expect((await store.history(id))[0]!.loops!.AU).toEqual({ loops: 0, pairs: 0 });
+    await drop(1, address);
+  });
+
+  it('finds the pair through any of its wallets, middle included', async () => {
+    const id = await mixed();
+    const { rows } = await store.pool.query('SELECT id FROM washtrace.witnesses WHERE collection_id = $1 AND wallets @> ARRAY[$2]::text[]', [id, w('w13')]);
+    expect(rows).toHaveLength(1);
+    const pair = await store.pool.query(
+      `SELECT count(*)::int AS n FROM washtrace.flags f WHERE f.collection_id = $1 AND f.witness_id = $2`, [id, rows[0].id]);
+    expect(pair.rows[0].n).toBe(1);
+    await drop(1, address);
+  });
+
+  it('a re-save replaces the witnesses with the new ones, not adds to them', async () => {
+    const id = await mixed();
+    await store.saveAnalysis(id, 2, LAB_MIXED.analysis, 5, LAB_MIXED.cursor, MONEY);
+    const { rows } = await store.pool.query('SELECT count(*)::int AS n FROM washtrace.witnesses WHERE collection_id = $1', [id]);
+    expect(rows[0].n).toBe(2);
+    await store.saveAnalysis(id, 3, { ...LAB_MIXED.analysis, flags: [] }, 5, LAB_MIXED.cursor, MONEY);
+    const none = await store.pool.query('SELECT count(*)::int AS n FROM washtrace.witnesses WHERE collection_id = $1', [id]);
+    expect(none.rows[0].n).toBe(0);
+    await drop(1, address);
+  });
+
+  it('is null on an analysis saved before loops were counted', async () => {
+    const { id } = await store.addCollection(1, address, null, 1);
+    await store.saveAnalysis(id, 1, LAB_MIXED.analysis, 5, null, MONEY);
+    await store.pool.query('UPDATE washtrace.analyses SET loops = NULL WHERE collection_id = $1', [id]);
+    expect((await store.collection(1, address))!.latest!.loops).toBeNull();
+    expect((await store.history(id))[0]!.loops).toBeNull();
+    await drop(1, address);
+  });
+
+  it('queues a collection analysed before loops were counted to run again, and leaves a newer one be', async () => {
+    const newer = w('lab6');
+    const old = (await store.addCollection(1, address, null, 1)).id;
+    await store.saveAnalysis(old, 1, LAB_MIXED.analysis, 5, null, MONEY);
+    await store.pool.query('UPDATE washtrace.analyses SET loops = NULL WHERE collection_id = $1', [old]);
+    const fresh = (await store.addCollection(1, newer, null, 1)).id;
+    await store.saveAnalysis(fresh, 1, LAB_MIXED.analysis, 5, null, MONEY);
+    try {
+      expect((await store.stale()).map((s) => s.id)).not.toContain(old);
+      // Run the newest migration again, as an install upgrading to it would.
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (24)');
+      expect(await store.migrate()).toBe(25);
+      const due = (await store.stale()).map((s) => s.id);
+      expect(due).toContain(old);
+      expect(due).not.toContain(fresh);
+      // The newest-first page's index, in the order it reads, in place of the ascending one.
+      const { rows } = await store.pool.query(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'transfers' AND indexname LIKE 'transfers_coll_time%'");
+      expect(rows.map((r) => r.indexname)).toEqual(['transfers_coll_time_desc_idx']);
+      expect(rows[0].indexdef).toContain('block_time DESC NULLS LAST');
+    } finally {
+      await drop(1, address);
+      await drop(1, newer);
+    }
+  });
+});
+
+describe('trades', () => {
+  const labAddress = w('lab3'), mixedAddress = w('lab4'), hexAddress = w('lab5');
+  const CTX = { money: MONEY, ran: ['A'] as Method[], zone: 'UTC' };
+  const ALL = { money: MONEY, ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
+  const ETH = (x: number) => (BigInt(Math.round(x * 1000)) * 10n ** 15n).toString();
+  const keys = (rows: { txHash: string }[]) => rows.map((r) => LAB.keyOf(r.txHash));
+  const DAY_MS = 86_400_000;
+  // The lab's wallets and hashes are not hex, so a Find on them is tried on a collection whose are.
+  const hex = (s: string) => '0x' + s.padEnd(40, '0');
+  const alice = hex('ab12'), bob = hex('ab34'), carol = hex('cd56');
+  const t1 = '0x' + 'e'.repeat(64), t2 = '0x' + 'f'.repeat(64);
+  let lab: number, mixed: number, hexed: number;
+
+  beforeAll(async () => {
+    await store.migrate();
+    // LAB as the analysis left it: judged through block 600 without funding, so only Round trips ran; LATE came in after.
+    lab = (await store.addCollection(1, labAddress, null, 1)).id;
+    await store.ingest(lab, 1, [...LAB.transfers, LAB.late], LAB.cursor, []);
+    await store.saveAnalysis(lab, 1, LAB.analysis, 5, LAB.cursor, MONEY);
+    mixed = (await store.addCollection(1, mixedAddress, null, 1)).id;
+    await store.ingest(mixed, 1, LAB_MIXED.transfers, LAB_MIXED.cursor, []);
+    await store.saveAnalysis(mixed, 1, LAB_MIXED.analysis, 5, LAB_MIXED.cursor, MONEY);
+    // Never analysed: a mint, then two sales, the first at midday UTC on 31 January.
+    hexed = (await store.addCollection(1, hexAddress, null, 1)).id;
+    await store.ingest(hexed, 1, [
+      transfer('9', ZERO, alice, { blockTime: Date.UTC(2023, 0, 1) / 1000 }),
+      transfer('9', alice, bob, { txHash: t1, marketplace: 'blur', blockTime: Date.UTC(2023, 0, 31, 12) / 1000 }),
+      transfer('9', bob, carol, { txHash: t2, marketplace: 'blur', blockTime: Date.UTC(2023, 1, 1, 12) / 1000 }),
+    ], 1_000_000, []);
+  });
+  afterAll(async () => {
+    await drop(1, labAddress);
+    await drop(1, mixedAddress);
+    await drop(1, hexAddress);
+  });
+
+  const list = async (q: Partial<TradeQuery>, ctx = CTX, id = lab) => keys(await store.trades(id, { ...NO_FILTER, ...q }, ctx, 50, 0));
+
+  it('indexes a collection’s senders and receivers once each, for both equality and the start of an address', async () => {
+    const { rows } = await store.pool.query(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'transfers' AND indexdef LIKE '%(collection_id, %_address%' ORDER BY indexname`);
+    expect(rows.map((r) => r.indexname)).toEqual(['transfers_coll_from_prefix_idx', 'transfers_coll_to_prefix_idx']);
+    expect(rows.every((r) => r.indexdef.includes('text_pattern_ops'))).toBe(true);
+  });
+
+  it('lists counted sales newest first, with only the lenses that ran, and counts not-judged-yet rows apart', async () => {
+    const rows = await store.trades(lab, NO_FILTER, CTX, 50, 0);
+    expect(keys(rows)).toEqual(['LATE', 'S4', 'S3', 'P1', 'U1', 'S2', 'S5', 'S1']); // M1 not counted
+    expect(rows[0]).toMatchObject({ judged: false, lenses: [], heldS: null, buyerAgeS: null, floorRatio: null });
+    expect(rows[1]!.lenses).toEqual(['A']); // AU and AC copies ignored
+    expect(rows[1]).toMatchObject({ judged: true, heldS: 86_400, buyerAgeS: 41 * 86_400, floorRatio: 0.5, priceWei: ETH(1), marketplace: 'blur', tokenId: '1' });
+    expect(await store.tradeCount(lab, NO_FILTER, CTX)).toEqual({ total: 8, unjudged: 1 });
+    // Every transfer, not just sales; the uncounted mint stays out.
+    expect(await list({ kind: 'all' })).toEqual(['LATE', 'S4', 'S3', 'P1', 'U1', 'S2', 'S5', 'S1']);
+    expect((await store.trades(mixed, NO_FILTER, ALL, 50, 0)).map((r) => r.lenses)).toEqual([['AC'], ['A', 'AU', 'AC'], ['A', 'AU', 'AC'], ['A', 'AU', 'AC']]);
+  });
+
+  it('a caught filter on a lens that did not run returns nothing; not-caught leaves out rows not judged yet', async () => {
+    expect(await store.trades(lab, { ...NO_FILTER, caught: ['AU'] }, CTX, 50, 0)).toEqual([]);
+    expect(await store.tradeCount(lab, { ...NO_FILTER, caught: ['A', 'AC'] }, CTX)).toEqual({ total: 0, unjudged: 0 });
+    expect(await list({ caught: ['A'] })).toEqual(['S4', 'S3', 'S2', 'S1']);
+    expect(await list({ notCaught: ['A'] })).toEqual(['P1', 'U1', 'S5']);
+    // A not-caught lens that did not run is ignored: the rest still apply.
+    expect(await list({ notCaught: ['AU'] })).toEqual(['LATE', 'S4', 'S3', 'P1', 'U1', 'S2', 'S5', 'S1']);
+    expect(await list({ caught: ['AC'], notCaught: ['A'] }, ALL, mixed)).toEqual(['Q4']);
+  });
+
+  it('a price bound drops unpriced and non-ETH sales, and a price sort puts them last both ways', async () => {
+    expect(await list({ priceMinWei: ETH(1.5) })).toEqual(['S3', 'S2', 'S5']);
+    expect(await list({ priceMaxWei: ETH(1) })).toEqual(['LATE', 'S4', 'S1']);
+    for (const dir of ['asc', 'desc'] as const) expect((await list({ sort: 'price', dir })).slice(-2)).toEqual(['P1', 'U1']);
+    // Ties by date, newest first.
+    expect(await list({ sort: 'price', dir: 'asc' })).toEqual(['LATE', 'S4', 'S1', 'S3', 'S5', 'S2', 'P1', 'U1']);
+  });
+
+  it('a venue key matches every raw string of it', async () => {
+    expect(await list({ venues: ['opensea'] })).toEqual(['S2']);
+    expect(await list({ venues: ['opensea', 'blur'] })).toHaveLength(8);
+    expect(await list({ venues: ['x2y2'] })).toEqual([]);
+  });
+
+  it('filters by what the facts say, by time, by wallet and by token', async () => {
+    expect(await list({ heldOverS: 30 * 86_400 })).toEqual(['S3']);
+    // [over, under), as the bands read it: two days is not under two days.
+    expect(await list({ heldUnderS: 2 * 86_400 })).toEqual(['S4', 'P1']);
+    expect(await list({ buyerAgeOverS: 1 })).toEqual(['S4', 'S3']);
+    expect(await list({ floorMin: 1 })).toEqual(['S2', 'S5']);
+    expect(await list({ floorMax: 1 })).toEqual(['S4']);
+    expect(await list({ fromMs: at(50) * 1000, toMs: at(51) * 1000 })).toEqual(['S3']);
+    expect(await list({ fromMs: at(51) * 1000 - DAY_MS / 2 })).toEqual(['LATE', 'S4']);
+    expect(await list({ wallet: w('w3') })).toEqual(['S3', 'S2']);
+    expect(await list({ token: '2' })).toEqual(['P1', 'U1', 'S5']);
+  });
+
+  it('a token group is the wallets in that token’s loops; a wallet group goes through the index', async () => {
+    expect(await list({ kind: 'all', group: { method: 'A', token: '1' } })).toEqual(['S4', 'S3', 'S2', 'S1']);
+    expect(await list({ kind: 'all', group: { method: 'AC', wallet: w('w12') } }, ALL, mixed)).toEqual(['Q4']);
+    expect(await list({ kind: 'all', group: { method: 'A', wallet: w('w12') } }, ALL, mixed)).toEqual([]);
+    // A group by a lens that did not run has none of its copied loops.
+    expect(await list({ kind: 'all', group: { method: 'AU', token: '1' } })).toEqual([]);
+    expect(await list({ kind: 'all', group: { method: 'AU', wallet: w('w1') } })).toEqual([]);
+  });
+
+  it('groups by held band with only the lenses that ran, unknown last', async () => {
+    expect(await store.tradeGroups(lab, { ...NO_FILTER, token: '1' }, 'held', CTX)).toEqual([
+      { key: '2', trades: 3, caught: { A: 3 } }, { key: '3', trades: 1, caught: { A: 1 } }, { key: '-', trades: 1, caught: { A: 0 } },
+    ]);
+  });
+
+  it('groups by marketplace busiest first, by month in order, and by buyer age and floor band', async () => {
+    expect(await store.tradeGroups(lab, NO_FILTER, 'marketplace', CTX)).toEqual([
+      { key: 'blur', trades: 7, caught: { A: 3 } }, { key: 'opensea', trades: 1, caught: { A: 1 } },
+    ]);
+    expect(await store.tradeGroups(mixed, NO_FILTER, 'marketplace', ALL)).toEqual([{ key: 'blur', trades: 4, caught: { A: 3, AU: 3, AC: 4 } }]);
+    // Every transfer: one that is no sale has no marketplace, so it is unknown, and last.
+    expect(await store.tradeGroups(hexed, { ...NO_FILTER, kind: 'all' }, 'marketplace', CTX)).toEqual([
+      { key: 'blur', trades: 2, caught: { A: 0 } }, { key: '-', trades: 1, caught: { A: 0 } },
+    ]);
+    expect(await store.tradeGroups(lab, NO_FILTER, 'month', CTX)).toEqual([
+      { key: '2023-01', trades: 5, caught: { A: 2 } }, { key: '2023-02', trades: 2, caught: { A: 2 } }, { key: '2023-03', trades: 1, caught: { A: 0 } },
+    ]);
+    expect(await store.tradeGroups(lab, NO_FILTER, 'buyerAge', CTX)).toEqual([
+      { key: '0', trades: 5, caught: { A: 2 } }, { key: '2', trades: 2, caught: { A: 2 } }, { key: '-', trades: 1, caught: { A: 0 } },
+    ]);
+    // A ratio of exactly 2 is at an edge, so in the top band.
+    expect(await store.tradeGroups(lab, NO_FILTER, 'floor', CTX)).toEqual([
+      { key: '1', trades: 1, caught: { A: 1 } }, { key: '4', trades: 2, caught: { A: 1 } }, { key: '-', trades: 5, caught: { A: 2 } },
+    ]);
+  });
+
+  it('a month is the reader’s month, whatever the server’s time zone', async () => {
+    const months = async (zone: string) => (await store.tradeGroups(hexed, NO_FILTER, 'month', { ...CTX, zone })).map((g) => [g.key, g.trades]);
+    expect(await months('UTC')).toEqual([['2023-01', 1], ['2023-02', 1]]);
+    // Midday UTC on 31 January is already 1 February at UTC+14.
+    expect(await months('Pacific/Kiritimati')).toEqual([['2023-02', 2]]);
+  });
+
+  it('find takes a token number, a tx hash, or the start of a wallet address', async () => {
+    expect(await list({ find: '2' })).toEqual(['P1', 'U1', 'S5']);
+    expect(await list({ find: ' #2 ' })).toEqual(['P1', 'U1', 'S5']);
+    expect(await list({ find: 'hello' })).toEqual([]);
+    expect(await list({ find: '0x000' })).toEqual([]); // too short to be the start of an address
+    expect(await list({ find: '0x0000' })).toHaveLength(8); // four digits are enough, and every lab wallet starts so
+    const find = async (f: string) => (await store.trades(hexed, { ...NO_FILTER, find: f }, CTX, 50, 0)).map((r) => r.txHash);
+    expect(await find(t1.toUpperCase().replace('0X', '0x'))).toEqual([t1]);
+    expect(await find(carol)).toEqual([t2]);
+    expect(await find('0xAB34')).toEqual([t2, t1]);
+    expect(await find('0xcd56')).toEqual([t2]);
+    expect(await find('0xcd5')).toEqual([]);
+    expect(await find('9')).toEqual([t2, t1]);
+    // '#' makes a number a token, and hex after it is not an address.
+    expect(await find('#0xab34')).toEqual([]);
+  });
+
+  it('sorts by a lens, flagged first, and by a lens that did not run not at all', async () => {
+    expect(await list({ sort: 'lens-A', dir: 'desc' })).toEqual(['S4', 'S3', 'S2', 'S1', 'LATE', 'P1', 'U1', 'S5']);
+    expect(await list({ sort: 'lens-AU', dir: 'desc' })).toEqual(await list({}));
+    expect(await list({ sort: 'held', dir: 'desc' })).toEqual(['S3', 'S1', 'U1', 'S2', 'S4', 'P1', 'LATE', 'S5']);
+  });
+
+  it('the stream yields the same rows as every page put together', async () => {
+    const queries: TradeQuery[] = [NO_FILTER, { ...NO_FILTER, sort: 'price', dir: 'asc' }, { ...NO_FILTER, kind: 'all', caught: ['A'] }];
+    for (const q of queries) {
+      const pages = [];
+      for (let offset = 0; ; offset += 3) {
+        const page = await store.trades(lab, q, CTX, 3, offset);
+        pages.push(...page);
+        if (page.length < 3) break;
+      }
+      const streamed = [];
+      for await (const r of store.tradeStream(lab, q, CTX)) streamed.push(r);
+      expect(streamed).toEqual(pages);
+      expect(streamed.length).toBe((await store.tradeCount(lab, q, CTX)).total);
+    }
+  });
+});
+
+describe('lens lists', () => {
+  const labAddress = w('lab7'), mixedAddress = w('lab8'), sortedAddress = w('lab9');
+  const CTX = { money: MONEY, ran: ['A'] as Method[], zone: 'UTC' };
+  const ALL = { money: MONEY, ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
+  const ETH = (x: number) => (BigInt(Math.round(x * 1000)) * 10n ** 15n).toString();
+  const [W1, W11] = ['w1', 'w11'].map(w) as [string, string];
+  const tokens = (o: Partial<ListOpts<TokenSort>> = {}): ListOpts<TokenSort> => ({ sort: 'caught', find: null, limit: 50, offset: 0, ...o });
+  const wallets = (o: Partial<ListOpts<WalletSort>> = {}): ListOpts<WalletSort> => ({ sort: 'caught', find: null, limit: 50, offset: 0, ...o });
+  let lab: number, mixed: number, sorted: number;
+
+  // Three tokens whose orders differ by every sort, each order with a real tie. Every mint is on day 0 and counts for nothing.
+  const [A, B, C, D, E, F, G] = ['a', 'b', 'c', 'd', 'e', 'f', 'f1'].map(w) as [string, string, string, string, string, string, string];
+  const sale = (token: string, from: string, to: string, day: number, eth: number) =>
+    transfer(token, from, to, { marketplace: 'blur', priceWei: ETH(eth), currency: '', blockTime: at(day) });
+  const mints = [transfer('10', ZERO, A, { blockTime: at(0) }), transfer('20', ZERO, D, { blockTime: at(0) }), transfer('30', ZERO, F, { blockTime: at(0) })];
+  // Token 10: A and B round twice, then B sells on to C: 3 of 4 caught, 3 ETH, last on day 20.
+  const ring10 = [sale('10', A, B, 1, 1), sale('10', B, A, 2, 1), sale('10', A, B, 3, 1)];
+  // Token 20: D and E, once round: 2 of 2, 8 ETH, last on day 6.
+  const ring20 = [sale('20', D, E, 5, 4), sale('20', E, D, 6, 4)];
+  // Token 30: F and G round twice: 3 of 3, 3 ETH, last on day 42.
+  const ring30 = [sale('30', F, G, 40, 1), sale('30', G, F, 41, 1), sale('30', F, G, 42, 1)];
+  const sortedTransfers = [...mints, ...ring10, sale('10', B, C, 20, 5), ...ring20, ...ring30];
+  const flagsOn = (txs: typeof ring10, wallets: string[], cycles: number) =>
+    txs.map((t) => ({ txHash: t.txHash, logIndex: t.logIndex, method: 'A' as const, witness: { kind: 'scc' as const, wallets, cycles } }));
+
+  beforeAll(async () => {
+    await store.migrate();
+    // As the analysis left LAB: no funding, so only Round trips ran, and LATE came in after it.
+    lab = (await store.addCollection(1, labAddress, null, 1)).id;
+    await store.ingest(lab, 1, [...LAB.transfers, LAB.late], LAB.cursor, []);
+    await store.saveAnalysis(lab, 1, LAB.analysis, 5, LAB.cursor, MONEY);
+    mixed = (await store.addCollection(1, mixedAddress, null, 1)).id;
+    await store.ingest(mixed, 1, LAB_MIXED.transfers, LAB_MIXED.cursor, []);
+    await store.saveAnalysis(mixed, 1, LAB_MIXED.analysis, 5, LAB_MIXED.cursor, MONEY);
+    sorted = (await store.addCollection(1, sortedAddress, null, 1)).id;
+    await store.ingest(sorted, 1, sortedTransfers, 1_000_000, []);
+    await store.saveAnalysis(sorted, 1, {
+      ...LAB.analysis,
+      flags: [...flagsOn(ring10, [A, B], 2), ...flagsOn(ring20, [D, E], 1), ...flagsOn(ring30, [F, G], 2)],
+      uncounted: mints.map((t) => ({ txHash: t.txHash, logIndex: t.logIndex })),
+    }, 5, null, MONEY);
+  });
+  afterAll(async () => {
+    await drop(1, labAddress);
+    await drop(1, mixedAddress);
+    await drop(1, sortedAddress);
+  });
+
+  it('a token counts its counted trades, what the lens caught of them, its loops and their wallets', async () => {
+    // M1 is a mint and LATE was never judged: token 1's counted trades are S1-S4, every one caught.
+    expect(await store.lensTokens(lab, 'A', tokens(), CTX)).toEqual({
+      total: 1,
+      rows: [{ tokenId: '1', caught: 4, trades: 4, volumeWei: ETH(7), lastAt: at(51) * 1000, loops: 1, pairs: 0, wallets: 3, closedByMoney: 0, laps: 2, middles: 0 }],
+    });
+  });
+
+  it('a wallet counts the trades it was in, and the other wallets in its loops', async () => {
+    const { rows, total } = await store.lensWallets(lab, 'A', wallets(), CTX);
+    expect(total).toBe(3);
+    expect(rows.find((r) => r.address === W1)).toEqual({ address: W1, caught: 3, trades: 3, volumeWei: ETH(4), firstAt: at(10) * 1000, loops: 1, pairs: 0, partners: 2 });
+  });
+
+  it('loops and linked pairs are counted apart, with the middle wallet among the wallets', async () => {
+    const t = await store.lensTokens(mixed, 'AC', tokens(), ALL);
+    expect(t.rows[0]).toMatchObject({ tokenId: '3', caught: 4, trades: 4, loops: 1, pairs: 1, wallets: 4, middles: 1, laps: 2, closedByMoney: 0 });
+    const { rows } = await store.lensWallets(mixed, 'AC', wallets(), ALL);
+    expect(rows.find((r) => r.address === W11)).toMatchObject({ caught: 4, trades: 4, loops: 1, pairs: 1, partners: 3 });
+    // Under Round trips Q4 is not caught, so W11 is 3 of 4, in the loop alone.
+    const a = await store.lensWallets(mixed, 'A', wallets(), ALL);
+    expect(a.rows.find((r) => r.address === W11)).toMatchObject({ caught: 3, trades: 4, loops: 1, pairs: 0, partners: 1 });
+  });
+
+  it('reads nothing for a lens that did not run, though the engine copied its flags', async () => {
+    expect(await store.lensTokens(lab, 'AU', tokens(), CTX)).toEqual({ rows: [], total: 0 });
+    expect(await store.lensWallets(lab, 'AC', wallets(), CTX)).toEqual({ rows: [], total: 0 });
+  });
+
+  it('sorts tokens by most caught, share, volume and newest, a tie by token number', async () => {
+    const order = async (sort: TokenSort) => (await store.lensTokens(sorted, 'A', tokens({ sort }), CTX)).rows.map((r) => r.tokenId);
+    // 10 and 30 both caught 3: the lower number first.
+    expect(await order('caught')).toEqual(['10', '30', '20']);
+    // 20 and 30 both all caught: the more caught first; 10 is 3 of 4.
+    expect(await order('share')).toEqual(['30', '20', '10']);
+    // 20 is 8 ETH; 10 and 30 both 3 ETH, B's 5 ETH sale to C not caught.
+    expect(await order('volume')).toEqual(['20', '10', '30']);
+    expect(await order('newest')).toEqual(['30', '10', '20']);
+    expect((await store.lensTokens(sorted, 'A', tokens(), CTX)).rows.map((r) => r.lastAt)).toEqual([at(20) * 1000, at(42) * 1000, at(6) * 1000]);
+  });
+
+  it('sorts wallets by most caught, share, volume and first seen, a tie by address', async () => {
+    const order = async (sort: WalletSort) => (await store.lensWallets(sorted, 'A', wallets({ sort }), CTX)).rows.map((r) => r.address);
+    expect(await order('caught')).toEqual([A, B, F, G, D, E]);
+    // A, F and G all caught 3 of 3, D and E 2 of 2: the more caught first. B is 3 of 4.
+    expect(await order('share')).toEqual([A, F, G, D, E, B]);
+    expect(await order('volume')).toEqual([D, E, A, B, F, G]);
+    // Newest first, by each wallet's first counted trade: the mints on day 0 would tie A, D and F.
+    expect(await order('first')).toEqual([F, G, D, E, A, B]);
+    const firsts = Object.fromEntries((await store.lensWallets(sorted, 'A', wallets(), CTX)).rows.map((r) => [r.address, r.firstAt]));
+    expect([firsts[A], firsts[D], firsts[F]]).toEqual([at(1) * 1000, at(5) * 1000, at(40) * 1000]);
+  });
+
+  it('a limit of 0 reads the count alone', async () => {
+    expect(await store.lensTokens(sorted, 'A', tokens({ limit: 0 }), CTX)).toEqual({ rows: [], total: 3 });
+    expect(await store.lensWallets(sorted, 'A', wallets({ limit: 0, find: '0x000000' }), CTX)).toEqual({ rows: [], total: 6 });
+  });
+
+  it('a Find narrows to tokens whose number, or wallets whose address, starts with it; anything else matches nothing', async () => {
+    expect((await store.lensTokens(lab, 'A', tokens({ find: '1' }), CTX)).rows.map((r) => r.tokenId)).toEqual(['1']);
+    expect((await store.lensTokens(mixed, 'A', tokens({ find: '#3' }), ALL)).total).toBe(1);
+    expect(await store.lensTokens(lab, 'A', tokens({ find: '2' }), CTX)).toEqual({ rows: [], total: 0 });
+    expect(await store.lensTokens(lab, 'A', tokens({ find: 'hello' }), CTX)).toEqual({ rows: [], total: 0 });
+    expect(await store.lensTokens(lab, 'A', tokens({ find: '0x000000' }), CTX)).toEqual({ rows: [], total: 0 });
+    // The lab's wallets are 0x and zeros before their names, which are not hex: a hex start matches all three, and the whole name none.
+    expect((await store.lensWallets(lab, 'A', wallets({ find: '0x000000' }), CTX)).total).toBe(3);
+    expect((await store.lensWallets(lab, 'A', wallets({ find: W1 }), CTX)).total).toBe(0);
+    expect(await store.lensWallets(lab, 'A', wallets({ find: '1' }), CTX)).toEqual({ rows: [], total: 0 });
+  });
+
+  it('pages, and still counts the list past its last page', async () => {
+    const all = (await store.lensWallets(lab, 'A', wallets(), CTX)).rows;
+    expect(await store.lensWallets(lab, 'A', wallets({ limit: 1, offset: 1 }), CTX)).toEqual({ rows: [all[1]], total: 3 });
+    expect(await store.lensWallets(lab, 'A', wallets({ limit: 2, offset: 4 }), CTX)).toEqual({ rows: [], total: 3 });
+  });
+});
+
+describe('a wallet', () => {
+  // Its own chain, so no other block's collections hold its trades; hex wallets, so a Find on their start reads them.
+  const CHAIN = 909;
+  const hex = (s: string) => '0x' + s.padEnd(40, '0');
+  const W = hex('aa'), P = hex('bb'), Q = hex('cc'), R = hex('dd');
+  const ran = hex('c1'), notRan = hex('c2');
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  // Newest first: u2 u1 t4 t3 t2 t1. W is in all but u3.
+  const T = { t1: 1, t2: 2, t3: 3, t4: 4, u1: 5, u2: 6, u3: 7 } as const;
+  const keys = (rows: { txHash: string }[]) => rows.map((r) => Object.entries(T).find(([, n]) => tx(n) === r.txHash)![0]);
+
+  beforeAll(async () => {
+    await store.migrate();
+    const at = (k: keyof typeof T, token: string, from: string, to: string) => transfer(token, from, to, { txHash: tx(T[k]), blockNumber: T[k] });
+    const c1 = (await store.addCollection(CHAIN, ran, 'Ran', 1)).id;
+    await store.ingest(c1, CHAIN, [at('t1', '1', W, P), at('t2', '2', P, W), at('t3', '3', W, Q), at('t4', '4', Q, W)], 100, [W, P, Q]);
+    const c2 = (await store.addCollection(CHAIN, notRan, null, 1)).id;
+    await store.ingest(c2, CHAIN, [at('u1', '1', W, P), at('u2', '7', W, Q), at('u3', '8', P, Q)], 100, []);
+    // Linked wallets ran in the first collection. In the second only Round trips did, so its copied Linked wallets flag caught nothing.
+    const analysis = (id: number, funded: boolean) => store.pool.query(
+      `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches)
+       VALUES ($1, 1, 100, $2, 0, 0, 0, 0)`,
+      [id, JSON.stringify({ A: { available: true }, AU: { available: funded }, AC: { available: funded } })]);
+    await analysis(c1, true);
+    await analysis(c2, false);
+    const flag = (id: number, m: Method, k: keyof typeof T) => store.pool.query(
+      `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, $2, $3, 0, '{"kind":"pair","pair":[],"middle":null,"flowTx":"0x"}')`,
+      [id, m, tx(T[k])]);
+    await flag(c1, 'AC', 't1');
+    await flag(c1, 'A', 't2');
+    await flag(c1, 'AU', 't3');
+    await flag(c2, 'AC', 'u1');
+    await flag(c2, 'A', 'u2');
+    // W paid P three times and was paid once; Q both ways; R only paid W, five times, and trades nothing watched.
+    const pays = (from: string, to: string, n: number) => Array.from({ length: n }, () => flow(from, to));
+    await store.fund(CHAIN, W, [...pays(W, P, 3), ...pays(P, W, 1), ...pays(W, Q, 1), ...pays(Q, W, 2), ...pays(R, W, 5)], false);
+  });
+  afterAll(async () => {
+    await drop(CHAIN, ran);
+    await drop(CHAIN, notRan);
+  });
+
+  it('pages its trades newest first across collections, and counts them', async () => {
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0))).toEqual(['u2', 'u1', 't4', 't3', 't2', 't1']);
+    expect(keys(await store.walletTransfers(CHAIN, W, 2, 2))).toEqual(['t4', 't3']);
+    expect(await store.walletTransfers(CHAIN, W, 2, 6)).toEqual([]);
+    expect(await store.walletTradeCount(CHAIN, W)).toBe(6);
+  });
+
+  it('flagged only is what the page calls flagged: a counted lens, and only one that ran in that trade’s collection', async () => {
+    // t1: Linked wallets ran there. t2, u2: Round trips. Not t3 (Money loops back is not counted), nor u1 (Linked wallets did not run there).
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { flaggedOnly: true }))).toEqual(['u2', 't2', 't1']);
+    expect(await store.walletTradeCount(CHAIN, W, { flaggedOnly: true })).toBe(3);
+  });
+
+  it('flagged only reads nothing where no analysis ran, and only the latest analysis where several did', async () => {
+    const V = hex('ee'), unanalysed = hex('c3'), reanalysed = hex('c4');
+    const one = async (coll: string, n: number, m: Method) => {
+      const { id } = await store.addCollection(CHAIN, coll, null, 1);
+      await store.ingest(id, CHAIN, [transfer(String(n), V, P, { txHash: tx(n), blockNumber: n })], 200, []);
+      await store.pool.query(
+        `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, $2, $3, 0, '{"kind":"scc","wallets":[],"cycles":2}')`, [id, m, tx(n)]);
+      return id;
+    };
+    try {
+      // A Round trips flag with no analyses row: nothing is known to have run.
+      await one(unanalysed, 101, 'A');
+      // Linked wallets ran in an older analysis, not in the latest. The latest is inserted first, so ran_at decides, not the id.
+      const id = await one(reanalysed, 102, 'AC');
+      const analysis = (ac: boolean, ago: string) => store.pool.query(
+        `INSERT INTO washtrace.analyses (collection_id, ran_at, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches)
+         VALUES ($1, now() - $2::interval, 1, 200, $3, 0, 0, 0, 0)`,
+        [id, ago, JSON.stringify({ A: { available: true }, AU: { available: ac }, AC: { available: ac } })]);
+      await analysis(false, '0 seconds');
+      await analysis(true, '1 day');
+      expect(await store.walletTradeCount(CHAIN, V)).toBe(2);
+      expect(await store.walletTradeCount(CHAIN, V, { flaggedOnly: true })).toBe(0);
+      // The same trade counts once the latest analysis ran Linked wallets.
+      await analysis(true, '-1 day');
+      expect(await store.walletTransfers(CHAIN, V, 50, 0, { flaggedOnly: true })).toMatchObject([{ txHash: tx(102) }]);
+    } finally {
+      await drop(CHAIN, unanalysed);
+      await drop(CHAIN, reanalysed);
+    }
+  });
+
+  it('narrows to one collection, and lists its collections busiest first', async () => {
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { collection: notRan }))).toEqual(['u2', 'u1']);
+    expect(await store.walletTradeCount(CHAIN, W, { collection: ran, flaggedOnly: true })).toBe(2);
+    expect(await store.walletCollections(CHAIN, W)).toEqual([{ address: ran, name: 'Ran', trades: 4 }, { address: notRan, name: null, trades: 2 }]);
+  });
+
+  it('a Find reads a token number, or the other side of the trade by its address or the start of it; anything else matches nothing', async () => {
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '#1' }))).toEqual(['u1', 't1']);
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: P }))).toEqual(['u1', 't2', 't1']);
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '0xbb0000' }))).toEqual(['u1', 't2', 't1']);
+    // The wallet itself is no other side.
+    expect(await store.walletTradeCount(CHAIN, W, { find: W })).toBe(0);
+    for (const find of ['hello', tx(1)]) expect(await store.walletTradeCount(CHAIN, W, { find })).toBe(0);
+  });
+
+  it('with another wallet, holds the trades where the two are seller and buyer, either way', async () => {
+    expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { with: Q }))).toEqual(['u2', 't4', 't3']);
+    expect(await store.walletTradeCount(CHAIN, W, { with: Q, collection: ran })).toBe(2);
+  });
+
+  it('sorts its money partners four ways, pages them and counts them', async () => {
+    const order = async (sort: 'flows' | 'sent' | 'received' | 'watched') => (await store.counterparties(CHAIN, W, 50, 0, sort)).map((c) => c.address);
+    expect(await order('flows')).toEqual([R, P, Q]);
+    expect(await order('sent')).toEqual([P, Q, R]);
+    expect(await order('received')).toEqual([R, Q, P]);
+    expect(await order('watched')).toEqual([P, Q, R]);
+    expect(await store.counterparties(CHAIN, W, 1, 1, 'flows')).toEqual([{ address: P, flows: 4, sent: 3, received: 1, watched: true }]);
+    expect(await store.counterpartyCount(CHAIN, W)).toBe(3);
+  });
+
+  it('lists the payments between two wallets in each direction, newest first, paged and counted', async () => {
+    const sent = await store.flowsBetween(CHAIN, W, P, 'sent', 50, 0);
+    expect(sent.map((f) => [f.from, f.to])).toEqual([[W, P], [W, P], [W, P]]);
+    expect(sent.map((f) => f.blockNumber)).toEqual(sent.map((f) => f.blockNumber).sort((a, b) => b - a));
+    expect((await store.flowsBetween(CHAIN, W, P, 'received', 50, 0)).map((f) => [f.from, f.to])).toEqual([[P, W]]);
+    const both = await store.flowsBetween(CHAIN, W, P, 'both', 50, 0);
+    expect(both).toHaveLength(4);
+    expect(await store.flowsBetween(CHAIN, W, P, 'both', 2, 2)).toEqual(both.slice(2));
+    expect(await store.flowsBetweenCount(CHAIN, W, P, 'sent')).toBe(3);
+    expect(await store.flowsBetweenCount(CHAIN, W, P, 'received')).toBe(1);
+    expect(await store.flowsBetweenCount(CHAIN, W, P, 'both')).toBe(4);
+    expect(await store.flowsBetweenCount(CHAIN, W, R, 'sent')).toBe(0);
   });
 });

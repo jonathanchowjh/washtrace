@@ -72,6 +72,17 @@ describe('the search box type-ahead', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('drops the highlight on every change to the text, so Enter before the new reply cannot open a stale hit', async () => {
+    fetchMock.mockResolvedValue(reply(hits({ collections: [terra] })));
+    render(<Sidebar watched={[]} />);
+    await type('ter');
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    fireEvent.change(box(), { target: { value: 'terx' } });
+    expect(box().getAttribute('aria-activedescendant')).toBeNull();
+    expect(fireEvent.keyDown(box(), { key: 'Enter' })).toBe(true);
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it('closes on Escape', async () => {
     fetchMock.mockResolvedValue(reply(hits({ collections: [terra] })));
     render(<Sidebar watched={[]} />);

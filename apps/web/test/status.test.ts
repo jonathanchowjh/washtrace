@@ -16,7 +16,7 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
     restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
-    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, ...more,
   };
 }
 
@@ -167,7 +167,7 @@ describe('status', () => {
   });
 
   it('says which collection is downloading which file and how far', () => {
-    const manifest = { version: 2 as const, collections: [{ chainId: 1, address: '0xBC4C', name: 'BAYC', startBlock: 1, throughBlock: 2, throughTime: 3, transfers: { file: 'a', rows: 1, bytes: 12_300_000, sha256: 'x' }, trail: { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 3_400_000_000, sha256: 'y' } }] };
+    const manifest = { version: 3 as const, collections: [{ chainId: 1, address: '0xBC4C', name: 'BAYC', startBlock: 1, throughBlock: 2, throughTime: 3, transfers: { file: 'a', rows: 1, bytes: 12_300_000, sha256: 'x' }, trail: { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 3_400_000_000, sha256: 'y', files: { wallets: { bytes: 1, sha256: 'w' }, flows: { bytes: 2, sha256: 'f' } } } }] };
     const run = (more: Partial<CollectionRow>) => texts(snapshot({ collections: [collection(more)], manifest }), 'working');
     expect(run({ downloadFile: 'transfers', downloadProgress: 0.416 })).toEqual(['Downloading stored data for BAYC · 41% of 12.3 MB']);
     expect(run({ downloadFile: 'trail', downloadProgress: 0.05 })).toEqual(['Downloading the money trail for BAYC · 5% of 3.4 GB']);

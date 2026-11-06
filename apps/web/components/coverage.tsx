@@ -166,7 +166,7 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
             <span aria-hidden>✓</span>Transfers read<span aria-hidden className="ml-1 text-muted-foreground">→</span>
           </span>
         ) : null}
-        <span className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : stage.figure ?? progress(stage.share)}</span>
+        <span data-progress className="text-xl font-semibold text-foreground tabular-nums">{stage === null ? '…' : stage.figure ?? progress(stage.share)}</span>
         <div className="min-w-[11rem] flex-1">
           <p className="text-xs text-muted-foreground">{stage === null ? 'Finding where the collection begins' : stage.of}</p>
           <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'silent' || cov.reading === 'stored-only' || cov.reading === 'head-unknown'} /></div>
@@ -253,7 +253,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
             <th scope="col" className="px-4 py-2 font-medium">Collection</th>
             {LABELS.map((label, i) => (
               <th key={label} scope="col" title={TITLES[i]} className="px-2 py-2 font-medium whitespace-nowrap">
-                <span className="tabular-nums">{i + 1}</span> {label}
+                <span data-row-number className="tabular-nums">{i + 1}</span> {label}
               </th>
             ))}
           </tr>
@@ -312,17 +312,17 @@ function Step({ stage, figure, value, bar, children }: { stage: Stage; figure: R
   return (
     <li className="relative flex flex-col gap-1 px-4 py-3.5">
       <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <span className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{stage.n}</span>{stage.title}
+        <span data-row-number className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{stage.n}</span>{stage.title}
         <span className="ml-auto"><StageChip state={stage.state} /></span>
       </p>
-      <p className="text-xl font-semibold text-foreground tabular-nums">{figure}</p>
+      <p data-progress className="text-xl font-semibold text-foreground tabular-nums">{figure}</p>
       {bar !== undefined ? <Bar share={bar} paused={stage.state !== 'done' && stage.state !== 'live'} name="stage" /> : null}
       {stage.needs ? (
         <p className="text-xs font-medium text-foreground">
           {stage.needs.href ? <Link href={stage.needs.href} className="underline hover:text-foreground">{stage.needs.text}</Link> : stage.needs.text}
         </p>
       ) : null}
-      <p className="text-xs tabular-nums">{value}</p>
+      <p data-progress className="text-xs tabular-nums">{value}</p>
       {children}
       <p className="mt-auto pt-1.5 text-xs text-muted-foreground"><span className="font-medium text-body">Feeds </span>{stage.feeds}</p>
     </li>

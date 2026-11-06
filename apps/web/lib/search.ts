@@ -21,6 +21,8 @@ const MAX_TEXT = 100;
 /**
  * Trims, lowercases hex and strips one leading '#'. One or two bare digits are
  * text, so typing "12" never searches every collection's tokens; "#12" does.
+ * findOf in packages/detect/src/trades.ts is its twin for a Trades Find box:
+ * a change to one is made to both.
  */
 export function parseSearch(raw: string): Parsed {
   const typed = raw.trim();

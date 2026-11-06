@@ -118,9 +118,14 @@ export function analyze(input: Input): Analysis {
     totals[method] = sum(transfers, moved, flagged[method], input.money, available);
   }
 
+  // What the totals did not count, in chain order: mints, burns and custody moves. Whoever lists the trades needs it to tell "not counted" from "not flagged".
+  const counted = new Set(moved);
+  const uncounted = order.filter((i) => !counted.has(i)).map((i) => ({ txHash: transfers[i]!.txHash, logIndex: transfers[i]!.logIndex }));
+
   return {
     totals,
     flags,
+    uncounted,
     missingData: moves + gaps === 0 ? 0 : gaps / (moves + gaps),
     fundedWallets: [...wallets].filter((w) => input.funded.has(w)).length,
     wallets: wallets.size,

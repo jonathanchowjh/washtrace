@@ -29,17 +29,20 @@ export default async function TxPage({ params }: Props) {
     : washTrade ? 'The lenses on the right flag it. The reason is beside each transfer below; open its token to see the whole pattern.'
     : apartOnly ? `The lens on the right flags it: ${APART_WHY}. The reason is beside each transfer below.`
     : `Its ${transfers.length === 1 ? 'transfer is' : `${transfers.length} transfers are`} read, and no lens that ran flags ${transfers.length === 1 ? 'it' : 'them'}.`;
+  // The lens names open that lens's tab when the transaction belongs to one collection; across several there is no one tab.
+  const homes = new Set(transfers.flatMap((t) => (t.collection ? [`/c/${t.collection.chainId}/${t.collection.address}`] : [])));
+  const home = homes.size === 1 ? [...homes][0]! : null;
   return (
     <>
       <Head
         title={<span className="font-mono">{short(tx)}</span>}
         crumb={[{ href: '/', label: 'Collections' }]}
-        sub={<>Transaction · <a className="font-mono hover:underline" href={`${explorer(chainId)}/tx/${tx}`} target="_blank" rel="noreferrer">{tx}</a></>}
+        sub={<>Transaction · <a className="font-mono hover:underline" href={`${explorer(chainId)}/tx/${tx}`} target="_blank" rel="noopener noreferrer">{tx} ↗</a></>}
       />
       <Answer
         tone={tone}
         title={title}
-        aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} />)}</span> : undefined}
+        aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} href={home === null ? undefined : `${home}?method=${m}#evidence`} />)}</span> : undefined}
       >
         {body}{notRun.length > 0 && !unread ? ` ${lensList(notRun)} did not run.` : ''}
       </Answer>

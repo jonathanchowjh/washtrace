@@ -97,8 +97,14 @@ describe('the token page paging and filter', () => {
   const hrefOf = (c: HTMLElement, text: string) => [...c.querySelectorAll('a')].find((a) => a.textContent === text)?.getAttribute('href');
 
   // The "Why it was flagged" list only: the graph's labels and the table also carry row numbers.
-  const whyLinks = (c: HTMLElement) => [...c.querySelectorAll('ul.space-y-2 a')];
+  const whyLinks = (c: HTMLElement) => [...c.querySelectorAll('ul.space-y-2 a[href*="#t"]')];
   const whyHref = (c: HTMLElement, text: string) => whyLinks(c).find((a) => a.textContent === text)?.getAttribute('href');
+
+  it('links every trade of this token, every change of owner included, in the Trades view', async () => {
+    const c = await dom();
+    const a = [...c.querySelectorAll('a')].find((x) => x.textContent === 'Every trade of this token →');
+    expect(a?.getAttribute('href')).toBe(`/c/1/${ADDR}/flagged?kind=trades&token=7&all=1`);
+  });
 
   it('a token of one page shows no pager under its table', async () => {
     Object.assign(state, { blocks: many(5) });
@@ -207,5 +213,29 @@ describe('the token page paging and filter', () => {
     expect(hrefOf(c, 'All')).toBe(T);
     expect(hrefOf(c, 'Flagged')).toBe(`${T}?show=flagged`);
     expect(hrefOf(c, 'Sales')).toBe(`${T}?show=sales`);
+  });
+
+  const label = (c: HTMLElement, n: string) => [...c.querySelectorAll('svg a')].find((a) => a.textContent === n)?.getAttribute('href');
+
+  it('a graph number the filter keeps links with the filter, as the table does', async () => {
+    Object.assign(state, { blocks: many(3), each: [[], ['A'], []] });
+    expect(label(await dom({ show: 'flagged' }), '2')).toBe('?show=flagged#t2');
+  });
+
+  it('a graph number the filter hides links without the filter', async () => {
+    Object.assign(state, { blocks: many(3), each: [[], ['A'], []], sales: [0] });
+    expect(label(await dom({ show: 'sales' }), '2')).toBe('?page=1#t2');
+  });
+
+  it('?method lights the loops of that lens on arrival, and ?loop that loop, and junk lights none', async () => {
+    Object.assign(state, { blocks: many(3), each: [[], ['A'], ['A']] });
+    const lit = (c: HTMLElement) => c.querySelectorAll('[data-lit]').length;
+    expect(lit(await dom({ method: 'A' }))).toBeGreaterThan(0);
+    cleanup();
+    expect(lit(await dom({ loop: 'r0' }))).toBeGreaterThan(0);
+    cleanup();
+    expect(lit(await dom({ method: 'AC' }))).toBe(0);
+    cleanup();
+    expect(lit(await dom({ method: 'zzz', loop: 'r9' }))).toBe(0);
   });
 });

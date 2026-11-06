@@ -4,6 +4,8 @@
  * nothing the chain does not already say.
  */
 
+import { VENUES, venueOf } from '@washtrace/detect/trades';
+
 export type Link = { label: string; href: string };
 
 /** Each chain's block explorer. The one table of them: format's explorer() reads it too. */
@@ -60,18 +62,18 @@ export function walletLinks(chainId: number, address: string): Link[] {
 
 /** Marketplace contracts by the name a reader knows them by: every Seaport, and Wyvern before it, is OpenSea's. */
 export function venueName(venue: string): string {
-  if (venue.startsWith('seaport') || venue.startsWith('wyvern')) return 'OpenSea';
-  if (venue.startsWith('blur')) return 'Blur';
-  if (venue.startsWith('looksrare')) return 'LooksRare';
-  if (venue === 'x2y2') return 'X2Y2';
-  return venue;
+  const key = venueOf(venue);
+  return Object.hasOwn(VENUES, key) ? VENUES[key]!.name : venue;
 }
 
-/** Sales per marketplace under its reader's name, busiest first. */
-export function venues(marketplaces: readonly { name: string; sales: number }[]): { name: string; sales: number }[] {
-  const by = new Map<string, number>();
-  for (const m of marketplaces) by.set(venueName(m.name), (by.get(venueName(m.name)) ?? 0) + m.sales);
-  return [...by].map(([name, sales]) => ({ name, sales })).sort((a, b) => b.sales - a.sales || a.name.localeCompare(b.name));
+/** Sales per marketplace under its reader's name, busiest first. `key` is the name Trades filters it by (a VENUES key, or the raw string no venue lists). */
+export function venues(marketplaces: readonly { name: string; sales: number }[]): { key: string; name: string; sales: number }[] {
+  const by = new Map<string, { key: string; sales: number }>();
+  for (const m of marketplaces) {
+    const name = venueName(m.name);
+    by.set(name, { key: venueOf(m.name), sales: (by.get(name)?.sales ?? 0) + m.sales });
+  }
+  return [...by].map(([name, v]) => ({ key: v.key, name, sales: v.sales })).sort((a, b) => b.sales - a.sales || a.name.localeCompare(b.name));
 }
 
 /** The collections list with its view: the tab, the Find text, and the sort. Empty parts are left out, so the plain list is `/`. */

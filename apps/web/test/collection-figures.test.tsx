@@ -1,0 +1,129 @@
+import { cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tradesHref } from '@/lib/trades';
+
+const ADDR = '0x' + 'b'.repeat(40);
+const BASE = `/c/1/${ADDR}`;
+
+// Round trips flags 41 of 1,000 sales, Money loops back 300, Linked wallets 120.
+const FLAGGED = { A: 41, AU: 300, AC: 120 } as const;
+const state = { moneyRan: true, loops: true };
+const totals = (m: 'A' | 'AU' | 'AC') => ({
+  transfers: 5000, flagged: 400, sales: 1000, flaggedSales: FLAGGED[m], volumeWei: String(19_032n * 10n ** 18n),
+  flaggedVolumeWei: String(BigInt(FLAGGED[m]) * 20n * 10n ** 18n), wallets: 1207, tokens: 644, available: m === 'A' || state.moneyRan,
+});
+
+const collection = () => ({
+  id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 1, cursorBlock: 10, headBlock: 10, transfers: 5000, wallets: 37, fundedWallets: 37,
+  error: null, stale: false, pausedAt: null, priority: false, trailProgress: null, analysisError: null, storedThroughTime: null, storedThroughBlock: null,
+  downloadFile: null, downloadProgress: null, downloadNote: null, restoreProgress: null, restoreNote: null, trailNote: null, trailImportedSha: null,
+  rules: {}, contract: null, addedAt: 0, ingestedAt: 0, servedAt: 0, readRate: null,
+  latest: {
+    ranAt: 1_700_000_000_000, tookMs: 5, throughBlock: 10, missingData: 0, fundedWallets: 37, wallets: 37, truncatedSearches: 0,
+    // A lens that did not run carries Round trips' copy, as the engine writes it.
+    loops: state.loops ? { A: { loops: 388, pairs: 0 }, AU: { loops: 388, pairs: 0 }, AC: { loops: 120, pairs: 300 } } : null,
+    totals: { A: totals('A'), AU: totals('AU'), AC: totals('AC') },
+  },
+});
+
+vi.mock('@/lib/store', () => ({
+  store: () => ({
+    collection: async () => collection(),
+    history: async () => [],
+    timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
+    profile: async () => ({
+      supply: 644, holders: 300, firstMint: null, firstSale: 1_600_000_000_000, lastSale: 1_680_000_000_000,
+      marketplaces: [{ name: 'seaport-1.5', sales: 600 }, { name: 'blur', sales: 300 }, { name: 'seaport-1.4', sales: 50 }],
+    }),
+    passes: async () => [],
+    collections: async () => [],
+    sources: async () => ({}),
+    settings: async () => new Map(),
+    importedFunding: async () => false,
+    lensTokens: async () => ({ rows: [], total: 0 }),
+    lensWallets: async () => ({ rows: [], total: 0 }),
+  }),
+  storedEntry: async () => null,
+}));
+vi.mock('next/server', () => ({ connection: async () => {} }));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
+vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
+
+afterEach(() => { cleanup(); state.moneyRan = true; state.loops = true; });
+
+async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
+  const { default: Page } = await import('@/app/c/[chain]/[address]/page');
+  return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
+}
+const named = (c: Element, text: string) => [...c.querySelectorAll('a')].filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
+const answer = (c: Element) => c.querySelector('[aria-label="The answer"]')!;
+
+describe('the answer on the collection page', () => {
+  it('opens each end of the sales range, and N, M and S of its detail', async () => {
+    const a = answer(await draw());
+    const low = tradesHref(BASE, { caught: ['A'] }), high = tradesHref(BASE, { caught: ['AC'] });
+    expect(named(a, '4.1')).toEqual([low]);
+    expect(named(a, '12%')).toEqual([high]);
+    expect(named(a, '41')).toEqual([low]);
+    expect(named(a, '120')).toEqual([high]);
+    expect(named(a, '1,000')).toEqual([tradesHref(BASE, {})]);
+    expect(a.textContent).toContain('41–120 of 1,000 sales');
+  });
+
+  it('opens each end of the volume range sorted by price, biggest first', async () => {
+    const hrefs = [...answer(await draw()).querySelectorAll('a')].map((x) => x.getAttribute('href'));
+    expect(hrefs).toContain(tradesHref(BASE, { caught: ['A'], sort: 'price', dir: 'desc' }));
+    expect(hrefs).toContain(tradesHref(BASE, { caught: ['AC'], sort: 'price', dir: 'desc' }));
+  });
+
+  it('offers the whole trades list under the headline', async () => {
+    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'Dig into its trades →');
+    expect(dig?.getAttribute('href')).toBe(tradesHref(BASE, {}));
+  });
+});
+
+describe('the lens panel on the collection page', () => {
+  it('puts the stat line at the top of the panel, outside every card', async () => {
+    const stats = (await draw({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
+    expect(stats).not.toBeNull();
+    expect(stats.closest('nav')).toBeNull();
+    expect(named(stats, '120 loops and 300 linked pairs')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
+    expect(named(stats, '644 tokens')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
+  });
+
+  it('leaves the loops out of the stat line for an analysis that did not count them', async () => {
+    state.loops = false;
+    const stats = (await draw({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
+    expect(stats.textContent).not.toContain('loop');
+    expect(stats.textContent).toContain('644 tokens');
+  });
+
+  it('says Money loops back is not counted in its stat line, and gives a lens that did not run none', async () => {
+    expect((await draw({ method: 'AU' })).querySelector('[aria-label="Money loops back in numbers"]')!.textContent).toContain('(not counted)');
+    cleanup();
+    state.moneyRan = false;
+    const c = await draw({ method: 'AU' });
+    expect(c.querySelector('[aria-label="Money loops back in numbers"]')).toBeNull();
+    expect(c.textContent).toContain('Money loops back did not run');
+  });
+});
+
+describe('About', () => {
+  it('opens each marketplace on its sales, and Traded on all sales oldest first', async () => {
+    const about = (await draw()).querySelector('[aria-label="The collection"]')!;
+    expect(named(about, '650')).toEqual([tradesHref(BASE, { venues: ['opensea'] })]);
+    expect(named(about, '300')).toEqual([tradesHref(BASE, { venues: ['blur'] })]);
+    const hrefs = [...about.querySelectorAll('a')].map((x) => x.getAttribute('href'));
+    expect(hrefs).toContain(tradesHref(BASE, { sort: 'date', dir: 'asc' }));
+  });
+});
+
+describe('links never sit inside links', () => {
+  it('on any lens', async () => {
+    for (const method of ['A', 'AU', 'AC']) {
+      const c = await draw({ method });
+      expect(c.querySelectorAll('a a').length).toBe(0);
+      cleanup();
+    }
+  });
+});

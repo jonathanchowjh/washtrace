@@ -85,7 +85,8 @@ export function SearchBox({ id, className }: { id: string; className: string }) 
         id={id} name="q" placeholder="Search name, #token, address or tx" autoComplete="off"
         role="combobox" aria-expanded={shown} aria-controls={`${id}-list`} aria-autocomplete="list"
         aria-activedescendant={shown && active >= 0 ? optionId(active) : undefined}
-        value={text} onChange={(e) => { setText(e.target.value); setOpen(true); }}
+        // The hits on show are for the old text until the new reply: a highlight kept among them would open one on Enter.
+        value={text} onChange={(e) => { setText(e.target.value); setOpen(true); setActive(-1); }}
         onKeyDown={onKeyDown} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
         className="w-full rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
       />

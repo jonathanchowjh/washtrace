@@ -1,0 +1,59 @@
+import { cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { MethodTotals } from '@washtrace/detect';
+import { LensStats } from '@/components/methods';
+import { tradesHref } from '@/lib/trades';
+
+afterEach(cleanup);
+
+const BASE = `/c/1/0x${'b'.repeat(40)}`;
+const t = (over: Partial<MethodTotals> = {}): MethodTotals => ({
+  transfers: 5000, flagged: 400, sales: 1000, flaggedSales: 41, volumeWei: String(19_032n * 10n ** 18n), flaggedVolumeWei: String(8124n * 10n ** 17n),
+  wallets: 1207, tokens: 644, available: true, ...over,
+} as MethodTotals);
+
+const draw = (m: 'A' | 'AU' | 'AC', totals: MethodTotals, loops: { loops: number; pairs: number } | null = null, notFinal: ('A' | 'AU' | 'AC')[] = []) =>
+  render(<LensStats m={m} t={totals} loops={loops} base={BASE} notFinal={notFinal} />).container;
+const named = (c: Element, text: string) => [...c.querySelectorAll('a')].filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
+
+describe('the lens stat line', () => {
+  it('opens each figure on the list it counts', () => {
+    const c = draw('A', t(), { loops: 388, pairs: 0 });
+    const caught = tradesHref(BASE, { caught: ['A'] });
+    const all = tradesHref(BASE, {});
+    expect(named(c, '41')).toEqual([caught]);
+    expect(named(c, '1,000')).toEqual([all]);
+    expect(named(c, '4.1%')).toEqual([caught]);
+    expect(named(c, '812.4 ETH')).toEqual([tradesHref(BASE, { caught: ['A'], sort: 'price', dir: 'desc' })]);
+    expect(named(c, '19,032 ETH')).toEqual([tradesHref(BASE, { sort: 'price', dir: 'desc' })]);
+    expect(named(c, '644 tokens')).toEqual([`${BASE}/flagged?method=A&kind=tokens`]);
+    expect(named(c, '1,207 wallets')).toEqual([`${BASE}/flagged?method=A&kind=wallets`]);
+    expect(named(c, '388 loops')).toEqual([`${BASE}/flagged?method=A&kind=tokens`]);
+    expect(named(c, '8.0%')).toEqual([tradesHref(BASE, { caught: ['A'], kind: 'all' })]);
+    expect(c.textContent).toContain('of every change of owner');
+  });
+
+  it('says linked pairs beside loops for a lens that counts them, and leaves loops out when none were counted', () => {
+    expect(draw('AC', t(), { loops: 120, pairs: 300 }).textContent).toContain('120 loops and 300 linked pairs');
+    expect(draw('AC', t(), null).textContent).not.toContain('loop');
+  });
+
+  it('says Money loops back is not counted after its share, by name and never by code', () => {
+    const text = draw('AU', t()).textContent!;
+    expect(text).toContain('4.1% of sales (not counted)');
+    expect(text).not.toMatch(/\bAU\b/);
+    expect(draw('A', t()).textContent).not.toContain('not counted');
+  });
+
+  it('shows nothing for a lens that did not run', () => {
+    expect(draw('AC', t({ available: false })).childElementCount).toBe(0);
+  });
+
+  it('says a share is so far while the lens is not final', () => {
+    expect(draw('AC', t(), null, ['AC']).textContent).toContain('4.1% of sales so far');
+  });
+
+  it('holds no anchor inside another', () => {
+    expect(draw('A', t(), { loops: 1, pairs: 1 }).querySelectorAll('a a').length).toBe(0);
+  });
+});

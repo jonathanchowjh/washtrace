@@ -1,6 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_ONLY } from '@/lib/auth';
+import { tradesHref } from '@/lib/trades';
 
 // One collection with no analysis, its stored data 40% downloaded, and no pass ever reported: the worker is silent.
 const demo = {
@@ -121,6 +122,18 @@ describe('the collections page', () => {
     const c = await draw();
     expect([...c.querySelectorAll('li a[href*="#evidence"]')].slice(0, 1).map((a) => a.textContent)).toEqual(['20%']);
     expect(c.querySelectorAll('li a[href*="#evidence"]').length).toBe(2); // one per measure
+  });
+
+  it('the row’s sales count opens the sales, above the row link; its transfer count is plain, as no list holds every transfer', async () => {
+    state.rows = [analysed(1, 'Ape', 18, 25)];
+    const c = await draw();
+    const base = `/c/1/0x${'1'.repeat(40)}`;
+    const sales = [...c.querySelectorAll('li a')].find((a) => a.textContent === '100 sales')!;
+    expect(sales.getAttribute('href')).toBe(tradesHref(base, {}));
+    expect(sales.className).toContain('relative z-10');
+    expect(sales.parentElement!.textContent).toBe('100 sales among 100 transfers');
+    expect([...c.querySelectorAll('li a')].some((a) => a.textContent === '100 transfers')).toBe(false);
+    expect(c.querySelectorAll('a a').length).toBe(0);
   });
 
   it('a tab link keeps find, sort and dir', async () => {

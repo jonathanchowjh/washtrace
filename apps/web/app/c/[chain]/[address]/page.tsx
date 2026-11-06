@@ -6,7 +6,8 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { Pipeline, ReadingSummary } from '@/components/coverage';
 import { Elsewhere, Empty, Head, Section, Silent } from '@/components/head';
-import { History, LensCards, RangeBar, RangeKey, Ranked, Trend } from '@/components/methods';
+import { LensList, clampedPage, listView } from '@/components/lens-lists';
+import { History, LensCards, LensStats, RangeBar, RangeKey, Trend } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
@@ -15,20 +16,26 @@ import { addressOf, chainOf, methodOf } from '@/lib/api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, ethRange, explorer, pct, plural, short } from '@/lib/format';
-import type { CollectionProfile, CollectionRow } from '@washtrace/detect';
+import { LENSES, eth, explorer, pct, plural, short } from '@/lib/format';
+import { moneyFor, type CollectionProfile, type Method, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { collectionLinks, venues } from '@/lib/links';
-import { analyzingOn, coverage, evidenceLead, unread, range, rangeText, summary, waiting, type Range } from '@/lib/metrics';
+import { analyzingOn, coverage, evidenceLead, lensesRan, unread, range, rangeEnds, summary, waiting, type Range } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
+import { tradesHref } from '@/lib/trades';
+import { cn } from '@/lib/utils';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
-/** Rows of each ranking shown in the lens panel; the rest are a page away. */
+/** Rows of each lens list a page in the lens panel; the flagged page has all of them. */
 const TOP = 10;
 
-type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ method?: string }> };
+/**
+ * The lens, and each list's page, order and Find: tokens' `tp`, `ts` and
+ * `tq`, wallets' `wp`, `ws` and `wq`, so the two lists page apart.
+ */
+type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ method?: string; tp?: string; ts?: string; tq?: string; wp?: string; ws?: string; wq?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { address } = await params;
@@ -50,12 +57,40 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const s = store();
   const c = await s.collection(chainId, address);
   if (!c) notFound();
-  const method = methodOf((await searchParams).method);
+  const sp = await searchParams;
+  const method = methodOf(sp.method);
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
-  const [history, timeline, tokens, wallets, profile, passes, all, sources, settings] = await Promise.all([s.history(c.id), c.latest ? s.timeline(c.id, zone) : null, s.topTokens(c.id, method, TOP), s.topWallets(c.id, method, TOP), s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings()]);
-  const writable = mayWrite(process.env, await headers());
   const base = `/c/${chainId}/${address}`;
+  const tv = listView('tokens', { page: sp.tp, sort: sp.ts, find: sp.tq });
+  const wv = listView('wallets', { page: sp.wp, sort: sp.ws, find: sp.wq });
+  // Only a lens that ran is listed: when funding did not, the money lenses hold Round trips' flags, copied.
+  const ctx = { money: moneyFor(chainId), ran: lensesRan(c.latest), zone };
+  const listed = ctx.ran.includes(method);
+  // With a Find, each list is also counted without it, for "2 of 644": a limit of 0 reads the count alone.
+  const [history, timeline, tokens, wallets, tokensOf, walletsOf, profile, passes, all, sources, settings] = await Promise.all([
+    s.history(c.id), c.latest ? s.timeline(c.id, zone) : null,
+    listed ? clampedPage(tv.page, TOP, (offset) => s.lensTokens(c.id, method, { sort: tv.sort as TokenSort, find: tv.find, limit: TOP, offset }, ctx)) : null,
+    listed ? clampedPage(wv.page, TOP, (offset) => s.lensWallets(c.id, method, { sort: wv.sort as WalletSort, find: wv.find, limit: TOP, offset }, ctx)) : null,
+    listed && tv.find !== null ? s.lensTokens(c.id, method, { sort: 'caught', find: null, limit: 0, offset: 0 }, ctx) : null,
+    listed && wv.find !== null ? s.lensWallets(c.id, method, { sort: 'caught', find: null, limit: 0, offset: 0 }, ctx) : null,
+    s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings(),
+  ]);
+  // The list's own count, never the analysis totals: those also count a token or wallet whose every flagged trade is uncounted.
+  const tokenCount = tokensOf?.total ?? tokens?.total ?? 0;
+  const walletCount = walletsOf?.total ?? wallets?.total ?? 0;
+  const writable = mayWrite(process.env, await headers());
+  // This page with one list's page, order or Find changed, the other kept, back at the lens panel.
+  const here = (over: Partial<{ tp: number; ts: string; tq: string | null; wp: number; ws: string; wq: string | null }>) => {
+    const v = { tp: tokens?.page ?? 1, ts: tv.sort, tq: tv.find, wp: wallets?.page ?? 1, ws: wv.sort, wq: wv.find, ...over };
+    const pairs: [string, string | null][] = [
+      ['method', method], ['ts', v.ts === 'caught' ? null : v.ts], ['tq', v.tq], ['tp', v.tp > 1 ? String(v.tp) : null],
+      ['ws', v.ws === 'caught' ? null : v.ws], ['wq', v.wq], ['wp', v.wp > 1 ? String(v.wp) : null],
+    ];
+    return `${base}?${pairs.filter(([, x]) => x !== null).map(([k, x]) => `${k}=${encodeURIComponent(x!)}`).join('&')}#evidence`;
+  };
+  const flagged = (kind: 'tokens' | 'wallets', view: { sort: string; find: string | null }) =>
+    `${base}/flagged?method=${method}&kind=${kind}${view.sort === 'caught' ? '' : `&sort=${view.sort}`}${view.find === null ? '' : `&q=${encodeURIComponent(view.find)}`}`;
   const a = c.latest;
   const rules = rulesNote(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
@@ -81,12 +116,12 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       <Head
         title={name}
         crumb={[{ href: '/', label: 'Collections' }]}
-        sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <a className="font-mono hover:underline" href={`${explorer(chainId)}/address/${address}`} target="_blank" rel="noreferrer">{address}</a></>}
+        sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <a className="font-mono hover:underline" href={`${explorer(chainId)}/address/${address}`} target="_blank" rel="noopener noreferrer">{address} ↗</a></>}
       >
         <Refresh />
       </Head>
 
-      <About c={c} profile={profile} />
+      <About c={c} profile={profile} base={base} />
 
       {silent ? <Silent silent={silent} /> : null}
 
@@ -100,11 +135,26 @@ export default async function CollectionPage({ params, searchParams }: Props) {
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">How much of its trading looks like wash trading</p>
           </div>
           <div className="mt-3 grid gap-6 sm:grid-cols-2">
-            <Headline r={range(a.totals, 'sales')} of="of sales" none="No sale read yet."
-              detail={(r) => `${a.totals[r.low].flaggedSales.toLocaleString()}${r.low === r.high ? '' : `–${a.totals[r.high].flaggedSales.toLocaleString()}`} of ${a.totals.A.sales.toLocaleString()} sales`} />
-            <Headline r={range(a.totals, 'volume')} of="of volume" none="No priced sale read yet, so there is no volume to share."
-              detail={(r) => `${ethRange(a.totals[r.low].flaggedVolumeWei, a.totals[r.high].flaggedVolumeWei)} of ${eth(a.totals.A.volumeWei)}`} />
+            <Headline r={range(a.totals, 'sales')} of="of sales" none="No sale read yet." base={base}
+              detail={(r) => <>
+                <FigureLink href={tradesHref(base, { caught: [r.low] })}>{a.totals[r.low].flaggedSales.toLocaleString()}</FigureLink>
+                {r.low === r.high ? null : <>–<FigureLink href={tradesHref(base, { caught: [r.high] })}>{a.totals[r.high].flaggedSales.toLocaleString()}</FigureLink></>}
+                {' of '}<FigureLink href={tradesHref(base, {})}>{a.totals.A.sales.toLocaleString()}</FigureLink> sales
+              </>} />
+            <Headline r={range(a.totals, 'volume')} of="of volume" none="No priced sale read yet, so there is no volume to share." base={base} priciest
+              detail={(r) => {
+                // Each end opens what it counts, biggest first, as the stat line does; the total opens every sale.
+                const priciest = { sort: 'price', dir: 'desc' } as const;
+                const end = (m: Method) => tradesHref(base, { caught: [m], ...priciest });
+                const lo = a.totals[r.low].flaggedVolumeWei, hi = a.totals[r.high].flaggedVolumeWei;
+                return <>
+                  {lo === hi ? <FigureLink href={end(r.high)}>{eth(hi)}</FigureLink>
+                    : <><FigureLink href={end(r.low)}>{eth(lo, '').trim()}</FigureLink>–<FigureLink href={end(r.high)}>{eth(hi)}</FigureLink></>}
+                  {' of '}<FigureLink href={tradesHref(base, priciest)}>{eth(a.totals.A.volumeWei)}</FigureLink>
+                </>;
+              }} />
           </div>
+          <Link href={tradesHref(base, {})} className="mt-4 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">Dig into its trades →</Link>
           <p className="mt-4 max-w-3xl text-sm text-body">{summary(a.totals)}</p>
         </section>
       )}
@@ -114,25 +164,32 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           {/* These are the rules now set, which the latest analysis may not have run under yet. */}
           {rules ? <p className="mb-4 text-sm text-muted-foreground">{rules}</p> : null}
           <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} notFinal={cov.notFinal} trail={c.trailImportedSha !== null} funded={funded} coming={coming} silent={silent !== null}>
+            {t ? <LensStats m={method} t={t} loops={a.loops && ctx.ran.includes(method) ? a.loops[method] : null} base={base} notFinal={cov.notFinal} /> : null}
             <p className="mb-4 text-sm text-muted-foreground">
               {t?.available
                 ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
                 : <><span className="font-medium text-foreground">{lens.name}</span> did not run, so it flags nothing. Choose another lens above.</>}
             </p>
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Ranked
-                title="Tokens" unit="trades" empty={`${lens.name} flags no token.`}
-                more={t && t.tokens > TOP ? { href: `${base}/flagged?method=${method}&kind=tokens`, label: `See all ${t.tokens.toLocaleString()} tokens` } : null}
-                rows={tokens.map((r) => ({ key: r.tokenId, label: <Link href={`${base}/t/${r.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{r.tokenId.length > 14 ? `${r.tokenId.slice(0, 12)}…` : r.tokenId}</Link>, flagged: r.flagged, of: r.transfers }))}
-                tone={lens.tone}
-              />
-              <Ranked
-                title="Wallets" unit="trades it was in" empty={`${lens.name} flags no wallet.`}
-                more={t && t.wallets > TOP ? { href: `${base}/flagged?method=${method}&kind=wallets`, label: `See all ${t.wallets.toLocaleString()} wallets` } : null}
-                rows={wallets.map((w) => ({ key: w.address, label: <Wallet chainId={chainId} address={w.address} />, flagged: w.flagged, of: w.transfers }))}
-                tone={lens.tone}
-              />
-            </div>
+            {tokens && wallets ? (
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div>
+                  <LensList
+                    kind="tokens" method={method} base={base} chainId={chainId} rows={tokens.rows} total={tokens.total} of={tokenCount}
+                    sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
+                    pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
+                  />
+                  <Link href={flagged('tokens', tv)} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">All {plural(tokenCount, 'token')} →</Link>
+                </div>
+                <div>
+                  <LensList
+                    kind="wallets" method={method} base={base} chainId={chainId} rows={wallets.rows} total={wallets.total} of={walletCount}
+                    sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
+                    pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
+                  />
+                  <Link href={flagged('wallets', wv)} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">All {plural(walletCount, 'wallet')} →</Link>
+                </div>
+              </div>
+            ) : null}
           </LensCards>
         </Section>
       ) : null}
@@ -140,9 +197,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       {a && timeline && timeline.points.length > 0 ? (
         <Section
           title="When did it happen?"
-          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A sale here is any marketplace fill, so a month can sit a little under the headline, which also drops custody moves.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
+          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} />
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} base={base} />
         </Section>
       ) : null}
 
@@ -169,7 +226,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
  * when and where it traded, and who made it. Counted from the transfers read
  * so far, so it fills in with the reading.
  */
-function About({ c, profile: p }: { c: CollectionRow; profile: CollectionProfile }) {
+function About({ c, profile: p, base }: { c: CollectionRow; profile: CollectionProfile; base: string }) {
   const sold = venues(p.marketplaces);
   return (
     <section aria-label="The collection" className="mb-4 rounded-lg border bg-card p-4">
@@ -178,13 +235,14 @@ function About({ c, profile: p }: { c: CollectionRow; profile: CollectionProfile
         <Fact label="Holders" note="wallets holding one now">{p.holders.toLocaleString()}</Fact>
         <Fact label="First minted">{p.firstMint === null ? '—' : <Time ms={p.firstMint} style="date" />}</Fact>
         <Fact label="Traded" note="first sale to latest">
-          {p.firstSale === null || p.lastSale === null ? 'No sale yet' : <><Time ms={p.firstSale} style="month" /> – <Time ms={p.lastSale} style="month" /></>}
+          {p.firstSale === null || p.lastSale === null ? 'No sale yet'
+            : <FigureLink href={tradesHref(base, { sort: 'date', dir: 'asc' })}><Time ms={p.firstSale} style="month" /> – <Time ms={p.lastSale} style="month" /></FigureLink>}
         </Fact>
         <Fact label="Sold on" note="sales per marketplace">
-          {sold.length === 0 ? '—' : sold.slice(0, 3).map((v) => <span key={v.name} className="block">{v.name} <span className="font-normal text-muted-foreground">{v.sales.toLocaleString()}</span></span>)}
+          {sold.length === 0 ? '—' : sold.slice(0, 3).map((v) => <span key={v.name} className="block">{v.name} <FigureLink href={tradesHref(base, { venues: [v.key] })} className="font-normal text-muted-foreground">{v.sales.toLocaleString()}</FigureLink></span>)}
           {sold.length > 3 ? <span className="block text-xs font-normal text-muted-foreground">and {sold.slice(3).map((v) => v.name).join(', ')}</span> : null}
         </Fact>
-        <Fact label="Deployed by" note={c.contract?.creationTx ? <a href={`${explorer(c.chainId)}/tx/${c.contract.creationTx}`} target="_blank" rel="noreferrer" className="hover:underline">deployment tx ↗</a> : undefined}>
+        <Fact label="Deployed by" note={c.contract?.creationTx ? <a href={`${explorer(c.chainId)}/tx/${c.contract.creationTx}`} target="_blank" rel="noopener noreferrer" className="hover:underline">deployment tx ↗</a> : undefined}>
           {c.contract?.creator ? <Wallet chainId={c.chainId} address={c.contract.creator} /> : <span className="text-muted-foreground">{c.contract === null ? 'not read yet' : 'unknown'}</span>}
         </Fact>
       </dl>
@@ -206,12 +264,20 @@ function Fact({ label, note, children }: { label: string; note?: ReactNode; chil
   );
 }
 
-function Headline({ r, of, none, detail }: { r: Range | null; of: string; none: string; detail: (r: Range) => string }) {
+/** A figure that opens the list it counts. */
+function FigureLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
+  return <Link href={href} className={cn('hover:underline', className)}>{children}</Link>;
+}
+
+/** `priciest` sorts what each end opens by price, for a range of volume. */
+function Headline({ r, of, none, detail, base, priciest = false }: { r: Range | null; of: string; none: string; detail: (r: Range) => ReactNode; base: string; priciest?: boolean }) {
   if (r === null) return <p className="text-sm text-muted-foreground">{none}</p>;
+  const e = rangeEnds(r);
+  const end = (text: string, m: Method) => <FigureLink href={tradesHref(base, priciest ? { caught: [m], sort: 'price', dir: 'desc' } : { caught: [m] })}>{text}</FigureLink>;
   return (
     <div>
       <p className="flex items-baseline gap-2">
-        <span className="text-4xl font-semibold tracking-tight text-foreground tabular-nums">{rangeText(r)}</span>
+        <span className="text-4xl font-semibold tracking-tight text-foreground tabular-nums">{e.same ? end(e.high, r.high) : <>{end(e.low, r.low)}–{end(e.high, r.high)}</>}</span>
         <span className="text-sm text-muted-foreground">{of}</span>
       </p>
       <RangeBar range={r} className="mt-2 max-w-sm" />

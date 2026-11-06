@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectionLinks, tokenLinks, venues, walletLinks } from '@/lib/links';
+import { collectionLinks, tokenLinks, venueName, venues, walletLinks } from '@/lib/links';
 
 const A = '0x4e1f41613c9084fdb9e34e11fae9412427480e56';
 
@@ -26,6 +26,11 @@ describe('links', () => {
 
   it('counts sales under the marketplace a reader knows, busiest first', () => {
     expect(venues([{ name: 'blur-v2', sales: 7 }, { name: 'seaport-1.1', sales: 4 }, { name: 'blur', sales: 5 }, { name: 'wyvern-1', sales: 3 }, { name: 'looksrare', sales: 2 }, { name: 'looksrare-v2', sales: 1 }]))
-      .toEqual([{ name: 'Blur', sales: 12 }, { name: 'OpenSea', sales: 7 }, { name: 'LooksRare', sales: 3 }]);
+      .toEqual([{ key: 'blur', name: 'Blur', sales: 12 }, { key: 'opensea', name: 'OpenSea', sales: 7 }, { key: 'looksrare', name: 'LooksRare', sales: 3 }]);
+  });
+
+  it('names a marketplace string no table lists as itself, even one that is an Object property', () => {
+    expect(venueName('constructor')).toBe('constructor');
+    expect(venueName('some-new-market')).toBe('some-new-market');
   });
 });

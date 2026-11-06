@@ -54,6 +54,12 @@ export interface Flow {
  */
 export type Method = 'A' | 'AU' | 'AC';
 export const METHODS: readonly Method[] = ['A', 'AU', 'AC'];
+/**
+ * The lenses a trade is counted flagged by, Round trips to Linked wallets; the
+ * console's headline range reads the same. Here so a wallet's "flagged only"
+ * in SQL and the console's verdict read one list.
+ */
+export const HEADLINE: readonly Method[] = ['A', 'AC'];
 
 /** Why one transfer was flagged by one method: enough to draw it. */
 export type Witness =
@@ -87,6 +93,8 @@ export interface MethodTotals {
 export interface Analysis {
   totals: Record<Method, MethodTotals>;
   flags: Flag[];
+  /** Every input transfer no hop stands for (mints, burns, custody moves), so a list can say "not counted" for them. */
+  uncounted: { txHash: string; logIndex: number }[];
   /** Share of ownership changes whose sender was not the previous receiver: the paper's missing-data measure. */
   missingData: number;
   /** Wallets in the collection whose funding has been read, over all of them. */

@@ -312,9 +312,79 @@ CREATE TABLE IF NOT EXISTS washtrace.trail_resume (
 );
 `,
   `
+-- The URL of the last download whose bytes did not match the manifest's
+-- sha256. A URL names one file at one publish: the same bytes would come
+-- again, so no replica downloads it again, nor this one after a restart,
+-- until the Hub publishes again and the URL changes. Never cleared: once the
+-- URL changes it matches nothing.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS download_mismatch text;
+`,
+  `
 -- The console's search finds wallets by the start of their address. The image's
 -- collation is not C, so a prefix LIKE can only use an index built with
 -- text_pattern_ops.
 CREATE INDEX IF NOT EXISTS wallets_address_prefix_idx ON washtrace.wallets (chain_id, address text_pattern_ops);
+`,
+  `
+-- What each transfer of the latest analysis was, for the console's Trades
+-- table: whether the totals counted it, how long the token had sat since its
+-- last move, how old the buyer was to the collection, and its price against
+-- the week's floor. Written with the analysis, in its transaction, and only
+-- for transfers up to its cursor: a transfer with no row here was not judged.
+CREATE TABLE IF NOT EXISTS washtrace.trade_facts (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  tx_hash       text NOT NULL,
+  log_index     int NOT NULL,
+  counted       boolean NOT NULL,
+  held_s        bigint,
+  buyer_age_s   bigint,
+  floor_ratio   double precision,
+  PRIMARY KEY (collection_id, tx_hash, log_index)
+);
+`,
+  `
+-- Each loop once, with its wallets indexed: the console finds the loops a
+-- wallet is in by containment, and a flag points at its loop by id. Written
+-- with the analysis, in its transaction. \`loops\` on the analysis counts them
+-- per lens; it is NULL on analyses saved before this.
+CREATE TABLE IF NOT EXISTS washtrace.witnesses (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  id            int NOT NULL,
+  kind          text NOT NULL,
+  wallets       text[] NOT NULL,
+  cycles        int,
+  middle        text,
+  PRIMARY KEY (collection_id, id)
+);
+CREATE INDEX IF NOT EXISTS witnesses_wallets_idx ON washtrace.witnesses USING gin (wallets);
+ALTER TABLE washtrace.flags ADD COLUMN IF NOT EXISTS witness_id int;
+CREATE INDEX IF NOT EXISTS flags_witness_idx ON washtrace.flags (collection_id, method, witness_id);
+ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS loops jsonb;
+`,
+  `
+-- A Trades list's Find takes the start of a wallet address. The image's
+-- collation is not C, so a prefix LIKE needs text_pattern_ops, and those
+-- serve equality too: they replace the funding lanes' two indexes rather
+-- than sit beside them, so the biggest table costs no more to write. Built
+-- before the old ones go, so no moment is without one.
+CREATE INDEX IF NOT EXISTS transfers_coll_from_prefix_idx ON washtrace.transfers (collection_id, from_address text_pattern_ops);
+CREATE INDEX IF NOT EXISTS transfers_coll_to_prefix_idx ON washtrace.transfers (collection_id, to_address text_pattern_ops);
+DROP INDEX IF EXISTS washtrace.transfers_coll_from_idx;
+DROP INDEX IF EXISTS washtrace.transfers_coll_to_idx;
+`,
+  `
+-- A Trades list is newest first with the untimed last, and block_time can be
+-- null, so only an index in that order hands a page over without sorting the
+-- collection. Date ranges and month groups read it as well as the old one,
+-- which it replaces; built first, so no moment is without one.
+CREATE INDEX IF NOT EXISTS transfers_coll_time_desc_idx ON washtrace.transfers (collection_id, block_time DESC NULLS LAST);
+DROP INDEX IF EXISTS washtrace.transfers_coll_time_idx;
+-- An analysis saved before loops were counted wrote no witness ids, and one
+-- before that no trade facts: its trades all read "not judged yet" and its
+-- groups find no loops. Such a collection is queued to be analysed again.
+-- One with any analysis that counted loops is new enough.
+UPDATE washtrace.collections c SET version = version + 1
+WHERE c.analyzed_version > 0
+  AND NOT EXISTS (SELECT 1 FROM washtrace.analyses a WHERE a.collection_id = c.id AND a.loops IS NOT NULL);
 `,
 ];

@@ -114,15 +114,22 @@ export function Silent({ silent }: { silent: { since: number | null } }) {
 export function Section({ title, lead, aside, id, children }: { title: string; lead?: ReactNode; aside?: ReactNode; id?: string; children: ReactNode }) {
   return (
     <section id={id} className="mt-10 scroll-mt-6">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
-        <div className="max-w-3xl">
-          <h2 className="text-base font-semibold">{title}</h2>
-          {lead ? <p className="mt-0.5 text-sm text-muted-foreground">{lead}</p> : null}
-        </div>
-        {aside ? <div className="text-xs text-muted-foreground">{aside}</div> : null}
-      </div>
+      <SectionHead title={title} lead={lead} aside={aside} />
       {children}
     </section>
+  );
+}
+
+/** A section's heading alone, for a client component that lays out its own sections around state they share. */
+export function SectionHead({ title, lead, aside }: { title: string; lead?: ReactNode; aside?: ReactNode }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+      <div className="max-w-3xl">
+        <h2 className="text-base font-semibold">{title}</h2>
+        {lead ? <p className="mt-0.5 text-sm text-muted-foreground">{lead}</p> : null}
+      </div>
+      {aside ? <div className="text-xs text-muted-foreground">{aside}</div> : null}
+    </div>
   );
 }
 
@@ -146,7 +153,7 @@ export function Elsewhere({ links, className }: { links: { label: string; href: 
   return (
     <nav aria-label="Elsewhere" className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground', className)}>
       <span>See it on</span>
-      {links.map((l) => <a key={l.href} href={l.href} target="_blank" rel="noreferrer" className="font-medium text-foreground hover:underline">{l.label} ↗</a>)}
+      {links.map((l) => <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:underline">{l.label} ↗</a>)}
     </nav>
   );
 }

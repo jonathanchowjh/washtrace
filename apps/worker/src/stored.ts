@@ -8,9 +8,9 @@ import { Store, type StoredEntry, cutCollection, entryFor, messageOf, parseTarge
  *   npm run stored -- <chainId>/<address> [--trail]
  *
  * Writes data/stored/<chainId>-<address>.transfers.csv.zst, and
- * with --trail the money trail beside it (both are published to the Hub by
- * publish:hub, and a worker here loads them from disk), then the collection's manifest
- * entry. Without --trail an existing trail entry is kept: the base data and
+ * with --trail the money trail beside it as two files, .wallets.csv.zst and
+ * .flows.csv.zst (all are published to the Hub by publish:hub, and a worker
+ * here loads them from disk), then the collection's manifest entry. Without --trail an existing trail entry is kept: the base data and
  * the trail are re-cut on their own schedules. Only reads the store; never
  * writes it.
  */

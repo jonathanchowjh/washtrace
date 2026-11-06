@@ -2,16 +2,17 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS } from '@washtrace/detect';
-import { Answer, Elsewhere, Head, Section } from '@/components/head';
+import { METHODS, type Method } from '@washtrace/detect';
+import { Answer, Elsewhere, Head, Section, SectionHead } from '@/components/head';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
-import { TokenGraph } from '@/components/token-graph';
-import { Transfers, because, reasons, rowList } from '@/components/transfers';
+import { TokenLoops } from '@/components/token-graph';
+import { Transfers, because, rowList } from '@/components/transfers';
 import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
 import { lensList, short } from '@/lib/format';
 import { tokenLinks } from '@/lib/links';
-import { layout } from '@/lib/layout';
+import { layout, reasons } from '@/lib/layout';
+import { tradesHref } from '@/lib/trades';
 import { APART_WHY, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { tokenView } from '@/lib/views';
@@ -23,7 +24,7 @@ const SHOWS = ['all', 'flagged', 'sales'] as const;
 type Show = (typeof SHOWS)[number];
 const SHOW_NAME: Record<Show, string> = { all: 'All', flagged: 'Flagged', sales: 'Sales' };
 
-type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string }> };
+type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { tokenId } = await params;
@@ -83,6 +84,12 @@ export default async function TokenPage({ params, searchParams }: Props) {
     return `${query.length === 0 ? '' : `?${query.join('&')}`}#t${n}`;
   };
 
+  const drawing = layout(transfers, flows, middles);
+  // The table's link to every row the graph numbers, built here because only the server knows which page of the filter holds a row.
+  const rowHrefs = Object.fromEntries(drawing.edges.flatMap((e) => (e.row === null ? [] : [[e.row, rowHref(e.row)] as const])));
+  // A loop the link names wins over a lens; one that matches nothing lights nothing.
+  const initial = sp.loop ? { loop: sp.loop } : METHODS.find((m) => m === sp.method) ? { method: sp.method as Method } : null;
+
   return (
     <>
       <Head
@@ -121,28 +128,22 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : null}
       </Answer>
 
-      <div className="grid gap-x-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <Section title="What it looks like" lead="Each circle is a wallet. Solid arrows are the token changing hands, numbered as in the table below; dashed arrows are money between the same wallets.">
-          <TokenGraph drawing={layout(transfers, flows, middles)} chainId={chainId} rowHref={rowHref} />
-        </Section>
-        <Section title={apartOnly ? 'Why Money loops back flags it' : 'Why it was flagged'} lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it.'}>
-          {why.length === 0 ? (
-            <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : 'No analysis has covered these transfers yet, so no lens has looked for a pattern.'}</p>
-          ) : (
-            <ul className="space-y-2">
-              {why.map((r, i) => (
-                <li key={i} className="rounded-lg border bg-card p-3.5">
-                  <p className="text-sm text-foreground">{because(r.witness, chainId)}</p>
-                  <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-                    {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" />)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Section>
-      </div>
+      <TokenLoops
+        drawing={drawing} chainId={chainId} rowHrefs={rowHrefs} initial={initial}
+        graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
+        whyHead={<SectionHead title={apartOnly ? 'Why Money loops back flags it' : 'Why it was flagged'} lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it. Show in graph lights the pattern.'} />}
+        empty={<p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : 'No analysis has covered these transfers yet, so no lens has looked for a pattern.'}</p>}
+        items={why.map((r, i) => ({
+          key: drawing.loops[i]!.key,
+          body: because(r.witness, chainId),
+          meta: (
+            <>
+              <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
+              {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={`${base}?method=${m}#evidence`} />)}
+            </>
+          ),
+        }))}
+      />
 
       <Section title="Every transfer" lead={`${TINT_LEAD} The number in the first column is the arrow's label in the graph.`}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -156,17 +157,19 @@ export default async function TokenPage({ params, searchParams }: Props) {
           </nav>
           <p className="text-sm text-muted-foreground tabular-nums">
             Showing {(shown[0] === undefined ? 0 : (page - 1) * PAGE + 1).toLocaleString()}–{((page - 1) * PAGE + shown.length).toLocaleString()} of {kept.length.toLocaleString()} transfers
-            {shownFlagged > 0 ? ` · ${shownFlagged.toLocaleString()} flagged` : ''}
+            {shownFlagged === 0 ? null : show === 'all' ? <> · <Link href={hrefFor(1, 'flagged')} className="hover:underline">{shownFlagged.toLocaleString()} flagged</Link></> : ` · ${shownFlagged.toLocaleString()} flagged`}
           </p>
         </div>
         {kept.length === 0 ? (
           <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</p>
         ) : (
           <>
-            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered />
+            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} />
             {pages > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}
+        {/* The same transfers in the Trades view, to filter, group or download. */}
+        <p className="mt-3 text-sm"><Link href={tradesHref(base, { kind: 'all', token: tokenId })} className="font-medium hover:underline">Every trade of this token →</Link></p>
       </Section>
     </>
   );

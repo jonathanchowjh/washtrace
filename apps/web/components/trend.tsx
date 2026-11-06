@@ -1,6 +1,8 @@
 'use client';
 
-import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 // Types only: the package's values (the store, the chain client) must stay out of the browser bundle.
 import type { Bucket, Method } from '@washtrace/detect';
 import { LENSES as LENS_INFO, localTime, pct } from '@/lib/format';
@@ -30,7 +32,7 @@ export interface TimePoint {
  * market. `analyses`: the answer at each run of the worker.
  */
 export type TimeChartProps =
-  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Lens[]; zone: string }
+  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Lens[]; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[] }
   | { kind: 'analyses'; points: TimePoint[]; zone: string };
 
 const LENSES = Object.keys(LENS_INFO) as Lens[];
@@ -139,10 +141,13 @@ function runs(pts: ({ x: number; y: number } | null)[]): string[] {
 export function TimeChart(props: TimeChartProps) {
   const { points } = props;
   const svg = useRef<SVGSVGElement>(null);
+  const router = useRouter();
   const [at, setAt] = useState<number | null>(null);
   // Tick labels are local times, which the server cannot know: draw in the browser only.
   const browser = useSyncExternalStore(never, () => true, () => false);
   const { zone } = props;
+  const hrefs = props.kind === 'history' ? props.periodHrefs : undefined;
+  const lensHrefs = props.kind === 'history' ? props.lensHrefs : undefined;
   if (!browser) return <figure className="aspect-[720/330] rounded-lg border bg-card" />;
 
   const history = props.kind === 'history';
@@ -172,10 +177,12 @@ export function TimeChart(props: TimeChartProps) {
     return best;
   }
   const onMove = (e: PointerEvent<SVGRectElement>) => setAt(nearest(e.clientX));
+  const onOpen = (e: MouseEvent<SVGRectElement>) => { const h = hrefs?.[nearest(e.clientX)]; if (h) router.push(h); };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'ArrowRight') { setAt((i) => Math.min(points.length - 1, (i ?? -1) + 1)); e.preventDefault(); }
     if (e.key === 'ArrowLeft') { setAt((i) => Math.max(0, (i ?? points.length) - 1)); e.preventDefault(); }
     if (e.key === 'Escape') setAt(null);
+    if (e.key === 'Enter' && at !== null && hrefs?.[at]) { router.push(hrefs[at]!); e.preventDefault(); }
   };
 
   const p = at === null ? null : points[at]!;
@@ -221,7 +228,7 @@ export function TimeChart(props: TimeChartProps) {
               {LENSES.map((m) => { const s = share(p.lens[m]); return s === null ? null : <Marker key={m} m={m} x={px(p)} y={y(s)} />; })}
             </g>
           ) : null}
-          <rect x={L} y={0} width={W - L - R} height={H} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setAt(null)} />
+          <rect x={L} y={0} width={W - L - R} height={H} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setAt(null)} onClick={onOpen} className={hrefs ? 'cursor-pointer' : undefined} />
         </svg>
 
         <p className="mt-3 mb-1 text-xs text-muted-foreground">{history ? `Sales per ${props.bucket}: how much there was to judge` : 'Wallets checked for money, at each analysis'}</p>
@@ -243,7 +250,7 @@ export function TimeChart(props: TimeChartProps) {
             </>
           )}
           {p ? <line x1={px(p)} x2={px(p)} y1={ST} y2={SH - SB} className="stroke-muted-foreground" strokeWidth={1} /> : null}
-          <rect x={L} y={0} width={W - L - R} height={SH} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setAt(null)} />
+          <rect x={L} y={0} width={W - L - R} height={SH} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setAt(null)} onClick={onOpen} className={hrefs ? 'cursor-pointer' : undefined} />
         </svg>
 
         {p ? (
@@ -280,6 +287,7 @@ export function TimeChart(props: TimeChartProps) {
                 </>
               )}
             </p>
+            {hrefs ? <p className="mt-2 text-muted-foreground">Click to open these trades.</p> : null}
           </div>
         ) : null}
       </div>
@@ -301,11 +309,13 @@ export function TimeChart(props: TimeChartProps) {
               </tr>
             </thead>
             <tbody>
-              {[...points].reverse().map((q) => (
+              {points.map((q, i) => [q, i] as const).reverse().map(([q, i]) => (
                 <tr key={q.at} className="border-b last:border-b-0">
-                  <td className="px-2 py-1">{history ? periodText(q.at, props.bucket, zone) : localTime(q.at, 'datetime', zone)}</td>
-                  {LENSES.map((m) => { const s = share(q.lens[m]); return <td key={m} className="px-2 py-1 text-right">{s === null ? '—' : pctText(s)}</td>; })}
-                  <td className="px-2 py-1 text-right">{history ? q.sales.toLocaleString() : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
+                  <td className="px-2 py-1" data-time={history ? undefined : ''}>
+                    {history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{periodText(q.at, props.bucket, zone)}</Link> : periodText(q.at, props.bucket, zone)) : localTime(q.at, 'datetime', zone)}
+                  </td>
+                  {LENSES.map((m) => { const s = share(q.lens[m]); const h = lensHrefs?.[i]?.[m]; return <td key={m} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? '—' : h ? <Link href={h} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
+                  <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{q.sales.toLocaleString()}</Link> : q.sales.toLocaleString()) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
                 </tr>
               ))}
             </tbody>

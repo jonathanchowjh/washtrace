@@ -29,6 +29,7 @@ see [From the paper to now](#from-the-paper-to-now).
 - [The methods](#the-methods)
 - [Configuration](#configuration)
 - [Deploying](#deploying)
+- [Upgrading](#upgrading)
 - [Stored data](#stored-data)
 - [API](#api)
 - [Pages](#pages)
@@ -247,6 +248,44 @@ docker build --target api    -t washtrace-api .
   are stateless. Worker replicas share each job through an advisory lock, so a
   second worker gives failover, not double reads.
 
+## Upgrading
+
+Both services migrate the schema when they start, under one lock, and this
+release's migrations build indexes on the two biggest tables,
+`washtrace.transfers` and `washtrace.wallets`, as part of it. A plain
+`CREATE INDEX` holds a SHARE lock on its table until it is done: reads go on,
+but anything that writes those tables waits for it, such as ingest, a load of
+stored data, or deleting a collection.
+
+- **The worker does nothing until they finish.** No pass starts before its
+  migrate returns, and at tens of millions of transfers the indexes take
+  minutes to build.
+- **The console's collection pages error until the `analyses.loops` column
+  exists.** The api serves while the migrations run, and those pages read the
+  column one of them adds.
+- **Every analysed collection is analysed once more.** An analysis saved
+  before this release wrote no trade facts and no loops, so its trades read
+  "not judged yet" until the worker has analysed the collection again.
+
+To skip the wait, build those indexes beforehand, with the services running.
+Postgres builds an index `CONCURRENTLY` while writes carry on, though not
+inside a transaction, so run each statement on its own in `psql`:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS wallets_address_prefix_idx ON washtrace.wallets (chain_id, address text_pattern_ops);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_from_prefix_idx ON washtrace.transfers (collection_id, from_address text_pattern_ops);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_to_prefix_idx ON washtrace.transfers (collection_id, to_address text_pattern_ops);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_time_desc_idx ON washtrace.transfers (collection_id, block_time DESC NULLS LAST);
+```
+
+The names and definitions are the ones in
+[migrations.ts](packages/detect/src/migrations.ts), so the migrations find
+them there and skip them. The index on the flags' loops,
+`flags_witness_idx`, needs a column the migrations add first, so it is built
+during the upgrade. A `CONCURRENTLY` build that fails leaves an invalid index
+behind under its name: drop it and run the statement again, or the migration
+skips it.
+
 ## Stored data
 
 Reading a big collection from the chain takes days, so its chain data is cut
@@ -264,20 +303,30 @@ console shows how far it has got ("Money trail loading from stored data · 41%")
 and the analysis runs again once it is in.
 
 The default dataset holds six Ethereum collections, read through block
-26288279 (October 2026):
+26299951 (October 2026):
 
 | Collection | Address | Transfers | Money trail |
 |---|---|---|---|
-| Argonauts | [`0x387c…392c`](https://etherscan.io/address/0x387c41b0b2f1128de44db1bcf8baad085f26392c) | 1.3 MB | 321.4 MB |
+| Argonauts | [`0x387c…392c`](https://etherscan.io/address/0x387c41b0b2f1128de44db1bcf8baad085f26392c) | 1.3 MB | 321.0 MB |
 | Terraforms | [`0x4e1f…0e56`](https://etherscan.io/address/0x4e1f41613c9084fdb9e34e11fae9412427480e56) | 2.9 MB | 621.8 MB |
-| Meebits | [`0x7bd2…6bc7`](https://etherscan.io/address/0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7) | 6.3 MB | 996.6 MB |
-| Dreadfulz | [`0x81ae…5aa8`](https://etherscan.io/address/0x81ae0be3a8044772d04f32398bac1e1b4b215aa8) | 1.6 MB | 368.1 MB |
-| BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.4 MB |
-| dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.7 MB |
+| Meebits | [`0x7bd2…6bc7`](https://etherscan.io/address/0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7) | 6.3 MB | 997.0 MB |
+| Dreadfulz | [`0x81ae…5aa8`](https://etherscan.io/address/0x81ae0be3a8044772d04f32398bac1e1b4b215aa8) | 1.6 MB | 368.2 MB |
+| BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.8 MB |
+| dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.8 MB |
 
-Each file is zstd-compressed CSV, so the data reads without washtrace too. The
-[dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+Each file is zstd-compressed CSV, so the data reads without washtrace too. A
+money trail is two files, the checked wallets and the flows, and the table's
+Money trail column is their sizes added. The dataset opens in the Hub's viewer
+as three tables (transfers, wallets and flows), with one split per collection.
+The [dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
 gives the columns and a pandas example.
+
+A worker reads only a version 3 manifest, which names a trail's two files. Until
+the dataset is published again in that form, an upgraded install reads the chain
+instead of the stored data; an install that is not upgraded keeps its cached
+version 2 manifest and its files. After that publish each upgraded install
+downloads and loads its trails once more, and deletes the old single trail
+files itself.
 
 - **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
   repo or the image. Under Compose it is the named volume `stored`, written by
@@ -293,8 +342,10 @@ gives the columns and a pandas example.
   and a money trail that was loading picks up from the last batch it wrote, so
   a restart does not start either over. Half-downloaded files the
   manifest no longer names are deleted. A file that does not match its
-  checksum is downloaded again only once the dataset is published again; the
-  chain is read meanwhile.
+  checksum is not downloaded again, by any worker or after a restart, before
+  the dataset is published again; the chain is read meanwhile. One that was
+  resumed is downloaded again from its start, as the bytes kept may be what
+  broke.
 - **What is published.** Chain data only: transfers, the money trail's flows,
   the checked wallets' addresses, and each collection's address, chain and
   contract name. Never a wallet's status or errors, a label you gave a
@@ -303,7 +354,10 @@ gives the columns and a pandas example.
   `docker volume rm <project>_stored` with the services stopped.
 - **Cutting your own.** `npm run stored` writes a local manifest and files into
   `data/stored/`. The worker's hourly fetch replaces that manifest, so a local
-  cut is for publishing, not for serving.
+  cut is for publishing, not for serving. The maintainer's
+  `npm run publish:hub -- --from <dir>` uploads a folder a dry run wrote; over a
+  Hub manifest that is still version 2, add `--replace`, which makes the folder's
+  manifest the Hub's and deletes the files of collections not in the folder.
 
 ## API
 
@@ -316,15 +370,16 @@ the machine itself.
 
 | Method and route | Returns |
 |---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed. `trailProgress` (0 to 1) says how far that collection's downloaded money trail has loaded into the database; null when none is loading. |
+| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed; `downloadMismatch` is the URL of the last download whose bytes did not match the manifest, not downloaded again while the Hub serves it. `trailProgress` (0 to 1) says how far that collection's downloaded money trail has loaded into the database; null when none is loading. |
 | `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
-| `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the most-flagged tokens and wallets under the chosen method. |
+| `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the 50 tokens and wallets with the most trades caught under the chosen method, as `tokens` and `wallets`, each `{rows, total}`. A row counts its caught trades of its counted trades (no mints or custody moves), their volume in wei, and the loops and linked pairs behind them; a wallet's `partners` are the other wallets in those. A method that did not run lists none. |
 | `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |
 | `POST /api/collections/{chain}/{address}/resume` | The worker serves it again. `{paused: false}`, and again if not paused. |
 | `DELETE /api/collections/{chain}/{address}` | Stops watching and drops its transfers and analyses: `{removed: true}`. 409 unless paused first. Funding read for its wallets is kept, as it is per chain. |
 | `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection settings: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}, priority?}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. `priority: true` checks its wallets' funding first, sharing those turns with any other prioritised collection. |
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses (only the lenses that ran), and the money among its wallets. It carries `washTrade`, `judged`, `methods`, `apartOnly` and `notRun`, as the transaction route does. A token with no transfers is 404. |
-| `GET /api/wallets/{chain}/{address}` | A wallet's funding state, its 50 busiest counterparties and its latest 500 trades in every watched collection, with `cut` saying which list had more, and the same verdict fields as the token route. A wallet with no trades answers `washTrade: null, judged: false`: no watched collection holds a trade of it, so nothing has judged it. |
+| `GET /api/collections/{chain}/{address}/trades?<filters>` | The collection's trades under the same filters as the Trades page (`caught`, `not`, `market`, `pmin`, `pmax`, `from`, `to`, `wallet`, `token`, `q`, `sort`, `dir`, `all`, and the rest of its address bar). JSON is one page of 50: `{total, unjudged, page, pages, ran, rows}`, with lens codes, `ran` the lenses that ran, and `unjudged` the trades newer than the latest analysis. `format=csv` streams every trade the filters hold as `<address>-trades.csv`, read one row at a time and stopped when the download is cancelled. A lens that did not run holds no trades; an unwatched collection is 404. |
+| `GET /api/wallets/{chain}/{address}?<params>` | A wallet's funding state, a page of 50 of its money partners and a page of 100 of its trades in every watched collection, newest first, with the wallet page's params: `trades`, `partners` and `flows` (page numbers), `collection` (one collection's address), `flagged=1` (only trades a counted lens flags, where it ran), `q` (a token number, or the other side of a trade by its address or the start of it), `psort` (`flows`, `sent`, `received` or `watched`), and `with` (another wallet) with `dir` (`sent` or `received`; both when left out). `pages` gives each list's `{page, pages, total}`, a page past the last read as the last; `counts` every trade it has and those counted flagged; `collections` the collections it traded in; `cut` which list has more than one page; and with `with`, `between` holds the trades between the two (`trades`, the latest 100, of `tradesTotal`) and a page of 50 of the payments in `dir` (`flows` of `flowsTotal`). The verdict fields are the token route's, over the trades shown. A wallet with no trades answers `washTrade: null, judged: false`: no watched collection holds a trade of it, so nothing has judged it. |
 | `GET /api/search?q=&kind=&page=` | What the console's search finds for `q`: a collection name, a token number (`#1234`), a wallet address or its start (`0x` and at least 4 hex), or a transaction hash. Answers `collections`, `tokens`, `wallets` and `trades`, each at most 20, and `more` saying which kind had another. `kind` (one of those four) with `page` reads that kind alone, 20 a page. Text that is not understood finds nothing, never an error. |
 | `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, `judged`, the `methods` that flagged it, `apartOnly` (only Money loops back flags it, so it is shown but not counted), `notRun` (the lenses that did not run in some transfer's analysis), and the transfers. `washTrade` is true when Round trips or Linked wallets flags it; Money loops back is listed in `methods` but not counted, and a lens that did not run is never listed. `washTrade: null` with `judged: false` is a transaction that is read but that no analysis has covered yet: not the same as clean. A transaction washtrace has not read is 404, never `false`. |
 | `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4 (an RPC URL also keeps its scheme and host). Each field also answers `env`, what `.env` holds for it (masked the same way), and the response says `open` when saving needs no login. |

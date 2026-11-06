@@ -1,5 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { Pipeline, PipelineErrors, PipelineTable, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
 import { localTime, short } from '@/lib/format';
@@ -7,6 +7,9 @@ import { APART_WHY, TRAIL_LOADING, coverage, progress } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensCards } from '@/components/methods';
 import { TimeChart } from '@/components/trend';
+
+// The chart opens a period through the router.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(cleanup);
 
@@ -25,7 +28,7 @@ const entry = (more: Partial<StoredEntry> = {}) => ({
   chainId: 1, address: '0xabc', name: 'Demo', startBlock: 1, throughBlock: 500, throughTime: 1,
   transfers: { file: 'transfers.parquet', rows: 5, bytes: 2_000_000_000, sha256: 'abc' }, trail: null, ...more,
 }) as StoredEntry;
-const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 3_400_000_000, sha256: 'feed', checked: 1_612, of: 11_259 } as unknown as StoredEntry['trail'];
+const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 3_400_000_000, sha256: 'feed', checked: 1_612, of: 11_259, files: { wallets: { bytes: 1, sha256: 'w' }, flows: { bytes: 2, sha256: 'f' } } } as unknown as StoredEntry['trail'];
 /** Stored data the chain was read past (cursor 10) with a trail on top: stages 1 and 2 have the trail to do, if any. */
 const withTrail = () => entry({ throughBlock: 10, trail: TRAIL });
 

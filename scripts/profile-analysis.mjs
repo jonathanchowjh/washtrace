@@ -50,7 +50,7 @@ try {
 
   if (thread) {
     const [{ analysis, through }, threadMs] = await time(() => analyzeInThread({ storeUrl: url, id, chainId: c.chainId, ...settings }));
-    const [, saveMs] = await time(() => store.saveAnalysis(id, version, analysis, threadMs, through));
+    const [, saveMs] = await time(() => store.saveAnalysis(id, version, analysis, threadMs, through, settings.money));
     console.table({
       'analysisInput + analyze, in the thread': { ms: threadMs, rows: `${analysis.wallets} wallets, ${analysis.truncatedSearches} truncated searches` },
       saveAnalysis: { ms: saveMs, rows: flagged(analysis) },
@@ -59,7 +59,7 @@ try {
   } else {
     const [input, inputMs] = await time(() => store.analysisInput(id, c.chainId));
     const [result, analyzeMs] = await time(() => analyze({ ...input, ...settings }));
-    const [, saveMs] = await time(() => store.saveAnalysis(id, version, result, inputMs + analyzeMs, input.through));
+    const [, saveMs] = await time(() => store.saveAnalysis(id, version, result, inputMs + analyzeMs, input.through, settings.money));
     console.table({
       analysisInput: { ms: inputMs, rows: `${input.transfers.length} transfers, ${input.payments.size} payments, ${input.funded.size} funded, ${input.truncated.size} truncated` },
       analyze: { ms: analyzeMs, rows: `${result.wallets} wallets, ${result.truncatedSearches} truncated searches` },

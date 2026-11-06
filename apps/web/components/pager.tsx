@@ -4,7 +4,7 @@ import Link from 'next/link';
  * One pager for every list that is cut into pages: the range shown, First,
  * Previous, a page box, Next and Last. It is a server component, so the box is
  * a plain GET form: its action and hidden inputs are read from `href(1)`, which
- * keeps every other filter in the URL when a page is typed. `pageParam` names
+ * keeps every other filter in the URL, and its #fragment, when a page is typed. `pageParam` names
  * the page in the URL, so a page can hold several pagers that do not collide.
  * With one page it says only the count. `open` means `total` is only a lower
  * bound (the source cannot count the rest): the count says "more than", there
@@ -26,7 +26,7 @@ export function Pager({ total, page: asked, size, href, label = 'results', pageP
       <span className="flex flex-wrap items-center gap-1">
         <PageLink to={page > 1 ? href(1) : null}>« First</PageLink>
         <PageLink to={page > 1 ? href(page - 1) : null}>‹ Previous</PageLink>
-        <form action={form.pathname} method="get" className="flex items-center gap-1.5 px-2 text-muted-foreground">
+        <form action={`${form.pathname}${form.hash}`} method="get" className="flex items-center gap-1.5 px-2 text-muted-foreground">
           {hidden.map(([k, v], i) => <input key={i} type="hidden" name={k} value={v} />)}
           <label className="flex items-center gap-1.5 tabular-nums">
             Page

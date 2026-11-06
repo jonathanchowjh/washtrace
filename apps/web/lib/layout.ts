@@ -1,5 +1,35 @@
-import { ZERO, type FlaggedTransfer, type Flow } from '@washtrace/detect';
+import { METHODS, ZERO, type FlaggedTransfer, type Flow, type Method, type Witness } from '@washtrace/detect';
 import { toneOf, type Tone } from './metrics';
+
+/** Two witnesses that would read as the same sentence share a key. */
+function witnessKey(w: Witness): string {
+  if (w.kind === 'pair') return `pair|${w.pair.join(',')}|${w.middle}|${w.flowTx}`;
+  const base = `${[...w.wallets].sort().join(',')}|${w.cycles}`;
+  return w.kind === 'scc' ? `scc|${base}` : `flow|${base}|${w.via.length}`;
+}
+
+export interface Reason { witness: Witness; methods: Method[]; rows: number[] }
+
+/**
+ * A token's flags grouped by reason, so a pattern that four transfers share
+ * is said once with the four rows it covers, and the lenses that agree on it
+ * are named together. Rows are 1-based, as the graph labels them.
+ */
+export function reasons(transfers: readonly FlaggedTransfer[]): Reason[] {
+  const by = new Map<string, Reason>();
+  transfers.forEach((t, i) => {
+    for (const m of METHODS) {
+      const w = t.flags[m];
+      if (!w) continue;
+      const key = witnessKey(w);
+      const r = by.get(key) ?? { witness: w, methods: [], rows: [] };
+      if (!r.methods.includes(m)) r.methods.push(m);
+      if (!r.rows.includes(i + 1)) r.rows.push(i + 1);
+      by.set(key, r);
+    }
+  });
+  return [...by.values()];
+}
 
 /** Unordered: A→B and B→A are one pair, and share one fan. */
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -9,8 +39,14 @@ const FAN_MAX = 6;
 
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it. */
 export interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
-export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone; title: string; ref: number | null; lx: number; ly: number; label: string }
-export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[] }
+/**
+ * `tx` and `row` are the transfer an asset arrow opens and numbers (a bundle's
+ * first), and null for money. `from` and `to` are the wallets it joins.
+ */
+export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string }
+/** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. */
+export interface DrawnLoop { key: string; methods: Method[]; edges: string[]; nodes: string[] }
+export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
 /** What an edge's title says of its flags: nothing for a clean one, and that an apart lens alone does not count. */
 const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ' · flagged only by Money loops back, not counted' : ' · flagged');
@@ -72,6 +108,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
 
   const edges: DrawnEdge[] = [];
+  /** Which arrow draws each transfer (by index), so a reason can name its arrows. */
+  const edgeOf = new Map<number, string>();
   transfers.forEach((t, i) => {
     if (t.from === ZERO || t.to === ZERO) return;
     if (pairCount.get(pairKey(t.from, t.to))! > FAN_MAX) {
@@ -80,15 +118,17 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
       const v = toneOf(t);
       if (RANK[v] > RANK[b.tone]) b.tone = v;
       bundles.set(`${t.from}>${t.to}`, b);
+      edgeOf.set(i, `b${t.from}>${t.to}`);
       return;
     }
     const k = nextIn(t.from, t.to);
     const tone = toneOf(t);
     edges.push({
-      key: `t${i}`, kind: 'asset', tone, ref: i, label: String(i + 1),
+      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: String(i + 1),
       title: `#${i + 1} ${t.marketplace ? `sale on ${t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
+    edgeOf.set(i, `t${i}`);
   });
 
   for (const [key, b] of bundles) {
@@ -98,7 +138,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     // Money between the pair keeps the fan, and starts in the middle.
     const k = from < to ? 1 : 2;
     edges.push({
-      key: `b${key}`, kind: 'asset', tone: b.tone, ref: b.first, label: `×${b.rows.length}`,
+      key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`,
       title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${flaggedNote(b.tone)}`,
       ...curve(at.get(from)!, at.get(to)!, k, c),
     });
@@ -114,11 +154,20 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const [from, to] = key.split('>') as [string, string];
     const k = nextIn(from, to);
     edges.push({
-      key: `m${key}`, kind: 'money', tone: 'money', ref: null, label: count > 1 ? `×${count}` : '',
+      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '',
       title: `${count} money ${count === 1 ? 'flow' : 'flows'}`, ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }
-  return { size, nodes, edges };
+
+  const loops = reasons(transfers).map((r, i): DrawnLoop => {
+    const w = r.witness;
+    const wallets = w.kind === 'pair' ? [...w.pair, ...(w.middle === null ? [] : [w.middle])] : [...w.wallets];
+    const own = new Set(wallets);
+    const assets = r.rows.flatMap((n) => edgeOf.get(n - 1) ?? []);
+    const money = edges.filter((e) => e.kind === 'money' && own.has(e.from) && own.has(e.to)).map((e) => e.key);
+    return { key: `r${i}`, methods: r.methods, edges: [...new Set([...assets, ...money])], nodes: wallets };
+  });
+  return { size, nodes, edges, loops };
 }
 
 /** A quadratic arc from a to b, bowed by `k` steps; a self-loop is a teardrop pointing away from the centre. */

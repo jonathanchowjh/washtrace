@@ -1,19 +1,22 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
-import type { CollectionRow as Collection } from '@washtrace/detect';
+import type { CollectionRow as Collection, Method, MethodTotals } from '@washtrace/detect';
+import type { TradeQuery } from '@washtrace/detect/trades';
 import { AnalysisFailed, DownloadNote, ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/head';
 import { RangeBar } from '@/components/methods';
 import { Time } from '@/components/time';
 import { CollectionControls } from '@/components/watch';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, ethRange, plural, short } from '@/lib/format';
+import { LENSES, eth, plural, short } from '@/lib/format';
 import { coverage, range, rangeEnds, storedOnly, type Range } from '@/lib/metrics';
+import { tradesHref } from '@/lib/trades';
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
 
 /** Each end of a range opens the collection's evidence for the lens at that end. Above the row's whole-row link, like the controls. */
-function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: string; href: string }) {
+function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: ReactNode; href: string }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
   const e = rangeEnds(r);
   const end = (text: string, lens: Range['low']) => (
@@ -30,6 +33,17 @@ function Share({ r, label, detail, href }: { r: Range | null; label: string; det
       <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
     </div>
   );
+}
+
+/** "X–Y ETH of Z ETH", each end opening what it counts, biggest sale first, above the row's whole-row link. */
+function VolumeDetail({ volume: r, totals, href }: { volume: Range; totals: Record<Method, MethodTotals>; href: string }) {
+  const priciest = { sort: 'price', dir: 'desc' } as const;
+  const link = (q: Partial<TradeQuery>, text: string) => <Link href={tradesHref(href, { ...q, ...priciest })} className="relative z-10 hover:underline">{text}</Link>;
+  const lo = totals[r.low].flaggedVolumeWei, hi = totals[r.high].flaggedVolumeWei;
+  return <>
+    {lo === hi ? link({ caught: [r.high] }, eth(hi)) : <>{link({ caught: [r.low] }, eth(lo, '').trim())}–{link({ caught: [r.high] }, eth(hi))}</>}
+    {' of '}{link({}, eth(totals.A.volumeWei))}
+  </>;
 }
 
 /**
@@ -54,7 +68,12 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
         {/* The whole row opens the collection; the name is the link a screen reader announces. */}
         <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
-        <p className="mt-1 text-xs text-muted-foreground">{a ? `${plural(a.totals.A.sales, 'sale')} among ${plural(c.transfers, 'transfer')}` : plural(c.transfers, 'transfer')}</p>
+        {/* Above the row's overlay like the range ends: sales open the sales list. The transfer count is plain:
+            no list holds every transfer, as every change of owner leaves out mints and custody moves. */}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {a ? <><Link href={tradesHref(href, {})} className="relative z-10 hover:underline">{plural(a.totals.A.sales, 'sale')}</Link> among </> : null}
+          {plural(c.transfers, 'transfer')}
+        </p>
         {/* A "No RPC" left from before stored data loaded is no fault: the pill says where the data stops. */}
         {/* Nor an error on a paused collection: the worker leaves it alone, so nothing is failing now and nothing clears it. */}
         {c.error && !storedOnly(c, rpcChains) ? c.pausedAt !== null
@@ -80,7 +99,7 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
           />
           <Share
             r={volume} label="of volume" href={href}
-            detail={volume ? `${ethRange(a.totals[volume.low].flaggedVolumeWei, a.totals[volume.high].flaggedVolumeWei)} of ${eth(a.totals.A.volumeWei)}` : 'No priced sale read yet'}
+            detail={volume ? <VolumeDetail volume={volume} totals={a.totals} href={href} /> : 'No priced sale read yet'}
           />
         </>
       )}

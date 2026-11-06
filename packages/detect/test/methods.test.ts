@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/methods.js';
-import { chain, flow, input, transfer, w } from './fixtures.js';
-import type { Method } from '../src/types.js';
+import { LAB, LAB_MIXED, MONEY, chain, flow, input, transfer, w } from './fixtures.js';
+import type { Analysis, Method } from '../src/types.js';
 
 const a = w('a'), b = w('b'), c = w('c'), x = w('x');
 
@@ -169,5 +169,56 @@ describe('the same data, the same answer', () => {
     const want = analyze(input(ts, fs));
     expect(want.totals.A.flagged).toBe(6);
     for (const seed of seeds) expect(JSON.stringify(analyze(input(shuffled(ts, seed), fs))), `seed ${seed}`).toBe(JSON.stringify(want));
+  });
+});
+
+describe('uncounted', () => {
+  it('reports the transfers no hop stands for, and leaves flags and totals as they were', () => {
+    const k = w('k');
+    const mint = transfer('1', '0x0000000000000000000000000000000000000000', a);
+    const park = transfer('1', a, k);
+    const unpark = transfer('1', k, a);
+    const sold = transfer('1', a, b);
+    const ts = [sold, unpark, mint, park];
+    const r = analyze(input(ts, [], { custodians: new Set([k]) }));
+    expect(r.uncounted).toEqual([mint, park, unpark].map((t) => ({ txHash: t.txHash, logIndex: t.logIndex })));
+    expect(r.totals.A.transfers).toBe(1);
+    expect(r.flags).toEqual([]);
+    // Counted and uncounted together are every transfer there was.
+    expect(r.uncounted.length + r.totals.A.transfers).toBe(ts.length);
+  });
+});
+
+describe('uncounted on a fixture with flags', () => {
+  it('leaves the flags and totals as they were, and is the complement of the counted transfers', () => {
+    const zero = '0x0000000000000000000000000000000000000000';
+    const sale = { marketplace: 'seaport-1.6', priceWei: '1000000000000000000', currency: '' };
+    const mint = transfer('1', zero, a);
+    const ts = [mint, transfer('1', a, b, sale), transfer('1', b, a, sale), transfer('1', a, b, sale)];
+    const r = analyze(input(ts));
+    expect(r.flags).toHaveLength(9);
+    expect(flaggedBy(r)).toEqual({ A: 3, AU: 3, AC: 3 });
+    expect(r.totals.A).toMatchObject({ transfers: 3, sales: 3, flaggedSales: 3 });
+    expect(r.uncounted).toEqual([{ txHash: mint.txHash, logIndex: 0 }]);
+  });
+});
+
+/** The lab fixtures are hand-built; later tasks trust them, so they must be what `analyze` makes of their transfers. */
+describe('the lab fixtures match the engine', () => {
+  const keys = (a: Analysis, m: Method) => a.flags.filter((f) => f.method === m).map((f) => f.txHash).sort();
+  const same = (made: Analysis, fixture: Analysis) => {
+    expect(made.uncounted).toEqual(fixture.uncounted);
+    for (const m of ['A', 'AU', 'AC'] as const) expect(keys(made, m), m).toEqual(keys(fixture, m));
+    expect(made.totals).toEqual(fixture.totals);
+  };
+
+  it('LAB, with no funding', () => {
+    same(analyze(input(LAB.transfers, [], { fundingAvailable: false, money: MONEY })), LAB.analysis);
+  });
+
+  it('LAB_MIXED, funded so Q4 is closed by money through W13', () => {
+    const [w11, w12, w13] = [w('w11'), w('w12'), w('w13')];
+    const flows = [flow(w13, w11, { txHash: '0xlab_x1' }), flow(w13, w12)];
+    same(analyze(input(LAB_MIXED.transfers, flows, { money: MONEY })), LAB_MIXED.analysis);
   });
 });

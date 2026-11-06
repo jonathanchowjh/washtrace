@@ -7,7 +7,8 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./bytes": { "types": "./dist/bytes.d.ts", "default": "./dist/bytes.js" }
+    "./bytes": { "types": "./dist/bytes.d.ts", "default": "./dist/bytes.js" },
+    "./trades": { "types": "./dist/trades.d.ts", "default": "./dist/trades.js" }
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",

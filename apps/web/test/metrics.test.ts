@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { APART_WHY, TRAIL_LOADING, analyzingOn, coverage, judged, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { APART_WHY, TRAIL_LOADING, analyzingOn, coverage, judged, lensesRan, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -89,10 +89,10 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 1_000, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
-    latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 },
+    latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0, loops: null },
     servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
     restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
-    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, ...more,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, ...more,
   };
 }
 
@@ -473,5 +473,15 @@ describe('ranFlags', () => {
   });
   it('keeps none without an analysis', () => {
     expect(ranFlags(t, null).flags).toEqual({});
+  });
+});
+
+describe('lensesRan', () => {
+  it('is the lenses whose totals ran, in lens order', () => {
+    expect(lensesRan({ totals: OFF } as never)).toEqual(['A']);
+    expect(lensesRan({ totals: DEMO } as never)).toEqual(['A', 'AU', 'AC']);
+  });
+  it('is none without an analysis', () => {
+    expect(lensesRan(null)).toEqual([]);
   });
 });

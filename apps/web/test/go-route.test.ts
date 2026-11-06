@@ -11,10 +11,10 @@ vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/ser
 
 afterEach(() => { Object.assign(state, { watched: false, hits: none }); });
 
-async function go(q: string): Promise<string> {
+async function go(q: string, chain?: string): Promise<string> {
   const { GET } = await import('@/app/go/route');
   const { NextRequest } = await import('next/server');
-  const res = await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}`));
+  const res = await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}${chain === undefined ? '' : `&chain=${chain}`}`));
   expect(res.status).toBe(303);
   const to = new URL(res.headers.get('location')!);
   return to.pathname + to.search;
@@ -25,6 +25,27 @@ describe('/go', () => {
   it('sends a transaction hash to its transaction, even when search would find more', async () => {
     state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }, { chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '2' }] };
     expect(await go(TX.toUpperCase().replace('0X', '0x'))).toBe(`/tx/1/${TX}`);
+  });
+
+  it('with no chain given, finds a transaction hash on whichever chain holds it', async () => {
+    state.hits = { ...none, trades: [{ chainId: 8453, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }] };
+    expect(await go(TX)).toBe(`/tx/8453/${TX}`);
+  });
+
+  it('with no chain given, a hash on two chains goes to the results, and one nothing holds goes there to say so', async () => {
+    state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }, { chainId: 8453, txHash: TX, address: ADDR, name: 'B', tokenId: '1' }] };
+    expect(await go(TX)).toBe(`/search?q=${TX}`);
+    state.hits = none;
+    expect(await go(TX)).toBe(`/search?q=${TX}`);
+  });
+
+  it('a hash of a transaction with more transfers than one page of hits still opens it', async () => {
+    state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }], more: { ...none.more, trades: true } };
+    expect(await go(TX)).toBe(`/tx/1/${TX}`);
+  });
+
+  it('with a chain given, a hash goes straight to that chain’s transaction', async () => {
+    expect(await go(TX, '8453')).toBe(`/tx/8453/${TX}`);
   });
 
   it('sends an address as before: a watched collection to it, any other to the wallet', async () => {

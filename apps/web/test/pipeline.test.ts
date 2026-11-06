@@ -3,7 +3,7 @@ import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/de
 import { pipeline, STATE_WORDS, trailComing } from '@/lib/pipeline';
 
 const LATEST = { throughBlock: 1000 };
-const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 30, sha256: 'feed' } as unknown as StoredEntry['trail'];
+const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 30, sha256: 'feed', files: { wallets: { bytes: 1, sha256: 'w' }, flows: { bytes: 2, sha256: 'f' } } } as unknown as StoredEntry['trail'];
 
 const row = (more: Partial<CollectionRow> = {}) => ({
   id: 1, chainId: 1, address: '0xabc', name: 'Demo', startBlock: 1, cursorBlock: 1000, headBlock: 1000, transfers: 5,

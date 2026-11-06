@@ -1,5 +1,7 @@
 import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
+import { moneyFor } from '@washtrace/detect';
 import { addressOf, bad, chainOf, handle, json, methodOf, readJson } from '@/lib/api';
+import { lensesRan } from '@/lib/metrics';
 import { store } from '@/lib/store';
 
 const NOT_PAUSED = 'Pause this collection before deleting its data.';
@@ -7,8 +9,10 @@ const NOT_PAUSED = 'Pause this collection before deleting its data.';
 type Ctx = { params: Promise<{ chain: string; address: string }> };
 
 /**
- * GET: one collection's latest analysis, its history, and the tokens and
- * wallets most flagged under `?method=` (A, AU or AC; AC by default).
+ * GET: one collection's latest analysis, its history, and the 50 tokens and
+ * wallets with the most trades caught under `?method=` (A, AU or AC; AC by
+ * default), each `{ rows, total }`, as the console's lists read them. A lens
+ * that did not run lists none.
  */
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
@@ -20,8 +24,10 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
     const collection = await s.collection(chainId, address);
     if (!collection) return bad('This collection is not watched.', 404);
     const method = methodOf(new URL(req.url).searchParams.get('method'));
+    const ctx = { money: moneyFor(chainId), ran: lensesRan(collection.latest), zone: 'UTC' };
+    const top = { sort: 'caught', find: null, limit: 50, offset: 0 } as const;
     const [history, tokens, wallets] = await Promise.all([
-      s.history(collection.id), s.topTokens(collection.id, method), s.topWallets(collection.id, method),
+      s.history(collection.id), s.lensTokens(collection.id, method, top, ctx), s.lensWallets(collection.id, method, top, ctx),
     ]);
     return json({ collection, method, history, tokens, wallets });
   });

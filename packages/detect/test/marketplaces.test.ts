@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters, type Log } from 'viem';
-import { ORDER_FULFILLED, seaportPrice, tagSales } from '../src/marketplaces.js';
+import { MARKETPLACES, ORDER_FULFILLED, seaportPrice, tagSales } from '../src/marketplaces.js';
+import { VENUES, venueOf } from '../src/trades.js';
 import { transfer, w } from './fixtures.js';
 
 const SEAPORT_16 = '0x0000000000000068f116a894984e2db1123eb395';
@@ -142,5 +143,17 @@ describe('tagSales on the 2022 exchanges', () => {
     const logs = [at(nftLog(1n), 0), at(matched(100n), 1), at(nftLog(2n), 2), at(nftLog(3n), 3), at(matched(600n), 4)];
     tagSales([one, two, three], new Map([[one.txHash, logs]]), collection);
     expect([one.priceWei, two.priceWei, three.priceWei]).toEqual(['100', '300', '300']);
+  });
+});
+
+describe('venueOf', () => {
+  it('names every marketplace a sale can be tagged with by a venue, not by itself', () => {
+    for (const raw of Object.values(MARKETPLACES)) {
+      expect(Object.keys(VENUES)).toContain(venueOf(raw));
+      expect(VENUES[venueOf(raw)]!.raw).toContain(raw);
+    }
+  });
+  it('keeps a string no venue knows as its own key', () => {
+    expect(venueOf('sudoswap')).toBe('sudoswap');
   });
 });

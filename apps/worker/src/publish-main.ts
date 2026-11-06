@@ -11,11 +11,14 @@ import { PUBLISH_USAGE, Publisher, parsePublishArgs } from './publish.js';
  * never cut by accident. The token is HF_TOKEN (from .env or the
  * environment); it is never printed.
  *
- *   npm run publish:hub -- --from <dir> [--check]
+ *   npm run publish:hub -- --from <dir> [--check | --replace]
  *
  * uploads a folder a dry run wrote, as it stands, after reading every row of
- * it against its manifest. `--check` only verifies, and needs no token. A
- * store is not used, so `--from` refuses `--store`, `--dry-run` and names.
+ * it against its manifest. `--check` only verifies, and needs no token.
+ * `--replace` publishes over a Hub manifest that cannot be read (a version 2
+ * one): the folder's manifest replaces it, and the files of collections not
+ * in the folder are deleted. A store is not used, so `--from` refuses
+ * `--store`, `--dry-run` and names.
  */
 
 const parsed = parsePublishArgs(process.argv.slice(2));
@@ -23,13 +26,13 @@ if (!parsed) {
   console.error(PUBLISH_USAGE);
   process.exit(2);
 }
-const { dryRun, check, url, from, names } = parsed;
+const { dryRun, check, replace, url, from, names } = parsed;
 
 const token = process.env.HF_TOKEN?.trim() || undefined;
 const repo = process.env.WASHTRACE_STORED_REPO?.trim() || STORED_REPO;
 if (from !== undefined) {
   try {
-    console.info('[publish] %s', await new Publisher(null, token, repo).runFrom(from, { check }));
+    console.info('[publish] %s', await new Publisher(null, token, repo).runFrom(from, { check, replace }));
   } catch (err) {
     console.error('[publish] %s', messageOf(err));
     process.exitCode = 1;

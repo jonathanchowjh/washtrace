@@ -1,4 +1,5 @@
-import { BEHIND_BLOCKS, METHODS, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Method, type MethodTotals, type PassRow, type Transfer } from '@washtrace/detect';
+import type { ReactNode } from 'react';
+import { BEHIND_BLOCKS, HEADLINE, METHODS, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Method, type MethodTotals, type PassRow, type Transfer } from '@washtrace/detect';
 import { localTime, pct, plural } from './format';
 
 /**
@@ -22,7 +23,7 @@ export function part(t: MethodTotals, measure: Measure): { part: number; whole: 
 }
 
 /** The lenses the headline range reads, Round trips to Linked wallets. Money loops back runs and keeps its card, but is not counted. */
-export const HEADLINE: readonly Method[] = ['A', 'AC'];
+export { HEADLINE };
 
 /** The lenses that run and are shown but never counted: all but HEADLINE. */
 export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes(m));
@@ -69,6 +70,15 @@ export function ranFlags<T extends Pick<FlaggedTransfer, 'flags'>>(t: T, latest:
   return { ...t, flags };
 }
 
+/**
+ * The lenses that ran in a collection's latest analysis, for a Trades read's
+ * `ctx.ran`: the store reads no other lens's flags, for the reason ranFlags
+ * gives. None without an analysis.
+ */
+export function lensesRan(latest: Pick<AnalysisRow, 'totals'> | null): Method[] {
+  return METHODS.filter((m) => latest?.totals[m]?.available === true);
+}
+
 export interface Verdict {
   judged: boolean;
   /** True when a headline lens that ran flags a transfer; null when none does but some transfer is not judged; else false. */
@@ -91,7 +101,7 @@ export function verdict(rows: readonly { t: FlaggedTransfer; latest: AnalysisRow
 }
 
 /** The title and tone every page gives a verdict. `flagged` is the page's own title for a wash trade. */
-export function answer(v: Verdict, flagged: string): { title: string; tone: Tone } {
+export function answer(v: Verdict, flagged: ReactNode): { title: ReactNode; tone: Tone } {
   if (v.washTrade === true) return { title: flagged, tone: v.by.includes('A') ? 'cycle' : 'money' };
   if (v.washTrade === null) return { title: 'Not judged yet', tone: 'clean' };
   if (v.apartOnly) return { title: 'Flagged only by Money loops back, which is not counted', tone: 'apart' };

@@ -53,7 +53,7 @@ describe('layout', () => {
     expect(asset).toHaveLength(2);
     expect(asset.map((e) => e.label).sort()).toEqual(['×10', '×10']);
     // Each bundle points at its first transfer's row, so the label still leads to the table.
-    expect(asset.map((e) => e.ref).sort()).toEqual([1, 2]);
+    expect(asset.map((e) => e.row).sort()).toEqual([2, 3]);
   });
 
   it('draws money only between wallets on the drawing, counting repeats on one arrow', () => {
@@ -62,5 +62,31 @@ describe('layout', () => {
     const money = d.edges.filter((e) => e.kind === 'money');
     expect(money).toHaveLength(1);
     expect(money[0]!.label).toBe('×2');
+  });
+
+  it('names each reason’s arrows and wallets, and gives an arrow its trade and row', () => {
+    const c = '0x' + 'd'.repeat(40);
+    const one = { kind: 'scc' as const, wallets: [a, b], cycles: 2 };
+    const two = { kind: 'scc' as const, wallets: [b, c], cycles: 3 };
+    const flow = { txHash: '0xf', kind: 'native' as const, from: b, to: c, valueWei: '1', token: '', blockNumber: 1, blockTime: 1 };
+    const ts = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b, { A: one }), txHash: '0xs1' }, { ...t(b, a, { A: one }), txHash: '0xs2' }, { ...t(b, c, { AC: two }), txHash: '0xs3' }];
+    const d = layout(ts, [flow], []);
+    expect(d.loops.map((l) => l.key)).toEqual(['r0', 'r1']);
+    expect(d.loops[0]!.methods).toEqual(['A']);
+    expect(d.loops[0]!.edges).toEqual(['t1', 't2']);
+    expect(d.loops[0]!.nodes).toEqual([a, b]);
+    // The second reason also takes the money between its two wallets.
+    expect(d.loops[1]!.edges).toEqual(['t3', `m${b}>${c}`]);
+    const e = d.edges.find((x) => x.key === 't2')!;
+    expect([e.tx, e.row]).toEqual(['0xs2', 3]);
+    expect(d.edges.find((x) => x.kind === 'money')).toMatchObject({ tx: null, row: null });
+  });
+
+  it('takes a bundle into the reason of every transfer it holds, and opens its first trade', () => {
+    const scc = { kind: 'scc' as const, wallets: [a, b], cycles: 2 };
+    const ping = Array.from({ length: 20 }, (_, i) => ({ ...(i % 2 === 0 ? t(a, b, { A: scc }) : t(b, a, { A: scc })), txHash: `0xp${i}` }));
+    const d = layout(ping, [], []);
+    expect(d.loops[0]!.edges).toHaveLength(2);
+    expect(d.edges.map((e) => e.tx).sort()).toEqual(['0xp0', '0xp1']);
   });
 });

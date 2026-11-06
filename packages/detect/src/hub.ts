@@ -48,22 +48,28 @@ export function partPath(dest: string, sha256: string): string {
 /** A download's part, as partPath names it: never the manifest's own write, nor a local cut's (`<file>.part`). */
 const PART = /\.csv\.zst\.[0-9a-f]{16}\.part$/;
 
+/** The single file a money trail was before it was two: no manifest names it any more. Its download parts are stale parts already. */
+export const LEGACY_TRAIL = /^\d+-0x[0-9a-f]{40}\.trail\.csv\.zst$/;
+
 /**
  * Delete the download parts in `dir` that `manifest` names no file for: one
  * whose file was published again with other content, or whose collection (or
  * dataset) is gone. Each is kept to resume only while its checksum is the
  * manifest's, so these would never be resumed, and a trail's is a gigabyte.
- * Says which went. The caller holds the download lock, so no part removed is
+ * The single trail file of the old format goes whole, as does its part. Says which went. The caller holds the download lock, so no part removed is
  * one a download is writing.
  */
 export async function removeStaleParts(dir: string, manifest: Manifest): Promise<string[]> {
   const wanted = new Set<string>();
   for (const e of manifest.collections) {
     wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'transfers'), e.transfers.sha256)));
-    if (e.trail !== null) wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'trail'), e.trail.sha256)));
+    if (e.trail !== null) {
+      wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'wallets'), e.trail.files.wallets.sha256)));
+      wanted.add(basename(partPath(storedFile(e.chainId, e.address, 'flows'), e.trail.files.flows.sha256)));
+    }
   }
   const names = await readdir(dir).catch((err) => { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; });
-  const stale = names.filter((n) => PART.test(n) && !wanted.has(n));
+  const stale = names.filter((n) => (PART.test(n) && !wanted.has(n)) || LEGACY_TRAIL.test(n));
   for (const n of stale) await rm(join(dir, n), { force: true });
   return stale;
 }

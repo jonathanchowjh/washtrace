@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { MIGRATIONS, STORED_REPO, storedFile, writeTransfers, writeTrail, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
+import { MIGRATIONS, STORED_REPO, storedFile, trailPaths, trailSha, writeTransfers, writeTrail, StoredDataError, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
 import { Publisher, UPLOAD_TIMEOUT_MS, parsePublishArgs, uploadFetch } from '../src/publish.js';
 
 /** An operation's bytes as text: a Blob's text, or the file a URL names (decompressed, as a reader of the dataset sees it). */
@@ -48,6 +48,7 @@ function publisher(remote: Manifest | null, over: { store?: Store; token?: strin
   const p = new Publisher(over.store ?? fakeStore(), 'token' in over ? over.token : TOKEN, 'someone/data');
   p.remote = vi.fn(async () => remote);
   p.ensureRepo = vi.fn(async () => {});
+  p.remoteFiles = vi.fn(async () => []);
   p.cut = vi.fn(async (names: string[]) => {
     const out: StoredEntry[] = [];
     for (const name of names.length > 0 ? names : [`1/${addr('b2')}`]) {
@@ -86,17 +87,18 @@ describe('publish', () => {
     const p = new Publisher(store, TOKEN, 'someone/data');
     p.remote = async () => null;
     p.ensureRepo = vi.fn(async () => {});
+    p.remoteFiles = async () => [];
     // Read inside the commit: the cut files are gone from the temp folder once the run ends.
     const seen = new Map<string, string>();
-    p.commit = vi.fn(async (ops: { path: string; content: Blob | URL }[]) => {
-      for (const op of ops) seen.set(op.path, await contentOf(op));
+    p.commit = vi.fn(async (ops: { path: string; content?: Blob | URL }[]) => {
+      for (const op of ops) if (op.content) seen.set(op.path, await contentOf({ path: op.path, content: op.content }));
       return 'https://huggingface.co/datasets/someone/data/commit/abc';
     });
     await p.run([`1/${addr('b2')}`], { dryRun: false });
     expect(p.commit).toHaveBeenCalledTimes(1);
     const [, message] = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect([...seen.keys()].sort()).toEqual(
-      ['README.md', 'manifest.json', storedFile(1, addr('b2'), 'trail'), storedFile(1, addr('b2'), 'transfers')].sort());
+      ['README.md', 'manifest.json', storedFile(1, addr('b2'), 'wallets'), storedFile(1, addr('b2'), 'flows'), storedFile(1, addr('b2'), 'transfers')].sort());
     expect(message).toBe('Publish Contract through block 100');
     expect(seen.get('manifest.json')).toContain('Contract');
     for (const [path, text] of seen) expect(text, path).not.toContain(TOKEN);
@@ -106,7 +108,7 @@ describe('publish', () => {
 
   it('of one collection leaves the others in the manifest', async () => {
     const other = entry(addr('a1'), { name: 'Other' });
-    const p = publisher({ version: 2, revision: 'c'.repeat(40), collections: [other] });
+    const p = publisher({ version: 3, revision: 'c'.repeat(40), collections: [other] });
     await p.run([`1/${addr('b2')}`], { dryRun: false });
     const ops = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { path: string; content: Blob }[];
     const manifest = JSON.parse(await ops.find((o) => o.path === 'manifest.json')!.content.text()) as Manifest;
@@ -137,7 +139,7 @@ describe('publish', () => {
     expect((await p.cut([`1/${addr('c0')}`]))[0]!.name).toBe(addr('c0'));
     header.contractName = '' as never;
     expect((await p.cut([`1/${addr('c0')}`]))[0]!.name).toBe(addr('c0'));
-    expect(await readdir(work)).toContain(storedFile(1, addr('c0'), 'trail'));
+    expect(await readdir(work)).toEqual(expect.arrayContaining([storedFile(1, addr('c0'), 'wallets'), storedFile(1, addr('c0'), 'flows')]));
   });
 
   it('a dry run writes ./publish-dry, makes no Hub write, and needs no token', async () => {
@@ -174,6 +176,170 @@ describe('publish', () => {
   });
 });
 
+describe('publish over the Hub\'s files', () => {
+  const v2 = () => new StoredDataError('not a version 3 manifest: its version is not 3');
+  const reason = 'The Hub manifest cannot be read (not a version 3 manifest: its version is not 3): publish every collection, with no names, to replace it.';
+
+  /** A publisher whose cut also writes a trail, so a publish has all three files to commit. */
+  function withTrail(remote: Manifest | null) {
+    const p = publisher(remote);
+    p.cut = vi.fn(async () => {
+      const address = addr('a1');
+      const file = storedFile(1, address, 'transfers');
+      const t = await writeTransfers(join(p.dir, file), []);
+      async function* checked() { yield addr('a'); }
+      async function* flows() { yield { txHash: '0xf', kind: 'native' as const, from: addr('a'), to: addr('b'), valueWei: '1', token: '', blockNumber: 1, blockTime: 1 }; }
+      const tr = await writeTrail(trailPaths(p.dir, { chainId: 1, address }), { checked: checked(), flows: flows() });
+      return [entry(address, {
+        name: 'Contract', transfers: { file, ...t },
+        trail: { rows: tr.rows, wallets: tr.wallets, checked: 1, of: 1, bytes: tr.files.wallets.bytes + tr.files.flows.bytes, sha256: trailSha(tr.files), files: tr.files },
+      })];
+    });
+    return p;
+  }
+  const opsOf = (p: Publisher) => (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { operation: string; path: string }[];
+
+  it('a publish commits both trail files of each collection', async () => {
+    const p = withTrail(null);
+    await p.run([], { dryRun: false });
+    const paths = opsOf(p).filter((o) => o.operation === 'addOrUpdate').map((o) => o.path);
+    expect(paths).toEqual(expect.arrayContaining([storedFile(1, addr('a1'), 'wallets'), storedFile(1, addr('a1'), 'flows')]));
+    expect(paths.some((x) => x.endsWith('.trail.csv.zst'))).toBe(false);
+  });
+
+  it('a publish deletes the data files the new manifest does not name', async () => {
+    const p = withTrail(null);
+    const trail = `1-${addr('a1')}.trail.csv.zst`;
+    p.remoteFiles = vi.fn(async () => [trail, storedFile(1, addr('a1'), 'transfers'), 'README.md', 'notes.pdf']);
+    await p.run([], { dryRun: false });
+    expect(opsOf(p).filter((o) => o.operation === 'delete')).toEqual([{ operation: 'delete', path: trail }]);
+  });
+
+  it('a full publish over a version 2 Hub manifest replaces it', async () => {
+    const p = withTrail(null);
+    p.remote = vi.fn(async () => { throw v2(); });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await p.run([], { dryRun: false });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), 'someone/data', 'not a version 3 manifest: its version is not 3');
+    warn.mockRestore();
+    const ops = opsOf(p) as unknown as { path: string; content: Blob }[];
+    const manifest = JSON.parse(await ops.find((o) => o.path === 'manifest.json')!.content.text()) as Manifest;
+    expect(manifest.version).toBe(3);
+    expect(manifest.collections.map((e) => e.address)).toEqual([addr('a1')]);
+  });
+
+  it('a named publish over an unreadable Hub manifest is refused before any cut', async () => {
+    const p = withTrail(null);
+    p.remote = vi.fn(async () => { throw v2(); });
+    await expect(p.run([`1/${addr('a1')}`], { dryRun: false })).rejects.toThrow(reason);
+    expect(p.cut).not.toHaveBeenCalled();
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  /** A folder publisher whose Hub holds a manifest it cannot read, and whose folder holds collection a1. */
+  function fromOverV2() {
+    const f = new Publisher(null, TOKEN, 'someone/data');
+    f.ensureRepo = vi.fn(async () => {});
+    f.remote = vi.fn(async () => { throw v2(); });
+    f.remoteFiles = vi.fn(async () => []);
+    f.commit = vi.fn(async () => 'url');
+    f.fromDir = vi.fn(async () => [entry(addr('a1'))]);
+    return f;
+  }
+
+  it('runFrom over an unreadable Hub manifest is refused, and says --replace', async () => {
+    const f = fromOverV2();
+    await expect(f.runFrom('/d', { check: false, replace: false })).rejects.toThrow(`${reason} Or pass --replace with --from to replace it with this folder's manifest.`);
+    expect(f.commit).not.toHaveBeenCalled();
+  });
+
+  it('runFrom with replace commits the folder\'s manifest over an unreadable one, and warns', async () => {
+    const f = fromOverV2();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await f.runFrom('/d', { check: false, replace: true });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const text = warn.mock.calls[0]!.join(' ');
+    warn.mockRestore();
+    expect(text).toContain('not a version 3 manifest: its version is not 3');
+    expect(text).toContain("this folder's manifest replaces the Hub's");
+    expect(text).toContain('not in the folder are dropped');
+    const ops = (f.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { path: string; content: Blob }[];
+    const manifest = JSON.parse(await ops.find((o) => o.path === 'manifest.json')!.content.text()) as Manifest;
+    expect(manifest.version).toBe(3);
+    expect(manifest.collections.map((e) => e.address)).toEqual([addr('a1')]);
+  });
+
+  it('runFrom with replace still merges a readable Hub manifest', async () => {
+    const f = fromOverV2();
+    f.remote = vi.fn(async () => ({ version: 3, collections: [entry(addr('b2'))] }) as Manifest);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await f.runFrom('/d', { check: false, replace: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    const ops = (f.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { path: string; content: Blob }[];
+    const manifest = JSON.parse(await ops.find((o) => o.path === 'manifest.json')!.content.text()) as Manifest;
+    expect(manifest.collections.map((e) => e.address).sort()).toEqual([addr('a1'), addr('b2')]);
+  });
+
+  it('a publish deletes only repo-root data files', async () => {
+    const p = withTrail(null);
+    const nested = `archive/1-${addr('a1')}.trail.csv.zst`;
+    const old = `1-${addr('a1')}.trail.csv.zst`;
+    p.remoteFiles = vi.fn(async () => [nested, old]);
+    await p.run([], { dryRun: false });
+    expect(opsOf(p).filter((o) => o.operation === 'delete')).toEqual([{ operation: 'delete', path: old }]);
+  });
+
+  it('a publish by name keeps the files of a collection the manifest still names', async () => {
+    const a = addr('a1');
+    const kept = entry(a, {
+      name: 'Kept',
+      trail: { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 2, sha256: '', files: { wallets: { bytes: 1, sha256: '' }, flows: { bytes: 1, sha256: '' } } },
+    });
+    const p = publisher({ version: 3, collections: [kept] });
+    const old = `1-${a}.trail.csv.zst`;
+    p.remoteFiles = vi.fn(async () => [storedFile(1, a, 'transfers'), storedFile(1, a, 'wallets'), storedFile(1, a, 'flows'), old]);
+    await p.run([`1/${addr('b2')}`], { dryRun: false });
+    expect(opsOf(p).filter((o) => o.operation === 'delete')).toEqual([{ operation: 'delete', path: old }]);
+  });
+
+  it('a dry run lists the deletes and writes only the added files', async () => {
+    process.chdir(work);
+    const p = withTrail(null);
+    const trail = `1-${addr('a1')}.trail.csv.zst`;
+    p.remoteFiles = vi.fn(async () => [trail]);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await p.run([], { dryRun: true });
+    expect(info).toHaveBeenCalledWith('[publish] would delete %s', trail);
+    info.mockRestore();
+    const written = await readdir(join(work, 'publish-dry'));
+    expect(written).not.toContain(trail);
+    expect(written).toContain(storedFile(1, addr('a1'), 'flows'));
+  });
+});
+
+describe('Publisher.remoteFiles', () => {
+  it('is empty for a dataset the Hub does not have or will not show, and passes any other error on', async () => {
+    const p = new Publisher(null, undefined, 'someone/data');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    fetchSpy.mockResolvedValueOnce(new Response('{}', { status: 404 }));
+    expect(await p.remoteFiles()).toEqual([]);
+    fetchSpy.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+    expect(await p.remoteFiles()).toEqual([]);
+    fetchSpy.mockResolvedValueOnce(new Response('{}', { status: 503 }));
+    await expect(p.remoteFiles()).rejects.toThrow();
+    fetchSpy.mockRestore();
+  });
+
+  it('lists the files and no directory', async () => {
+    const p = new Publisher(null, undefined, 'someone/data');
+    const body = JSON.stringify([{ type: 'file', path: 'a.csv.zst', oid: 'x', size: 1 }, { type: 'directory', path: 'd', oid: 'y', size: 0 }]);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await p.remoteFiles()).toEqual(['a.csv.zst']);
+    fetchSpy.mockRestore();
+  });
+});
+
 describe('Publisher.ensureRepo', () => {
   it('refuses a token that is not the repo\'s owner, naming both and never the token', async () => {
     const p = new Publisher(fakeStore(), TOKEN, 'someone/data');
@@ -196,14 +362,14 @@ describe('publish --from', () => {
     const address = addr('b2');
     const file = storedFile(1, address, 'transfers');
     const t = await writeTransfers(join(dir, file), rowsOf(3));
-    async function* checked() { yield addr('a'); yield addr('b'); }
+    async function* checked() { yield addr('a'); yield addr('b'); yield addr('c'); }
     async function* flows() { yield { txHash: '0xf', kind: 'native' as const, from: addr('a'), to: addr('b'), valueWei: '1', token: '', blockNumber: 1, blockTime: 1 }; }
-    const tr = await writeTrail(join(dir, storedFile(1, address, 'trail')), { checked: checked(), flows: flows() });
+    const tr = await writeTrail(trailPaths(dir, { chainId: 1, address }), { checked: checked(), flows: flows() });
     const e = entry(address, {
       name: 'Contract', transfers: { file, ...t },
-      trail: { rows: tr.rows, wallets: tr.wallets, checked: tr.wallets, of: tr.wallets, bytes: tr.bytes, sha256: tr.sha256 }, ...over,
+      trail: { rows: tr.rows, wallets: tr.wallets, checked: tr.wallets, of: tr.wallets, bytes: tr.files.wallets.bytes + tr.files.flows.bytes, sha256: trailSha(tr.files), files: tr.files }, ...over,
     });
-    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({ version: 2, collections: [e] }, null, 2)}\n`);
+    await writeFile(join(dir, 'manifest.json'), `${JSON.stringify({ version: 3, collections: [e] }, null, 2)}\n`);
     await writeFile(join(dir, 'README.md'), 'the dry run card, never uploaded\n');
     return { dir, entry: e };
   }
@@ -220,6 +386,7 @@ describe('publish --from', () => {
     const p = new Publisher(null, TOKEN, 'someone/data');
     p.remote = vi.fn(async () => remote);
     p.ensureRepo = vi.fn(async () => {});
+    p.remoteFiles = vi.fn(async () => []);
     p.commit = vi.fn(async () => 'https://huggingface.co/datasets/someone/data/commit/abc');
     return p;
   }
@@ -228,18 +395,18 @@ describe('publish --from', () => {
     const { dir } = await folder();
     const before = await snapshot(dir);
     const other = entry(addr('a1'), { name: 'Other' });
-    const p = fromPublisher({ version: 2, revision: 'c'.repeat(40), collections: [other] });
+    const p = fromPublisher({ version: 3, revision: 'c'.repeat(40), collections: [other] });
     const seen = new Map<string, string>();
-    p.commit = vi.fn(async (ops: { path: string; content: Blob | URL }[]) => {
-      for (const op of ops) seen.set(op.path, op.content instanceof Blob ? await op.content.text() : fileURLToPath(op.content));
+    p.commit = vi.fn(async (ops: { path: string; content?: Blob | URL }[]) => {
+      for (const op of ops) if (op.content) seen.set(op.path, op.content instanceof Blob ? await op.content.text() : fileURLToPath(op.content));
       return 'url';
     });
-    await p.runFrom(dir, { check: false });
+    await p.runFrom(dir, { check: false, replace: false });
     expect(p.ensureRepo).toHaveBeenCalledTimes(1);
     expect(p.commit).toHaveBeenCalledTimes(1);
     const [, message] = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(message).toBe('Publish Contract through block 100');
-    expect([...seen.keys()].sort()).toEqual(['README.md', 'manifest.json', storedFile(1, addr('b2'), 'trail'), storedFile(1, addr('b2'), 'transfers')].sort());
+    expect([...seen.keys()].sort()).toEqual(['README.md', 'manifest.json', storedFile(1, addr('b2'), 'wallets'), storedFile(1, addr('b2'), 'flows'), storedFile(1, addr('b2'), 'transfers')].sort());
     expect(seen.get(storedFile(1, addr('b2'), 'transfers'))).toBe(join(dir, storedFile(1, addr('b2'), 'transfers')));
     expect(seen.get('README.md')).toContain('# washtrace data');
     expect(seen.get('README.md')).toContain(addr('a1'));
@@ -250,7 +417,7 @@ describe('publish --from', () => {
     // A refusal leaves it as it was too.
     await writeFile(join(dir, storedFile(1, addr('b2'), 'transfers')), 'x', { flag: 'a' });
     const after = await snapshot(dir);
-    await expect(p.runFrom(dir, { check: false })).rejects.toThrow('does not match its manifest');
+    await expect(p.runFrom(dir, { check: false, replace: false })).rejects.toThrow('does not match its manifest');
     expect(await snapshot(dir)).toEqual(after);
   });
 
@@ -260,7 +427,7 @@ describe('publish --from', () => {
     p.remote = vi.fn(async () => null);
     p.ensureRepo = vi.fn(async () => {});
     p.commit = vi.fn(async () => 'url');
-    await expect(p.runFrom(dir, { check: true })).resolves.toContain('matches its manifest');
+    await expect(p.runFrom(dir, { check: true, replace: false })).resolves.toContain('matches its manifest');
     expect(p.remote).not.toHaveBeenCalled();
     expect(p.ensureRepo).not.toHaveBeenCalled();
     expect(p.commit).not.toHaveBeenCalled();
@@ -274,53 +441,70 @@ describe('publish --from', () => {
     const bytes = await readFile(join(dir, name));
     bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 1;
     await writeFile(join(dir, name), bytes);
-    await expect(p.runFrom(dir, { check: false })).rejects.toThrow(`${name} in ${dir} does not match its manifest`);
+    await expect(p.runFrom(dir, { check: false, replace: false })).rejects.toThrow(`${name} in ${dir} does not match its manifest`);
 
     // The real hash and size, but the wrong number of rows.
     const rows = await folder();
     const manifest = JSON.parse(await readFile(join(rows.dir, 'manifest.json'), 'utf8')) as Manifest;
     manifest.collections[0]!.transfers.rows = 4;
     await writeFile(join(rows.dir, 'manifest.json'), JSON.stringify(manifest));
-    await expect(p.runFrom(rows.dir, { check: false })).rejects.toThrow('it has 3 rows, the manifest says 4');
+    await expect(p.runFrom(rows.dir, { check: false, replace: false })).rejects.toThrow('it has 3 rows, the manifest says 4');
 
     expect(p.ensureRepo).not.toHaveBeenCalled();
     expect(p.remote).not.toHaveBeenCalled();
     expect(p.commit).not.toHaveBeenCalled();
   });
 
-  it('refuses a missing file, a wrong size and a wrong checked-wallet count', async () => {
+  it('refuses a wallets file whose row count is not the manifest\'s wallets', async () => {
     const p = fromPublisher(null);
     const { dir } = await folder();
-    const trail = storedFile(1, addr('b2'), 'trail');
+    const wallets = storedFile(1, addr('b2'), 'wallets');
     const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as Manifest;
-    manifest.collections[0]!.trail!.wallets = 5;
+    manifest.collections[0]!.trail!.wallets = 4;
     await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
-    await expect(p.fromDir(dir)).rejects.toThrow(`${trail} in ${dir} does not match its manifest: it has 2 checked wallets, the manifest says 5`);
+    await expect(p.fromDir(dir)).rejects.toThrow(`${wallets} in ${dir} does not match its manifest: it has 3 rows, the manifest says 4`);
+  });
+
+  it('refuses a flows file whose size is not the manifest\'s, and a flows file that is missing', async () => {
+    const p = fromPublisher(null);
+    const { dir } = await folder();
+    const flows = storedFile(1, addr('b2'), 'flows');
+    const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as Manifest;
+    manifest.collections[0]!.trail!.files.flows.bytes += 1;
     manifest.collections[0]!.trail!.bytes += 1;
     await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
-    await expect(p.fromDir(dir)).rejects.toThrow('the manifest says');
-    await rm(join(dir, trail));
-    await expect(p.fromDir(dir)).rejects.toThrow(`${trail} in ${dir} does not match its manifest: the file is missing`);
+    await expect(p.fromDir(dir)).rejects.toThrow(`${flows} in ${dir} does not match its manifest: it is `);
+    await rm(join(dir, flows));
+    await expect(p.fromDir(dir)).rejects.toThrow(`${flows} in ${dir} does not match its manifest: the file is missing`);
+  });
+
+  it('refuses a flows file whose row count is not the manifest\'s rows', async () => {
+    const p = fromPublisher(null);
+    const { dir } = await folder();
+    const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as Manifest;
+    manifest.collections[0]!.trail!.rows = 2;
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
+    await expect(p.fromDir(dir)).rejects.toThrow('it has 1 rows, the manifest says 2');
   });
 
   it('never uploads a file the manifest does not list', async () => {
     const { dir } = await folder();
     await writeFile(join(dir, 'stray.csv.zst'), 'not zstd, would fail if read');
     const p = fromPublisher(null);
-    await p.runFrom(dir, { check: false });
+    await p.runFrom(dir, { check: false, replace: false });
     const ops = (p.commit as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { path: string }[];
     expect(ops.map((o) => o.path)).not.toContain('stray.csv.zst');
-    expect(ops).toHaveLength(4);
+    expect(ops).toHaveLength(5);
   });
 
   it('refuses a folder older than the Hub\'s cut', async () => {
     const { dir } = await folder();
-    const p = fromPublisher({ version: 2, revision: 'c'.repeat(40), collections: [entry(addr('b2'), { name: 'Contract', throughBlock: 250 })] });
-    await expect(p.runFrom(dir, { check: false })).rejects.toThrow(`the Hub has a newer cut of Contract (block 250) than ${dir} (block 100)`);
+    const p = fromPublisher({ version: 3, revision: 'c'.repeat(40), collections: [entry(addr('b2'), { name: 'Contract', throughBlock: 250 })] });
+    await expect(p.runFrom(dir, { check: false, replace: false })).rejects.toThrow(`the Hub has a newer cut of Contract (block 250) than ${dir} (block 100)`);
     expect(p.commit).not.toHaveBeenCalled();
     // The same block is not older.
-    p.remote = vi.fn(async () => ({ version: 2, collections: [entry(addr('b2'), { throughBlock: 100 })] }) as Manifest);
-    await p.runFrom(dir, { check: false });
+    p.remote = vi.fn(async () => ({ version: 3, collections: [entry(addr('b2'), { throughBlock: 100 })] }) as Manifest);
+    await p.runFrom(dir, { check: false, replace: false });
     expect(p.commit).toHaveBeenCalledTimes(1);
   });
 
@@ -328,7 +512,7 @@ describe('publish --from', () => {
     const { dir } = await folder();
     const p = fromPublisher(null);
     p.remote = vi.fn(async () => { throw Object.assign(new Error('Hugging Face answered 401 for someone/data'), { status: 401 }); });
-    await expect(p.runFrom(dir, { check: false })).rejects.toThrow('401');
+    await expect(p.runFrom(dir, { check: false, replace: false })).rejects.toThrow('401');
     expect(p.commit).not.toHaveBeenCalled();
   });
 
@@ -342,6 +526,14 @@ describe('publish --from', () => {
     expect(parsePublishArgs(['--check'])).toBeNull();
     expect(parsePublishArgs(['--store', 'postgres://x', '--check'])).toBeNull();
     expect(parsePublishArgs(['--store', 'postgres://x', '--dry-run'])).toMatchObject({ url: 'postgres://x', dryRun: true });
+  });
+
+  it('takes --replace only with --from, and not with --check', () => {
+    expect(parsePublishArgs(['--from', '/d', '--replace'])).toMatchObject({ from: '/d', check: false, replace: true });
+    expect(parsePublishArgs(['--from', '/d'])).toMatchObject({ replace: false });
+    expect(parsePublishArgs(['--replace'])).toBeNull();
+    expect(parsePublishArgs(['--from', '/d', '--check', '--replace'])).toBeNull();
+    expect(parsePublishArgs(['--store', 'postgres://x', '--replace'])).toBeNull();
   });
 
   it('run() leaves a folder it did not create alone', async () => {

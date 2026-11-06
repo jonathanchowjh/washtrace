@@ -11,7 +11,7 @@ import { storedFile, type StoredEntry } from '../src/stored.js';
 const body = Buffer.from(Array.from({ length: 5_000 }, (_, i) => i % 251));
 const sha = createHash('sha256').update(body).digest('hex');
 const REV = 'c0ffee'.padEnd(40, '0');
-const MANIFEST = '{"version":2,"collections":[]}';
+const MANIFEST = '{"version":3,"collections":[]}';
 
 let server: Server;
 let base: string;
@@ -63,7 +63,7 @@ describe('fetchManifest', () => {
       expect(req.url).toBe('/datasets/u/d/resolve/main/manifest.json');
       res.writeHead(200, { 'x-repo-commit': REV }).end(MANIFEST);
     };
-    expect(await fetchManifest('u/d', base)).toEqual({ version: 2, revision: REV, collections: [] });
+    expect(await fetchManifest('u/d', base)).toEqual({ version: 3, revision: REV, collections: [] });
     expect(seen.authorization).toBeUndefined();
   });
 
@@ -201,7 +201,10 @@ describe('removeStaleParts', () => {
   const entry = (address: string, t: string, r: string | null): StoredEntry => ({
     chainId: 1, address, name: 'X', startBlock: 1, throughBlock: 2, throughTime: 0,
     transfers: { file: storedFile(1, address, 'transfers'), rows: 1, bytes: 1, sha256: t.repeat(64) },
-    trail: r === null ? null : { rows: 1, wallets: 1, checked: 1, of: 1, bytes: 1, sha256: r.repeat(64) },
+    trail: r === null ? null : {
+      rows: 1, wallets: 1, checked: 1, of: 1, bytes: 2, sha256: r.repeat(64),
+      files: { wallets: { bytes: 1, sha256: r.repeat(64) }, flows: { bytes: 1, sha256: r.repeat(64) } },
+    },
   });
 
   it('removes the part of a file the manifest names no more, and keeps every other file', async () => {
@@ -211,23 +214,39 @@ describe('removeStaleParts', () => {
     const keep = [
       // The manifest's own, still to resume.
       partPath(at(storedFile(1, A, 'transfers')), 'a'.repeat(64)),
-      partPath(at(storedFile(1, A, 'trail')), 'b'.repeat(64)),
+      partPath(at(storedFile(1, A, 'wallets')), 'b'.repeat(64)),
+      partPath(at(storedFile(1, A, 'flows')), 'b'.repeat(64)),
       // Whole files, the manifest's write and a local cut's: none is a download's part.
-      at(storedFile(1, A, 'transfers')), at('manifest.json.part'), at(`${storedFile(1, B, 'trail')}.part`),
+      at(storedFile(1, A, 'transfers')), at('manifest.json.part'), at(`${storedFile(1, B, 'flows')}.part`),
     ];
     const stale = [
       // Its file published again with other content.
-      partPath(at(storedFile(1, A, 'trail')), 'c'.repeat(64)),
+      partPath(at(storedFile(1, A, 'flows')), 'c'.repeat(64)),
       // A collection the manifest no longer has, or another dataset's.
       partPath(at(storedFile(1, B, 'transfers')), 'd'.repeat(64)),
     ];
     for (const f of [...keep, ...stale]) await writeFile(f, 'x');
-    const removed = await removeStaleParts(d, { version: 2, collections: [entry(A, 'a', 'b')] });
+    const removed = await removeStaleParts(d, { version: 3, collections: [entry(A, 'a', 'b')] });
     expect(removed.sort()).toEqual(stale.map((f) => f.slice(d.length + 1)).sort());
     expect((await readdir(d)).sort()).toEqual(keep.map((f) => f.slice(d.length + 1)).sort());
   });
 
+  it('keeps the parts of both trail files, and deletes the old single trail file and its part', async () => {
+    const d = join(dir, 'legacy');
+    await mkdir(d, { recursive: true });
+    const at = (file: string) => join(d, file);
+    const keep = [
+      partPath(at(storedFile(1, A, 'wallets')), 'b'.repeat(64)),
+      partPath(at(storedFile(1, A, 'flows')), 'b'.repeat(64)),
+    ];
+    const old = [`1-${A}.trail.csv.zst`, `1-${A}.trail.csv.zst.${'0123456789abcdef'}.part`];
+    for (const f of [...keep, ...old.map(at)]) await writeFile(f, 'x');
+    const removed = await removeStaleParts(d, { version: 3, collections: [entry(A, 'a', 'b')] });
+    expect(removed.sort()).toEqual(old.sort());
+    expect((await readdir(d)).sort()).toEqual(keep.map((f) => f.slice(d.length + 1)).sort());
+  });
+
   it('finds nothing to do in a folder that is not there yet', async () => {
-    expect(await removeStaleParts(join(dir, 'none'), { version: 2, collections: [] })).toEqual([]);
+    expect(await removeStaleParts(join(dir, 'none'), { version: 3, collections: [] })).toEqual([]);
   });
 });

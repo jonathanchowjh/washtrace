@@ -1,4 +1,5 @@
-import { EVERY, ZERO, entryFor, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Store } from '@washtrace/detect';
+import { EVERY, ZERO, entryFor, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
+import { addressOf } from './api';
 import { authConfigured, mayWrite } from './auth';
 import { analyzingOn, ranFlags, storedOnly, verdict, type Verdict } from './metrics';
 import { configFromSources, hopsFollowed, view } from './settings';
@@ -20,9 +21,10 @@ export type TokenView = {
   flows: Flow[];
 } & Verdict;
 
-/** What the wallet page and route show of its two long lists; the store is asked for one more of each. */
-export const TRADES = 500;
+/** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
+export const TRADES = 100;
 export const COUNTERPARTIES = 50;
+export const FLOWS = 50;
 
 /** Each collection's latest analysis, by address, for the collections these transfers are in (null: none yet). */
 async function latestByAddress(s: Store, chainId: number, transfers: readonly FlaggedTransfer[]): Promise<Map<string, AnalysisRow | null>> {
@@ -57,19 +59,79 @@ export async function txView(chainId: number, tx: string): Promise<{ transfers: 
   return { ...verdict(rows), transfers: rows.map((r) => ranFlags(r.t, r.latest)) };
 }
 
-/** A wallet: its funding, its busiest counterparties and its latest trades, with the one verdict of the trades shown. */
-export async function walletView(chainId: number, address: string) {
+/** What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`. */
+export type WalletOpts = { trades: number; partners: number; flows: number; filter: WalletFilter; dir: FlowDir; psort: PartnerSort };
+
+const PARTNER_SORTS: readonly PartnerSort[] = ['flows', 'sent', 'received', 'watched'];
+
+/**
+ * The wallet page's and route's params as one reading. Junk is dropped: a
+ * page under 1 or not a number is the first, a collection or `with` that is
+ * no address is none, `flagged` is only `1`, and an unknown order or
+ * direction is the default.
+ */
+export function walletOpts(q: Record<string, string | string[] | undefined>): WalletOpts {
+  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
+  const page = (k: string) => { const n = Number.parseInt(one(k) ?? '1', 10); return Number.isSafeInteger(n) && n >= 1 ? n : 1; };
+  const filter: WalletFilter = {};
+  const collection = addressOf(one('collection') ?? '');
+  if (collection !== null) filter.collection = collection;
+  if (one('flagged') === '1') filter.flaggedOnly = true;
+  const find = one('q')?.trim().slice(0, 100);
+  if (find) filter.find = find;
+  const other = addressOf(one('with') ?? '');
+  if (other !== null) filter.with = other;
+  const dir = one('dir');
+  const psort = PARTNER_SORTS.find((s) => s === one('psort')) ?? 'flows';
+  return { trades: page('trades'), partners: page('partners'), flows: page('flows'), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
+}
+
+/** Page `asked` of `total` rows, clamped to the last there is, before any offset is read from it. */
+function paged(asked: number, total: number, size: number): { page: number; pages: number; total: number } {
+  const pages = Math.max(1, Math.ceil(total / size));
+  return { page: Math.min(asked, pages), pages, total };
+}
+
+/**
+ * A wallet: its funding, a page of its money partners, a page of its trades
+ * under the filter, with the one verdict of the trades shown, and with
+ * `filter.with` what passed between it and that wallet. Its counts are over
+ * every trade: the title's flagged count is the flagged-only list's.
+ */
+export async function walletView(chainId: number, address: string, opts: WalletOpts) {
   const s = store();
-  // One more than is shown, so a full list can tell a cut from a wallet that has exactly that many.
-  const [funding, counterRows, tradeRows] = await Promise.all([s.wallet(chainId, address), s.counterparties(chainId, address, COUNTERPARTIES + 1), s.walletTransfers(chainId, address, TRADES + 1)]);
-  const shown = tradeRows.slice(0, TRADES);
-  const latest = await latestByAddress(s, chainId, shown);
-  const rows = shown.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
+  const { with: other, ...narrow } = opts.filter;
+  const narrowed = Object.keys(narrow).length > 0;
+  const [funding, collections, all, flagged, matched, partnersTotal, flowsTotal, betweenTotal] = await Promise.all([
+    s.wallet(chainId, address), s.walletCollections(chainId, address),
+    s.walletTradeCount(chainId, address), s.walletTradeCount(chainId, address, { flaggedOnly: true }),
+    narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
+    other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),
+    other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other }),
+  ]);
+  const pages = { trades: paged(opts.trades, matched ?? all, TRADES), partners: paged(opts.partners, partnersTotal, COUNTERPARTIES), flows: paged(opts.flows, flowsTotal, FLOWS) };
+  const offset = (p: { page: number }, size: number) => (p.page - 1) * size;
+  const [shown, counterparties, betweenShown, flows] = await Promise.all([
+    s.walletTransfers(chainId, address, TRADES, offset(pages.trades, TRADES), narrow),
+    s.counterparties(chainId, address, COUNTERPARTIES, offset(pages.partners, COUNTERPARTIES), opts.psort),
+    other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other }),
+    other === undefined ? [] : s.flowsBetween(chainId, address, other, opts.dir, FLOWS, offset(pages.flows, FLOWS)),
+  ]);
+  const latest = await latestByAddress(s, chainId, [...shown, ...betweenShown]);
+  const judge = (ts: readonly FlaggedTransfer[]) => ts.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
+  const rows = judge(shown);
   return {
     funding,
-    counterparties: counterRows.slice(0, COUNTERPARTIES),
+    collections,
+    counterparties,
     transfers: rows.map((r) => ranFlags(r.t, r.latest)),
-    cut: { trades: tradeRows.length > TRADES, counterparties: counterRows.length > COUNTERPARTIES },
+    /** Every trade it has, and those counted flagged, whatever the filter. */
+    counts: { trades: all, flagged },
+    pages,
+    // Kept for the API: which list has more than one page.
+    cut: { trades: pages.trades.pages > 1, counterparties: pages.partners.pages > 1 },
+    // The trades between the two are the first TRADES; past that the page opens the rest as a Find on the other wallet.
+    between: other === undefined ? null : { trades: judge(betweenShown).map((r) => ranFlags(r.t, r.latest)), tradesTotal: betweenTotal, flows, flowsTotal },
     ...verdict(rows),
   };
 }
