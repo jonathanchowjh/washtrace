@@ -82,7 +82,7 @@ async function flaggedPage(sp: Record<string, string> = {}): Promise<HTMLElement
 const links = (c: Element) => [...c.querySelectorAll('a')];
 const linkTo = (c: Element, href: string) => links(c).find((a) => a.getAttribute('href') === href);
 const named = (c: Element, text: string) => links(c).filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
-const list = (c: Element, kind: 'tokens' | 'wallets') => c.querySelector(`[aria-label="${kind === 'tokens' ? 'Tokens' : 'Wallets'} Round trips caught"]`)!;
+const list = (c: Element, kind: 'tokens' | 'wallets') => c.querySelector(`[aria-label="${kind === 'tokens' ? 'Tokens' : 'Wallets'} Round trips flagged"]`)!;
 
 describe('the lens lists on the collection page', () => {
   it('every count opens its trades, the loops open the token page lit, and the wallets open their group', async () => {
@@ -95,7 +95,7 @@ describe('the lens lists on the collection page', () => {
     expect(el.textContent).toContain('1 loop among 3 wallets, 2 laps');
     expect(el.textContent).toContain('11 of 14 trades');
     expect(el.textContent).toContain('2.5 ETH');
-    expect(el.textContent).toContain('caught of its counted trades');
+    expect(el.textContent).toContain('flagged of its counted trades');
   });
 
   it('a wallet row says why in its own words, and its counts open its trades', async () => {
@@ -125,7 +125,7 @@ describe('the lens lists on the collection page', () => {
     expect(named(el, 'share')).toEqual([`${BASE}?method=A&ts=share#evidence`]);
     expect(named(el, 'volume')).toEqual([`${BASE}?method=A&ts=volume#evidence`]);
     expect(named(el, 'newest')).toEqual([`${BASE}?method=A&ts=newest#evidence`]);
-    expect(named(el, 'most caught')).toEqual([`${BASE}?method=A#evidence`]);
+    expect(named(el, 'most flagged')).toEqual([`${BASE}?method=A#evidence`]);
     expect(named(el, 'Next ›')).toEqual([`${BASE}?method=A&tp=2#evidence`]);
     expect(named(list(el.ownerDocument.body, 'wallets'), 'first seen')).toEqual([`${BASE}?method=A&ws=first#evidence`]);
   });
@@ -247,8 +247,16 @@ describe('the lens lists on the flagged page', () => {
 
   it('the Tokens and Wallets tabs drop the other list\'s sort and Find', async () => {
     const el = await flaggedPage({ method: 'A', kind: 'tokens', sort: 'share', q: '7' });
-    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label=Show] a')].find((a) => a.textContent === name)?.getAttribute('href');
+    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(tab('Wallets')).toBe(`${BASE}/flagged?method=A&kind=wallets`);
     expect(tab('Tokens')).toBe(`${BASE}/flagged?method=A&kind=tokens&sort=share&q=7`);
+  });
+
+  it('titles its tab with its heading', async () => {
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/flagged/page');
+    const title = async (sp: Record<string, string>) => (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).title;
+    expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens flagged by Round trips');
+    expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets flagged by Linked wallets');
+    expect(await title({ kind: 'trades' })).toBe('Trades in Coll');
   });
 });

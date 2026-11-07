@@ -392,18 +392,18 @@ describe('no Etherscan key, and a stored money trail', () => {
     expect(text).not.toContain('do not run');
     expect(text).not.toContain('those lenses are off');
     expect(text).not.toContain('funding is off');
-    expect(text).toContain('None: not saved here or in .env, so stage 5 needs a key: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
+    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
   });
 
   it('names the stage each group feeds, and says a missing key needs one', () => {
     const text = render(<Settings fields={fields()} writable />).container.textContent!;
-    expect(text).toContain("Read new transfers from the chain, stage 4 of every collection's reading, needs an RPC for each chain it reads. Without one, nothing newer is read.");
-    expect(text).toContain("stage 5 of every collection's reading, needs an Etherscan key.");
+    expect(text).toContain("Read new transfers from the chain, reading stage 4 (Chain) for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read.");
+    expect(text).toContain("reading stage 5 (Money) for every collection, needs an Etherscan key.");
     expect(text).toContain('without a key they do not run.');
   });
 
   it('says they do not run when nothing feeds them', () => {
     const text = render(<Settings fields={fields()} writable />).container.textContent!;
-    expect(text).toContain('None: not saved here or in .env, so stage 5 needs a key, and Money loops back and Linked wallets do not run.');
+    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key, and Money loops back and Linked wallets do not run.');
   });
 });

@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { tradesHref } from '@/lib/trades';
+import { tradesHref } from '@/lib/trades-url';
 
 // One collection with no analysis, its stored data 40% downloaded, and no pass ever reported: the worker is silent.
 const demo = {
@@ -65,7 +65,7 @@ describe('the collections page', () => {
 
   it('a collection with no analysis waits on the silent worker, not on its download', async () => {
     const text = await page();
-    expect(text).toContain('Not analysed yet · the worker is silent, so nothing is read or analysed until it reports again.');
+    expect(text).toContain('Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.');
     expect(text).not.toContain('Downloading stored data');
   });
 
@@ -73,7 +73,7 @@ describe('the collections page', () => {
     state.rows = [analysed(1, 'Bored Ape Yacht Club', 10, 20), analysed(2, 'Doodles', 5, 6)];
     const c = await draw({ find: 'APE' });
     expect(names(c)).toEqual(['Bored Ape Yacht Club']);
-    expect(c.textContent).toContain('1 of 2 collections in this tab match “APE”');
+    expect(c.textContent).toContain('1 of 2 collections in this tab matches “APE”');
     expect(c.querySelector('a[href="/"]')?.textContent).toBe('Clear');
   });
 
@@ -146,8 +146,11 @@ describe('the collections page', () => {
   it('shows the current sort with an arrow, and the Find box keeps tab, sort and dir as hidden inputs', async () => {
     state.rows = [analysed(1, 'Ape', 10, 20)];
     const c = await draw({ sort: 'washed', tab: 'all' });
-    expect(c.textContent).toContain('Sort:');
-    expect(c.textContent).toContain('washed ▼');
+    expect(c.textContent).toContain('Sort by');
+    // The arrow is the link's ::after, so the sort in force is read from aria-current and the arrow's class.
+    const on = [...c.querySelectorAll('a[aria-current="true"]')];
+    expect(on.map((a) => a.textContent)).toEqual(['washed', 'Sales that look washed']);
+    expect(on.every((a) => a.className.includes("after:content-['▼']"))).toBe(true);
     const form = c.querySelector('form[method="get"]')!;
     expect([...form.querySelectorAll('input[type=hidden]')].map((i) => `${i.getAttribute('name')}=${i.getAttribute('value')}`)).toEqual(['tab=all', 'sort=washed']);
   });

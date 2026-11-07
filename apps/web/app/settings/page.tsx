@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 import { headers } from 'next/headers';
 import { messageOf } from '@washtrace/detect';
-import { Head, Problem } from '@/components/head';
+import { Head, Problem, STORE_DOWN } from '@/components/head';
 import { Settings } from '@/components/settings';
 import { settingsView } from '@/lib/views';
 
@@ -16,7 +16,7 @@ export default async function SettingsPage() {
   try {
     v = await settingsView(await headers());
   } catch (err) {
-    return <><Head title="Settings" /><Problem title="The store did not answer">{messageOf(err)}</Problem></>;
+    return <><Head title="Settings" /><Problem title={STORE_DOWN}>{messageOf(err)}</Problem></>;
   }
   return (
     <>

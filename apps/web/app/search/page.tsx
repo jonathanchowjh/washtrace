@@ -2,11 +2,11 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
 import type { SearchHits, SearchKind } from '@washtrace/detect';
-import { Empty, Head, Problem, Section } from '@/components/head';
+import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/head';
 import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
+import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/api';
-import { EXPLORERS } from '@/lib/links';
 import { hitRow, parseSearch, searchArgs, SEARCH_LIMIT } from '@/lib/search';
 import { store } from '@/lib/store';
 
@@ -47,7 +47,7 @@ export default async function SearchPage({ searchParams }: Props) {
   try {
     hits = await store().search(parsed, { offset, only });
   } catch {
-    return <>{head}<Problem title="Search could not read the store.">It could not look up “{q}”.</Problem></>;
+    return <>{head}<Problem title={STORE_DOWN}>It could not look up “{q}”.</Problem></>;
   }
   const here = (over: { kind?: SearchKind; page?: number }) =>
     `/search?q=${encodeURIComponent(q)}${over.kind ? `&kind=${over.kind}` : ''}${(over.page ?? 1) > 1 ? `&page=${over.page}` : ''}`;
@@ -60,13 +60,13 @@ export default async function SearchPage({ searchParams }: Props) {
     // Chain 1 is the only chain a pasted hash can be looked up on without knowing its chain.
     const address = addressOf(q);
     const tx = txOf(q);
-    const outside = address ? `${EXPLORERS[1]!.host}/address/${address}` : tx ? `${EXPLORERS[1]!.host}/tx/${tx}` : null;
+    const outside = address ? explorerAddress(1, address) : tx ? explorerTx(1, tx) : null;
     return (
       <>
         {head}
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
-          {outside ? <> <a className="underline" href={outside} target="_blank" rel="noopener noreferrer">Look it up on Etherscan ↗</a></> : null}
+          {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
         </Empty>
       </>
     );

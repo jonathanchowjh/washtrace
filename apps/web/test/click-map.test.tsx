@@ -9,7 +9,7 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
-import { tradesHref } from '@/lib/trades';
+import { tradesHref } from '@/lib/trades-url';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const SELF = '0x' + 'a'.repeat(40);

@@ -53,7 +53,7 @@ const MASK = '••••';
  * it points. The same as the worker reports it (env.ts), and the same again
  * on a URL already masked.
  */
-function maskedUrl(url: string): string {
+export function maskedUrl(url: string): string {
   const q = url.indexOf('?');
   // Up to the last @ before the host ends, after the scheme and any slashes: the URL parser also reads userinfo in
   // `https:a:b@x`, `https:/a:b@x` and `https:\a:b@x`.
@@ -178,7 +178,7 @@ export function pinned(key: string, sources: Record<string, SettingSource>, sett
  * is shown masked (shownSecret), and to someone who may not change it as
  * '••••' alone, whatever its source.
  */
-export function view(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
+export function fieldViews(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
   return FIELDS.map((f) => {
     const reported = sources[f.key];
     const why = pinned(f.key, sources, settings);

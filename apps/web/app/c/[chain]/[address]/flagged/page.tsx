@@ -1,28 +1,55 @@
 import type { Metadata } from 'next';
+import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { cookies } from 'next/headers';
 import { METHODS, moneyFor, type Method, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
-import { NO_FILTER, findOf, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
-import { Empty, Head } from '@/components/head';
+import { NO_FILTER, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
+import { Empty, Head, Segmented } from '@/components/head';
 import { LensList, clampedPage, listView } from '@/components/lens-lists';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { addressOf, chainOf, methodOf } from '@/lib/api';
-import { LENSES, plural, short } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, plural, short, num } from '@/lib/format';
 import { lensesRan } from '@/lib/metrics';
+import { pages } from '@/lib/params';
 import { store } from '@/lib/store';
-import { parseView, tradesHref } from '@/lib/trades';
+import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
+/** Tokens or wallets to a page; the Trades list's page is TRADES_PAGE. */
 const PAGE = 50;
 
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 
-export const metadata: Metadata = { title: 'Flagged' };
+/** The collection, read once per request: the tab title and the page both need it. */
+const collectionOf = cache((chainId: number, address: string) => store().collection(chainId, address));
+
+/** The page's heading, which is also its tab title. */
+function headingOf(kind: 'tokens' | 'wallets' | 'trades', name: string, lens: string): string {
+  return kind === 'trades' ? `Trades in ${name}` : `${kind === 'tokens' ? 'Tokens' : 'Wallets'} flagged by ${lens}`;
+}
+
+/** The kind and lens the URL asks for, as the page reads them. */
+function askedOf(q: Record<string, string | string[] | undefined>) {
+  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
+  const kind = one('kind') === 'wallets' ? 'wallets' : one('kind') === 'trades' ? 'trades' : 'tokens';
+  return { one, kind } as const;
+}
+
+export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
+  await connection();
+  const p = await params;
+  const chainId = chainOf(p.chain);
+  const address = addressOf(p.address);
+  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  if (!c) return { title: 'Flagged' };
+  const { one, kind } = askedOf(await searchParams);
+  return { title: headingOf(kind, c.name ?? short(c.address), LENSES[methodOf(one('method'))].name) };
+}
 
 /**
  * Every token or wallet one lens flags, a page at a time: the collection
@@ -38,10 +65,9 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
   const address = addressOf(p.address);
   if (chainId === null || address === null) notFound();
   const s = store();
-  const c = await s.collection(chainId, address);
+  const c = await collectionOf(chainId, address);
   if (!c) notFound();
-  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
-  const kind = one('kind') === 'wallets' ? 'wallets' : one('kind') === 'trades' ? 'trades' : 'tokens';
+  const { one, kind } = askedOf(q);
   // The reader's zone, detected in the browser: months and dates are read in their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   const { q: asked, view } = parseView(q, zone);
@@ -78,7 +104,7 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
 
   const trades = kind === 'trades' ? await tradesOf(s, c, chainId, query, view.by, view.page, zone) : null;
 
-  const skipped = trades === null ? '' : query.notCaught.filter((m) => !trades.ran.includes(m)).map((m) => ` ${LENSES[m].name} did not run, so "not caught by" it is left out.`).join('');
+  const skipped = trades === null ? '' : query.notCaught.filter((m) => !trades.ran.includes(m)).map((m) => ` ${LENSES[m].name} did not run, so "not flagged by" it is left out.`).join('');
   const csv = `/api/collections/${chainId}/${address}/trades?format=csv${tradesHref(base, query).slice(`${base}/flagged?kind=trades`.length)}`;
   const lensHref = (m: Method) => kind === 'trades' ? tradesHref(base, { ...query, caught: [m] }, { by: view.by }) : href({ method: m });
   const lensOn = (m: Method) => kind === 'trades' ? query.caught.length === 1 && query.caught[0] === m : m === method;
@@ -86,11 +112,11 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
   return (
     <>
       <Head
-        title={kind === 'trades' ? `Trades in ${name}` : `${kind === 'tokens' ? 'Tokens' : 'Wallets'} flagged by ${lens.name}`}
+        title={headingOf(kind, name, lens.name)}
         crumb={[{ href: '/', label: 'Collections' }, { href: `${base}?method=${method}`, label: name }]}
         sub={kind === 'trades'
           ? `${query.kind === 'all' ? 'Every change of owner' : 'Every sale'}, filtered by what you ask: a lens, a marketplace, a price, a wallet. Open a date to see the trade itself.`
-          : `${of.toLocaleString()} in all. Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}
+          : `${num(of)} in all. Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -102,21 +128,17 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
             </Link>
           ))}
         </nav>
-        <nav aria-label="Show" className="flex rounded-md border bg-card p-0.5 text-sm">
-          {(['tokens', 'wallets', 'trades'] as const).map((k) => (
-            <Link key={k} href={k === 'trades' ? tradesHref(base, kind === 'trades' ? query : {}, { by: view.by }) : href({ kind: k })} aria-current={k === kind ? 'page' : undefined}
-              className={cn('rounded px-3 py-1', k === kind ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
-              {k === 'tokens' ? 'Tokens' : k === 'wallets' ? 'Wallets' : 'Trades'}
-            </Link>
-          ))}
-        </nav>
+        <Segmented label="Show tokens, wallets or trades" items={(['tokens', 'wallets', 'trades'] as const).map((k) => ({
+          key: k, href: k === 'trades' ? tradesHref(base, kind === 'trades' ? query : {}, { by: view.by }) : href({ kind: k }),
+          label: k === 'tokens' ? 'Tokens' : k === 'wallets' ? 'Wallets' : 'Trades', current: k === kind,
+        }))} />
       </div>
 
       {trades ? (
         <>
           <FilterBar base={base} q={query} view={view} zone={zone} />
           {trades.state === 'absent' ? (
-            <div className="mt-4 max-w-3xl space-y-2">{trades.absent.map((m) => <Empty key={m}>{LENSES[m].name} did not run on this collection, so it catches nothing yet.</Empty>)}</div>
+            <div className="mt-4 max-w-3xl space-y-2">{trades.absent.map((m) => <Empty key={m}>{LENSES[m].name} did not run on this collection, so it flags nothing yet.</Empty>)}</div>
           ) : trades.state === 'unreadable' ? (
             <div className="mt-4 max-w-3xl"><Empty>“{query.find}” is not a token number, wallet address or transaction hash.</Empty></div>
           ) : (
@@ -137,7 +159,7 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
               {trades.total === 0 ? null : (
                 <>
                   <TradesTable base={base} q={query} view={view} zone={zone} chainId={chainId} rows={trades.rows} ran={trades.ran} money={trades.money} />
-                  <Pager total={trades.total} page={trades.page} size={PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label="trades" />
+                  <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label="trades" />
                   <p className="mt-3 text-sm"><a href={csv} className="font-medium hover:underline">Download CSV ↓</a></p>
                 </>
               )}
@@ -170,9 +192,9 @@ type Coll = NonNullable<Awaited<ReturnType<Store['collection']>>>;
  * (no loops counted) and the migration that queues such collections has run.
  */
 function unjudged(latest: Coll['latest'], n: number): string {
-  if (latest === null) return 'Not analysed yet.';
-  if (latest.loops === null) return 'The latest analysis predates these figures; this collection is queued to be analysed again.';
-  return `${n.toLocaleString()} of them are newer than the latest analysis and not judged yet.`;
+  if (latest === null) return `${NOT_JUDGED_YET}.`;
+  if (latest.loops === null) return 'The latest analysis predates these figures; this collection is queued to be analyzed again.';
+  return `${num(n)} of them are newer than the latest analysis and not judged yet.`;
 }
 
 /**
@@ -184,13 +206,11 @@ function unjudged(latest: Coll['latest'], n: number): string {
 async function tradesOf(s: Store, c: Coll, chainId: number, query: TradeQuery, by: TradeGroupBy | null, asked: number, zone: string) {
   const ran = lensesRan(c.latest);
   const ctx = { money: moneyFor(chainId), ran, zone };
-  // A group on a lens's loops is a caught filter too: one that did not run has none of its own.
-  const absent = [...new Set([...query.caught, ...(query.group === null ? [] : [query.group.method])])].filter((m) => !ran.includes(m));
-  const none = { ran, money: ctx.money, absent, total: 0, unjudged: 0, page: 1, rows: [] as TradeRow[], groups: null as TradeGroup[] | null };
-  if (absent.length > 0) return { ...none, state: 'absent' as const };
-  if (query.find !== null && findOf(query.find).kind === 'none') return { ...none, state: 'unreadable' as const };
+  const nothing = holdsNothing(query, ran);
+  const none = { ran, money: ctx.money, absent: nothing?.state === 'absent' ? nothing.absent : [], total: 0, unjudged: 0, page: 1, rows: [] as TradeRow[], groups: null as TradeGroup[] | null };
+  if (nothing !== null) return { ...none, state: nothing.state };
   const { total, unjudged } = await s.tradeCount(c.id, query, ctx);
-  const page = Math.min(Math.max(1, Math.ceil(total / PAGE)), asked);
-  const [rows, groups] = await Promise.all([s.trades(c.id, query, ctx, PAGE, (page - 1) * PAGE), by !== null && total > 0 ? s.tradeGroups(c.id, query, by, ctx) : null]);
+  const page = Math.min(pages(total, TRADES_PAGE), asked);
+  const [rows, groups] = await Promise.all([s.trades(c.id, query, ctx, TRADES_PAGE, (page - 1) * TRADES_PAGE), by !== null && total > 0 ? s.tradeGroups(c.id, query, by, ctx) : null]);
   return { ...none, state: 'ok' as const, total, unjudged, page, rows, groups };
 }

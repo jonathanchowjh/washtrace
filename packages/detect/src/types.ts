@@ -51,6 +51,9 @@ export interface Flow {
  *        user transaction graph.
  * - `AC` SCC detection on the asset transfer graph, unioned with depth-2
  *        cycles through the undirected user transaction graph.
+ *
+ * The console calls a method a lens: `A` is Round trips, `AU` Money loops
+ * back and `AC` Linked wallets.
  */
 export type Method = 'A' | 'AU' | 'AC';
 export const METHODS: readonly Method[] = ['A', 'AU', 'AC'];

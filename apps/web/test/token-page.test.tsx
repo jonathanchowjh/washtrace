@@ -49,7 +49,7 @@ describe('the token page when not everything is judged', () => {
   it('names a money swatch in the legend only when a money arrow is drawn', async () => {
     Object.assign(state, { flagged: ['A'] });
     const legend = [...(await dom()).querySelectorAll('figcaption > span')].map((s) => s.textContent);
-    expect(legend).toContain('round trip');
+    expect(legend).toContain('Round trips');
     expect(legend).toContain('first holder');
     expect(legend).not.toContain('money');
   });
@@ -57,7 +57,7 @@ describe('the token page when not everything is judged', () => {
   it('a token with no analysis does not say no pattern was found', async () => {
     Object.assign(state, { latestNull: true });
     const text = await page();
-    expect(text).toContain('No analysis has covered these transfers yet, so no lens has looked for a pattern.');
+    expect(text).toContain('Its transfers are read, but no analysis has covered them yet. That is not the same as clean.');
     expect(text).not.toContain('No lens found a pattern');
   });
 
@@ -77,7 +77,7 @@ describe('the token page when not everything is judged', () => {
     expect(c.querySelector('.bg-money, .bg-money-surface\\/70, .text-money')?.outerHTML).toBeUndefined();
     expect(text).toContain('Why Money loops back flags it');
     expect(text).not.toContain('Why it was flagged');
-    expect(text).toContain('only Money loops back, not counted');
+    expect(text).toContain('Money loops back only, not counted');
     expect(text).toContain(TINT_LEAD);
     expect(text).toContain(APART_WHY);
   });
@@ -121,7 +121,8 @@ describe('the token page paging and filter', () => {
     expect(rows).toHaveLength(100);
     expect(rows[0]).toBe('t1');
     expect(rows[99]).toBe('t100');
-    expect(c.textContent).toContain('Showing 1–100 of 250 transfers');
+    expect(c.textContent).toContain('1–100 of 250 transfers');
+    expect(c.textContent).not.toContain('Showing');
     expect(hrefOf(c, 'Next ›')).toBe(`${T}?page=2`);
   });
 
@@ -132,7 +133,7 @@ describe('the token page paging and filter', () => {
     expect(rows[0]).toBe('t101');
     expect(rows).toContain('t150');
     expect(c.querySelector('#t150 td')?.textContent).toBe('150');
-    expect(c.textContent).toContain('Showing 101–200 of 250 transfers');
+    expect(c.textContent).toContain('101–200 of 250 transfers');
   });
 
   it('clamps a page past the end and ignores junk', async () => {

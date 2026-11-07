@@ -1,27 +1,28 @@
 import Link from 'next/link';
 import type { Method, TokenLine, WalletLine } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { LENSES, eth, plural } from '@/lib/format';
-import { tradesHref } from '@/lib/trades';
+import { LENSES, eth, num, plural, tokenLabel } from '@/lib/format';
+import { findText, pageOf, pages } from '@/lib/params';
+import { tradesHref } from '@/lib/trades-url';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 import { cn } from '@/lib/utils';
+import { Empty } from './head';
 import { DOT } from './methods';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
 
 /** Each list's orders, as the URL names them and as its sort links read. */
 export const SORTS = {
-  tokens: [['caught', 'most caught'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
-  wallets: [['caught', 'most caught'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
+  tokens: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
+  wallets: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
 } as const;
 
 /** A list's page, order and Find from the URL. Junk is dropped: an unknown order is the default, and a page under 1 is the first. */
 export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?: string; find?: string }): { page: number; sort: string; find: string | null } {
-  const page = Number.parseInt(raw.page ?? '1', 10);
   return {
-    page: Number.isSafeInteger(page) && page >= 1 ? page : 1,
+    page: pageOf(raw.page),
     sort: SORTS[kind].some(([s]) => s === raw.sort) ? raw.sort! : 'caught',
-    find: raw.find?.trim().slice(0, 100) || null,
+    find: findText(raw.find),
   };
 }
 
@@ -29,15 +30,15 @@ export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?
 export async function clampedPage<T>(asked: number, size: number, read: (offset: number) => Promise<{ rows: T[]; total: number }>): Promise<{ rows: T[]; total: number; page: number }> {
   const first = await read((asked - 1) * size);
   if (first.rows.length > 0 || first.total === 0) return { ...first, page: asked };
-  const page = Math.max(1, Math.ceil(first.total / size));
+  const page = pages(first.total, size);
   return { ...(await read((page - 1) * size)), page };
 }
 
 /**
- * The tokens or wallets one lens caught trades of, each saying why in words,
+ * The tokens or wallets one lens flagged trades of, each saying why in words,
  * with every count a link to the trades it counts: the loops to the token
- * page with them lit (or to a wallet's caught trades), the wallets to their
- * group, the caught and the total to those trades. Above it, the orders and a
+ * page with them lit (or to a wallet's flagged trades), the wallets to their
+ * group, the flagged and the total to those trades. Above it, the orders and a
  * Find box that keeps every other parameter; below it, its pages. A Find that
  * names nothing this list holds says so.
  */
@@ -60,10 +61,10 @@ export function LensList({ kind, method, base, chainId, rows, total, of, sort, s
   const start = (pager.page - 1) * pager.size;
 
   return (
-    <section aria-label={`${kind === 'tokens' ? 'Tokens' : 'Wallets'} ${lens.name} caught`}>
+    <section aria-label={`${kind === 'tokens' ? 'Tokens' : 'Wallets'} ${lens.name} flagged`}>
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
-        <h3 className="text-sm font-medium text-body">Which {unit}s did {lens.name} catch?</h3>
-        <span>caught of its counted trades · volume caught</span>
+        <h3 className="text-sm font-medium text-body">Which {unit}s did {lens.name} flag?</h3>
+        <span>flagged of its counted trades · volume flagged</span>
       </div>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
         <nav aria-label={`Order the ${unit}s`} className="text-muted-foreground">
@@ -79,26 +80,25 @@ export function LensList({ kind, method, base, chainId, rows, total, of, sort, s
           {kept.map(([k, v], i) => <input key={i} type="hidden" name={k} value={v} />)}
           <input
             type="search" name={findParam} defaultValue={find ?? ''} placeholder={kind === 'tokens' ? 'Find a token number' : 'Find a wallet (0x…)'}
-            aria-label={kind === 'tokens' ? `Find a token ${lens.name} caught, by its number` : `Find a wallet ${lens.name} caught, by its address or the start of it`}
-            className="w-44 rounded-md border bg-card px-2 py-1 text-foreground"
+            aria-label={kind === 'tokens' ? `Find a token ${lens.name} flagged, by its number` : `Find a wallet ${lens.name} flagged, by its address or the start of it`}
+            className="field w-44"
           />
-          <button type="submit" className="rounded-md border bg-card px-2.5 py-1 font-medium hover:bg-muted">Find</button>
+          <button type="submit" className="btn-secondary">Find</button>
         </form>
       </div>
       {find !== null ? (
-        <p className="mb-2 text-sm text-muted-foreground">
-          {total.toLocaleString()} of {plural(of, unit)} match “{find}” · <Link href={clear} className="font-medium text-foreground hover:underline">Clear</Link>
+        <MatchLine n={total} of={plural(of, unit)} query={find} clear={clear}>
           {readable ? null : <> · “{find}” is {kind === 'tokens' ? 'not a token number.' : 'not a wallet address or the start of one.'}</>}
-        </p>
+        </MatchLine>
       ) : null}
       {rows.length === 0 ? (
-        find === null ? <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{empty}</p> : null
+        find === null ? <Empty>{empty}</Empty> : null
       ) : (
         <ol start={start + 1} className="rounded-lg border bg-card">
           {kind === 'tokens'
             ? (rows as TokenLine[]).map((l, i) => (
               <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(l)}
-                name={<Link href={`${base}/t/${l.tokenId}`} title={`Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{l.tokenId.length > 20 ? `${l.tokenId.slice(0, 18)}…` : l.tokenId}</Link>}
+                name={<Link href={`${base}/t/${l.tokenId}`} title={`Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link>}
                 loops={`${base}/t/${l.tokenId}?method=${method}`}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
@@ -123,7 +123,21 @@ export function LensList({ kind, method, base, chainId, rows, total, of, sort, s
   );
 }
 
-/** One row: its number, its name, why in words, its caught of its trades, its caught volume, and the share as a bar in the lens's hue. */
+/**
+ * What a Find or a filter left of a list: "12 of 644 tokens match “14” · Clear".
+ * `of` names what was filtered, with its count. `query` is the Find text, null for a filter that has none to quote;
+ * `clear` is the link back to the whole list. `children` follow, for a note on the query.
+ */
+export function MatchLine({ n, of, query, clear, children }: { n: number; of: string; query: string | null; clear: string; children?: React.ReactNode }) {
+  return (
+    <p className="mb-2 text-sm text-muted-foreground">
+      {num(n)} of {of} {n === 1 ? 'matches' : 'match'}{query === null ? null : <> “{query}”</>} · <Link href={clear} className="font-medium text-foreground hover:underline">Clear</Link>
+      {children}
+    </p>
+  );
+}
+
+/** One row: its number, its name, why in words, its flagged of its trades, its flagged volume, and the share as a bar in the lens's hue. */
 function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }: {
   n: number; line: TokenLine | WalletLine; tone: keyof typeof DOT; why: WhyPart[]; name: React.ReactNode; loops: string; group: string; trades: string; caught: string; volume: string;
 }) {
@@ -134,13 +148,13 @@ function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }:
         <span data-row-number className="w-7 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{n}</span>
         <span className="min-w-0 truncate">{name}</span>
         <span className="ml-auto shrink-0 text-xs tabular-nums">
-          <Link href={caught} title="The trades it caught" className={number}>{line.caught.toLocaleString()}</Link>
+          <Link href={caught} title="The trades it flagged" className={number}>{num(line.caught)}</Link>
           {' of '}
-          <Link href={trades} title="All its counted trades" className={number}>{line.trades.toLocaleString()}</Link>
+          <Link href={trades} title="All its counted trades" className={number}>{num(line.trades)}</Link>
           {' trades'}
         </span>
-        <span className="w-20 shrink-0 text-right text-xs tabular-nums" title="Volume of the caught sales priced in ETH or WETH">
-          {line.volumeWei === '0' ? '—' : <Link href={volume} title="The trades it caught, biggest first" className={number}>{eth(line.volumeWei)}</Link>}
+        <span className="w-20 shrink-0 text-right text-xs tabular-nums" title="Volume of the flagged sales priced in ETH or WETH">
+          {line.volumeWei === '0' ? '—' : <Link href={volume} title="The trades it flagged, biggest first" className={number}>{eth(line.volumeWei)}</Link>}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-3 pl-9">

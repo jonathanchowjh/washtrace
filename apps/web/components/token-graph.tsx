@@ -4,7 +4,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Method } from '@washtrace/detect';
 import type { Drawing } from '@/lib/layout';
-import { short } from '@/lib/format';
+import { LENSES, short } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
@@ -124,9 +124,9 @@ export function TokenLoops({ drawing, chainId, items, initial, rowHrefs, graphHe
             ))}
           </svg>
           <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            {drawn.has('cycle') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />round trip</span> : null}
-            {drawn.has('money') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />linked by money</span> : null}
-            {drawn.has('apart') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-muted-foreground" />only Money loops back, not counted</span> : null}
+            {drawn.has('cycle') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />{LENSES.A.name}</span> : null}
+            {drawn.has('money') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />{LENSES.AC.name}</span> : null}
+            {drawn.has('apart') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-muted-foreground" />{LENSES.AU.name} only, not counted</span> : null}
             {drawn.has('clean') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-clean" />not flagged</span> : null}
             {money ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />money</span> : null}
             <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span>

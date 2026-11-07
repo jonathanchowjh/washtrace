@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type Method, type Witness } from '@washtrace/detect';
-import { LENSES, eth, explorer, short } from '@/lib/format';
+import { LENSES, eth, num, short, tokenLabel } from '@/lib/format';
+import { explorerTx } from '@/lib/links';
+import { Empty, Ext } from '@/components/head';
 import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
@@ -18,11 +20,12 @@ export function because(w: Witness, chainId: number): React.ReactNode {
     return `${w.wallets.length} wallets in a cycle closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
   }
   const [a, b] = w.pair;
+  const tx = explorerTx(chainId, w.flowTx);
   return (
     <>
       <Wallet chainId={chainId} address={a} /> and <Wallet chainId={chainId} address={b} />{' '}
-      {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} /></>}{' '}
-      (<a className="hover:underline" href={`${explorer(chainId)}/tx/${w.flowTx}`} target="_blank" rel="noopener noreferrer">tx ↗</a>)
+      {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} /></>}
+      {tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}
     </>
   );
 }
@@ -48,7 +51,7 @@ const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground
 export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base }: {
   chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string;
 }) {
-  if (transfers.length === 0) return <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">No transfers read yet.</p>;
+  if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full min-w-[52rem] text-left text-sm">
@@ -68,19 +71,20 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const tone = toneOf(t);
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
+            const tx = explorerTx(chainId, t.txHash);
             return (
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
                 {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
                 <td className="px-3 py-2 whitespace-nowrap">
                   <Link className="text-xs tabular-nums hover:underline" href={`/tx/${chainId}/${t.txHash}`} title="Open this trade">
-                    {t.blockTime === null ? `block ${t.blockNumber.toLocaleString()}` : <Time ms={t.blockTime * 1000} />}
+                    {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
-                  <a className="ml-1 text-xs text-muted-foreground hover:underline" href={`${explorer(chainId)}/tx/${t.txHash}`} target="_blank" rel="noopener noreferrer" title="Open the transaction on the block explorer">↗</a>
+                  {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
                 </td>
                 {collection && t.collection ? (
                   <td className="px-3 py-2">
                     <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`}>
-                      {t.collection.name ?? short(t.collection.address)} #{t.tokenId.length > 10 ? `${t.tokenId.slice(0, 8)}…` : t.tokenId}
+                      {t.collection.name ?? short(t.collection.address)} #{tokenLabel(t.tokenId)}
                     </Link>
                   </td>
                 ) : null}

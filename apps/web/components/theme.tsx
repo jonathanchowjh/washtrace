@@ -31,7 +31,7 @@ export function ThemeToggle() {
         try { localStorage.setItem('washtrace.theme', next); } catch { /* blocked storage: follow the OS next visit */ }
         setTheme(next);
       }}
-      className="flex items-center gap-2 rounded-[5px] border bg-card px-2 py-1 whitespace-nowrap text-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+      className="field flex items-center gap-2 whitespace-nowrap hover:bg-muted"
     >
       {next === 'dark' ? '☾ Dark mode' : '☀ Light mode'}
     </button>

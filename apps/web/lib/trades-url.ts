@@ -9,16 +9,19 @@
  */
 
 import type { Method } from '@washtrace/detect';
-import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, type GroupRef, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, findOf, type GroupRef, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { LENSES, localTime, short } from './format';
+import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
 
 export type Params = Record<string, string | string[] | undefined>;
 export interface View { by: TradeGroupBy | null; page: number }
 
+/** Trades to a page, in the Trades list and its route. */
+export const TRADES_PAGE = 50;
+
 const BYS: readonly TradeGroupBy[] = ['marketplace', 'month', 'held', 'floor', 'buyerAge'];
 const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller', ...Object.keys(LENSES).map((m) => `lens-${m}`)];
-const ADDRESS = /^0x[0-9a-f]{40}$/i;
 const DAY = 86_400;
 
 const isMethod = (m: string): m is Method => Object.hasOwn(LENSES, m);
@@ -75,15 +78,46 @@ function parseGroup(v: string | undefined): GroupRef | null {
   const m = /^(\w+)\.([tw])\.(\w+)$/.exec(v ?? '');
   if (!m || !isMethod(m[1]!)) return null;
   const method = m[1];
-  if (m[2] === 't') return /^\d{1,78}$/.test(m[3]!) ? { method, token: BigInt(m[3]!).toString() } : null;
-  return ADDRESS.test(m[3]!) ? { method, wallet: m[3]!.toLowerCase() } : null;
+  if (m[2] === 't') {
+    const token = tokenIdOf(m[3]!);
+    return token === null ? null : { method, token };
+  }
+  const wallet = addressOf(m[3]!);
+  return wallet === null ? null : { method, wallet };
 }
 
 function parseMethods(v: string | undefined): Method[] {
   return [...new Set((v ?? '').split(',').filter(isMethod))];
 }
 
+/**
+ * Why a query can hold no trades, or null when it can: it filters to a lens
+ * that did not run (a group on a lens's loops is a caught filter too), or its
+ * Find is one the store cannot read. The Trades page says why; the route
+ * answers empty. One rule, so the page and the route never disagree.
+ */
+export function holdsNothing(q: TradeQuery, ran: readonly Method[]): { state: 'absent'; absent: Method[] } | { state: 'unreadable' } | null {
+  const absent = [...new Set([...q.caught, ...(q.group === null ? [] : [q.group.method])])].filter((m) => !ran.includes(m));
+  if (absent.length > 0) return { state: 'absent', absent };
+  return q.find !== null && findOf(q.find).kind === 'none' ? { state: 'unreadable' } : null;
+}
+
 // ---- URL --------------------------------------------------------------------
+
+/**
+ * A request's query as Params, keeping every value of a repeated key the way
+ * Next hands a page its searchParams. The Trades form sends its checkboxes as
+ * `caught=A&caught=AC`, and Object.fromEntries would keep only the last, so the
+ * route would answer a narrower query than the page shows.
+ */
+export function paramsOf(sp: URLSearchParams): Params {
+  const p: Record<string, string | string[]> = {};
+  for (const k of new Set(sp.keys())) {
+    const all = sp.getAll(k);
+    p[k] = all.length === 1 ? all[0]! : all;
+  }
+  return p;
+}
 
 /** A parameter's value; a repeated parameter is its values joined by commas. */
 function param(p: Params, k: string): string | undefined {
@@ -119,7 +153,6 @@ export function parseView(p: Params, zone = 'UTC'): { q: TradeQuery; view: View 
   const day = (k: string) => parseInstant(s(k)) ?? (s(k) === undefined ? dayStart(p, k, zone) : null);
   const sort = s('sort');
   const by = s('by');
-  const page = Number(s('page'));
   const q: TradeQuery = {
     ...NO_FILTER,
     kind: s('all') === '1' ? 'all' : 'sales',
@@ -130,14 +163,14 @@ export function parseView(p: Params, zone = 'UTC'): { q: TradeQuery; view: View 
     buyerAgeOverS: dur('ageover'), buyerAgeUnderS: dur('ageunder'),
     floorMin: parseRatio(s('fmin')), floorMax: parseRatio(s('fmax')),
     fromMs: day('from'), toMs: day('to'),
-    wallet: ADDRESS.test(s('wallet') ?? '') ? s('wallet')!.toLowerCase() : null,
-    token: /^\d{1,78}$/.test(s('token') ?? '') ? BigInt(s('token')!).toString() : null,
+    wallet: addressOf(s('wallet') ?? ''),
+    token: tokenIdOf(s('token') ?? ''),
     group: parseGroup(s('group')),
-    find: s('q')?.trim().slice(0, 100) || null,
+    find: findText(s('q')),
     sort: sort !== undefined && SORTS.includes(sort) ? (sort as TradeSort) : NO_FILTER.sort,
     dir: s('dir') === 'asc' ? 'asc' : 'desc',
   };
-  return { q, view: { by: BYS.find((b) => b === by) ?? null, page: Number.isSafeInteger(page) && page >= 1 ? page : 1 } };
+  return { q, view: { by: BYS.find((b) => b === by) ?? null, page: pageOf(s('page')) } };
 }
 
 /** The listed values that are in `have`, in the list's order and comma-joined (null when none), so one set of filters has one URL whatever order it was typed in. */
@@ -206,8 +239,8 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
   const when = q.fromMs !== null && q.toMs !== null ? `${day(q.fromMs)} → ${day(q.toMs)}` : q.fromMs !== null ? `From ${day(q.fromMs)}` : q.toMs !== null ? `Before ${day(q.toMs)}` : null;
 
   const all: [string, string | null, Partial<TradeQuery>][] = [
-    ['caught', q.caught.length ? `Caught by ${list(q.caught)}` : null, { caught: [] }],
-    ['not', q.notCaught.length ? `Not caught by ${list(q.notCaught)}` : null, { notCaught: [] }],
+    ['caught', q.caught.length ? `Flagged by ${list(q.caught)}` : null, { caught: [] }],
+    ['not', q.notCaught.length ? `Not flagged by ${list(q.notCaught)}` : null, { notCaught: [] }],
     ['market', q.venues.length ? `Marketplace: ${q.venues.map((v) => VENUES[v]?.name ?? v).join(', ')}` : null, { venues: [] }],
     ['price', price && `Price ${price} ETH`, { priceMinWei: null, priceMaxWei: null }],
     ['held', held && `Held ${held}`, { heldOverS: null, heldUnderS: null }],

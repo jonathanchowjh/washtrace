@@ -5,29 +5,13 @@
  */
 
 import { VENUES, venueOf } from '@washtrace/detect/trades';
+import { CHAINS } from './chains';
 
 export type Link = { label: string; href: string };
 
-/** Each chain's block explorer. The one table of them: format's explorer() reads it too. */
-export const EXPLORERS: Readonly<Record<number, { name: string; host: string }>> = {
-  1: { name: 'Etherscan', host: 'https://etherscan.io' },
-  10: { name: 'Etherscan', host: 'https://optimistic.etherscan.io' },
-  137: { name: 'Polygonscan', host: 'https://polygonscan.com' },
-  8453: { name: 'Basescan', host: 'https://basescan.org' },
-  42161: { name: 'Arbiscan', host: 'https://arbiscan.io' },
-  81457: { name: 'Blastscan', host: 'https://blastscan.io' },
-  33139: { name: 'Apescan', host: 'https://apescan.io' },
-};
-
-/** OpenSea's name for each chain in its URLs. */
-const OPENSEA: Readonly<Record<number, string>> = {
-  1: 'ethereum', 10: 'optimism', 137: 'matic', 8453: 'base', 42161: 'arbitrum', 81457: 'blast', 33139: 'ape_chain',
-};
-
 /** The collection on its explorer, on OpenSea, and on Ethereum on LooksRare and Blur, where most of its wash trading paid. */
 export function collectionLinks(chainId: number, address: string): Link[] {
-  const e = EXPLORERS[chainId];
-  const os = OPENSEA[chainId];
+  const { explorer: e, opensea: os } = CHAINS[chainId] ?? {};
   return [
     ...(e ? [{ label: e.name, href: `${e.host}/token/${address}` }] : []),
     ...(os ? [{ label: 'OpenSea', href: `https://opensea.io/contract/${os}/${address}` }] : []),
@@ -38,9 +22,20 @@ export function collectionLinks(chainId: number, address: string): Link[] {
   ];
 }
 
+/** The transaction on its chain's explorer, or null for a chain with none: a link there is left out, never sent to another chain's explorer. */
+export function explorerTx(chainId: number, hash: string): string | null {
+  const e = CHAINS[chainId]?.explorer;
+  return e ? `${e.host}/tx/${hash}` : null;
+}
+
+/** The address (a wallet or a contract) on its chain's explorer, or null for a chain with none. */
+export function explorerAddress(chainId: number, address: string): string | null {
+  const e = CHAINS[chainId]?.explorer;
+  return e ? `${e.host}/address/${address}` : null;
+}
+
 export function tokenLinks(chainId: number, address: string, tokenId: string): Link[] {
-  const e = EXPLORERS[chainId];
-  const os = OPENSEA[chainId];
+  const { explorer: e, opensea: os } = CHAINS[chainId] ?? {};
   return [
     ...(e ? [{ label: e.name, href: `${e.host}/nft/${address}/${tokenId}` }] : []),
     ...(os ? [{ label: 'OpenSea', href: `https://opensea.io/item/${os}/${address}/${tokenId}` }] : []),
@@ -52,10 +47,10 @@ export function tokenLinks(chainId: number, address: string, tokenId: string): L
 }
 
 export function walletLinks(chainId: number, address: string): Link[] {
-  const e = EXPLORERS[chainId];
+  const { explorer: e, opensea: os } = CHAINS[chainId] ?? {};
   return [
     ...(e ? [{ label: e.name, href: `${e.host}/address/${address}` }] : []),
-    ...(OPENSEA[chainId] ? [{ label: 'OpenSea', href: `https://opensea.io/${address}` }] : []),
+    ...(os ? [{ label: 'OpenSea', href: `https://opensea.io/${address}` }] : []),
     ...(chainId === 1 ? [{ label: 'Blur', href: `https://blur.io/eth/portfolio/${address}` }] : []),
   ];
 }

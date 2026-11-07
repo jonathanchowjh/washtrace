@@ -1,6 +1,9 @@
 import { connection } from 'next/server';
 import { messageOf, METHODS, type Method } from '@washtrace/detect';
+import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from './auth';
 import { ConfigError } from './config';
+
+export { addressOf, chainIdOf, chainOf, idOf, tokenIdOf, txOf } from './params';
 
 /**
  * What every API route shares: JSON in and out, parsing of the chain and
@@ -34,6 +37,29 @@ export async function readJson(req: Request): Promise<Record<string, unknown> | 
   }
 }
 
+/** The refusal of a request that changes state when this console may not be written to, else null. */
+export function refuseWrite(req: Request): Response | null {
+  return mayWrite(process.env, req.headers) ? null : bad(LOCAL_ONLY, 403);
+}
+
+/** Who made the request, for the log line of a change; whoever the proxy named, else 'anonymous'. */
+export function actorOf(req: Request): string {
+  return decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous');
+}
+
+/**
+ * The start of every write route: refused unless this console may be written
+ * to, then its JSON body, with the actor for the log. A route with no body
+ * worth sending (pause, delete) still takes this: requiring JSON is the CSRF
+ * defence.
+ */
+export async function writeBody(req: Request): Promise<{ body: Record<string, unknown>; actor: string } | Response> {
+  const refused = refuseWrite(req);
+  if (refused) return refused;
+  const body = await readJson(req);
+  return body instanceof Response ? body : { body, actor: actorOf(req) };
+}
+
 /** Run a route's reads, mapping a missing setting to 503 and anything else to 500 with its message. */
 export async function handle(fn: () => Promise<Response>): Promise<Response> {
   await connection();
@@ -44,25 +70,6 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
     console.error('[washtrace] %s', messageOf(err));
     return bad(messageOf(err), 500);
   }
-}
-
-export function chainOf(raw: string): number | null {
-  return /^\d{1,10}$/.test(raw) ? Number(raw) : null;
-}
-
-/** Lowercased, because every address in the store is. */
-export function addressOf(raw: string): string | null {
-  const a = raw.toLowerCase();
-  return /^0x[0-9a-f]{40}$/.test(a) ? a : null;
-}
-
-export function txOf(raw: string): string | null {
-  const t = raw.toLowerCase();
-  return /^0x[0-9a-f]{64}$/.test(t) ? t : null;
-}
-
-export function tokenIdOf(raw: string): string | null {
-  return /^\d{1,78}$/.test(raw) ? BigInt(raw).toString() : null;
 }
 
 /** AC by default: the lens that counts the most, and a superset of Round trips. */

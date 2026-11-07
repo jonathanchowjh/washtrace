@@ -7,7 +7,7 @@ import { SearchBox } from './search-box';
 import { ThemeToggle } from './theme';
 import { ZonePicker } from './zone';
 
-const ITEM = 'flex items-center gap-2 rounded-[5px] px-2 py-1 whitespace-nowrap hover:bg-muted hover:text-foreground '
+const ITEM = 'flex items-center gap-2 rounded-md px-2 py-1 whitespace-nowrap hover:bg-muted hover:text-foreground '
   + 'aria-[current=page]:bg-muted aria-[current=page]:font-semibold aria-[current=page]:text-foreground';
 
 /**

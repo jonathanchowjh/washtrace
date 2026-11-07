@@ -42,6 +42,9 @@ export function Warn({ className }: { className?: string }) {
   );
 }
 
+/** What a page says when the store did not answer. */
+export const STORE_DOWN = 'The store did not answer';
+
 /** A failed read, said where its rows would be. Never an empty list. `doThis` is the one step that fixes it. */
 export function Problem({ title, children, doThis = 'check that the store is running and reachable, then reload this page.' }: { title: string; children: ReactNode; doThis?: ReactNode }) {
   return (
@@ -153,11 +156,83 @@ export function Elsewhere({ links, className }: { links: { label: string; href: 
   return (
     <nav aria-label="Elsewhere" className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground', className)}>
       <span>See it on</span>
-      {links.map((l) => <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:underline">{l.label} ↗</a>)}
+      {links.map((l) => <Ext key={l.href} href={l.href} className="font-medium text-foreground">{l.label}</Ext>)}
     </nav>
   );
 }
 
+/** A page's empty state: a dashed box saying what is missing and, where it helps, why. */
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{children}</p>;
+}
+
+/** A link to another site: a new tab, no opener, and the arrow that says so. Null `href` (a chain with no explorer) leaves the text plain. */
+export function Ext({ href, className, title, children }: { href: string | null; className?: string; title?: string; children: ReactNode }) {
+  if (href === null) return <span className={className}>{children}</span>;
+  return <a href={href} target="_blank" rel="noopener noreferrer" title={title} className={cn('hover:underline', className)}>{children} ↗</a>;
+}
+
+/** The link that leads on to more of what a section shows. Prose links ("Back to collections") stay plain underlined text. */
+export function MoreLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
+  return <Link href={href} className={cn('inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline', className)}>{children}</Link>;
+}
+
+/** An exclusive choice among views of the same thing, as one bar of links. `label` says what is chosen. */
+export function Segmented({ label, items }: { label: string; items: { key: string; href: string; label: string; current: boolean }[] }) {
+  return (
+    <nav aria-label={label} className="flex rounded-md border bg-card p-0.5 text-sm">
+      {items.map((i) => (
+        <Link key={i.key} href={i.href} aria-current={i.current ? 'page' : undefined}
+          className={cn('rounded px-3 py-1', i.current ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
+          {i.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+/** What a status pill's colour says: working is blue, done is green, only a failure is the fault colour, a limit to lift (a missing key) is its own, and idle is grey. */
+export type PillTone = 'working' | 'done' | 'fault' | 'limit' | 'idle';
+const PILL_TONE: Record<PillTone, string> = {
+  working: 'bg-focus/12 text-focus',
+  done: 'bg-ok/12 text-ok',
+  fault: 'bg-fault/12 text-fault',
+  limit: 'bg-money/12 text-money',
+  idle: 'bg-muted text-muted-foreground',
+};
+
+/** A status in one or two words. The radius is not full, so a pill that wraps in a narrow column stays a rounded box. */
+export function Pill({ tone, className, children }: { tone: PillTone; className?: string; children: ReactNode }) {
+  return <span className={cn('rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL_TONE[tone], className)}>{children}</span>;
+}
+
+/** Progress as a thin bar. Never green when `paused` (a stage that is not done or following, or a frozen head): a full bar would claim it is current. */
+export function Bar({ share, paused = false, name, className }: { share: number; paused?: boolean; name?: string; className?: string }) {
+  return (
+    <span aria-hidden data-bar={name} className={cn('block h-1.5 w-full overflow-hidden rounded-full bg-muted', className)}>
+      <i className={cn('block h-full rounded-full', share >= 1 && !paused ? 'bg-ok' : 'bg-muted-foreground')} style={{ width: `${Math.max(share > 0 ? 2 : 0, share * 100)}%` }} />
+    </span>
+  );
+}
+
+/**
+ * A link that sorts by one thing. On the sort in force it says which way it runs (`dir`) with an arrow; elsewhere `dir` is null.
+ * `href` is the page re-sorted, so the caller decides what a second press does.
+ */
+export function SortLink({ href, dir, title, className, children }: { href: string; dir: 'asc' | 'desc' | null; title?: string; className?: string; children: ReactNode }) {
+  return (
+    <Link href={href} title={title} aria-current={dir === null ? undefined : 'true'}
+      className={cn('inline-flex items-center gap-1.5 hover:text-foreground hover:underline', dir !== null && `font-medium text-foreground after:text-[0.6rem] ${dir === 'asc' ? "after:content-['▲']" : "after:content-['▼']"}`, className)}>
+      {children}
+    </Link>
+  );
+}
+
+/** A table's sortable column head: `aria-sort` on the column in force, and the link that sorts by it. */
+export function SortHead({ href, dir, title, right = false, children }: { href: string; dir: 'asc' | 'desc' | null; title?: string; right?: boolean; children: ReactNode }) {
+  return (
+    <th aria-sort={dir === null ? undefined : dir === 'asc' ? 'ascending' : 'descending'} className={cn('px-3 py-2 font-medium', right ? 'text-right' : 'text-left')}>
+      <SortLink href={href} dir={dir} title={title}>{children}</SortLink>
+    </th>
+  );
 }

@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import { METHODS, type Method, type TradeRow } from '@washtrace/detect';
 import { VENUES, venueOf, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { SortHead } from '@/components/head';
 import { DOT } from '@/components/methods';
 import { Wallet } from '@/components/transfers';
-import { LENSES, eth, localTime, pct } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, eth, localTime, num, pct, tokenLabel } from '@/lib/format';
 import { dateIn, midnight } from '@/lib/zone';
-import { bandLabel, chips, duration, groupFilter, tradesHref, weiToEth, type View } from '@/lib/trades';
+import { bandLabel, chips, duration, groupFilter, tradesHref, weiToEth, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 
 /**
@@ -31,8 +32,8 @@ function Duration({ name, label, seconds }: { name: string; label: string; secon
     <div className="flex flex-col gap-1 text-sm">
       <label htmlFor={`${name}_n`} className="text-muted-foreground">{label}</label>
       <span className="flex gap-1.5">
-        <input id={`${name}_n`} type="number" name={`${name}_n`} min={0} step={1} defaultValue={d?.[1] ?? ''} className={cn('w-24 tabular-nums', field)} />
-        <select name={`${name}_u`} defaultValue={d?.[2] ?? 'h'} aria-label={`${label}, unit`} className={field}>
+        <input id={`${name}_n`} type="number" name={`${name}_n`} min={0} step={1} defaultValue={d?.[1] ?? ''} className="field w-24 tabular-nums" />
+        <select name={`${name}_u`} defaultValue={d?.[2] ?? 'h'} aria-label={`${label}, unit`} className="field">
           <option value="m">min</option>
           <option value="h">h</option>
           <option value="d">d</option>
@@ -63,19 +64,17 @@ function Day({ name, label, ms, zone }: { name: string; label: string; ms: numbe
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <input type="date" name={`${name}_day`} defaultValue={value} disabled={kept} className={cn(field, 'disabled:opacity-50')} />
-      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone)}; remove the date chip to change it.</span> : null}
+      <input type="date" name={`${name}_day`} defaultValue={value} disabled={kept} className="field disabled:opacity-50" />
+      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone, 'en-US')}; remove the date chip to change it.</span> : null}
     </label>
   );
 }
-
-const field = 'rounded-md border bg-card px-2 py-1 text-foreground';
 
 function Text({ name, label, value, type = 'text', placeholder }: { name: string; label: string; value: string | null; type?: string; placeholder?: string }) {
   return (
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <input type={type} name={name} defaultValue={value ?? ''} placeholder={placeholder} step="any" min={type === 'number' ? 0 : undefined} className={cn('w-28 tabular-nums', field)} />
+      <input type={type} name={name} defaultValue={value ?? ''} placeholder={placeholder} step="any" min={type === 'number' ? 0 : undefined} className="field w-28 tabular-nums" />
     </label>
   );
 }
@@ -103,8 +102,8 @@ export function FilterBar(w: Where) {
     <section aria-label="Filters" className="mt-4 space-y-3">
       <form action={`${base}/flagged`} method="get" role="search" className="flex flex-wrap items-center gap-2">
         {carried(w, (k) => k !== 'q')}
-        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className={cn('w-72 max-w-full', field)} />
-        <button type="submit" className="rounded-md border bg-card px-3 py-1 text-sm font-medium hover:bg-muted">Find</button>
+        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
+        <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
 
       <div className="flex flex-wrap items-start gap-2">
@@ -119,8 +118,8 @@ export function FilterBar(w: Where) {
             {carried(w, (k) => ['kind', 'wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}
             <div className="flex flex-wrap gap-x-8 gap-y-4">
-              <Checks title="Caught by" name="caught" options={lenses} on={q.caught} />
-              <Checks title="Not caught by" name="not" options={lenses} on={q.notCaught} />
+              <Checks title="Flagged by" name="caught" options={lenses} on={q.caught} />
+              <Checks title="Not flagged by" name="not" options={lenses} on={q.notCaught} />
               <Checks title="Marketplace" name="market" options={venues} on={q.venues} />
             </div>
             <div className="flex flex-wrap gap-4">
@@ -165,7 +164,7 @@ function groupLabel(by: TradeGroupBy, key: string): string {
   if (by === 'marketplace') return VENUES[key]?.name ?? key;
   if (by === 'month') {
     const m = /^(\d{4})-(\d{2})$/.exec(key);
-    return m ? localTime(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1), 'month', 'UTC', 'en-GB') : key;
+    return m ? localTime(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1), 'month', 'UTC', 'en-US') : key;
   }
   return bandLabel(by, key);
 }
@@ -203,7 +202,7 @@ export function GroupBy({ base, q, view, zone, groups, ran }: Where & { groups: 
                   // A row no filter can hold (the unknown group, a marketplace with no name here) is not a list to open.
                   <tr key={g.key} data-unlisted={f === null ? '' : undefined}>
                     <td className="px-3 py-2">{groupLabel(by, g.key)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums"><Cell href={to()}>{g.trades.toLocaleString()}</Cell></td>
+                    <td className="px-3 py-2 text-right tabular-nums"><Cell href={to()}>{num(g.trades)}</Cell></td>
                     {METHODS.map((m) => (
                       <td key={m} className="px-3 py-2 text-right tabular-nums">
                         {ran.includes(m) ? <Cell href={to({ caught: [m] })}>{pct(g.caught[m] ?? 0, g.trades)}</Cell> : <span className="text-muted-foreground">did not run</span>}
@@ -229,7 +228,7 @@ function Cell({ href, children }: { href: string | null; children: React.ReactNo
 /** The sort a header starts with: names read A to Z, the rest biggest or newest first. */
 const FIRST_ASC: readonly TradeSort[] = ['token', 'seller', 'marketplace'];
 
-const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → Buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', 'vs floor']];
+const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', 'vs floor']];
 
 /** "<1 min", "45 min", "3 h", "12 d": a length of time to one unit, rounded down. */
 function span(s: number | null): string {
@@ -243,13 +242,10 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: string; wher
   const here = q.sort === sort;
   const dir = here ? (q.dir === 'asc' ? 'desc' : 'asc') : FIRST_ASC.includes(sort) ? 'asc' : 'desc';
   return (
-    <th aria-sort={here ? (q.dir === 'asc' ? 'ascending' : 'descending') : undefined} className="px-3 py-2 text-left font-medium">
-      <Link href={tradesHref(base, { ...q, sort, dir }, { by: view.by })}
-        className={cn('inline-flex items-center gap-1.5 hover:text-foreground', here ? `text-foreground after:text-[0.6rem] ${q.dir === 'asc' ? "after:content-['▲']" : "after:content-['▼']"}` : '')}>
-        {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[LENSES[tone].tone])} /> : null}
-        {label}
-      </Link>
-    </th>
+    <SortHead href={tradesHref(base, { ...q, sort, dir }, { by: view.by })} dir={here ? (q.dir === 'asc' ? 'asc' : 'desc') : null}>
+      {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[LENSES[tone].tone])} /> : null}
+      {label}
+    </SortHead>
   );
 }
 
@@ -280,10 +276,10 @@ export function TradesTable({ chainId, rows, ran, money, ...where }: Where & { c
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={`/tx/${chainId}/${r.txHash}`} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone)}</Link>
+                  <Link href={`/tx/${chainId}/${r.txHash}`} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
-                  <Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{r.tokenId.length > 12 ? `${r.tokenId.slice(0, 10)}…` : r.tokenId}</Link>
+                  <Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link>
                   {only({ token: r.tokenId }, 'Only trades with this token')}
                 </td>
                 <td className="px-3 py-2">{wallet(r.from)} → {wallet(r.to)}</td>
@@ -297,12 +293,12 @@ export function TradesTable({ chainId, rows, ran, money, ...where }: Where & { c
                   ? ran.map((m) => (
                     <td key={m} className="px-3 py-2">
                       {r.lenses.includes(m)
-                        ? <i role="img" aria-label={`Caught by ${LENSES[m].name}`} className={cn('inline-block size-2.5 rounded-full', DOT[LENSES[m].tone])} />
-                        : <span aria-label="Not caught" className="text-muted-foreground">–</span>}
+                        ? <i role="img" aria-label={`Flagged by ${LENSES[m].name}`} className={cn('inline-block size-2.5 rounded-full', DOT[LENSES[m].tone])} />
+                        : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
                     </td>
                   ))
                   // With no lens run there is no lens column to say it in.
-                  : ran.length > 0 ? <td colSpan={ran.length} className="px-3 py-2 text-muted-foreground">not judged yet</td> : null}
+                  : ran.length > 0 ? <td colSpan={ran.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
               </tr>
             );
           })}

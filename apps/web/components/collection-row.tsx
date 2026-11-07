@@ -1,16 +1,16 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import type { CollectionRow as Collection, Method, MethodTotals } from '@washtrace/detect';
-import type { TradeQuery } from '@washtrace/detect/trades';
+import type { CollectionRow as Collection } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/head';
-import { RangeBar } from '@/components/methods';
+import { RangeBar, RangeFigure, VolumeDetail } from '@/components/methods';
 import { Time } from '@/components/time';
 import { CollectionControls } from '@/components/watch';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, plural, short } from '@/lib/format';
-import { coverage, range, rangeEnds, storedOnly, type Range } from '@/lib/metrics';
-import { tradesHref } from '@/lib/trades';
+import { LENSES, plural, short } from '@/lib/format';
+import { coverage, storedOnly } from '@/lib/coverage';
+import { range, type Range } from '@/lib/metrics';
+import { tradesHref } from '@/lib/trades-url';
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
@@ -18,32 +18,19 @@ export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_
 /** Each end of a range opens the collection's evidence for the lens at that end. Above the row's whole-row link, like the controls. */
 function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: ReactNode; href: string }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
-  const e = rangeEnds(r);
   const end = (text: string, lens: Range['low']) => (
     <Link href={`${href}?method=${lens}#evidence`} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
   );
   return (
     <div className="min-w-0">
       <p className="flex items-baseline gap-1.5">
-        {/* One link when both ends agree. */}
-        <span className="text-xl font-semibold text-foreground tabular-nums">{e.same ? end(e.high, r.high) : <>{end(e.low, r.low)}–{end(e.high, r.high)}</>}</span>
+        <span className="text-xl font-semibold text-foreground tabular-nums"><RangeFigure range={r} end={end} /></span>
         <span className="text-xs text-muted-foreground md:hidden">{label}</span>
       </p>
       <RangeBar range={r} className="mt-1.5 max-w-56" />
       <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
     </div>
   );
-}
-
-/** "X–Y ETH of Z ETH", each end opening what it counts, biggest sale first, above the row's whole-row link. */
-function VolumeDetail({ volume: r, totals, href }: { volume: Range; totals: Record<Method, MethodTotals>; href: string }) {
-  const priciest = { sort: 'price', dir: 'desc' } as const;
-  const link = (q: Partial<TradeQuery>, text: string) => <Link href={tradesHref(href, { ...q, ...priciest })} className="relative z-10 hover:underline">{text}</Link>;
-  const lo = totals[r.low].flaggedVolumeWei, hi = totals[r.high].flaggedVolumeWei;
-  return <>
-    {lo === hi ? link({ caught: [r.high] }, eth(hi)) : <>{link({ caught: [r.low] }, eth(lo, '').trim())}–{link({ caught: [r.high] }, eth(hi))}</>}
-    {' of '}{link({}, eth(totals.A.volumeWei))}
-  </>;
 }
 
 /**
@@ -99,7 +86,7 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
           />
           <Share
             r={volume} label="of volume" href={href}
-            detail={volume ? <VolumeDetail volume={volume} totals={a.totals} href={href} /> : 'No priced sale read yet'}
+            detail={volume ? <VolumeDetail volume={volume} totals={a.totals} base={href} overlay /> : 'No priced sale read yet'}
           />
         </>
       )}

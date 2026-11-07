@@ -1,8 +1,19 @@
-/** Display only. Nothing here is summed or compared; amounts stay wei strings until they are drawn. */
+/**
+ * Display strings, and the lens vocabulary that is this file's main shared
+ * data (LENSES: each lens's name, hue and one-line meaning, which the Trades
+ * URL, the API and the pages all take as the source of truth for lens
+ * identity). It also holds the stored-data size model (StoredSize,
+ * storedSizes, storedLine). Amounts stay wei strings until they are drawn;
+ * nothing here is summed or compared.
+ */
 
 import type { Manifest } from '@washtrace/detect';
 import { formatBytes } from '@washtrace/detect/bytes';
-import { EXPLORERS } from './links';
+
+/** A count with thousands separators, in the one locale the whole console pins (server and browser agree). */
+export function num(n: number | bigint): string {
+  return n.toLocaleString('en-US');
+}
 
 export function short(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -14,7 +25,7 @@ export function eth(wei: string | null, unit = 'ETH'): string {
   const n = BigInt(wei);
   const whole = n / 10n ** 18n;
   const frac = (n % 10n ** 18n).toString().padStart(18, '0').slice(0, 4).replace(/0+$/, '');
-  return `${whole.toLocaleString('en-US')}${frac ? `.${frac}` : ''} ${unit}`;
+  return `${num(whole)}${frac ? `.${frac}` : ''} ${unit}`;
 }
 
 /** A share as a percentage: never "0%" for a share above zero, which would read as clean. */
@@ -28,7 +39,7 @@ export function pct(part: number, whole: number): string {
 
 /** "1 wallet", "2 wallets": `many` for a word whose plural is not an added s ("searches"). */
 export function plural(n: number, word: string, many = `${word}s`): string {
-  return `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;
+  return `${num(n)} ${n === 1 ? word : many}`;
 }
 
 /** How long a wait will take, roughly: a guess is never shown to the minute. "about 40 min left". */
@@ -37,6 +48,43 @@ export function eta(ms: number): string {
   if (min < 60) return `about ${min} min left`;
   const h = Math.round(min / 60);
   return h < 24 ? `about ${h} h left` : `about ${plural(Math.round(h / 24), 'day')} left`;
+}
+
+/**
+ * A duration in the unit that reads best: milliseconds under 10 s, whole seconds
+ * until the rounded figure reaches two minutes, then minutes to a tenth. The unit
+ * switches on the rounded seconds, so 119.9 s reads "2.0 min" and never "120 s".
+ */
+export function took(ms: number): string {
+  if (ms < 10_000) return `${ms} ms`;
+  const s = Math.round(ms / 1000);
+  return s < 120 ? `${s} s` : `${(ms / 60_000).toFixed(1)} min`;
+}
+
+/**
+ * How often something repeats: seconds (to a tenth) under two minutes, then
+ * minutes. Not took(), which reads a 5 s poll as "5000 ms": took() measures a
+ * run, where milliseconds matter, and an interval is set in seconds.
+ */
+export function interval(ms: number): string {
+  const s = Math.round(ms / 100) / 10;
+  return s < 120 ? `${num(s)} s` : `${num(Math.round(s / 6) / 10)} min`;
+}
+
+/** What a trade or transaction no analysis has covered yet is called, wherever it is said. */
+export const NOT_JUDGED_YET = 'Not judged yet';
+
+/** A token id shortened to fit a row or heading; the full id is always one click away. */
+export function tokenLabel(id: string, max = 20): string {
+  return id.length > max ? `${id.slice(0, max - 2)}…` : id;
+}
+
+/** The six reading stages' short names, in order: the column heads of the pipeline table. */
+export const STAGE_LABELS = ['Download', 'Load', 'Analyze stored', 'Chain', 'Money', 'Re-analyze'] as const;
+
+/** "reading stage 4 (Chain)": a pipeline stage by number and name, so it is not mistaken for the worker's three numbered jobs. */
+export function stageName(n: 1 | 2 | 3 | 4 | 5 | 6): string {
+  return `reading stage ${n} (${STAGE_LABELS[n - 1]})`;
 }
 
 export type TimeStyle = 'datetime' | 'date' | 'time' | 'month';
@@ -95,15 +143,6 @@ export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
 export function withoutKey(trailFunded: boolean): string {
   const money = `${LENSES.AU.name} and ${LENSES.AC.name}`;
   return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
-}
-
-export function explorer(chainId: number): string {
-  return EXPLORERS[chainId]?.host ?? 'https://etherscan.io';
-}
-
-/** "35–62 ETH", or "35 ETH" when both ends agree. */
-export function ethRange(lowWei: string, highWei: string): string {
-  return lowWei === highWei ? eth(lowWei) : `${eth(lowWei, '').trim()}–${eth(highWei)}`;
 }
 
 /** A file's size as the Hub shows it. Defined once in the detect package, so the dataset card says the same size (see bytes.ts). */

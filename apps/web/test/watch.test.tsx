@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/api';
 import { localTime, storedSizes } from '@/lib/format';
-import { waiting } from '@/lib/metrics';
+import { waiting } from '@/lib/coverage';
 import { storedManifest } from '@/lib/store';
 import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { LOCAL_ONLY } from '@/lib/auth';
@@ -358,7 +358,7 @@ describe('CollectionRow', () => {
   it('with no analysis and a download under way, a silent worker claims no progress beside its pill', () => {
     const c = { ...base, cursorBlock: null, startBlock: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 } as typeof base;
     const { container } = render(<CollectionRow writable c={c} why={waiting(c, undefined, new Map(), ON, 0, 'UTC', true)} rpcChains={ON} funding silent now={0} />);
-    expect(container.textContent).toContain('Not analysed yet · the worker is silent, so nothing is read or analysed until it reports again.');
+    expect(container.textContent).toContain('Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.');
     expect(container.textContent).not.toContain('Downloading stored data');
   });
 
@@ -380,7 +380,7 @@ describe('CollectionRow', () => {
     expect(container.querySelector('.text-fault')).toBeNull();
   });
 
-  it('lets the How complete column shrink to its track, so the pill wraps inside it', () => {
+  it('lets the Reading column shrink to its track, so the pill wraps inside it', () => {
     const { container } = render(<CollectionRow writable c={base} why="Waiting" rpcChains={ON} funding silent={false} now={0} />);
     const column = container.querySelector('li > div:last-child')!;
     expect(column.className).toContain('min-w-0');
@@ -484,10 +484,10 @@ describe('the worker page\'s sources', () => {
   it('a missing Etherscan key reads as the key it needs, in the colour of the RPC line, never grey', async () => {
     for (const trailFunded of [false, true]) {
       const el = await funding({ trailFunded });
-      const line = [...el.querySelectorAll('li')].find((li) => li.textContent!.includes('→ stage 5'))!;
+      const line = [...el.querySelectorAll('li')].find((li) => li.textContent!.includes('→ reading stage 5 (Money)'))!;
       expect(line.textContent).toContain('Needs a key:');
       expect(line.querySelector('.text-money')).not.toBeNull();
-      expect(line.querySelector('.text-muted-foreground')?.textContent).toBe('→ stage 5');
+      expect(line.querySelector('.text-muted-foreground')?.textContent).toBe('→ reading stage 5 (Money)');
       const link = [...line.querySelectorAll('a')].find((a) => a.textContent === 'Add an Etherscan key in Settings →')!;
       expect(link.getAttribute('href')).toBe('/settings#etherscan.key');
       cleanup();

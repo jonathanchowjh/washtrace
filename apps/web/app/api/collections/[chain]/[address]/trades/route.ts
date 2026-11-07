@@ -1,14 +1,13 @@
 import { cookies } from 'next/headers';
 import { METHODS, moneyFor, type Method, type TradeRow } from '@washtrace/detect';
-import { findOf, venueOf, VENUES } from '@washtrace/detect/trades';
+import { venueOf, VENUES } from '@washtrace/detect/trades';
 import { addressOf, bad, chainOf, handle, json } from '@/lib/api';
 import { LENSES } from '@/lib/format';
 import { lensesRan } from '@/lib/metrics';
+import { pages as pagesOf } from '@/lib/params';
 import { store } from '@/lib/store';
-import { parseView, weiToEth } from '@/lib/trades';
+import { TRADES_PAGE, holdsNothing, paramsOf, parseView, weiToEth } from '@/lib/trades-url';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
-
-const PAGE = 50;
 
 const HEADER = ['date', 'token', 'seller', 'buyer', 'price', 'currency', 'marketplace', 'held_seconds', 'buyer_age_seconds', 'price_vs_floor',
   ...METHODS.map((m) => LENSES[m].name + (LENSES[m].tone === 'apart' ? ' (not counted)' : '')), 'tx'];
@@ -82,10 +81,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ chain: s
     if (c === null) return bad('This collection is not watched.', 404);
     const url = new URL(req.url);
     const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
-    const { q, view } = parseView(Object.fromEntries(url.searchParams), zone);
+    const { q, view } = parseView(paramsOf(url.searchParams), zone);
     const ran = lensesRan(c.latest);
     const ctx = { money: moneyFor(chainId), ran, zone };
-    const empty = q.caught.some((m) => !ran.includes(m)) || (q.find !== null && findOf(q.find).kind === 'none');
+    const empty = holdsNothing(q, ran) !== null;
 
     if (url.searchParams.get('format') === 'csv') {
       return new Response(csvBody(empty ? nothing() : s.tradeStream(c.id, q, ctx), ran, ctx.money), {
@@ -94,9 +93,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ chain: s
     }
 
     const { total, unjudged } = empty ? { total: 0, unjudged: 0 } : await s.tradeCount(c.id, q, ctx);
-    const pages = Math.max(1, Math.ceil(total / PAGE));
+    const pages = pagesOf(total, TRADES_PAGE);
     const page = Math.min(pages, view.page);
-    const rows = total === 0 ? [] : await s.trades(c.id, q, ctx, PAGE, (page - 1) * PAGE);
+    const rows = total === 0 ? [] : await s.trades(c.id, q, ctx, TRADES_PAGE, (page - 1) * TRADES_PAGE);
     return json({ total, unjudged, page, pages, ran, rows });
   });
 }

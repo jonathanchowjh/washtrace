@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { eta, formatBytes, localTime } from './format';
-import { analysisRetry, downloaded, isRunning, progress, restoreText, storedOnly } from './metrics';
+import { LENSES, eta, formatBytes, localTime, num } from './format';
+import { analysisRetry, downloaded, isRunning, progress, restoreText, storedOnly } from './coverage';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
@@ -19,7 +19,7 @@ export interface Snapshot {
 }
 
 /** needs-you: broken and a person can fix it. working: normal progress that takes time. info: a choice or a limit, nothing to fix. */
-export type Severity = 'needs-you' | 'working' | 'info';
+type Severity = 'needs-you' | 'working' | 'info';
 
 /** A needs-you notice always says what to do (`doThis`, with an optional place to do it); the others may offer a link. */
 export type Notice =
@@ -145,7 +145,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     if (storedTurn) {
       // Past the stored data (read on while an RPC was set), it stops at its cursor, whose date is not known. Text, so the locale is pinned.
       const past = c.storedThroughBlock !== null && c.cursorBlock! > c.storedThroughBlock;
-      const block = `block ${c.cursorBlock!.toLocaleString('en')}`;
+      const block = `block ${num(c.cursorBlock!)}`;
       const said = past ? `${label} is read to ${block} and its chain has no RPC.` : `${label} shows stored data only.`;
       const from = past ? block : localTime(c.storedThroughTime!, 'date', zone, 'en-GB');
       if (FIELDS.some((f) => f.key === `rpc.${c.chainId}`)) notice('info', `${said} Set an RPC to continue from ${from}.`, { label: 'Open Settings', href: `/settings#rpc.${c.chainId}` });
@@ -153,7 +153,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     }
     if (backfilling) {
       const left = c.readRate ? ` ${eta((behind / c.readRate) * 1000)}.` : '';
-      notice('working', `${label}: ${behind.toLocaleString('en')} blocks behind the finalized head.${left}`);
+      notice('working', `${label}: ${num(behind)} blocks behind the finalized head.${left}`);
     }
     // The worker clears its "No RPC" once it sees the stored data; until then that error is no fault either.
     const error = stored ? null : c.error;
@@ -173,7 +173,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     else if (c.analysisError) {
       needsYou(
         `Analysis of ${label} failed: ${c.analysisError}`,
-        `Wait: ${analysisRetry(c, now, zone)}, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker`,
+        `Wait: ${analysisRetry(c, now, zone)}, while the other collections are analyzed. If it keeps failing, check the worker's log: docker compose logs worker`,
         `/c/${c.chainId}/${c.address}`,
       );
     }
@@ -190,19 +190,19 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     for (const c of s.collections.filter(checking)) {
       const rate = (s.funding.find((f) => f.chainId === c.chainId)?.doneLastHour ?? 0) / s.collections.filter((o) => o.chainId === c.chainId && checking(o)).length;
       const left = rate > 0 ? ` · ${eta(((c.wallets - c.fundedWallets) / rate) * 3_600_000)}` : '';
-      notice('working', `Checking wallets for ${c.name ?? `${c.chainId}:${c.address}`}: ${c.fundedWallets.toLocaleString('en')} of ${c.wallets.toLocaleString('en')}${left}`);
+      notice('working', `Checking wallets for ${c.name ?? `${c.chainId}:${c.address}`}: ${num(c.fundedWallets)} of ${num(c.wallets)}${left}`);
     }
   }
   if (!s.config.funding) {
     // A money trail loaded from stored data is funding the worker does not have to fetch.
     notice('info', s.trailFunded
-      ? 'Needs an Etherscan key: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.'
-      : 'Needs an Etherscan key: Money loops back and Linked wallets do not run without one.', { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
+      ? `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} run on stored money trails only, and newer wallets go unchecked.`
+      : `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} do not run without one.`, { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
   }
   // With no key nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {
     // No lane takes these, so they neither wait nor fail: resuming a collection brings its own back.
-    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${f.stranded.toLocaleString('en')} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);
+    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${num(f.stranded)} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);
     // Only wallets the worker will check count as failed, so one held back never blames the key.
     if (f.failed === 0) continue;
     // Some wallets failing while others are checked is a rate limit or a timeout: they retry on their own.

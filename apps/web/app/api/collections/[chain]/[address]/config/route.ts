@@ -1,6 +1,5 @@
 import type { CollectionRow } from '@washtrace/detect';
-import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { addressOf, bad, chainOf, handle, json, readJson } from '@/lib/api';
+import { addressOf, bad, chainOf, handle, json, writeBody } from '@/lib/api';
 import { configChange, effectiveRules } from '@/lib/collections';
 import { store } from '@/lib/store';
 
@@ -30,19 +29,17 @@ export async function GET(_req: Request, { params }: Ctx): Promise<Response> {
  */
 export async function POST(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
-    const raw = await readJson(req);
-    if (raw instanceof Response) return raw;
+    const written = await writeBody(req);
+    if (written instanceof Response) return written;
     const p = await params;
     const chainId = chainOf(p.chain);
     const address = addressOf(p.address);
     if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
-    const change = configChange(raw);
+    const change = configChange(written.body);
     if (typeof change === 'string') return bad(change);
     const collection = await store().configure(chainId, address, change);
     if (!collection) return bad('This collection is not watched.', 404);
-    const actor = decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous');
-    console.info('[washtrace] %s configured %d/%s: %s', actor, chainId, address, JSON.stringify(change));
+    console.info('[washtrace] %s configured %d/%s: %s', written.actor, chainId, address, JSON.stringify(change));
     return json(body(collection));
   });
 }

@@ -12,8 +12,6 @@ export const HELD_BANDS = [3_600, 86_400, 30 * 86_400] as const;
 export const AGE_BANDS = [86_400, 30 * 86_400] as const;
 /** 0 <0.5×, 1 0.5–0.9×, 2 0.9–1.1×, 3 1.1–2×, 4 >2×. */
 export const FLOOR_BANDS = [0.5, 0.9, 1.1, 2] as const;
-/** How many UTC days before a sale its floor looks back over. */
-export const FLOOR_DAYS = 7;
 
 /** The band a value falls in, or null when it has no value. */
 export function band(edges: readonly number[], value: number | null): number | null {

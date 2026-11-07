@@ -3,14 +3,48 @@ import { ZERO } from './graph.js';
 import { traders } from './marketplaces.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
-import { AGE_BANDS, FLOOR_BANDS, FLOOR_DAYS, HELD_BANDS, VENUES, findOf, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
+import { findOf, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
+import { CAUGHT_COLUMNS, CAUGHT_FROM, CAUGHT_WHERE, COUNTED_JOIN, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
 import type { Rules } from './methods.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
-import { HEADLINE, METHODS, type Analysis, type Flag, type Flow, type Method, type MethodTotals, type Transfer, type Witness } from './types.js';
+import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type Transfer, type Witness } from './types.js';
+
+export type { FlaggedTransfer, FlowDir, ListOpts, PartnerSort, TokenLine, TokenSort, TradeGroup, TradeRow, WalletFilter, WalletLine, WalletSort } from './trade-sql.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
 const LOCK_NS = 0x77617368; // "wash"
-const MIGRATE_JOB = 0;
+
+/**
+ * Every advisory-lock key `locked()` is given, in one table so a new one cannot
+ * collide with another unseen. Only one replica holds a key at a time.
+ */
+export const LOCKS = {
+  migrate: 0,
+  /** The three polling jobs: only one replica runs each at a time. */
+  ingest: 1,
+  fund: 2,
+  analyze: 3,
+  /** Every replica hears a check's request, and one runs it. */
+  checks: 4,
+  /** One download at a time across every replica, so two never write the same part file. */
+  download: 5,
+  /** One trail import at a time across every replica, so two never load the same trail at once. */
+  trail: 6,
+} as const;
+
+/**
+ * When a failed stored-data load, download or analysis is tried again: five
+ * minutes after the first failure, doubling with each one in a row, up to an
+ * hour. The SQL for the column holding the failure count (the old count, so
+ * the first failure waits five minutes; the power is capped so it never
+ * overflows). `retryMs` below is its JS mirror; the two must agree.
+ */
+const backoffSql = (failures: string) => `now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(${failures}, 4))))`;
+/** The JS mirror of backoffSql, for the worker's own maps of failures: the wait after the `failures`th failure in a row. */
+export function retryMs(failures: number): number {
+  return Math.min(60 * 60_000, 5 * 60_000 * 2 ** (failures - 1));
+}
+
 /** Postgres's code for a row whose parent is gone. */
 const FOREIGN_KEY_VIOLATION = '23503';
 /** Postgres's code for a statement it ended to break a deadlock. */
@@ -157,52 +191,6 @@ export interface AnalysisRow {
   loops: Record<Method, { loops: number; pairs: number }> | null;
 }
 
-export interface FlaggedTransfer extends Transfer {
-  flags: Partial<Record<Method, Witness>>;
-  /** Present on reads that span collections. */
-  collection?: { chainId: number; address: string; name: string | null };
-}
-
-/**
- * One row of a Trades list: the transfer, the lenses that ran and flag it, and
- * its facts. One no analysis has covered yet is not judged: it has no facts and
- * no lenses, which is not the same as clean.
- */
-export interface TradeRow extends Transfer { lenses: Method[]; judged: boolean; heldS: number | null; buyerAgeS: number | null; floorRatio: number | null }
-
-/** One Group by row: its key ('-' for unknown), its trades, and how many each lens that ran caught. */
-export interface TradeGroup { key: string; trades: number; caught: Partial<Record<Method, number>> }
-
-export type TokenSort = 'caught' | 'share' | 'volume' | 'newest';
-export type WalletSort = 'caught' | 'share' | 'volume' | 'first';
-/**
- * One row of a lens's token list. `trades` are the token's counted changes of
- * owner (no mints, no custody moves) and `caught` those the lens flags. The
- * rest is over the loops its caught trades point at: `loops` the round trips
- * (`closedByMoney` of them closed by a payment, `laps` their cycles summed),
- * `pairs` the linked pairs (`middles` of them through a third wallet), and
- * `wallets` every wallet in any of them. `volumeWei` is its caught sales priced
- * in money; `lastAt` its newest counted trade.
- */
-export interface TokenLine { tokenId: string; caught: number; trades: number; volumeWei: string; lastAt: number | null; loops: number; pairs: number; wallets: number; closedByMoney: number; laps: number; middles: number }
-/**
- * One row of a lens's wallet list, counted as a token's are; `partners` are the other wallets in its loops.
- * `firstAt` is its first *counted* trade, of the trades `trades` counts: a mint into it is not one.
- */
-export interface WalletLine { address: string; caught: number; trades: number; volumeWei: string; firstAt: number | null; loops: number; pairs: number; partners: number }
-/** A lens list's order, its Find box's text (read by findOf), and its page. */
-export interface ListOpts<S> { sort: S; find: string | null; limit: number; offset: number }
-/**
- * What a wallet's trades are narrowed to: one collection (its address), those
- * counted flagged, a Find read by findOf, and those with one other wallet on
- * the other side.
- */
-export interface WalletFilter { collection?: string; flaggedOnly?: boolean; find?: string; with?: string }
-/** A wallet's money partners' orders: most payments, most it sent, most it received, those trading a watched collection first. */
-export type PartnerSort = 'flows' | 'sent' | 'received' | 'watched';
-/** Which payments between two wallets: the first's to the second, back, or both. */
-export type FlowDir = 'sent' | 'received' | 'both';
-
 /** The wallets one collection (or, with a null id, the followed wallets) wants checked, best first. */
 export interface FundingLane {
   collectionId: number | null;
@@ -307,7 +295,7 @@ export class Store {
 
   /** Applies every migration the store lacks, under a lock so replicas starting together migrate once. */
   async migrate(): Promise<number> {
-    return this.locked(MIGRATE_JOB, true, async (c) => {
+    return this.locked(LOCKS.migrate, true, async (c) => {
       await c.query('CREATE SCHEMA IF NOT EXISTS washtrace');
       await c.query('CREATE TABLE IF NOT EXISTS washtrace.schema_version (version int NOT NULL, singleton bool NOT NULL DEFAULT true UNIQUE CHECK (singleton))');
       const { rows } = await c.query<{ version: number }>('SELECT version FROM washtrace.schema_version');
@@ -598,10 +586,10 @@ export class Store {
              WHERE id = $1`,
             [id, RESTORE_NOTES[err.kind], key],
           )
-          // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+          // The old count on the right: the first failure waits five minutes.
           : this.pool.query(
             `UPDATE washtrace.collections SET restore_progress = NULL, restore_note = $2, restore_note_key = NULL, restore_failures = restore_failures + 1,
-               restore_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(restore_failures, 4))))
+               restore_retry_at = ${backoffSql('restore_failures')}
              WHERE id = $1`,
             [id, RESTORE_NOTES.failed],
           );
@@ -678,10 +666,10 @@ export class Store {
    * after, until another such URL replaces it.
    */
   async downloadFailed(id: number, note: string, mismatch: string | null = null): Promise<void> {
-    // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+    // The old count on the right: the first failure waits five minutes.
     await this.pool.query(
       `UPDATE washtrace.collections SET download_file = NULL, download_progress = NULL, download_note = $2, download_failures = download_failures + 1,
-         download_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(download_failures, 4)))),
+         download_retry_at = ${backoffSql('download_failures')},
          download_mismatch = COALESCE($3, download_mismatch)
        WHERE id = $1`,
       [id, note, mismatch],
@@ -754,7 +742,7 @@ export class Store {
    * statement deletes the count. Returns how many wallets and flows the trail held.
    *
    * It runs for an hour on a big trail, in the background (see
-   * Worker.startTrailImport), so `onFlows` hears the running count of flows
+   * StoredSync.startTrailImport), so `onFlows` hears the running count of flows
    * as each batch commits, and `signal` stops it before the next batch of
    * either pass, throwing its reason. Every statement is idempotent, so one
    * Postgres ends to break a deadlock (funding writes the same wallets and
@@ -874,7 +862,7 @@ export class Store {
 
   /**
    * Forget every trail import's progress. For a worker starting, while no
-   * replica imports (see Worker.clearStaleTrailProgress): an import running
+   * replica imports (see StoredSync.clearStaleTrailProgress): an import running
    * when the last one died says "Importing" for ever otherwise.
    */
   async clearTrailProgress(): Promise<void> {
@@ -1100,7 +1088,7 @@ export class Store {
     const cursor = (await this.pool.query<{ cursor_block: string | null }>('SELECT cursor_block FROM washtrace.collections WHERE id = $1', [id])).rows[0]?.cursor_block;
     const through = cursor == null ? null : Number(cursor);
     const transfers = (await this.pool.query(
-      `${TRANSFER_SELECT} WHERE t.collection_id = $1 AND ($2::bigint IS NULL OR t.block_number <= $2::bigint)`, [id, through],
+      `${SELECT_TRANSFER} ${TRANSFERS} WHERE t.collection_id = $1 AND ($2::bigint IS NULL OR t.block_number <= $2::bigint)`, [id, through],
     )).rows.map(toTransfer);
     // The collection's wallets go in as an array, not as a subquery. As an
     // IN subquery, thousands of them were too many to hash in work_mem, and
@@ -1121,7 +1109,7 @@ export class Store {
     // flows, and reading them all ran the worker out of memory at 6.7M flows
     // for 1.3M pairs; the cursor keeps even the pairs from landing at once.
     const payments = new Payments();
-    const paid = this.cursor(
+    const paid = this.stream(
       // Three columns and no more: millions of rows, and the graph reads nothing else of a payment.
       `SELECT DISTINCT ON (f.from_address, f.to_address) f.from_address, f.to_address, f.tx_hash FROM washtrace.flows f
        WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
@@ -1173,10 +1161,17 @@ export class Store {
         seen[x.method].add(wid);
         loops[x.method][x.witness.kind === 'pair' ? 'pairs' : 'loops']++;
       }
+      // How far the facts on disk reach, and what they were worked out with: the latest analysis's, read before this one's row is in.
+      // Facts worked out otherwise, or by an analysis from before facts were keyed, are no base to add to.
+      const key = factsKey(money);
+      const last = (await c.query<{ through_block: string | null; facts_key: string | null }>(
+        'SELECT through_block, facts_key FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT 1', [id],
+      )).rows[0];
+      const prev = last?.through_block != null && last.facts_key === key ? Number(last.through_block) : null;
       await c.query(
-        `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches, loops)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [id, tookMs, through, JSON.stringify(analysis.totals), analysis.missingData, analysis.fundedWallets, analysis.wallets, analysis.truncatedSearches, JSON.stringify(loops)],
+        `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches, loops, facts_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [id, tookMs, through, JSON.stringify(analysis.totals), analysis.missingData, analysis.fundedWallets, analysis.wallets, analysis.truncatedSearches, JSON.stringify(loops), key],
       );
       await c.query('DELETE FROM washtrace.flags WHERE collection_id = $1', [id]);
       await c.query('DELETE FROM washtrace.witnesses WHERE collection_id = $1', [id]);
@@ -1221,7 +1216,7 @@ export class Store {
           [id, batch.map((x) => x.method), batch.map((x) => x.txHash), batch.map((x) => x.logIndex), ws, batch.map((x) => ids.get(x.witness)!)],
         );
       }
-      await writeFacts(c, id, analysis.uncounted, through, money);
+      await writeFacts(c, id, analysis.uncounted, through, money, prev);
       await c.query(
         `UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2), analysis_failures = 0, analysis_error = NULL, analysis_retry_at = NULL
          WHERE id = $1`,
@@ -1247,10 +1242,10 @@ export class Store {
    * memory, so a restarted worker waits too.
    */
   async analysisFailed(id: number, error: string): Promise<void> {
-    // The old count on the right: the first failure waits five minutes. The power is capped so it never overflows.
+    // The old count on the right: the first failure waits five minutes.
     await this.pool.query(
       `UPDATE washtrace.collections SET analysis_error = $2, analysis_failures = analysis_failures + 1,
-         analysis_retry_at = now() + make_interval(secs => LEAST(3600, 300 * power(2, LEAST(analysis_failures, 4))))
+         analysis_retry_at = ${backoffSql('analysis_failures')}
        WHERE id = $1`,
       [id, error],
     );
@@ -1294,8 +1289,8 @@ export class Store {
 
   /** A collection's transfers up to block `through`, in chain order, streamed for writing to a file. */
   storedTransfers(id: number, through: number): AsyncGenerator<Transfer> {
-    return this.cursor(
-      `${TRANSFER_COLUMNS} FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.block_number <= $2 ORDER BY t.block_number, t.log_index`,
+    return this.stream(
+      `${SELECT_TRANSFER} FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.block_number <= $2 ORDER BY t.block_number, t.log_index`,
       [id, through], toTransfer,
     );
   }
@@ -1339,14 +1334,14 @@ export class Store {
     return {
       checked: rows[0]!.checked,
       of: rows[0]!.of,
-      addresses: this.cursor(
+      addresses: this.stream(
         `SELECT address FROM washtrace.wallets
          WHERE chain_id = $1 AND status = 'done' AND NOT truncated AND (address = ANY($2::text[]) OR address = ANY($3::text[]))
          ORDER BY address`,
         [chainId, traders, followed],
         (r): string => r.address,
       ),
-      flows: this.cursor(
+      flows: this.stream(
         `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
                 extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
          WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
@@ -1364,7 +1359,7 @@ export class Store {
    * transaction, so the rows are one snapshot. Leaving the loop early (a
    * failed write) closes the cursor and gives the connection back.
    */
-  private async *cursor<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE): AsyncGenerator<T> {
+  private async *stream<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE): AsyncGenerator<T> {
     const c = await this.pool.connect();
     let finished = false;
     try {
@@ -1558,7 +1553,7 @@ export class Store {
   /** One token's transfers in chain order, each with the methods that flagged it. */
   async token(id: number, tokenId: string): Promise<FlaggedTransfer[]> {
     const { rows } = await this.pool.query(
-      `${TRANSFER_COLUMNS}, ${FLAGS_AGG} ${TRANSFERS} WHERE t.collection_id = $1 AND t.token_id = $2::numeric ORDER BY t.block_number, t.log_index`,
+      `${SELECT_TRANSFER}, ${FLAGS_AGG} ${TRANSFERS} WHERE t.collection_id = $1 AND t.token_id = $2::numeric ORDER BY t.block_number, t.log_index`,
       [id, tokenId],
     );
     return rows.map(toFlagged);
@@ -1581,7 +1576,7 @@ export class Store {
     const where = walletWhere(chainId, address, filter, params);
     params.push(limit, offset);
     const { rows } = await this.pool.query(
-      `${TRANSFER_COLUMNS}, ${FLAGS_AGG}, c.chain_id, c.address AS collection_address, c.name AS collection_name ${TRANSFERS}
+      `${SELECT_TRANSFER}, ${FLAGS_AGG}, c.chain_id, c.address AS collection_address, c.name AS collection_name ${TRANSFERS}
        WHERE ${where} ORDER BY t.block_number DESC, t.log_index DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
@@ -1652,7 +1647,7 @@ export class Store {
   /** Every watched transfer in one transaction, flagged or not: the API's "is this sale a wash trade?". */
   async transaction(chainId: number, txHash: string): Promise<FlaggedTransfer[]> {
     const { rows } = await this.pool.query(
-      `${TRANSFER_COLUMNS}, ${FLAGS_AGG}, c.chain_id, c.address AS collection_address, c.name AS collection_name ${TRANSFERS}
+      `${SELECT_TRANSFER}, ${FLAGS_AGG}, c.chain_id, c.address AS collection_address, c.name AS collection_name ${TRANSFERS}
        WHERE c.chain_id = $1 AND t.tx_hash = $2 ORDER BY t.log_index`,
       [chainId, txHash],
     );
@@ -1705,7 +1700,7 @@ export class Store {
   /** Every trade `q` holds, in its order, streamed: the same rows as every page of `trades` put together. */
   tradeStream(id: number, q: TradeQuery, ctx: TradeContext): AsyncGenerator<TradeRow> {
     const params: unknown[] = [];
-    return this.cursor(tradeSelect(id, q, ctx, params), params, toTrade);
+    return this.stream(tradeSelect(id, q, ctx, params), params, toTrade);
   }
 
   /**
@@ -1731,38 +1726,39 @@ export class Store {
       [arg, ...page],
     )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, transfers: r.transfers })), 'wallets');
 
+    // The kinds' queries are independent, and the sidebar asks as a person types: they run at once, not one after another.
+    const asks: Promise<void>[] = [];
     if ((p.kind === 'text' || p.kind === 'token') && want('collections')) {
       // `%`, `_` and `\` are only themselves in what a person typed.
       const like = `%${p.text.replace(/[\\%_]/g, '\\$&')}%`;
-      hits.collections = await collections('(c.name ILIKE $1 OR c.contract_name ILIKE $1 OR c.symbol ILIKE $1)', like);
+      asks.push(collections('(c.name ILIKE $1 OR c.contract_name ILIKE $1 OR c.symbol ILIKE $1)', like).then((h) => { hits.collections = h; }));
     }
     if (p.kind === 'token' && want('tokens')) {
       // One index probe per collection: Postgres 17 has no skip scan over transfers_token_idx.
-      const { rows } = await this.pool.query(
+      asks.push(this.pool.query(
         `SELECT c.chain_id, c.address, c.name, x.n FROM washtrace.collections c CROSS JOIN LATERAL (
            SELECT count(*)::int AS n FROM washtrace.transfers t WHERE t.collection_id = c.id AND t.token_id = $1::numeric) x
          WHERE x.n > 0 ORDER BY x.n DESC, c.id LIMIT $2 OFFSET $3`,
         [p.tokenId, ...page],
-      );
-      hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n })), 'tokens');
+      ).then(({ rows }) => { hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n })), 'tokens'); }));
     }
     if (p.kind === 'address') {
-      if (want('collections')) hits.collections = await collections('c.address = $1', p.address);
-      if (want('wallets')) hits.wallets = await wallets('address = $1', p.address);
+      if (want('collections')) asks.push(collections('c.address = $1', p.address).then((h) => { hits.collections = h; }));
+      if (want('wallets')) asks.push(wallets('address = $1', p.address).then((h) => { hits.wallets = h; }));
     }
     if (p.kind === 'prefix') {
       // Hex has no `%` or `_`, so the prefix needs no escaping.
-      if (want('collections')) hits.collections = await collections(`c.address LIKE $1 || '%'`, p.prefix);
-      if (want('wallets')) hits.wallets = await wallets(`address LIKE $1 || '%'`, p.prefix);
+      if (want('collections')) asks.push(collections(`c.address LIKE $1 || '%'`, p.prefix).then((h) => { hits.collections = h; }));
+      if (want('wallets')) asks.push(wallets(`address LIKE $1 || '%'`, p.prefix).then((h) => { hits.wallets = h; }));
     }
     if (p.kind === 'tx' && want('trades')) {
-      const { rows } = await this.pool.query(
+      asks.push(this.pool.query(
         `SELECT c.chain_id, t.tx_hash, c.address, c.name, t.token_id::text AS token_id ${TRANSFERS}
          WHERE t.tx_hash = $1 ORDER BY c.id, t.log_index LIMIT $2 OFFSET $3`,
         [p.tx, ...page],
-      );
-      hits.trades = cut(rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades');
+      ).then(({ rows }) => { hits.trades = cut(rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades'); }));
     }
+    await Promise.all(asks);
     return hits;
   }
 
@@ -1950,249 +1946,14 @@ const servedWallet = (hops: string) =>
   `CASE WHEN w.depth > 0 THEN w.depth <= ${hops} AND EXISTS (SELECT 1 FROM washtrace.collections c WHERE c.chain_id = w.chain_id AND ${SERVED_LIVE})
   ELSE ${namedLive('from_address')} OR ${namedLive('to_address')} END`;
 
-const TRANSFER_COLUMNS = `
-SELECT t.tx_hash, t.log_index, t.block_number, extract(epoch FROM t.block_time)::float8 AS bt, t.token_id::text AS token_id,
-       t.from_address, t.to_address, t.marketplace, t.price_wei::text AS price_wei, t.currency`;
-const TRANSFERS = 'FROM washtrace.transfers t JOIN washtrace.collections c ON c.id = t.collection_id';
-const TRANSFER_SELECT = `${TRANSFER_COLUMNS} ${TRANSFERS}`;
+/** How many UTC days before a sale its floor looks back over. */
+export const FLOOR_DAYS = 7;
+/** Bump it whenever a fact's definition changes: an analysis then writes every trade fact again, not only the new ones. */
+export const FACTS_VERSION = 1;
 
-/** A Trades list's rows: each transfer `t`, and its facts `x` when an analysis has judged it. */
-const TRADES_FROM = `FROM washtrace.transfers t
-  LEFT JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index`;
-
-/**
- * Which of a wallet's transfers `filter` holds: those on chain `chainId` it
- * sent or received, through the per-address indexes. Flagged only is what the
- * console calls flagged (counted in apps/web/lib/metrics.ts): a HEADLINE lens
- * flags it and ran in its own collection's latest analysis. The engine copies
- * Round trips' flags into the money lenses when no funding ran, so a Linked
- * wallets flag where it did not run is no flag. A Find is read by findOf: a
- * token number, or the other side of the trade by its address or the start of
- * it; anything else matches nothing.
- */
-function walletWhere(chainId: number, address: string, filter: WalletFilter, params: unknown[]): string {
-  const p = binder(params);
-  const chain = p(chainId), self = p(address);
-  const where = [`c.chain_id = ${chain}`, `(t.from_address = ${self} OR t.to_address = ${self})`];
-  if (filter.collection !== undefined) where.push(`c.address = ${p(filter.collection.toLowerCase())}`);
-  if (filter.flaggedOnly) {
-    where.push(`EXISTS (SELECT 1 FROM washtrace.flags f
-      WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${p(HEADLINE)}::text[])
-        AND (SELECT a.totals FROM washtrace.analyses a WHERE a.collection_id = t.collection_id ORDER BY a.ran_at DESC LIMIT 1) -> f.method ->> 'available' = 'true')`);
-  }
-  // The other side: the buyer of what it sold, the seller of what it bought.
-  const other = (op: '=' | 'LIKE', v: string) => {
-    const o = p(v);
-    where.push(`((t.from_address = ${self} AND t.to_address ${op} ${o}) OR (t.to_address = ${self} AND t.from_address ${op} ${o}))`);
-  };
-  if (filter.with !== undefined) other('=', filter.with.toLowerCase());
-  if (filter.find !== undefined) {
-    const f = findOf(filter.find);
-    if (f.kind === 'token') where.push(`t.token_id = ${p(f.tokenId)}::numeric`);
-    else if (f.kind === 'address') other('=', f.address);
-    // Hex only, so the pattern holds no wildcard but its own.
-    else if (f.kind === 'prefix') other('LIKE', `${f.prefix}%`);
-    else where.push('false');
-  }
-  return where.join(' AND ');
-}
-
-/** A wallet's money partners: each flow it sent ('out') or received ('in'), as `other` and `dir`. Wallet `$2` on chain `$1`. */
-const PARTNERS_FROM = `FROM (SELECT to_address AS other, 'out' AS dir FROM washtrace.flows WHERE chain_id = $1 AND from_address = $2
-  UNION ALL SELECT from_address, 'in' FROM washtrace.flows WHERE chain_id = $1 AND to_address = $2) x WHERE other <> $2`;
-/** The partner orders, over the rows `p`; counterparties adds the address last. */
-const PARTNER_ORDER: Readonly<Record<PartnerSort, string>> = {
-  flows: 'p.flows DESC',
-  sent: 'p.sent DESC, p.flows DESC',
-  received: 'p.received DESC, p.flows DESC',
-  watched: 'p.watched DESC, p.flows DESC',
-};
-/** The payments from `$2` to `$3` on chain `$1`, or back, or both. */
-function betweenWhere(dir: FlowDir): string {
-  const sent = 'f.from_address = $2 AND f.to_address = $3', received = 'f.from_address = $3 AND f.to_address = $2';
-  return `f.chain_id = $1 AND ${dir === 'sent' ? sent : dir === 'received' ? received : `((${sent}) OR (${received}))`}`;
-}
-
-/** Binds `v` into `params` and gives its placeholder. */
-const binder = (params: unknown[]) => (v: unknown): string => {
-  params.push(v);
-  return `$${params.length}`;
-};
-
-/** Whether lens `m` flags transfer `t`. Only ever asked of a lens in `ctx.ran`. */
-const flaggedBy = (m: Method, p: (v: unknown) => string) =>
-  `EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = ${p(m)} AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)`;
-
-/** A whole number as Postgres numeric takes it: a wei amount or a token id. */
-const WHOLE = /^\d{1,78}$/;
-
-/** A lens's caught trades: its flags `f` (lens `$2`) on the counted transfers `t` of collection `$1`, with their facts `x`. */
-const CAUGHT_FROM = `FROM washtrace.flags f
-  JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
-  JOIN washtrace.trade_facts x ON x.collection_id = f.collection_id AND x.tx_hash = f.tx_hash AND x.log_index = f.log_index`;
-const CAUGHT_WHERE = 'f.collection_id = $1 AND f.method = $2 AND x.counted';
-/** Transfer `t`'s facts, when the analysis counted it. */
-const COUNTED_JOIN = 'JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted';
-/** Transfer `t` once for each wallet in it, as `s.address`: a wallet that sold to itself is in it once. */
-const SIDES = 'CROSS JOIN LATERAL unnest(CASE WHEN t.to_address = t.from_address THEN ARRAY[t.from_address] ELSE ARRAY[t.from_address, t.to_address] END) s(address)';
-/**
- * What a lens list row's caught trades add up to: how many, their volume (sales
- * priced in money, `$3`), and the loops they point at, repeats and all; a read
- * by `= ANY` takes each loop once.
- */
-const CAUGHT_COLUMNS = `count(*)::int AS caught,
-  COALESCE(sum(CASE WHEN t.marketplace IS NOT NULL AND t.currency = ANY($3::text[]) THEN t.price_wei END), 0) AS volume,
-  array_agg(f.witness_id) AS ids`;
-/** A lens list's orders, over its rows `c`; each caller adds its own key last, so ties keep one order. */
-const LIST_ORDER = {
-  caught: 'c.caught DESC',
-  share: 'c.caught::float8 / c.trades DESC, c.caught DESC',
-  volume: 'c.volume DESC',
-  at: 'c.at DESC NULLS LAST',
-} as const;
-
-/**
- * A lens list row `c`'s loops: the witnesses in its `ids`, counted by kind, and
- * the wallets in any of them other than `self`. Distinct by hashing rather than
- * count(DISTINCT), which sorts: a ring wallet's loops can hold 75,000 wallets.
- */
-function loopsOf(self: string | null): string {
-  return `CROSS JOIN LATERAL (SELECT
-      count(*) FILTER (WHERE w.kind IN ('scc', 'scc+flow'))::int AS loops,
-      count(*) FILTER (WHERE w.kind = 'scc+flow')::int AS closed,
-      COALESCE(sum(w.cycles) FILTER (WHERE w.kind IN ('scc', 'scc+flow')), 0)::int AS laps,
-      count(*) FILTER (WHERE w.kind = 'pair')::int AS pairs,
-      count(*) FILTER (WHERE w.kind = 'pair' AND w.middle IS NOT NULL)::int AS middles,
-      (SELECT count(*)::int FROM (SELECT DISTINCT a FROM washtrace.witnesses v CROSS JOIN unnest(v.wallets) a
-       WHERE v.collection_id = $1 AND v.id = ANY(c.ids)${self === null ? '' : ` AND a <> ${self}`}) d) AS wallets
-    FROM washtrace.witnesses w WHERE w.collection_id = $1 AND w.id = ANY(c.ids)) s`;
-}
-
-/**
- * The one place a Trades list's filters become SQL. The page, its count, its
- * groups and its stream all read through it, so they always hold the same
- * trades. Every value is bound into `params`. Flags are read only for lenses
- * in `ctx.ran`: when funding did not run, the engine copies every Round trips
- * flag into the money lenses, and those copies caught nothing.
- */
-function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params: unknown[]): string {
-  const p = binder(params);
-  const ran = (m: Method) => ctx.ran.includes(m);
-  const c = p(id);
-  // Counted, or not judged yet. A transfer the analysis did not count (a mint, a custody move) is no trade.
-  const where = [`t.collection_id = ${c}`, '(x.counted OR x.tx_hash IS NULL)'];
-  const none = () => where.push('false');
-  if (q.kind === 'sales') where.push('t.marketplace IS NOT NULL');
-  if (q.caught.some((m) => !ran(m))) none();
-  for (const m of q.caught.filter(ran)) where.push(flaggedBy(m, p));
-  // Not caught is judged and clean. A lens that did not run is ignored here, and the page says so.
-  const clean = q.notCaught.filter(ran);
-  if (clean.length) where.push('x.tx_hash IS NOT NULL', ...clean.map((m) => `NOT ${flaggedBy(m, p)}`));
-  if (q.venues.length) where.push(`t.marketplace = ANY(${p(q.venues.flatMap((v) => VENUES[v]?.raw ?? [v]))}::text[])`);
-  if (q.priceMinWei !== null || q.priceMaxWei !== null) {
-    // A price in anything but money says nothing of a bound in ETH, and an unpriced sale none at all.
-    where.push(`t.price_wei IS NOT NULL AND t.currency = ANY(${p([...ctx.money])}::text[])`);
-    for (const [bound, op] of [[q.priceMinWei, '>='], [q.priceMaxWei, '<=']] as const) {
-      if (bound === null) continue;
-      if (WHOLE.test(bound)) where.push(`t.price_wei ${op} ${p(bound)}::numeric`);
-      else none();
-    }
-  }
-  const span = (col: string, over: number | null, under: number | null) => {
-    if (over !== null) where.push(`${col} >= ${p(over)}::float8`);
-    if (under !== null) where.push(`${col} < ${p(under)}::float8`);
-  };
-  span('x.held_s', q.heldOverS, q.heldUnderS);
-  span('x.buyer_age_s', q.buyerAgeOverS, q.buyerAgeUnderS);
-  span('x.floor_ratio', q.floorMin, q.floorMax);
-  if (q.fromMs !== null) where.push(`t.block_time >= to_timestamp(${p(q.fromMs / 1000)}::float8)`);
-  if (q.toMs !== null) where.push(`t.block_time < to_timestamp(${p(q.toMs / 1000)}::float8)`);
-  const either = (address: string) => {
-    const a = p(address);
-    where.push(`(t.from_address = ${a} OR t.to_address = ${a})`);
-  };
-  if (q.wallet !== null) either(q.wallet.toLowerCase());
-  if (q.token !== null) {
-    if (WHOLE.test(q.token)) where.push(`t.token_id = ${p(q.token)}::numeric`);
-    else none();
-  }
-  if (q.group !== null) {
-    const g = q.group;
-    if (!ran(g.method)) none();
-    else {
-      const m = p(g.method);
-      // The loops: those the lens flags on the token, or those holding the wallet, found through the GIN index.
-      const loops = 'token' in g
-        ? WHOLE.test(g.token)
-          ? `w.id IN (SELECT f.witness_id FROM washtrace.flags f
-               JOIN washtrace.transfers ft ON ft.collection_id = f.collection_id AND ft.tx_hash = f.tx_hash AND ft.log_index = f.log_index
-               WHERE f.collection_id = ${c} AND f.method = ${m} AND ft.token_id = ${p(g.token)}::numeric)`
-          : 'false'
-        : `w.wallets @> ARRAY[${p(g.wallet.toLowerCase())}]::text[]
-           AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = w.collection_id AND f.method = ${m} AND f.witness_id = w.id)`;
-      const set = `ARRAY(SELECT DISTINCT unnest(w.wallets) FROM washtrace.witnesses w WHERE w.collection_id = ${c} AND ${loops})`;
-      where.push(`t.from_address = ANY(${set}) AND t.to_address = ANY(${set})`);
-    }
-  }
-  if (q.find !== null) {
-    const f = findOf(q.find);
-    if (f.kind === 'token') where.push(`t.token_id = ${p(f.tokenId)}::numeric`);
-    else if (f.kind === 'tx') where.push(`t.tx_hash = ${p(f.tx)}`);
-    else if (f.kind === 'address') either(f.address);
-    else if (f.kind === 'prefix') {
-      // Hex only, so the pattern holds no wildcard but its own; the text_pattern_ops indexes serve it.
-      const a = p(`${f.prefix}%`);
-      where.push(`(t.from_address LIKE ${a} OR t.to_address LIKE ${a})`);
-    } else none();
-  }
-  return where.join(' AND ');
-}
-
-/** A transfer's VENUES key, as venueOf gives it, in SQL; null when it is no sale. The raw strings are bound. */
-function venueCase(p: (v: unknown) => string): string {
-  const arms = Object.entries(VENUES).map(([key, v]) => `WHEN t.marketplace = ANY(${p(v.raw)}::text[]) THEN ${p(key)}::text`);
-  return `CASE ${arms.join(' ')} ELSE t.marketplace END`;
-}
-
-/** A Trades list's order. Ties, and every key with no value, go newest first after the rest. */
-function tradeOrder(q: TradeQuery, ctx: TradeContext, params: unknown[]): string {
-  const p = binder(params);
-  const newest = 't.block_time DESC NULLS LAST, t.block_number DESC, t.log_index DESC, t.tx_hash DESC';
-  if (q.sort === 'date') return q.dir === 'asc' ? 't.block_time ASC NULLS LAST, t.block_number, t.log_index, t.tx_hash' : newest;
-  const lens = q.sort.startsWith('lens-') ? (q.sort.slice(5) as Method) : null;
-  const key = lens !== null ? (ctx.ran.includes(lens) ? flaggedBy(lens, p) : null)
-    // A price in anything but money is not comparable, so it sorts with the unpriced.
-    : q.sort === 'price' ? `CASE WHEN t.currency = ANY(${p([...ctx.money])}::text[]) THEN t.price_wei END`
-    : q.sort === 'held' ? 'x.held_s'
-    : q.sort === 'buyerAge' ? 'x.buyer_age_s'
-    : q.sort === 'floor' ? 'x.floor_ratio'
-    : q.sort === 'token' ? 't.token_id'
-    : q.sort === 'marketplace' ? venueCase(p)
-    : q.sort === 'seller' ? 't.from_address'
-    : null;
-  return key === null ? newest : `${key} ${q.dir === 'asc' ? 'ASC' : 'DESC'} NULLS LAST, ${newest}`;
-}
-
-/** The rows of a Trades list, sorted, for a page to cut or a cursor to stream. */
-function tradeSelect(id: number, q: TradeQuery, ctx: TradeContext, params: unknown[]): string {
-  const ran = binder(params)([...ctx.ran]);
-  return `${TRANSFER_COLUMNS}, x.tx_hash IS NOT NULL AS judged, x.held_s, x.buyer_age_s, x.floor_ratio,
-    ARRAY(SELECT f.method FROM washtrace.flags f
-          WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${ran}::text[])) AS lenses
-    ${TRADES_FROM} WHERE ${tradeWhere(id, q, ctx, params)} ORDER BY ${tradeOrder(q, ctx, params)}`;
-}
-
-/** What a trade is grouped by: a band's index, a month in the reader's zone, or a venue; '-' when unknown. */
-function groupKey(by: TradeGroupBy, ctx: TradeContext, params: unknown[]): string {
-  const p = binder(params);
-  const bandOf = (col: string, edges: readonly number[]) =>
-    `CASE WHEN ${col} IS NULL THEN '-' ELSE (${edges.map((e) => `(${col} >= ${p(e)}::float8)::int`).join(' + ')})::text END`;
-  if (by === 'held') return bandOf('x.held_s', HELD_BANDS);
-  if (by === 'buyerAge') return bandOf('x.buyer_age_s', AGE_BANDS);
-  if (by === 'floor') return bandOf('x.floor_ratio', FLOOR_BANDS);
-  // The wall-clock time in the zone, formatted: to_char of a timestamptz would format in the session's zone.
-  if (by === 'month') return `COALESCE(to_char(t.block_time AT TIME ZONE ${p(ctx.zone)}::text, 'YYYY-MM'), '-')`;
-  return `COALESCE(${venueCase(p)}, '-')`;
+/** What a collection's trade facts are worked out with. Facts under another key can't be added to: each must be written again. */
+function factsKey(money: ReadonlySet<string>): string {
+  return `${FACTS_VERSION}/${FLOOR_DAYS}/${[...money].sort().join(',')}`;
 }
 
 /**
@@ -2202,11 +1963,31 @@ function groupKey(by: TradeGroupBy, ctx: TradeContext, params: unknown[]): strin
  * price over the median price of the seven UTC days before. All in SQL: a
  * collection is millions of rows, and none comes to Node. The uncounted keys
  * are the only thing sent in, in batches like the flags.
+ *
+ * Each ingest brings an analysis, so the facts are not all written each time.
+ * When the ones on disk cover exactly the transfers through `prev`, the
+ * previous analysis's cursor (null when its facts were worked out
+ * otherwise), only the rows whose `counted` changed are written, and the
+ * transfers past `prev` added. Otherwise they are all deleted and written
+ * again.
+ *
+ * Change how `held_s`, `buyer_age_s` or `floor_ratio` is worked out here and
+ * bump FACTS_VERSION (above factsKey), or old facts keep the old meaning.
+ * `counted` needs no bump: it is re-checked every save.
  */
-async function writeFacts(c: pg.PoolClient, id: number, uncounted: Analysis['uncounted'], through: number | null, money: ReadonlySet<string>): Promise<void> {
-  // Transfers are re-read here, not carried from analysisInput. A stored-data load adding rows below the cursor in between gets them counted = true; the load bumps `version`, so the next analysis corrects it.
-  await c.query('DELETE FROM washtrace.trade_facts WHERE collection_id = $1', [id]);
-  await c.query('CREATE TEMP TABLE uncounted (tx_hash text NOT NULL, log_index int NOT NULL) ON COMMIT DROP');
+async function writeFacts(
+  c: pg.PoolClient, id: number, uncounted: Analysis['uncounted'], through: number | null, money: ReadonlySet<string>, prev: number | null,
+): Promise<void> {
+  // Transfers are re-read here, not carried from analysisInput. A stored-data load adding rows below the cursor in between gets them counted = true, or no row at all if they land below `prev` after the count; the load bumps `version`, so the next analysis corrects it.
+  // An older fact can stay: its token's last move, its buyer's first, and the week before its day are all older still, as ingest only appends past the cursor and block time rises with the block on every chain we read (Ethereum, Base). A row below `prev` that is new or gone since, as a load or restore leaves, breaks the equal count.
+  const since = prev !== null && through !== null && through >= prev && (await c.query<{ covered: boolean }>(
+    `SELECT (SELECT count(*) FROM washtrace.trade_facts WHERE collection_id = $1)
+          = (SELECT count(*) FROM washtrace.transfers WHERE collection_id = $1 AND block_number <= $2::bigint) AS covered`,
+    [id, prev],
+  )).rows[0]!.covered ? prev : null;
+  if (since === null) await c.query('DELETE FROM washtrace.trade_facts WHERE collection_id = $1', [id]);
+  // Keyed, so the counted update probes it per fact when it is too big to hash, not scans it per fact.
+  await c.query('CREATE TEMP TABLE uncounted (tx_hash text NOT NULL, log_index int NOT NULL, PRIMARY KEY (tx_hash, log_index)) ON COMMIT DROP');
   for (let at = 0; at < uncounted.length; at += FLAG_BATCH_ROWS) {
     const batch = uncounted.slice(at, at + FLAG_BATCH_ROWS);
     await c.query(
@@ -2214,6 +1995,17 @@ async function writeFacts(c: pg.PoolClient, id: number, uncounted: Analysis['unc
       [batch.map((u) => u.txHash), batch.map((u) => u.logIndex)],
     );
   }
+  if (since !== null) {
+    // A fact is wrong when it is counted and listed uncounted, or neither: only those are written.
+    await c.query(
+      `UPDATE washtrace.trade_facts x SET counted = NOT x.counted
+       WHERE x.collection_id = $1
+         AND x.counted = EXISTS (SELECT 1 FROM uncounted u WHERE u.tx_hash = x.tx_hash AND u.log_index = x.log_index)`,
+      [id],
+    );
+  }
+  // Every transfer through `through` is read either way: the new ones' last moves, first sightings and floors are in the old.
+  // A change to how a fact below is worked out needs FACTS_VERSION bumped.
   await c.query(
     `WITH t AS (
        SELECT tx_hash, log_index, block_number, token_id, to_address, from_address, price_wei, currency, marketplace,
@@ -2237,39 +2029,16 @@ async function writeFacts(c: pg.PoolClient, id: number, uncounted: Analysis['unc
      FROM lagged l
      LEFT JOIN uncounted u ON u.tx_hash = l.tx_hash AND u.log_index = l.log_index
      LEFT JOIN seen s ON s.address = l.to_address
-     LEFT JOIN floors f ON f.day = floor(l.bt / 86400)::int`,
-    [id, through, [...money], FLOOR_DAYS],
+     LEFT JOIN floors f ON f.day = floor(l.bt / 86400)::int
+     WHERE $5::bigint IS NULL OR l.block_number > $5::bigint`,
+    [id, through, [...money], FLOOR_DAYS, since],
   );
 }
-
-const FLAGS_AGG = `(SELECT jsonb_object_agg(f.method, f.witness) FROM washtrace.flags f
-  WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AS flags`;
 
 // bigint and numeric columns arrive as strings; each is converted where it is read.
 /** What a setting's report may keep: a secret only when it is masked, the store's own guard against its caller. */
 function safe(key: string, shown: string | null): string | null {
   return SECRET_KEYS(key) && !shown?.includes('••••') ? null : shown;
-}
-
-function toTransfer(r: any): Transfer {
-  return {
-    txHash: r.tx_hash, logIndex: r.log_index, blockNumber: Number(r.block_number), blockTime: r.bt,
-    tokenId: r.token_id, from: r.from_address, to: r.to_address, marketplace: r.marketplace, priceWei: r.price_wei, currency: r.currency,
-  };
-}
-
-function toFlagged(r: any): FlaggedTransfer {
-  const t: FlaggedTransfer = { ...toTransfer(r), flags: r.flags ?? {} };
-  if (r.collection_address !== undefined) t.collection = { chainId: r.chain_id, address: r.collection_address, name: r.collection_name };
-  return t;
-}
-
-function toTrade(r: any): TradeRow {
-  const num = (v: unknown) => (v === null ? null : Number(v));
-  return {
-    ...toTransfer(r), lenses: METHODS.filter((m) => r.lenses.includes(m)), judged: r.judged,
-    heldS: num(r.held_s), buyerAgeS: num(r.buyer_age_s), floorRatio: r.floor_ratio,
-  };
 }
 
 function toFlow(r: any): Flow {

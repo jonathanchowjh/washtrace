@@ -1,13 +1,27 @@
 import { ETHERSCAN_V2 } from './etherscan.js';
 import { STORED_REPO } from './hub.js';
 import { SECRET_KEYS, type SettingSource } from './store.js';
-import type { WorkerConfig } from './worker.js';
 
 /**
  * Every environment variable either service reads. In the package, not in
  * an app, because the API and the worker are two processes that must read
  * the same deployment the same way.
  */
+
+/** What the worker reads from the environment and the console's settings on every pass, so a changed setting needs no restart. */
+export interface WorkerConfig {
+  /** RPC URL per chain id. A collection on a chain with none reports so, and waits. */
+  rpc: ReadonlyMap<number, string>;
+  etherscanKey: string | null;
+  etherscanPerSecond: number;
+  etherscanUrl: string;
+  /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
+  followHops: number;
+  /** The Hugging Face dataset (owner/name) stored data is downloaded from. */
+  storedRepo: string;
+  /** Where each set value came from, keyed by setting key. Never a secret's value: the store publishes this. */
+  sources: Record<string, SettingSource>;
+}
 
 /** A setting is missing or malformed. Said as such, never as an empty chain. */
 export class ConfigError extends Error {}
@@ -92,10 +106,10 @@ export function shownSecret(key: string, value: string): string {
 
 /**
  * `url` with its credentials as '••••': its userinfo and every query value,
- * where a compatible API may take a key (urlSecrets in worker.ts). Its host
+ * where a compatible API may take a key (urlSecrets below). Its host
  * and path stay, to say where it points. Kept as written, not re-serialised.
  */
-function maskedUrl(url: string): string {
+export function maskedUrl(url: string): string {
   const q = url.indexOf('?');
   // Up to the last @ before the host ends, after the scheme and any slashes: the URL parser also reads userinfo in
   // `https:a:b@x`, `https:/a:b@x` and `https:\a:b@x`.
@@ -114,4 +128,74 @@ function maskedUrl(url: string): string {
 function hops(raw: string | undefined): number {
   const n = Number(raw ?? '3');
   return Number.isInteger(n) && n >= 0 && n <= 10 ? n : 3;
+}
+
+export function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * An error in a line: viem's short message and details, not its full
+ * message, which adds the request body and the version. Other errors as
+ * they are.
+ */
+export function briefOf(err: unknown): string {
+  const e = err as { shortMessage?: unknown; details?: unknown } | null;
+  if (typeof e?.shortMessage !== 'string') return messageOf(err);
+  return typeof e.details === 'string' && e.details !== '' ? `${e.shortMessage} ${e.details}` : e.shortMessage;
+}
+
+/**
+ * `text` with every secret and every URL taken out, cut to one short line.
+ * RPC and HTTP clients put the request URL in their errors, and an RPC
+ * URL is often its own key, so a URL is never kept even when not configured.
+ */
+export function redact(text: string, secrets: readonly string[]): string {
+  // URLs first, whole: hiding a secret inside one first would leave the rest of it.
+  let out = text.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]');
+  // Ignoring case: a URL's host is lowercased once parsed, and a provider may echo it as it was written.
+  for (const s of [...secrets].filter((s) => s.length >= 4).sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[hidden]');
+  }
+  out = out.replace(/\s+/g, ' ').trim();
+  return out.length > 300 ? `${out.slice(0, 299)}…` : out;
+}
+
+/**
+ * The URL and its parts, as secrets. A provider's key is a path segment, a
+ * query value or a subdomain, and a provider may echo it on its own, in the
+ * URL without its scheme, or decoded, so each part is kept both as written
+ * and decoded. With `credentialsOnly`, only the parts that can carry a key in
+ * a public API's URL: its userinfo and query values. Its host and path are
+ * public ("etherscan" among them), and hiding them would hide whose error it is.
+ */
+export function urlSecrets(url: string, credentialsOnly = false): string[] {
+  const bare = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const parts = credentialsOnly ? [] : [url, bare, bare.replace(/\/+$/, '')];
+  try {
+    const u = new URL(url);
+    if (!credentialsOnly) parts.push(u.host, u.hostname, ...u.hostname.split('.').filter((l) => l.length >= 6), ...u.pathname.split('/').filter((p) => p.length >= 6));
+    parts.push(u.username, u.password);
+    // The Authorization header the transport sends for them, which a proxy may echo.
+    if (u.username !== '' || u.password !== '') {
+      parts.push(Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64'));
+    }
+    parts.push(...u.search.slice(1).split('&').map((kv) => kv.slice(kv.indexOf('=') + 1)).filter((v) => v.length >= 6));
+  } catch {
+    // Not a URL: every run of six or more between separators.
+    if (!credentialsOnly) parts.push(...url.split(/[/?&=:@#]/).filter((p) => p.length >= 6));
+  }
+  // A query value encodes a space as '+', which decodeURIComponent leaves.
+  return parts.flatMap((p) => {
+    try { return [p, decodeURIComponent(p), decodeURIComponent(p.replace(/\+/g, ' '))]; } catch { return [p]; }
+  });
+}
+
+/**
+ * Every secret in a config: the RPC URLs whole (an RPC URL is often its own
+ * key), the credentials in the Etherscan URL (a compatible API may take a key
+ * in its query), and the key.
+ */
+export function configSecrets(config: WorkerConfig): string[] {
+  return [...[...config.rpc.values()].flatMap((u) => urlSecrets(u)), ...urlSecrets(config.etherscanUrl, true), config.etherscanKey ?? ''];
 }

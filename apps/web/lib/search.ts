@@ -1,11 +1,13 @@
 import type { Parsed, SearchHits, SearchKind } from '@washtrace/detect';
 import { chainName } from './chains';
 import { plural, short } from './format';
+import { MAX_TEXT, pageOf, tokenIdOf } from './params';
 
 /**
  * Reading what was typed into search, and the page and kind a results URL
- * asks for. The sidebar loads this file, so it checks hex itself: lib/api.ts
- * value-imports detect's main entry, which a client component must not.
+ * asks for. The sidebar loads this file, so it takes its rules from the
+ * import-free lib/params.ts: lib/api.ts value-imports detect's main entry,
+ * which a client component must not.
  */
 
 export type { Parsed, SearchKind };
@@ -14,9 +16,6 @@ export type { Parsed, SearchKind };
 export const SEARCH_LIMIT = 20;
 
 export const SEARCH_KINDS: readonly SearchKind[] = ['collections', 'tokens', 'wallets', 'trades'];
-
-/** Longest text searched; a name is never longer, and a URL can carry anything. */
-const MAX_TEXT = 100;
 
 /**
  * Trims, lowercases hex and strips one leading '#'. One or two bare digits are
@@ -34,7 +33,8 @@ export function parseSearch(raw: string): Parsed {
     if (hex.length === 42) return { kind: 'address', address: hex };
     if (hex.length >= 6 && hex.length < 42) return { kind: 'prefix', prefix: hex };
   }
-  if (/^\d{1,78}$/.test(text) && (hashed || text.length >= 3)) return { kind: 'token', tokenId: BigInt(text).toString(), text };
+  const tokenId = tokenIdOf(text);
+  if (tokenId !== null && (hashed || text.length >= 3)) return { kind: 'token', tokenId, text };
   if (text.length < 2) return { kind: 'empty' };
   return { kind: 'text', text: text.slice(0, MAX_TEXT) };
 }
@@ -46,8 +46,8 @@ export function parseSearch(raw: string): Parsed {
  */
 export function searchArgs(q: { kind?: string; page?: string }): { only: SearchKind | undefined; page: number } {
   const only = SEARCH_KINDS.find((k) => k === q.kind);
-  const page = Number(q.page ?? '1');
-  return { only, page: only && Number.isSafeInteger(page) && page >= 1 && page <= 1_000_000 ? page : 1 };
+  const page = pageOf(q.page);
+  return { only, page: only && page <= 1_000_000 ? page : 1 };
 }
 
 /**

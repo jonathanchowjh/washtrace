@@ -5,11 +5,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/head';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { LENSES, withoutKey } from '@/lib/format';
+import { LENSES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 
-const INPUT = 'rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none disabled:opacity-60';
-const BUTTON = 'rounded-[5px] border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50 disabled:hover:bg-transparent';
+const INPUT = 'field font-mono text-xs disabled:opacity-60';
 
 /** How often a Test is polled, and how long before the page stops waiting. The worker answers in about a second. */
 const POLL_MS = 500;
@@ -33,7 +32,7 @@ const HINTS: Record<string, string> = {
  */
 function unset(key: string, trailFunded: boolean): string | undefined {
   if (key === 'rpc.1') return 'so the worker reads nothing from Ethereum.';
-  if (key === 'etherscan.key') return trailFunded ? `so stage 5 needs a key: ${withoutKey(true)}.` : `so stage 5 needs a key, and ${withoutKey(false)}.`;
+  if (key === 'etherscan.key') return trailFunded ? `so ${stageName(5)} needs a key: ${withoutKey(true)}.` : `so ${stageName(5)} needs a key, and ${withoutKey(false)}.`;
   return undefined;
 }
 
@@ -41,12 +40,12 @@ function unset(key: string, trailFunded: boolean): string | undefined {
 const GROUPS = [
   {
     title: 'Where it reads the chain',
-    lead: () => 'Read new transfers from the chain, stage 4 of every collection\'s reading, needs an RPC for each chain it reads. Without one, nothing newer is read.',
+    lead: () => `Read new transfers from the chain, ${stageName(4)} for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read.`,
     keys: (k: string) => k.startsWith('rpc.'),
   },
   {
     title: 'Where it checks who paid whom',
-    lead: (trailFunded: boolean) => `Check wallets for money, stage 5 of every collection's reading, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
+    lead: (trailFunded: boolean) => `Check wallets for money, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
     keys: (k: string) => !k.startsWith('rpc.'),
   },
 ];
@@ -139,7 +138,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const hasInput = !field.secret || editing;
 
   const clearButton = field.source === 'console'
-    ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={reset ? named('Reset', ' to its .env value…') : named('Clear', '…')} className={BUTTON}
+    ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={reset ? named('Reset', ' to its .env value…') : named('Clear', '…')} className="btn text-xs"
       title={field.locked ? lockedWhy : reset ? 'Drop what is saved here so the worker uses .env again. Asks first.' : 'Remove it from the console. Asks first.'}>{reset ? 'Reset to .env…' : 'Clear…'}</button>
     : null;
 
@@ -150,8 +149,8 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
         <span>{reset
           ? `Reset the ${field.label} to its .env value? What is saved here is dropped, and the worker uses .env.`
           : `Clear the ${field.label}? ${unset(field.key, trailFunded) ? `Once cleared, ${unset(field.key, trailFunded)!.replace(/^so /, '')}` : 'The worker stops using it.'}`}</span>
-        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={reset ? named('Reset', ' to its .env value') : named('Clear')} className={`${BUTTON} border-foreground`}>{reset ? 'Reset' : 'Clear'}</button>
-        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className={BUTTON}>Keep</button>
+        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={reset ? named('Reset', ' to its .env value') : named('Clear')} className="btn border-foreground text-xs">{reset ? 'Reset' : 'Clear'}</button>
+        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className="btn text-xs">Keep</button>
       </span>
     );
   } else if (!field.secret) {
@@ -163,7 +162,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
       }}>
         <input id={id} name="value" key={field.shown ?? ''} defaultValue={field.shown ?? ''} placeholder={fallback} disabled={field.locked || busy}
           aria-describedby={hintId} title={field.locked ? lockedWhy : undefined} className={`${INPUT} ${field.key.endsWith('.url') ? 'w-80' : 'w-24'} max-w-full`} />
-        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className={BUTTON}>{busy ? 'Saving…' : 'Save'}</button>
+        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className="btn text-xs">{busy ? 'Saving…' : 'Save'}</button>
         {clearButton}
       </form>
     );
@@ -173,15 +172,15 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
       <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); void put(draft.trim()); }}>
         <input id={id} name="value" autoFocus autoComplete="off" spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} aria-describedby={hintId}
           placeholder={check?.kind === 'rpc' ? 'https://…' : 'As etherscan.io/myapikey shows it'} className={`${INPUT} w-80 max-w-full`} />
-        <button type="submit" disabled={busy || draft.trim() === ''} aria-label={named('Save')} className={BUTTON}>{busy ? 'Saving…' : 'Save'}</button>
-        <button type="button" onClick={() => { setEditing(false); setDraft(''); setSaid(null); }} aria-label={named('Cancel')} className={BUTTON}>Cancel</button>
+        <button type="submit" disabled={busy || draft.trim() === ''} aria-label={named('Save')} className="btn text-xs">{busy ? 'Saving…' : 'Save'}</button>
+        <button type="button" onClick={() => { setEditing(false); setDraft(''); setSaid(null); }} aria-label={named('Cancel')} className="btn text-xs">Cancel</button>
       </form>
     );
   } else {
     value = (
       <span className="flex flex-wrap items-center gap-2">
         {field.shown ? <span className="font-mono text-xs text-foreground">{field.shown}</span> : null}
-        <button type="button" disabled={field.locked} onClick={() => { setEditing(true); setSaid(null); }} aria-label={named(field.set ? 'Replace' : 'Set')} className={BUTTON}
+        <button type="button" disabled={field.locked} onClick={() => { setEditing(true); setSaid(null); }} aria-label={named(field.set ? 'Replace' : 'Set')} className="btn text-xs"
           title={field.locked ? lockedWhy : field.set ? 'Type a new value in place of this one' : 'Type a value for the worker to use'}>{field.set ? 'Replace' : 'Set'}</button>
         {clearButton}
       </span>
@@ -200,7 +199,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
       <div className="flex flex-wrap items-center gap-2">
         {value}
         {check
-          ? <button type="button" data-test disabled={testWhy !== null || test.running} onClick={test.run} aria-label={named('Test')} className={BUTTON}
+          ? <button type="button" data-test disabled={testWhy !== null || test.running} onClick={test.run} aria-label={named('Test')} className="btn text-xs"
             title={testWhy ?? (check.kind === 'rpc'
               ? 'Ask the worker to read the finalized block, an old balance and 50,000 blocks of logs through this RPC'
               : 'Ask the worker to make one cheap Etherscan call with this key')}>{test.running ? 'Testing…' : 'Test'}</button>
@@ -318,7 +317,7 @@ function TestOutcome({ outcome }: { outcome: Outcome }) {
   ].filter((n) => n !== null);
   return (
     <div className="text-foreground">
-      <p>Finalized block {finalized.toLocaleString('en')} · Archive reads <Mark ok={archive} /> · 50,000-block log reads <Mark ok={logs} /></p>
+      <p>Finalized block {num(finalized)} · Archive reads <Mark ok={archive} /> · 50,000-block log reads <Mark ok={logs} /></p>
       {notes.length > 0 ? <p className="mt-0.5 text-muted-foreground">{notes.join(' ')}</p> : null}
     </div>
   );

@@ -6,7 +6,7 @@
  */
 
 import type { TokenLine, WalletLine } from '@washtrace/detect';
-import { plural } from './format';
+import { plural, num } from './format';
 
 export type WhyPart = { text: string; opens?: 'loops' | 'wallets' };
 
@@ -24,8 +24,8 @@ export function tokenWhy(l: TokenLine): WhyPart[] {
   // Laps only when some loop went round more than once: one lap a loop says nothing the loops did not.
   const tails = [
     l.laps > l.loops ? plural(l.laps, 'lap') : null,
-    l.closedByMoney > 0 ? `${l.closedByMoney.toLocaleString('en-US')} closed by money` : null,
-    l.middles > 0 ? `${l.middles.toLocaleString('en-US')} through a middle wallet` : null,
+    l.closedByMoney > 0 ? `${num(l.closedByMoney)} closed by money` : null,
+    l.middles > 0 ? `${num(l.middles)} through a middle wallet` : null,
   ].filter((s) => s !== null);
   if (tails.length > 0) parts.push({ text: tails.map((t) => `, ${t}`).join('') });
   return parts;

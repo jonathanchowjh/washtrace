@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
 import { cookies, headers } from 'next/headers';
 import { connection } from 'next/server';
-import Link from 'next/link';
 import { messageOf, type CollectionRow as Collection } from '@washtrace/detect';
-import { Empty, Head, Problem, Silent } from '@/components/head';
+import { Empty, Head, Problem, STORE_DOWN, Silent, SortLink } from '@/components/head';
+import { MatchLine } from '@/components/lens-lists';
 import { HowWeLook } from '@/components/methods';
 import { CollectionRow, COLS } from '@/components/collection-row';
 import { Refresh } from '@/components/refresh';
@@ -13,7 +13,8 @@ import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { ConfigError } from '@/lib/config';
 import { short, storedSizes } from '@/lib/format';
 import { homeHref } from '@/lib/links';
-import { range, tabCounts, waiting } from '@/lib/metrics';
+import { tabCounts, waiting } from '@/lib/coverage';
+import { range } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedManifest } from '@/lib/store';
@@ -41,7 +42,7 @@ type Sort = (typeof SORTS)[number];
 type Dir = 'asc' | 'desc';
 
 /** What each sort link says, and what the column it sits on is for. */
-const SORT_LABEL: Record<Sort, string> = { washed: 'washed', volume: 'volume', sales: 'sales', name: 'name', analysed: 'last analysed' };
+const SORT_LABEL: Record<Sort, string> = { washed: 'washed', volume: 'volume', sales: 'sales', name: 'name', analysed: 'last analyzed' };
 
 /** Names read A to Z first; every measure reads biggest, or latest, first. */
 function defaultDir(sort: Sort): Dir {
@@ -75,15 +76,10 @@ function sorted(rows: Collection[], sort: Sort | null, dir: Dir): Collection[] {
 type View = { tab?: string; find?: string; sort?: string; dir?: string };
 
 /** The link to sort by one measure; on the sort already chosen it flips the direction, and shows which way it runs. */
-function SortLink({ to, view, sort, dir, children }: { to: Sort; view: View; sort: Sort | null; dir: Dir; children: React.ReactNode }) {
+function SortBy({ to, view, sort, dir, children }: { to: Sort; view: View; sort: Sort | null; dir: Dir; children: React.ReactNode }) {
   const current = sort === to;
   const next = current ? (dir === 'asc' ? 'desc' : 'asc') : defaultDir(to);
-  const href = homeHref({ ...view, sort: to, dir: next === defaultDir(to) ? undefined : next });
-  return (
-    <Link href={href} aria-current={current ? 'true' : undefined} className={`hover:text-foreground hover:underline ${current ? 'font-medium text-foreground' : ''}`}>
-      {children}{current ? (dir === 'asc' ? ' ▲' : ' ▼') : ''}
-    </Link>
-  );
+  return <SortLink href={homeHref({ ...view, sort: to, dir: next === defaultDir(to) ? undefined : next })} dir={current ? dir : null}>{children}</SortLink>;
 }
 
 /**
@@ -102,19 +98,17 @@ function FindAndSort({ view, sort, dir, find, matched, of }: { view: View; sort:
           Find
           <input
             type="search" name="find" defaultValue={find} placeholder="name or address"
-            className="w-56 rounded-[5px] border bg-card px-2 py-1 text-sm text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+            className="field w-56 text-sm"
           />
         </label>
-        <button type="submit" className="rounded-md border bg-card px-3 py-1 text-sm font-medium text-foreground hover:bg-muted">Find</button>
+        <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
-      {find ? (
-        <p className="text-xs text-muted-foreground">{matched} of {of} collections in this tab match “{find}” · <Link href={homeHref({ ...view, find: undefined })} className="underline hover:text-foreground">Clear</Link></p>
-      ) : null}
+      {find ? <MatchLine n={matched} of={`${of} collections in this tab`} query={find} clear={homeHref({ ...view, find: undefined })} /> : null}
       {/* Also on the column headers on a wide screen; here at every width. */}
       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-        Sort:
+        Sort by
         {SORTS.map((s, i) => (
-          <span key={s}>{i > 0 ? <span aria-hidden className="mr-1.5">·</span> : null}<SortLink to={s} view={view} sort={sort} dir={dir}>{SORT_LABEL[s]}</SortLink></span>
+          <span key={s}>{i > 0 ? <span aria-hidden className="mr-1.5">·</span> : null}<SortBy to={s} view={view} sort={sort} dir={dir}>{SORT_LABEL[s]}</SortBy></span>
         ))}
       </p>
     </div>
@@ -143,7 +137,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
     return (
       <>
         <Head title="Collections" />
-        <Problem title={read.err instanceof ConfigError ? 'washtrace is not configured' : 'The store did not answer'}>{messageOf(read.err)}</Problem>
+        <Problem title={read.err instanceof ConfigError ? 'washtrace is not configured' : STORE_DOWN}>{messageOf(read.err)}</Problem>
       </>
     );
   }
@@ -200,10 +194,11 @@ export default async function Collections({ searchParams }: { searchParams: Prom
       ) : (
         <div className="mt-4 rounded-lg border bg-card">
           <div className={`hidden gap-6 border-b px-4 py-2 text-xs text-muted-foreground md:grid ${COLS}`}>
-            <SortLink to="name" view={view} sort={sort} dir={dir}>Collection</SortLink>
-            <SortLink to="washed" view={view} sort={sort} dir={dir}>Sales that look washed</SortLink>
-            <SortLink to="volume" view={view} sort={sort} dir={dir}>Volume that looks washed</SortLink>
-            <SortLink to="analysed" view={view} sort={sort} dir={dir}>How complete</SortLink>
+            <SortBy to="name" view={view} sort={sort} dir={dir}>Collection</SortBy>
+            <SortBy to="washed" view={view} sort={sort} dir={dir}>Sales that look washed</SortBy>
+            <SortBy to="volume" view={view} sort={sort} dir={dir}>Volume that looks washed</SortBy>
+            {/* The column holds the reading, its download progress, the last analysis and the controls; it sorts by the last analysis. */}
+            <SortBy to="analysed" view={view} sort={sort} dir={dir}>Reading · last analyzed</SortBy>
           </div>
           <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, rpcChains, now, zone, silent !== null)} rpcChains={rpcChains} funding={funding} silent={silent !== null} writable={writable} now={now} />)}</ul>
         </div>

@@ -31,22 +31,14 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-// A load of stored data that was running when the last worker died rolled
-// back, but the progress it showed was written outside it: clear it, or the
-// console says "Loading stored data" for ever. Before the first pass, which
-// may start a load of its own.
-await store.clearRestoreProgress().catch((err) => console.warn('[worker] stale stored-data progress not cleared: %s', messageOf(err)));
-// The same for a download that was running: its part file is kept, and the next pass resumes it.
-await store.clearDownloads().catch((err) => console.warn('[worker] stale download progress not cleared: %s', messageOf(err)));
-
 // Stored data is data/stored at the repo root (/app in the image), wherever
 // the process was started from: `npm run worker` starts it in apps/worker.
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
 // The environment wins over the console's settings, which each pass re-reads.
 const worker = new Worker(store, (s) => workerConfig(process.env, s), url, storedDir(process.env, root));
-// The same for a money trail import that was running, unless another replica is importing now: its progress is true.
-await worker.clearStaleTrailProgress().catch((err) => console.warn('[worker] stale money trail progress not cleared: %s', messageOf(err)));
+// Before the first pass, which may start a load of its own.
+await worker.sync.clearStaleProgress();
 worker.start();
 // A Test asked for in the console is heard at once over LISTEN, not next pass.
 void worker.listen();

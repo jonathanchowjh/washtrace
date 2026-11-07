@@ -48,10 +48,28 @@ describe('/go', () => {
     expect(await go(TX, '8453')).toBe(`/tx/8453/${TX}`);
   });
 
-  it('sends an address as before: a watched collection to it, any other to the wallet', async () => {
-    expect(await go(ADDR)).toBe(`/w/1/${ADDR}`);
+  it('with a chain given, sends an address to that chain: a watched collection to it, any other to the wallet', async () => {
+    expect(await go(ADDR, '8453')).toBe(`/w/8453/${ADDR}`);
     state.watched = true;
-    expect(await go(ADDR)).toBe(`/c/1/${ADDR}`);
+    expect(await go(ADDR, '8453')).toBe(`/c/8453/${ADDR}`);
+  });
+
+  it('with no chain given, finds an address on whichever chain holds it', async () => {
+    state.hits = { ...none, collections: [{ ...coll, chainId: 8453 }] };
+    expect(await go(ADDR)).toBe(`/c/8453/${ADDR}`);
+    state.hits = { ...none, wallets: [{ chainId: 8453, address: ADDR, transfers: 3 }] };
+    expect(await go(ADDR)).toBe(`/w/8453/${ADDR}`);
+  });
+
+  it('with no chain given, an address that is a collection and a wallet opens the collection', async () => {
+    state.hits = { ...none, collections: [{ ...coll, chainId: 8453 }], wallets: [{ chainId: 8453, address: ADDR, transfers: 3 }] };
+    expect(await go(ADDR)).toBe(`/c/8453/${ADDR}`);
+  });
+
+  it('with no chain given, an address nothing holds opens its wallet page, and one on two chains goes to the results', async () => {
+    expect(await go(ADDR)).toBe(`/w/1/${ADDR}`);
+    state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 3 }, { chainId: 8453, address: ADDR, transfers: 1 }] };
+    expect(await go(ADDR)).toBe(`/search?q=${ADDR}`);
   });
 
   it('redirects to the one thing a name finds', async () => {

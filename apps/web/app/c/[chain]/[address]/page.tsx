@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { Pipeline, ReadingSummary } from '@/components/coverage';
-import { Elsewhere, Empty, Head, Section, Silent } from '@/components/head';
+import { Pipeline } from '@/components/pipeline';
+import { ReadingSummary } from '@/components/coverage';
+import { Elsewhere, Empty, Ext, Head, MoreLink, Section, Silent } from '@/components/head';
 import { LensList, clampedPage, listView } from '@/components/lens-lists';
-import { History, LensCards, LensStats, RangeBar, RangeKey, Trend } from '@/components/methods';
+import { History, LensCards, LensStats, RangeBar, RangeFigure, RangeKey, Trend, VolumeDetail } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
@@ -16,15 +17,16 @@ import { addressOf, chainOf, methodOf } from '@/lib/api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, explorer, pct, plural, short } from '@/lib/format';
+import { LENSES, pct, plural, short, num } from '@/lib/format';
 import { moneyFor, type CollectionProfile, type Method, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
-import { collectionLinks, venues } from '@/lib/links';
-import { analyzingOn, coverage, evidenceLead, lensesRan, unread, range, rangeEnds, summary, waiting, type Range } from '@/lib/metrics';
+import { collectionLinks, explorerAddress, explorerTx, venues } from '@/lib/links';
+import { analyzingOn, coverage, unread, waiting } from '@/lib/coverage';
+import { evidenceLead, lensesRan, range, summary, type Range } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
-import { tradesHref } from '@/lib/trades';
+import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
@@ -116,7 +118,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
       <Head
         title={name}
         crumb={[{ href: '/', label: 'Collections' }]}
-        sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <a className="font-mono hover:underline" href={`${explorer(chainId)}/address/${address}`} target="_blank" rel="noopener noreferrer">{address} ↗</a></>}
+        sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext></>}
       >
         <Refresh />
       </Head>
@@ -137,24 +139,14 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           <div className="mt-3 grid gap-6 sm:grid-cols-2">
             <Headline r={range(a.totals, 'sales')} of="of sales" none="No sale read yet." base={base}
               detail={(r) => <>
-                <FigureLink href={tradesHref(base, { caught: [r.low] })}>{a.totals[r.low].flaggedSales.toLocaleString()}</FigureLink>
-                {r.low === r.high ? null : <>–<FigureLink href={tradesHref(base, { caught: [r.high] })}>{a.totals[r.high].flaggedSales.toLocaleString()}</FigureLink></>}
-                {' of '}<FigureLink href={tradesHref(base, {})}>{a.totals.A.sales.toLocaleString()}</FigureLink> sales
+                <FigureLink href={tradesHref(base, { caught: [r.low] })}>{num(a.totals[r.low].flaggedSales)}</FigureLink>
+                {r.low === r.high ? null : <>–<FigureLink href={tradesHref(base, { caught: [r.high] })}>{num(a.totals[r.high].flaggedSales)}</FigureLink></>}
+                {' of '}<FigureLink href={tradesHref(base, {})}>{num(a.totals.A.sales)}</FigureLink> sales
               </>} />
             <Headline r={range(a.totals, 'volume')} of="of volume" none="No priced sale read yet, so there is no volume to share." base={base} priciest
-              detail={(r) => {
-                // Each end opens what it counts, biggest first, as the stat line does; the total opens every sale.
-                const priciest = { sort: 'price', dir: 'desc' } as const;
-                const end = (m: Method) => tradesHref(base, { caught: [m], ...priciest });
-                const lo = a.totals[r.low].flaggedVolumeWei, hi = a.totals[r.high].flaggedVolumeWei;
-                return <>
-                  {lo === hi ? <FigureLink href={end(r.high)}>{eth(hi)}</FigureLink>
-                    : <><FigureLink href={end(r.low)}>{eth(lo, '').trim()}</FigureLink>–<FigureLink href={end(r.high)}>{eth(hi)}</FigureLink></>}
-                  {' of '}<FigureLink href={tradesHref(base, priciest)}>{eth(a.totals.A.volumeWei)}</FigureLink>
-                </>;
-              }} />
+              detail={(r) => <VolumeDetail volume={r} totals={a.totals} base={base} />} />
           </div>
-          <Link href={tradesHref(base, {})} className="mt-4 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">Dig into its trades →</Link>
+          <MoreLink href={tradesHref(base, {})} className="mt-4">Dig into its trades →</MoreLink>
           <p className="mt-4 max-w-3xl text-sm text-body">{summary(a.totals)}</p>
         </section>
       )}
@@ -178,7 +170,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                     sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
                     pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
                   />
-                  <Link href={flagged('tokens', tv)} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">All {plural(tokenCount, 'token')} →</Link>
+                  <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} →</MoreLink>
                 </div>
                 <div>
                   <LensList
@@ -186,7 +178,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                     sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
                     pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
                   />
-                  <Link href={flagged('wallets', wv)} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">All {plural(walletCount, 'wallet')} →</Link>
+                  <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} →</MoreLink>
                 </div>
               </div>
             ) : null}
@@ -213,7 +205,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         ) : null}
       </Section>
 
-      <Section title="Reading this collection" lead={c.pausedAt === null ? 'Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
+      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the others\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
         {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
         <CollectionControls writable={writable} chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>
@@ -228,21 +220,22 @@ export default async function CollectionPage({ params, searchParams }: Props) {
  */
 function About({ c, profile: p, base }: { c: CollectionRow; profile: CollectionProfile; base: string }) {
   const sold = venues(p.marketplaces);
+  const creation = c.contract?.creationTx ? explorerTx(c.chainId, c.contract.creationTx) : null;
   return (
     <section aria-label="The collection" className="mb-4 rounded-lg border bg-card p-4">
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Fact label="Tokens" note="minted and not burned">{p.supply.toLocaleString()}</Fact>
-        <Fact label="Holders" note="wallets holding one now">{p.holders.toLocaleString()}</Fact>
+        <Fact label="Tokens" note="minted and not burned">{num(p.supply)}</Fact>
+        <Fact label="Holders" note="wallets holding one now">{num(p.holders)}</Fact>
         <Fact label="First minted">{p.firstMint === null ? '—' : <Time ms={p.firstMint} style="date" />}</Fact>
         <Fact label="Traded" note="first sale to latest">
           {p.firstSale === null || p.lastSale === null ? 'No sale yet'
             : <FigureLink href={tradesHref(base, { sort: 'date', dir: 'asc' })}><Time ms={p.firstSale} style="month" /> – <Time ms={p.lastSale} style="month" /></FigureLink>}
         </Fact>
         <Fact label="Sold on" note="sales per marketplace">
-          {sold.length === 0 ? '—' : sold.slice(0, 3).map((v) => <span key={v.name} className="block">{v.name} <FigureLink href={tradesHref(base, { venues: [v.key] })} className="font-normal text-muted-foreground">{v.sales.toLocaleString()}</FigureLink></span>)}
+          {sold.length === 0 ? '—' : sold.slice(0, 3).map((v) => <span key={v.name} className="block">{v.name} <FigureLink href={tradesHref(base, { venues: [v.key] })} className="font-normal text-muted-foreground">{num(v.sales)}</FigureLink></span>)}
           {sold.length > 3 ? <span className="block text-xs font-normal text-muted-foreground">and {sold.slice(3).map((v) => v.name).join(', ')}</span> : null}
         </Fact>
-        <Fact label="Deployed by" note={c.contract?.creationTx ? <a href={`${explorer(c.chainId)}/tx/${c.contract.creationTx}`} target="_blank" rel="noopener noreferrer" className="hover:underline">deployment tx ↗</a> : undefined}>
+        <Fact label="Deployed by" note={creation === null ? undefined : <Ext href={creation}>deployment tx</Ext>}>
           {c.contract?.creator ? <Wallet chainId={c.chainId} address={c.contract.creator} /> : <span className="text-muted-foreground">{c.contract === null ? 'not read yet' : 'unknown'}</span>}
         </Fact>
       </dl>
@@ -272,12 +265,11 @@ function FigureLink({ href, className, children }: { href: string; className?: s
 /** `priciest` sorts what each end opens by price, for a range of volume. */
 function Headline({ r, of, none, detail, base, priciest = false }: { r: Range | null; of: string; none: string; detail: (r: Range) => ReactNode; base: string; priciest?: boolean }) {
   if (r === null) return <p className="text-sm text-muted-foreground">{none}</p>;
-  const e = rangeEnds(r);
   const end = (text: string, m: Method) => <FigureLink href={tradesHref(base, priciest ? { caught: [m], sort: 'price', dir: 'desc' } : { caught: [m] })}>{text}</FigureLink>;
   return (
     <div>
       <p className="flex items-baseline gap-2">
-        <span className="text-4xl font-semibold tracking-tight text-foreground tabular-nums">{e.same ? end(e.high, r.high) : <>{end(e.low, r.low)}–{end(e.high, r.high)}</>}</span>
+        <span className="text-4xl font-semibold tracking-tight text-foreground tabular-nums"><RangeFigure range={r} end={end} /></span>
         <span className="text-sm text-muted-foreground">{of}</span>
       </p>
       <RangeBar range={r} className="mt-2 max-w-sm" />

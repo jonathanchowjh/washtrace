@@ -44,7 +44,7 @@ export const WRAPPED: Readonly<Record<number, readonly string[]>> = {
 };
 
 /** Contracts never treated as the middle of a money path, beyond the marketplaces themselves. */
-export const INFRASTRUCTURE: readonly string[] = [
+const INFRASTRUCTURE: readonly string[] = [
   '0x1e0049783f008a0085193e00003d00cd54003c71', // OpenSea conduit
   '0x0000a26b00c1f0df003000390027140000faa719', // OpenSea fee recipient
 ];
@@ -81,8 +81,8 @@ const TAKER = new Set(LOOKSRARE.map((e) => toEventSelector(e)));
 
 const WYVERN = parseAbi(['event OrdersMatched(bytes32 buyHash, bytes32 sellHash, address indexed maker, address indexed taker, uint256 price, bytes32 indexed metadata)']);
 const ORDERS_MATCHED = toEventSelector(WYVERN[0]);
-/** ERC-20 and ERC-721 Transfer share it; ERC-721 indexes the token id, so its log has four topics. */
-const TRANSFER = toEventSelector('event Transfer(address indexed from, address indexed to, uint256 value)');
+/** ERC-20 and ERC-721 Transfer share it (`indexed` does not change a selector); ERC-721 indexes the token id, so its log has four topics. */
+export const TRANSFER = toEventSelector('event Transfer(address indexed from, address indexed to, uint256 value)');
 
 // Seaport's ItemType enum.
 const NATIVE = 0;
@@ -158,7 +158,7 @@ export function seaportPrice(log: Log, collection: string, tokenId: bigint): { p
 }
 
 /** What one LooksRare v1 fill paid. The event names the collection, the token and the currency, so nothing is inferred. */
-export function looksRarePrice(log: Log, collection: string, tokenId: bigint): { priceWei: string; currency: string } | null {
+function looksRarePrice(log: Log, collection: string, tokenId: bigint): { priceWei: string; currency: string } | null {
   let args: { currency: string; collection: string; tokenId: bigint; amount: bigint; price: bigint };
   try {
     ({ args } = decodeEventLog({ abi: LOOKSRARE, data: log.data, topics: log.topics as [`0x${string}`] }) as unknown as { args: typeof args });
@@ -176,7 +176,7 @@ export function looksRarePrice(log: Log, collection: string, tokenId: bigint): {
  * paid in whatever ERC-20 moved in that stretch, or in ETH where none did.
  * A bundle is split evenly; mixed currencies are unpriced.
  */
-export function wyvernPrice(logs: readonly Log[], match: Log, logIndex: number): { priceWei: string; currency: string } | null {
+function wyvernPrice(logs: readonly Log[], match: Log, logIndex: number): { priceWei: string; currency: string } | null {
   const end = match.logIndex ?? -1;
   const start = Math.max(-1, ...logs.filter((l) => l.topics[0] === ORDERS_MATCHED && (l.logIndex ?? -1) < end).map((l) => l.logIndex ?? -1));
   if (logIndex <= start || logIndex >= end) return null;

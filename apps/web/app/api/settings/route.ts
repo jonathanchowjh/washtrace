@@ -1,5 +1,4 @@
-import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { bad, handle, json, readJson } from '@/lib/api';
+import { bad, handle, json, writeBody } from '@/lib/api';
 import { FIELDS, pinned } from '@/lib/settings';
 import { store } from '@/lib/store';
 import { settingsView } from '@/lib/views';
@@ -24,9 +23,9 @@ export async function GET(req: Request): Promise<Response> {
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
-    const body = await readJson(req);
-    if (body instanceof Response) return body;
+    const written = await writeBody(req);
+    if (written instanceof Response) return written;
+    const { body, actor } = written;
     const field = FIELDS.find((f) => f.key === body.key);
     if (!field) return bad(`Unknown setting. Settings: ${FIELDS.map((f) => f.key).join(', ')}.`);
     if (body.value !== null && typeof body.value !== 'string') return bad('value must be a string, or null to clear it.');
@@ -37,7 +36,6 @@ export async function POST(req: Request): Promise<Response> {
     const value = body.value === null ? null : body.value.trim();
     const invalid = value === null ? null : field.validate(value);
     if (invalid) return bad(invalid);
-    const actor = decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'console');
     await s.setSetting(field.key, value, actor);
     // The key alone: never the value logged, nor answered, since it may be a secret.
     console.info('[washtrace] %s %s %s', actor, value === null ? 'cleared' : 'set', field.key);

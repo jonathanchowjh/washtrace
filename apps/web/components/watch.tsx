@@ -8,9 +8,6 @@ import { LOCAL_ONLY } from '@/lib/auth';
 import { CHAINS } from '@/lib/chains';
 import { storedLine, type StoredSize } from '@/lib/format';
 
-const FIELD = 'rounded-[5px] border bg-card px-2 py-1 text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none';
-const BUTTON = 'rounded-[5px] border px-2.5 py-1 font-medium text-foreground hover:bg-muted disabled:opacity-50';
-
 type Said = { ok: boolean; text: string };
 
 /**
@@ -109,7 +106,7 @@ export function Suggested({ writable, watched, stored }: { writable: boolean; wa
               </div>
               {watched.includes(key)
                 ? <Link href={`/c/${key}`} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
-                : <button type="button" disabled={busy !== null || !writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => add(s)} className={BUTTON}>{busy === s.address ? 'Adding…' : 'Watch'}</button>}
+                : <button type="button" disabled={busy !== null || !writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => add(s)} className="btn">{busy === s.address ? 'Adding…' : 'Watch'}</button>}
             </li>
           );
         })}
@@ -147,20 +144,20 @@ export function AddCollection({ writable, stored }: { writable: boolean; stored:
   return (
     <form action={submit} className="flex flex-wrap items-end gap-2 text-[13px]">
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Chain
-        <select name="chainId" defaultValue="1" onChange={(e) => setChain(e.target.value)} className={FIELD}>
-          {Object.entries(CHAINS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        <select name="chainId" defaultValue="1" onChange={(e) => setChain(e.target.value)} className="field">
+          {Object.entries(CHAINS).map(([id, c]) => <option key={id} value={id}>{c.name}</option>)}
         </select>
       </label>
       <label className="flex max-w-full flex-col gap-0.5 text-xs text-muted-foreground">Contract
-        <input name="address" required onChange={(e) => setTyped(e.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className={`${FIELD} w-[23rem] max-w-full font-mono text-xs`} />
+        <input name="address" required onChange={(e) => setTyped(e.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className="field w-[23rem] max-w-full font-mono text-xs" />
       </label>
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Name
-        <input name="name" placeholder="optional" className={`${FIELD} w-36`} />
+        <input name="name" placeholder="optional" className="field w-36" />
       </label>
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">From block
-        <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className={`${FIELD} w-28 font-mono text-xs`} />
+        <input name="fromBlock" inputMode="numeric" pattern="\d*" placeholder="deployment" className="field w-28 font-mono text-xs" />
       </label>
-      <button type="submit" disabled={busy || !writable} title={writable ? undefined : LOCAL_ONLY} className={BUTTON}>{busy ? 'Adding…' : 'Watch'}</button>
+      <button type="submit" disabled={busy || !writable} title={writable ? undefined : LOCAL_ONLY} className="btn">{busy ? 'Adding…' : 'Watch'}</button>
  {/* Watching it downloads this, so it is said before the press. */}
       {size ? <p className="basis-full text-xs text-muted-foreground">{storedLine(size)}</p> : null}
       {said ? <p role="status" className={said.ok ? 'basis-full text-xs text-ok' : 'basis-full text-xs text-fault'}>{said.ok ? null : <Warn className="mr-1 size-3.5 align-text-bottom" />}{said.text}</p> : null}
@@ -206,9 +203,9 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   if (!paused) {
     return (
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/pause`)} className={BUTTON}
+        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/pause`)} className="btn"
           title={no ? LOCAL_ONLY : 'Stop reading new blocks for this collection; keeps its data'}>Pause</button>
-        {compact ? null : <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className={BUTTON}
+        {compact ? null : <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className="btn"
           title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
         {fail}
       </span>
@@ -217,9 +214,9 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   if (!armed) {
     return (
       <span className="flex flex-wrap items-center gap-2 text-xs">
-        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/resume`)} className={BUTTON}
+        <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/resume`)} className="btn"
           title={no ? LOCAL_ONLY : 'Start reading new blocks for this collection again, from where it stopped'}>Resume</button>
-        <button type="button" disabled={no} onClick={() => setArmed(true)} className={`${BUTTON} border-foreground`}
+        <button type="button" disabled={no} onClick={() => setArmed(true)} className="btn border-foreground"
           title={no ? LOCAL_ONLY : "Remove this collection's transfers and analyses from the store. Asks first."}>Delete data…</button>
         {fail}
       </span>
@@ -228,8 +225,8 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   return (
     <span className="flex flex-wrap items-center gap-2 text-xs">
       <span>Delete its transfers and analyses? Wallet funding is kept. Watching it again starts over (or restores stored data).</span>
-      <button type="button" disabled={busy || no} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className={`${BUTTON} border-foreground`}>Delete</button>
-      <button type="button" onClick={() => { setArmed(false); setError(null); }} className={BUTTON}>Keep</button>
+      <button type="button" disabled={busy || no} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className="btn border-foreground">Delete</button>
+      <button type="button" onClick={() => { setArmed(false); setError(null); }} className="btn">Keep</button>
       {fail}
     </span>
   );

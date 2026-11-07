@@ -1,9 +1,11 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { Pipeline, PipelineErrors, PipelineTable, ReadingPill, ReadingSummary, trust } from '@/components/coverage';
+import { ReadingPill, ReadingSummary, trust } from '@/components/coverage';
+import { Pipeline, PipelineErrors, PipelineTable } from '@/components/pipeline';
 import { localTime, short } from '@/lib/format';
-import { APART_WHY, TRAIL_LOADING, coverage, progress } from '@/lib/metrics';
+import { TRAIL_LOADING, coverage, progress } from '@/lib/coverage';
+import { APART_WHY } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensCards } from '@/components/methods';
 import { TimeChart } from '@/components/trend';
@@ -153,7 +155,7 @@ describe('a collection whose latest analysis failed', () => {
   const stage6 = (c: CollectionRow) => view(c, { covNow: NOW, now: NOW }).querySelectorAll('li')[5]!;
   it('stage 6 says the analysis runs again once the trail is in, not that nothing is new', () => {
     const loading = stage6(row({ latest: analysed, trailProgress: 0.3 })).textContent!;
-    expect(loading).toContain('· money trail loading; analysed again once it has');
+    expect(loading).toContain('· money trail loading; analyzed again once it has');
     expect(loading).not.toContain('nothing new since');
     cleanup();
     expect(stage6(row({ latest: analysed })).textContent).toContain('· nothing new since');
@@ -631,7 +633,7 @@ describe('the six stages', () => {
     const latest = { ranAt: Date.UTC(2026, 9, 14, 8), tookMs: 25_000, throughBlock: 500, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ storedThroughTime: 1, storedThroughBlock: 500, cursorBlock: 500, latest });
     const li = panel(c, entry()).querySelectorAll('li')[2]!;
-    expect(li.textContent).toContain('Analysed');
+    expect(li.textContent).toContain('Analyzed');
     expect(li.textContent).toContain('through block 500');
     expect(li.textContent).toContain('took 25 s');
   });

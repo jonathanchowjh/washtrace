@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { BEHIND_BLOCKS, HEADLINE, METHODS, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Method, type MethodTotals, type PassRow, type Transfer } from '@washtrace/detect';
-import { localTime, pct, plural } from './format';
+import { HEADLINE, METHODS, type AnalysisRow, type FlaggedTransfer, type Method, type MethodTotals, type Transfer } from '@washtrace/detect';
+import { LENSES, NOT_JUDGED_YET, pct, num } from './format';
 
 /**
  * The analysis, said the way a reader asks it. One collection's answer is a
@@ -35,7 +35,7 @@ export const APART_WHY = 'on real data it flags as many sales as it does with bu
 export const NOT_JUDGED = 'Its transfers are read, but no analysis has covered them yet. That is not the same as clean.';
 
 /** The lead of any table of trades, saying what the row tints mean. */
-export const TINT_LEAD = 'Rows tinted for Round trips or Linked wallets are flagged; grey rows are flagged only by Money loops back, which is not counted.';
+export const TINT_LEAD = `Rows tinted for ${LENSES.A.name} or ${LENSES.AC.name} are flagged; grey rows are flagged only by ${LENSES.AU.name}, which is not counted.`;
 
 /** How a trade, or a whole page, reads: the hue of the strongest counted lens, grey for an apart lens alone. */
 export type Tone = 'cycle' | 'money' | 'apart' | 'clean';
@@ -103,8 +103,8 @@ export function verdict(rows: readonly { t: FlaggedTransfer; latest: AnalysisRow
 /** The title and tone every page gives a verdict. `flagged` is the page's own title for a wash trade. */
 export function answer(v: Verdict, flagged: ReactNode): { title: ReactNode; tone: Tone } {
   if (v.washTrade === true) return { title: flagged, tone: v.by.includes('A') ? 'cycle' : 'money' };
-  if (v.washTrade === null) return { title: 'Not judged yet', tone: 'clean' };
-  if (v.apartOnly) return { title: 'Flagged only by Money loops back, which is not counted', tone: 'apart' };
+  if (v.washTrade === null) return { title: NOT_JUDGED_YET, tone: 'clean' };
+  if (v.apartOnly) return { title: `Flagged only by ${LENSES.AU.name}, which is not counted`, tone: 'apart' };
   return { title: v.notRun.length === 0 ? 'Not flagged by any lens' : 'Not flagged by the lenses that ran', tone: 'clean' };
 }
 
@@ -134,263 +134,24 @@ export function rangeEnds(r: Range): { low: string; high: string; same: boolean 
   return { low: lo.replace('%', ''), high: hi, same: lo === hi };
 }
 
-/** "18–25%", or "18%" when the lenses agree. */
-export function rangeText(r: Range): string {
-  const e = rangeEnds(r);
-  return e.same ? e.high : `${e.low}–${e.high}`;
-}
-
 /** The range in a sentence: what Round trips counts, and what Linked wallets adds. */
 export function summary(totals: Record<Method, MethodTotals>): string {
   const a = totals.A;
-  if (a.sales === 0) return `No sale read yet, so there is no share of sales. ${a.flagged.toLocaleString('en-US')} of ${a.transfers.toLocaleString('en-US')} changes of owner are round trips.`;
+  if (a.sales === 0) return `No sale read yet, so there is no share of sales. ${num(a.flagged)} of ${num(a.transfers)} changes of owner are round trips.`;
   const strict = a.flaggedSales === 0
-    ? `None of the ${a.sales.toLocaleString('en-US')} sales is a round trip between the same wallets.`
-    : `${a.flaggedSales.toLocaleString('en-US')} of ${a.sales.toLocaleString('en-US')} sales are round trips between the same wallets.`;
+    ? `None of the ${num(a.sales)} sales is a round trip between the same wallets.`
+    : `${num(a.flaggedSales)} of ${num(a.sales)} sales are round trips between the same wallets.`;
   if (!totals.AC.available) return `${strict} Money links between buyers and sellers were not checked, so this is the strict count alone.`;
   const wide = totals.AC.flaggedSales;
   return wide > a.flaggedSales
-    ? `${strict} Counting buyers and sellers linked by money, up to ${wide.toLocaleString('en-US')} are.`
+    ? `${strict} Counting buyers and sellers linked by money, up to ${num(wide)} are.`
     : `${strict} Following the money adds none.`;
 }
 
 /** The lead of "How was it found?": which lenses make the range above, and why Money loops back is shown apart. Linked wallets not run leaves Round trips as the whole range. */
 export function evidenceLead(totals: Record<Method, MethodTotals>): string {
-  const apart = `Money loops back is shown apart: ${APART_WHY}. Choose a lens to see the tokens and wallets it flags.`;
+  const apart = `${LENSES.AU.name} is shown apart: ${APART_WHY}. Choose a lens to see the tokens and wallets it flags.`;
   return totals.AC.available
-    ? `Round trips and Linked wallets are the two ends of the range above. Between a third and a half of what Linked wallets adds over Round trips is chance. ${apart}`
-    : `Round trips is the whole range above: Linked wallets has not run. ${apart}`;
-}
-
-/** A share of progress: "100%" only when it is done, so 99.98% of history reads as unfinished. */
-export function progress(share: number): string {
-  const text = pct(share, 1);
-  return share < 1 && text === '100%' ? '>99%' : text;
-}
-
-/** A download's share rounded down, as the Hub's own count would say it: 41.6% reads 41%, never a step ahead of the bytes. */
-export function downloaded(share: number): string {
-  return `${Math.floor(share * 100)}%`;
-}
-
-export type Reading = 'queued' | 'downloading' | 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete' | 'paused' | 'silent';
-
-export interface Coverage {
-  reading: Reading;
-  /** Share of the collection's blocks read, 0 to 1. Null until its deployment block is known. */
-  blocks: number | null;
-  behind: number | null;
-  wallets: { checked: number; of: number };
-  /** False when the money lenses did not run: no wallet is waiting to be checked. */
-  money: boolean;
-  /** Money lenses whose shares are not final while wallets are unchecked: checking more can move them either way. */
-  notFinal: Method[];
-  /** How far a load of stored data has got, 0 to 1, while one runs; else null. */
-  restore: number | null;
-  /** How far the download of its transfers has got, 0 to 1, while one runs and it is not paused; else null. A trail download is a note on the funding step, not a reading. */
-  download: number | null;
-  /** When the stored data stops, while it is all there is (stored-only, not read past it); else null. */
-  stops: number | null;
-  /** How long ago that was, "9 days unsynced", whenever `stops` is set; else null. */
-  unsynced: string | null;
-  /** Stored-only but read from the chain, past the stored data or with none, before the RPC went: the block it was read to. Else null. */
-  readTo: number | null;
-  /** How far a money trail's download or import has got, 0 to 1, while one runs on a collection that is not paused and whose worker is not silent; else null. */
-  trail: number | null;
-  label: string;
-}
-
-const TRAIL_READINGS: ReadonlySet<Reading> = new Set(['stored-only', 'head-unknown', 'checking', 'complete']);
-
-/** What a label gains while a money trail loads: the lenses that need it have not run on it yet. */
-export const TRAIL_LOADING = ' · money trail loading';
-
-/**
- * Whether a collection shows stored data only: its stored data has loaded
- * (the cursor sits past its start), and its chain has no RPC to read on
- * from there. Not a fault, and not starting: the numbers are all there, they
- * just stop where the stored data was cut.
- */
-export function storedOnly(c: Pick<CollectionRow, 'chainId' | 'startBlock' | 'cursorBlock'> & Partial<Pick<CollectionRow, 'storedThroughTime'>>, rpcChains: ReadonlySet<number>): boolean {
-  return !rpcChains.has(c.chainId) && (c.storedThroughTime ?? null) !== null && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock;
-}
-
-/**
- * Why a collection's stored data was not loaded, and what follows, as the
- * console says it. The worker writes only why (restoreNote); what follows
- * depends on the chain's RPC. With one the chain is read meanwhile; with none
- * nothing is, and the stored data is all the collection can have. Either way
- * a load the data failed is tried again once the stored data changes, and
- * one the store failed after its wait: then `then` ends in "after", and the
- * caller says `retryAt` in the reader's zone; once that has passed, it is
- * due. A paused collection is neither read nor tried, so it gets only why.
- * Nothing while a load runs: that is the try, and its progress says so.
- */
-export function restoreNext(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt'> & Partial<Pick<CollectionRow, 'restoreNote' | 'restoreRetryAt' | 'restoreProgress'>>,
-  rpcChains: ReadonlySet<number>,
-  now: number,
-): { note: string; then: string | null; retryAt: number | null } | null {
-  if (!c.restoreNote) return null;
-  if (c.pausedAt !== null) return { note: c.restoreNote, then: null, retryAt: null };
-  if ((c.restoreProgress ?? null) !== null) return null;
-  const retryAt = c.restoreRetryAt ?? null;
-  const read = rpcChains.has(c.chainId) ? 'Reading from the chain instead; it is' : 'It is';
-  if (retryAt === null) return { note: c.restoreNote, then: `${read} tried again when its stored file or its manifest entry changes.`, retryAt };
-  return retryAt > now ? { note: c.restoreNote, then: `${read} tried again after`, retryAt } : { note: c.restoreNote, then: `${read} due to be tried again.`, retryAt: null };
-}
-
-/** restoreNext as one line of text, its time said in `zone`. Built on the server, so the locale is pinned. */
-export function restoreText(c: Parameters<typeof restoreNext>[0], rpcChains: ReadonlySet<number>, now: number, zone = 'UTC'): string | null {
-  const n = restoreNext(c, rpcChains, now);
-  if (n === null) return null;
-  return [n.note, n.then, n.retryAt === null ? null : `${localTime(n.retryAt, 'time', zone, 'en-GB')}.`].filter((x) => x !== null).join(' ');
-}
-
-/** How long stored data has gone unread, as the owner put it: "9 days unsynced". With no RPC there is no head to count blocks to, only time. */
-function unsyncedFor(ms: number): string {
-  const hours = Math.floor(ms / 3_600_000);
-  if (hours < 1) return 'up to date with its stored data';
-  return hours < 24 ? `${plural(hours, 'hour')} unsynced` : `${plural(Math.floor(hours / 24), 'day')} unsynced`;
-}
-
-/**
- * How far the reading the numbers rest on has got. History comes first: with
- * blocks unread, any share can still move either way. Then wallets: with
- * money unread, the money lenses have missed links, and a wallet can turn out
- * to be a hub, so their shares are not final and can move either way. Before
- * either, stored data may be loading: the history it holds arrives at once,
- * when the load commits. A paused
- * collection is none of these: its head stops moving, so "up to date" would
- * be a claim nobody is keeping true. Nor is one whose chain has no
- * RPC, whatever it has read: its numbers stop at the stored date, said in
- * `zone` (the reader's; the console draws that date with Time), or at the
- * block it was read to, or there are none. Nor one read before whose chain's
- * head is not known now: its RPC failed before saying (the collection's
- * error says why), and what was read stands. A silent worker keeps nothing
- * current, so no reading claims progress: all but those that claim none
- * (paused, stored-only, head-unknown) read silent, and no bar moves.
- *
- * `funding` is whether an Etherscan key is set (SourcesConfig.funding, as the
- * status report reads it). Without one nothing checks wallets, so unchecked
- * wallets leave the money lenses' shares not final but are not a step in progress.
- */
-export function coverage(
-  c: Pick<CollectionRow, 'chainId' | 'pausedAt' | 'startBlock' | 'cursorBlock' | 'headBlock' | 'wallets' | 'fundedWallets' | 'latest'> & Partial<Pick<CollectionRow, 'restoreProgress' | 'downloadFile' | 'downloadProgress' | 'storedThroughTime' | 'storedThroughBlock' | 'transfers' | 'analysisError' | 'trailProgress'>>,
-  rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', funding = true, silent = false,
-): Coverage {
-  const money = c.latest === null ? true : c.latest.totals.AU.available || c.latest.totals.AC.available;
-  const wallets = { checked: c.fundedWallets, of: c.wallets };
-  const behind = c.headBlock === null || c.cursorBlock === null ? null : Math.max(0, c.headBlock - c.cursorBlock);
-  const span = c.headBlock === null || c.startBlock === null ? null : c.headBlock - c.startBlock;
-  const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.max(0, Math.min(1, (c.cursorBlock - c.startBlock) / span));
-  const unchecked = money && wallets.checked < wallets.of;
-  const notFinal: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
-  // A load is never resumed after a pause, so progress left on a paused collection is stale.
-  // Never shown as done: the data is not there until the load commits, and then the progress is gone.
-  const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
-  // The download comes first: the stored data cannot load until it has arrived. Capped like a load, for the same reason.
-  const download = c.pausedAt === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null ? Math.min(c.downloadProgress!, 0.99) : null;
-  // Held for a download that has not started (another runs, or another replica has the lock): the worker marks the file, with no progress.
-  const queued = c.pausedAt === null && download === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) === null;
-  // Nothing moves stored data, so a missing RPC is what holds the reading: whatever was read, it reads stored-only.
-  const noRpc = c.pausedAt === null && restore === null && download === null && !queued && !rpcChains.has(c.chainId);
-  const stored = noRpc && storedOnly(c, rpcChains);
-  // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
-  const past = stored && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
-  const stops = stored && !past ? c.storedThroughTime! : null;
-  const unsynced = stops === null ? null : unsyncedFor(now - stops);
-  // Read from the chain with no stored data before the RPC went: what was read stands, so it stops at its cursor too.
-  const chainRead = noRpc && !stored && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && (c.transfers ?? 0) > 0;
-  const readTo = past || chainRead ? c.cursorBlock : null;
-  // A trail loads beside the reading, not as one: the lenses that need it wait on it. The same cap as a load.
-  const trailShare = c.downloadFile === 'trail' && (c.downloadProgress ?? null) !== null ? c.downloadProgress! : (c.trailProgress ?? null);
-  const trail = c.pausedAt === null && !silent && trailShare !== null ? Math.min(trailShare, 0.99) : null;
-  // No bar under a pill moves while nothing reports.
-  const base = { blocks, behind, wallets, money, notFinal, restore: silent ? null : restore, download: silent ? null : download, stops, unsynced, readTo, trail };
-  // Where the trail is loading, the label says so: the reading is true, and the lenses that need the trail have not run on it.
-  const out = (reading: Reading, label: string): Coverage => ({ ...base, reading, label: trail !== null && TRAIL_READINGS.has(reading) ? `${label}${TRAIL_LOADING}` : label });
-  // A reading that claims progress cannot be kept while nothing reports.
-  const moving = (reading: Reading, label: string): Coverage => silent ? out('silent', 'Worker silent · not kept current') : out(reading, label);
-  if (download !== null) return moving('downloading', `Downloading stored data · ${downloaded(download)}`);
-  if (queued && restore === null) return moving('queued', 'Waiting to download stored data');
-  if (restore !== null) return moving('restoring', `Loading stored data · ${progress(restore)}`);
-  if (c.pausedAt !== null) return out('paused', c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${c.cursorBlock.toLocaleString('en-US')}`);
-  // Before 'starting': with no RPC the head is never known, and the stored numbers are all there is.
-  // Built on the server, so the locale is pinned; the console draws its own date with Time.
-  if (stops !== null) return out('stored-only', `Stored data · stops ${localTime(stops, 'date', zone, 'en-GB')} · ${unsynced}`);
-  if (readTo !== null) return out('stored-only', `Read to block ${readTo.toLocaleString('en-US')} · no RPC for its chain`);
-  // Nothing of stored data to show, and nothing read on: `stops` and `readTo` stay null, and the pill and summary say the missing RPC.
-  if (noRpc) return out('stored-only', 'No RPC for its chain');
-  // Read before, but no head now: an RPC that fails (a typo, a rate limit) never said it. The numbers are there; how far behind is not known.
-  const read = c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && ((c.storedThroughTime ?? null) !== null || (c.transfers ?? 0) > 0);
-  if (c.headBlock === null && read) return out('head-unknown', `Read to block ${c.cursorBlock!.toLocaleString('en-US')}`);
-  // An unknown head cannot be caught up to.
-  if (c.cursorBlock === null || c.startBlock === null || c.headBlock === null) return moving('starting', 'Starting');
-  if (behind !== null && behind > BEHIND_BLOCKS) return moving('catching-up', `Reading history · ${blocks === null ? '…' : progress(blocks)}`);
-  // The wallet counts come from an analysis, so until the first one they are not zero but unknown.
-  if (c.latest === null) return moving('analyzing', c.analysisError ? 'First analysis failed' : 'Analyzing');
-  // Only a key checks wallets: without one (a loaded money trail, or a key just removed) nothing is in progress.
-  if (unchecked && funding) return moving('checking', `Checking wallets · ${progress(wallets.of === 0 ? 0 : wallets.checked / wallets.of)}`);
-  return moving('complete', 'Up to date');
-}
-
-/**
- * The collections tabs' counts. "Behind" is the In sync collections showing
- * stored data only: in sync by choice, but nothing reads them on until their
- * chain has an RPC.
- */
-export function tabCounts(rows: readonly CollectionRow[], rpcChains: ReadonlySet<number>): { sync: number; paused: number; all: number; behind: number } {
-  const sync = rows.filter((c) => c.pausedAt === null);
-  return { sync: sync.length, paused: rows.length - sync.length, all: rows.length, behind: sync.filter((c) => storedOnly(c, rpcChains)).length };
-}
-
-/** Whether history is still unread, paused or not: a pause does not read what was left. The history chart shades that stretch. */
-export function unread(cov: Pick<Coverage, 'behind'>): boolean {
-  return cov.behind !== null && cov.behind > BEHIND_BLOCKS;
-}
-
-/** A pass is running from when it starts until it finishes. The status route and the pages both decide it here. */
-export function isRunning(p: PassRow): boolean {
-  return p.finishedAt === null || p.finishedAt < p.startedAt;
-}
-
-/** Whether the running analyze pass is on collection `id`: only that one's analysis stages can be running. */
-export function analyzingOn(passes: readonly PassRow[], id: number): boolean {
-  return passes.some((p) => p.job === 'analyze' && isRunning(p) && p.subjectId === id);
-}
-
-/**
- * When a collection whose last analysis failed is tried again, as the console
- * says it: after a time in `zone`, or due once that has passed, when it waits
- * only for the analysis thread. Text, so the locale is pinned.
- */
-export function analysisRetry(c: Pick<CollectionRow, 'analysisRetryAt'>, now: number, zone = 'UTC'): string {
-  const at = c.analysisRetryAt ?? null;
-  return at !== null && at > now ? `it is tried again after ${localTime(at, 'time', zone, 'en-GB')}` : 'it is due to be tried again';
-}
-
-/**
- * Why a collection has no analysis yet, from what the worker is doing now.
- * Analysis runs one collection per pass, so a new one may be queued behind
- * another that takes a while. One whose analysis failed waits out its back-off
- * first, said in `zone`. While the worker is silent (workerSilent) nothing is
- * downloaded, loaded or analysed, so no step is claimed as under way.
- */
-export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', silent = false): string {
-  // Never analysed while paused, so promise nothing.
-  if (c.pausedAt !== null) return 'Paused · it is not analysed until you resume it.';
-  if (silent) return 'Not analysed yet · the worker is silent, so nothing is read or analysed until it reports again.';
-  // Its transfers arrive all at once when the load commits; until then there is nothing to analyse.
-  if (c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null) return 'Downloading stored data · it is analysed once it has loaded.';
-  if (c.downloadFile === 'transfers') return 'Waiting to download stored data · it is analysed once it has loaded.';
-  if ((c.restoreProgress ?? null) !== null) return 'Loading stored data · it is analysed once it has loaded.';
-  if (c.transfers === 0) return rpcChains.has(c.chainId) ? 'Waiting for its first transfers.' : 'Nothing is read until its chain has an RPC.';
-  const running = analyzePass && isRunning(analyzePass) && analyzePass.subjectId !== null ? analyzePass : null;
-  const min = running === null ? '' : `${Math.floor((now - running.startedAt) / 60_000)} min`;
-  if (running?.subjectId === c.id) return `First analysis running · started ${min} ago.`;
-  // Not the next pass: it waits out its back-off whatever runs now.
-  if (c.analysisError) return `Its analysis failed: ${c.analysisError} · ${analysisRetry(c, now, zone)}.`;
-  if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
-  return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
+    ? `${LENSES.A.name} and ${LENSES.AC.name} are the two ends of the range above. Between a third and a half of what ${LENSES.AC.name} adds over ${LENSES.A.name} is chance. ${apart}`
+    : `${LENSES.A.name} is the whole range above: ${LENSES.AC.name} has not run. ${apart}`;
 }

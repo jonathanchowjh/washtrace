@@ -115,12 +115,12 @@ export function ZonePicker() {
         aria-labelledby={`${id}-label ${id}-field`}
         onClick={() => (open ? setOpen(false) : show())}
         onKeyDown={(e) => { if (!open && ['Enter', ' ', 'ArrowDown'].includes(e.key)) { e.preventDefault(); show(); } }}
-        className="w-full truncate rounded-[5px] border bg-card px-1.5 py-1 text-left text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+        className="field w-full truncate px-1.5 text-left text-xs"
       >
         <span id={`${id}-field`}>{choice.auto ? `Detect automatically (${choice.zone})` : choice.zone.replaceAll('_', ' ')}</span>
       </button>
       {open ? (
-        <div className="absolute right-2 bottom-full left-2 z-20 mb-1 rounded-[5px] border bg-card p-1 shadow-md">
+        <div className="absolute right-2 bottom-full left-2 z-20 mb-1 rounded-md border bg-card p-1 shadow-md">
           <input
             autoFocus
             role="combobox"
@@ -133,7 +133,7 @@ export function ZonePicker() {
             onChange={(e) => { setQuery(e.target.value); setActive(e.target.value.trim() ? 1 : 0); }}
             onKeyDown={onSearchKey}
             onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node | null)) setOpen(false); }}
-            className="mb-1 w-full rounded-[5px] border bg-background px-1.5 py-1 text-xs text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+            className="field mb-1 w-full bg-background px-1.5 text-xs"
           />
           <ul id={`${id}-list`} role="listbox" onMouseDown={(e) => e.preventDefault()} aria-label="Times shown in" className="max-h-64 overflow-y-auto">
             {options.map((o, i) => (

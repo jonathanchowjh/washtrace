@@ -88,7 +88,7 @@ export function SearchBox({ id, className }: { id: string; className: string }) 
         // The hits on show are for the old text until the new reply: a highlight kept among them would open one on Enter.
         value={text} onChange={(e) => { setText(e.target.value); setOpen(true); setActive(-1); }}
         onKeyDown={onKeyDown} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-        className="w-full rounded-[5px] border bg-card px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+        className="field w-full font-mono text-xs placeholder:text-muted-foreground"
       />
       {/* Mouse-down on the list is held back so the input keeps focus, and a click lands before blur closes the list. */}
       <ul

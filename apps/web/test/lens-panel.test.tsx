@@ -2,7 +2,7 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MethodTotals } from '@washtrace/detect';
 import { LensStats } from '@/components/methods';
-import { tradesHref } from '@/lib/trades';
+import { tradesHref } from '@/lib/trades-url';
 
 afterEach(cleanup);
 

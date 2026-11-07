@@ -3,10 +3,11 @@ import { appendFile, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, needsRestore, needsTrail, nextAnalysis, TRAIL_NOTES, Worker, type WorkerConfig } from '../src/worker.js';
+import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, nextAnalysis, Worker } from '../src/worker.js';
+import { needsRestore, needsTrail, StoredSync, TRAIL_NOTES } from '../src/stored-sync.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
-import { workerConfig } from '../src/env.js';
+import { workerConfig, type WorkerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan, WALLET_MS } from '../src/etherscan.js';
 import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPaths, trailSha, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
 import { hubUrl, partPath } from '../src/hub.js';
@@ -33,13 +34,13 @@ vi.mock('node:worker_threads', async (original) => ({
 
 // No test reaches the Hub: one that forgets to say what the Hub answers finds it unreachable, and downloads nothing.
 beforeEach(() => {
-  vi.spyOn(Worker.prototype, 'fetchHubManifest').mockRejectedValue(new Error('tests never reach the Hub'));
-  vi.spyOn(Worker.prototype, 'downloadFile').mockRejectedValue(new Error('tests never reach the Hub'));
+  vi.spyOn(StoredSync.prototype, 'fetchHubManifest').mockRejectedValue(new Error('tests never reach the Hub'));
+  vi.spyOn(StoredSync.prototype, 'downloadFile').mockRejectedValue(new Error('tests never reach the Hub'));
 });
 
 /** The Hub was asked a moment ago, so a pass reads the manifest on disk (`manifest`, as the test overrides it) and asks nothing. */
 function askedHub(w: Worker): Worker {
-  (w as any).hubAskedAt = Date.now();
+  (w.sync as any).hubAskedAt = Date.now();
   return w;
 }
 
@@ -104,7 +105,7 @@ describe('Worker.ingest', () => {
       served: async (id: number, blocks: number) => { served.push({ id, blocks }); },
     };
     const w = askedHub(new Worker(store, () => config, ''));
-    (w as any).manifest = async () => ({ version: 3, collections: [] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       transfers: async (address: string, from: number) => {
@@ -251,8 +252,8 @@ describe('Worker.ingest restoring stored data', () => {
       served: async (id: number) => { events.push(`served ${id}`); },
     };
     const w = askedHub(new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), ''));
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
-    (w as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
+    (w.sync as any).storedTransfers = async function* (e: StoredEntry) { events.push(`read ${e.transfers.file}`); yield []; };
     return { w, events, store };
   }
 
@@ -275,7 +276,7 @@ describe('Worker.ingest restoring stored data', () => {
       [row({ cursorBlock: 900, contract: {} as any }), row({ id: 2, address: '0xb2', ...fresh })],
       new Map([[1, 'http://rpc']]),
     );
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY, second] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY, second] });
     (w as any).chain = () => ({ finalized: async () => 1_000, deployBlock: async () => 100, transfers: async () => ({ transfers: [], through: 1_000 }) });
     await w.ingest();
     expect(events.filter((e) => e.startsWith('restore'))).toEqual(['restore 1 1 0xbc4c']);
@@ -292,7 +293,7 @@ describe('Worker.ingest restoring stored data', () => {
     const fresh = { cursorBlock: null, startBlock: null, contract: {} as any };
     const rows = [row({ ...fresh }), row({ id: 2, address: '0xb2', ...fresh })];
     const { w, events, store } = setup(rows, rows, new Map([[1, 'http://rpc']]));
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY, second] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY, second] });
     (w as any).chain = () => ({ finalized: async () => 1_000, deployBlock: async () => 100, transfers: async () => ({ transfers: [], through: 1_000 }) });
     store.restore = async (id: number) => { events.push(`restore ${id}`); if (id === 1) throw new Error('store down'); };
     await w.ingest();
@@ -325,7 +326,7 @@ describe('Worker.ingest restoring stored data', () => {
     const keys: string[] = [];
     store.restore = async (_id: number, _chainId: number, _entry: StoredEntry, _batches: unknown, key: string) => { events.push('restore'); keys.push(key); };
     let key = 'abc:1:2:3';
-    (w as any).restoreKey = async () => key;
+    (w.sync as any).restoreKey = async () => key;
     await w.ingest();
     expect(events).not.toContain('restore');
     key = 'abc:1:2:4';
@@ -347,7 +348,7 @@ describe('Worker.ingest restoring stored data', () => {
     await w.ingest();
     expect(tries()).toBe(1);
     // Analysed meanwhile on what it has, as a recorded back-off is.
-    expect((w as any).restoreFailed.has(1)).toBe(true);
+    expect((w.sync as any).restoreFailed.has(1)).toBe(true);
     now += 5 * 60_000;
     await w.ingest();
     expect(tries()).toBe(2);
@@ -359,7 +360,7 @@ describe('Worker.ingest restoring stored data', () => {
     fail = false;
     await w.ingest();
     expect(tries()).toBe(3);
-    expect((w as any).restoreFailed.has(1)).toBe(false);
+    expect((w.sync as any).restoreFailed.has(1)).toBe(false);
   });
 
   it('clears a note about stored data the collection no longer reaches for: read past it, or gone from the manifest', async () => {
@@ -370,7 +371,7 @@ describe('Worker.ingest restoring stored data', () => {
     await past.w.ingest();
     const gone = setup([row({ id: 2, cursorBlock: null, restoreNote: 'Stored data could not be loaded.' })], []);
     gone.store.clearRestoreNote = async (id: number) => { cleared.push(id); };
-    (gone.w as any).manifest = async () => ({ version: 3, collections: [] });
+    (gone.w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     await gone.w.ingest();
     expect(cleared).toEqual([1, 2]);
     expect([...past.events, ...gone.events].filter((e) => e.startsWith('restore'))).toEqual([]);
@@ -378,7 +379,7 @@ describe('Worker.ingest restoring stored data', () => {
 
   it('reads the chain as before when the manifest cannot be read', async () => {
     const { w, events } = setup([row({ cursorBlock: null })], []);
-    (w as any).manifest = async () => { throw new Error('not json'); };
+    (w.sync as any).manifest = async () => { throw new Error('not json'); };
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     await w.ingest();
@@ -448,8 +449,8 @@ describe('Worker.ingest loading a money trail', () => {
   /**
    * A worker over a stub store that says what happened, in order, and keeps
    * the rows as the store would, with a trail's two files on disk whose
-   * sha256 is `sha`. The import runs under lock 6, which another replica holds while
-   * `lock.other`. `hold` makes each import wait for the test; `settle` waits
+   * sha256 is `sha`. The import runs under the trail lock (LOCKS.trail),
+   * which another replica holds while `lock.other`. `hold` makes each import wait for the test; `settle` waits
    * for the one running in the background to end.
    */
   async function setup(rows: CollectionRow[], sha: string, after: CollectionRow[] = rows) {
@@ -491,15 +492,15 @@ describe('Worker.ingest loading a money trail', () => {
       setError: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
     };
     const w = askedHub(new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', dir));
-    (w as any).manifest = async () => ({ version: 3, collections: [TRAILED] });
-    (w as any).storedTransfers = async function* () { yield []; };
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [TRAILED] });
+    (w.sync as any).storedTransfers = async function* () { yield []; };
     const hashed: string[] = [];
-    w.fileSha = async (path: string) => { hashed.push(path); return sha; };
-    (w as any).storedTrail = async function* (entry: StoredEntry, verify: boolean) {
+    w.sync.fileSha = async (path: string) => { hashed.push(path); return sha; };
+    (w.sync as any).storedTrail = async function* (entry: StoredEntry, verify: boolean) {
       events.push(`read ${entry.address} ${entry.trail!.sha256}`, `verify ${verify}`);
       yield { checked: [], flows: [] };
     };
-    const settle = async () => { await (w as any).importing?.done; };
+    const settle = async () => { await (w.sync as any).importing?.done; };
     /** From now on each import waits for the test. An abort rejects it with `onAbort(reason)`, as the store throws the signal's reason between batches. */
     const hold = (onAbort: (reason: unknown) => unknown = (reason) => reason) => {
       const calls: Held[] = [];
@@ -533,13 +534,13 @@ describe('Worker.ingest loading a money trail', () => {
     expect(await w.ingest()).not.toContain('money trail');
     await asked(1);
     expect(events).toContain('lock 6');
-    expect((w as any).importing).toMatchObject({ id: 1, sha: 'feed' });
+    expect((w.sync as any).importing).toMatchObject({ id: 1, sha: 'feed' });
     // Still running when the next pass comes: not started twice.
     await w.ingest();
     expect(calls).toHaveLength(1);
     calls[0]!.release();
     await settle();
-    expect((w as any).importing).toBeNull();
+    expect((w.sync as any).importing).toBeNull();
   });
 
   it('writes no ingest heartbeat for a trail import', async () => {
@@ -574,7 +575,7 @@ describe('Worker.ingest loading a money trail', () => {
 
   it('runs one trail import at a time, and none while another replica holds the lock', async () => {
     const { w, events, lock, hold, settle } = await setup([row(), row({ id: 2, address: '0xb2' })], 'feed');
-    (w as any).manifest = async () => ({ version: 3, collections: [TRAILED, OTHER] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [TRAILED, OTHER] });
     lock.other = true;
     await w.ingest();
     await settle();
@@ -604,7 +605,7 @@ describe('Worker.ingest loading a money trail', () => {
     await settle();
     expect(events).toContain('lock 6');
     expect(events.some((e) => /^(import|progress|note|read)/.test(e))).toBe(false);
-    expect((w as any).importing).toBeNull();
+    expect((w.sync as any).importing).toBeNull();
   });
 
   it('reads the chain of a collection whose trail is importing', async () => {
@@ -627,8 +628,8 @@ describe('Worker.ingest loading a money trail', () => {
     await w.ingest();
     await asked(1);
     // A new cut: the manifest and the file on disk both change.
-    (w as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, sha256: 'beef', files: { wallets: { bytes: 10, sha256: 'beef' }, flows: { bytes: 90, sha256: 'beef' } } } }] });
-    w.fileSha = async () => 'beef';
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, sha256: 'beef', files: { wallets: { bytes: 10, sha256: 'beef' }, flows: { bytes: 90, sha256: 'beef' } } } }] });
+    w.sync.fileSha = async () => 'beef';
     await writeFile(trailPaths(dir, TRAILED).wallets, 'wallets cut again');
     await writeFile(trailPaths(dir, TRAILED).flows, 'a trail cut again');
     await w.ingest();
@@ -668,10 +669,10 @@ describe('Worker.ingest loading a money trail', () => {
 
   it('writes trail progress in order, at most once per 1%, capped at 99%, and clears it after the last write', async () => {
     const { w, events, store, settle } = await setup([row()], 'feed');
-    (w as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, rows: 1_000 } }] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, trail: { ...TRAILED.trail!, rows: 1_000 } }] });
     // Batches of flows that bring the count to 1, 4, 11, 12, 500, 999, 1000 and 1200 of the manifest's 1000.
     const sizes = [1, 3, 7, 1, 488, 499, 1, 200];
-    (w as any).storedTrail = async function* () {
+    (w.sync as any).storedTrail = async function* () {
       yield { checked: ['0xa'], flows: [] };
       for (const n of sizes) yield { checked: [], flows: new Array(n).fill({}) };
     };
@@ -750,7 +751,7 @@ describe('Worker.ingest loading a money trail', () => {
     vi.useFakeTimers();
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { w, events, hold, settle } = await setup([row()], 'feed');
-    (w as any).storedTrail = async function* () { for (let i = 0; i < 3; i++) yield { checked: [], flows: [] }; };
+    (w.sync as any).storedTrail = async function* () { for (let i = 0; i < 3; i++) yield { checked: [], flows: [] }; };
     const { calls, asked } = hold();
     await w.ingest();
     await asked(1);
@@ -774,14 +775,14 @@ describe('Worker.ingest loading a money trail', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { w, events, settle } = await setup([row()], 'feed');
     // A reader stuck in a read: its next batch never comes, and nothing between batches ever runs.
-    (w as any).storedTrail = () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) });
+    (w.sync as any).storedTrail = () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) });
     await w.ingest();
     await vi.waitFor(() => expect(events).toContain('import 1 1 feed'));
     await vi.advanceTimersByTimeAsync(15 * 60_000 + 10_000);
     await settle();
     expect(events).toContain('progress 1 null');
     expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
-    expect((w as any).trailsBackoff.has(1)).toBe(true);
+    expect((w.sync as any).trailsBackoff.has(1)).toBe(true);
     expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
   });
 
@@ -789,7 +790,7 @@ describe('Worker.ingest loading a money trail', () => {
     const { w, store, settle } = await setup([row()], 'feed');
     /** A reader that counts how often it is opened and closed: a real one holds a file and a decompressor open until closed. */
     const reader = { opened: 0, closed: 0 };
-    (w as any).storedTrail = () => {
+    (w.sync as any).storedTrail = () => {
       reader.opened += 1;
       const batches = [{ checked: ['0xa'], flows: [] }, { checked: [], flows: [{}] }];
       return {
@@ -812,7 +813,7 @@ describe('Worker.ingest loading a money trail', () => {
     // Stopped between batches: the store throws the signal's reason with the reader open.
     const stopped = await setup([row()], 'feed');
     const once = { opened: 0, closed: 0 };
-    (stopped.w as any).storedTrail = () => {
+    (stopped.w.sync as any).storedTrail = () => {
       once.opened += 1;
       return {
         [Symbol.asyncIterator]: () => ({
@@ -844,7 +845,7 @@ describe('Worker.ingest loading a money trail', () => {
     await w.ingest();
     await asked(1);
     // A new cut reaches past what was read: its transfers are to load again, and its trail goes after them.
-    (w as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, throughBlock: 2_000 }] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [{ ...TRAILED, throughBlock: 2_000 }] });
     await w.ingest();
     expect(events).not.toContain('restore');
     expect(calls[0]!.opts.signal.reason).toBe('stopped');
@@ -883,7 +884,7 @@ describe('Worker.ingest loading a money trail', () => {
     w.stop();
     expect(calls[0]!.opts.signal.reason).toBe('stopped');
     await w.drain(5_000);
-    expect((w as any).importing).toBeNull();
+    expect((w.sync as any).importing).toBeNull();
     expect(events).toContain('progress 1 null');
     expect(events.some((e) => e.startsWith('note'))).toBe(false);
   });
@@ -900,7 +901,7 @@ describe('Worker.ingest loading a money trail', () => {
     };
     await w.ingest();
     await asked(1);
-    (w as any).importing.abort.abort('stopped');
+    (w.sync as any).importing.abort.abort('stopped');
     await settle();
     expect(events).toContain('progress 1 null (fails)');
     // The next pass clears it before anything else about trails.
@@ -918,10 +919,10 @@ describe('Worker.ingest loading a money trail', () => {
     let cleared = 0;
     store.clearTrailProgress = async () => { cleared += 1; };
     lock.other = true;
-    await w.clearStaleTrailProgress();
+    await w.sync.clearStaleTrailProgress();
     expect(cleared).toBe(0);
     lock.other = false;
-    await w.clearStaleTrailProgress();
+    await w.sync.clearStaleTrailProgress();
     expect(cleared).toBe(1);
     expect(events.filter((e) => e === 'lock 6')).toHaveLength(2);
   });
@@ -1009,7 +1010,7 @@ describe('Worker.ingest loading a money trail', () => {
   it('a trail with only its wallets file on disk is not noted and not imported', async () => {
     const { w, events, settle } = await setup([row()], 'feed');
     let read = 0;
-    (w as any).storedTrail = async function* () { read += 1; yield { checked: [], flows: [] }; };
+    (w.sync as any).storedTrail = async function* () { read += 1; yield { checked: [], flows: [] }; };
     await rm(trailPaths(dir, TRAILED).flows);
     await w.ingest();
     await settle();
@@ -1022,7 +1023,7 @@ describe('Worker.ingest loading a money trail', () => {
     const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { w, events } = await setup([row()], 'feed');
     const paths = trailPaths(dir, TRAILED);
-    w.fileSha = async (path: string) => (path === paths.wallets ? 'beef' : 'feed');
+    w.sync.fileSha = async (path: string) => (path === paths.wallets ? 'beef' : 'feed');
     await w.ingest();
     expect(events).toContain(`note 1 ${TRAIL_NOTES.mismatch}`);
     expect(events.some((e) => e.startsWith('import'))).toBe(false);
@@ -1041,12 +1042,12 @@ describe('Worker.ingest loading a money trail', () => {
 
   it('clears a note once the manifest has no trail for the collection', async () => {
     const { w, events } = await setup([row({ trailNote: 'Money trail on disk could not be read, so it was not loaded.' })], 'feed');
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
     await w.ingest();
     expect(events).toContain('note 1 null');
     // And none to clear: nothing written.
     const clean = await setup([row()], 'feed');
-    (clean.w as any).manifest = async () => ({ version: 3, collections: [] });
+    (clean.w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     await clean.w.ingest();
     expect(clean.events.some((e) => e.startsWith('note'))).toBe(false);
   });
@@ -1175,15 +1176,15 @@ describe('Worker downloading stored data', () => {
     const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: hub.repo }), '', dir);
     /** Waits for the download and the trail import running in the background, if any, to end. */
     const settle = async () => {
-      await (w as any).downloading?.done;
-      await (w as any).importing?.done;
+      await (w.sync as any).downloading?.done;
+      await (w.sync as any).importing?.done;
     };
-    w.fetchHubManifest = async () => { hub.asked += 1; return hub.answer(); };
-    w.fileSha = (path: string) => readFile(path, 'utf8');
+    w.sync.fetchHubManifest = async () => { hub.asked += 1; return hub.answer(); };
+    w.sync.fileSha = (path: string) => readFile(path, 'utf8');
     /** Resolved at the next call of downloadFile. */
     let called: () => void = () => {};
     const nextCall = () => new Promise<void>((r) => { called = r; });
-    w.downloadFile = (url, dest, sha256, onProgress, signal) => new Promise<void>((resolve, reject) => {
+    w.sync.downloadFile = (url, dest, sha256, onProgress, signal) => new Promise<void>((resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('This operation was aborted')));
       calls.push({
         url, dest, sha: sha256, onProgress, signal,
@@ -1219,8 +1220,8 @@ describe('Worker downloading stored data', () => {
   it('takes the sha256 a download checked, and does not hash the file again to load it', async () => {
     const { w, events, calls } = setup([watched(1, A)], [stored(A, 'a')]);
     const hashed: string[] = [];
-    const read = w.fileSha;
-    w.fileSha = (path: string) => { hashed.push(path); return read(path); };
+    const read = w.sync.fileSha;
+    w.sync.fileSha = (path: string) => { hashed.push(path); return read(path); };
     await w.ingest();
     await calls[0]!.finish();
     await w.ingest();
@@ -1330,7 +1331,7 @@ describe('Worker downloading stored data', () => {
     await vi.waitFor(() => expect(events).toContain('import 1'));
     // A new cut on the Hub: the trail on disk is no longer the one wanted, and its import stops.
     hub.answer = async () => ({ version: 3, revision: REV, collections: [stored(A, 'a', 'c')] });
-    (w as any).hubAskedAt = -Infinity;
+    (w.sync as any).hubAskedAt = -Infinity;
     await w.ingest();
     expect(signal!.reason).toBe('stopped');
     // Not downloaded over the file the import is still reading.
@@ -1696,7 +1697,7 @@ describe('Worker downloading stored data', () => {
     expect(events).toContain('lock 5');
     await expect(readFile(stale, 'utf8')).resolves.toBe('old');
     hub.lock = true;
-    (w as any).hubAskedAt = -Infinity;
+    (w.sync as any).hubAskedAt = -Infinity;
     await w.ingest();
     await expect(readFile(stale, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(kept, 'utf8')).resolves.toBe('half');
@@ -1773,8 +1774,8 @@ describe('Worker downloading stored data', () => {
     await writeManifest(join(dir, 'manifest.json'), { version: 3, revision: REV, collections: [e] });
     const { w, calls } = setup([watched(1, A)], [e]);
     // The real method, over a Hub that answers 401 (and 503 below).
-    vi.mocked(Worker.prototype.fetchHubManifest).mockRestore();
-    delete (w as any).fetchHubManifest;
+    vi.mocked(StoredSync.prototype.fetchHubManifest).mockRestore();
+    delete (w.sync as any).fetchHubManifest;
     const answer = vi.fn(async () => new Response(null, { status: 401, headers: { 'x-error-code': 'RepoNotFound' } }));
     vi.stubGlobal('fetch', answer);
     try {
@@ -1785,7 +1786,7 @@ describe('Worker downloading stored data', () => {
       // A Hub that is down is not "no dataset": the cache stays.
       await writeManifest(join(dir, 'manifest.json'), { version: 3, revision: REV, collections: [e] });
       answer.mockImplementation(async () => new Response(null, { status: 503 }));
-      await expect(w.fetchHubManifest('u/d')).rejects.toMatchObject({ status: 503 });
+      await expect(w.sync.fetchHubManifest('u/d')).rejects.toMatchObject({ status: 503 });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2232,7 +2233,7 @@ describe('Worker.analyze when an analysis fails', () => {
       },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), 'postgres://washtrace:hunter2@db:5432/washtrace');
-    (w as any).manifest = async () => ({ version: 3, collections: [] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     const tried: number[] = [];
     const state = { broken: true, error: 'out of memory' };
     w.analyzeOff = async (request) => {
@@ -2317,7 +2318,7 @@ describe('Worker.analyze when an analysis fails', () => {
     waiting.delete(2);
     let cursor: number | null = null;
     (w as any).store.collections = async () => [row({ id: 1, cursorBlock: cursor, startBlock: cursor === null ? null : 100 })];
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
     expect(await w.analyze()).toBe('nothing due');
     cursor = 900;
     expect(await w.analyze()).toBe('BAYC analyzed');
@@ -2330,8 +2331,8 @@ describe('Worker.analyze when an analysis fails', () => {
     waiting.delete(2);
     let more: Partial<CollectionRow> = { restoreNote: 'Stored data could not be loaded.', restoreRetryAt: Date.now() + 60_000 };
     (w as any).store.collections = async () => [row({ id: 1, cursorBlock: 100, ...more })];
-    (w as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
-    (w as any).restoreKey = async () => 'abc:absent';
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [ENTRY] });
+    (w.sync as any).restoreKey = async () => 'abc:absent';
     // Due again (the file changed): held, so it is analysed once, after the load.
     more = { restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: 'abc:1:2:3' };
     expect(await w.analyze()).toBe('nothing due');
@@ -2343,7 +2344,7 @@ describe('Worker.analyze when an analysis fails', () => {
     expect(await w.analyze()).toBe('BAYC analyzed');
     // A back-off held in memory, its write lost: analysed on what it has too.
     more = {};
-    (w as any).restoreFailed.set(1, { failures: 1, retryAt: Date.now() + 60_000 });
+    (w.sync as any).restoreFailed.set(1, { failures: 1, retryAt: Date.now() + 60_000 });
     waiting.set(1, stale(1, 'BAYC'));
     expect(await w.analyze()).toBe('BAYC analyzed');
     expect(tried).toEqual([1, 1, 1]);
@@ -2376,7 +2377,7 @@ describe('an analysis that never ends', () => {
       analysisFailed: async (id: number, error: string) => { failed.push([id, error]); },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
-    (w as any).manifest = async () => ({ version: 3, collections: [] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     const outcome = w.analyze().then(() => 'saved', (err: Error) => err.message);
     await vi.advanceTimersByTimeAsync(ANALYZE_TIMEOUT_MS);
     expect(await outcome).toBe(STOPPED);
@@ -2490,7 +2491,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
     const w = askedHub(new Worker(store, config, ''));
-    (w as any).manifest = async () => ({ version: 3, collections: [] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     // The real chain client, whose provider refuses: viem puts "URL: <the RPC URL>" in the message.
     (w as any).chain = (chainId: number, url: string) => {
       const c = new Chain(chainId, url);
@@ -2514,7 +2515,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
       setError: async () => {}, setHead: async () => {}, heartbeat: async () => {}, served: async () => {},
     };
     const w = askedHub(new Worker(store, config, ''));
-    (w as any).manifest = async () => ({ version: 3, collections: [] });
+    (w.sync as any).manifest = async () => ({ version: 3, collections: [] });
     (w as any).chain = () => ({
       finalized: async () => 1_000,
       describe: async () => { throw new HttpRequestError({ url: RPC, status: 429, details: `rate limited: ${RPC}` }); },

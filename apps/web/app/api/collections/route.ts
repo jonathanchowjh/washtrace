@@ -1,5 +1,4 @@
-import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { addressOf, bad, handle, json, readJson } from '@/lib/api';
+import { addressOf, bad, chainIdOf, handle, json, writeBody } from '@/lib/api';
 import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
 
@@ -15,10 +14,10 @@ export async function GET(): Promise<Response> {
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
-    const body = await readJson(req);
-    if (body instanceof Response) return body;
-    const chainId = typeof body.chainId === 'number' && Number.isInteger(body.chainId) && body.chainId > 0 ? body.chainId : null;
+    const written = await writeBody(req);
+    if (written instanceof Response) return written;
+    const { body, actor } = written;
+    const chainId = chainIdOf(body.chainId);
     const address = typeof body.address === 'string' ? addressOf(body.address.trim()) : null;
     const name = typeof body.name === 'string' && body.name.trim() !== '' ? body.name.trim().slice(0, 120) : null;
     const fromBlock = body.fromBlock === undefined || body.fromBlock === null ? null
@@ -28,7 +27,6 @@ export async function POST(req: Request): Promise<Response> {
     if (fromBlock === undefined) return bad('fromBlock must be a block number, or left out to start at deployment.');
     const s = store();
     const { id, created } = await s.addCollection(chainId, address, name, fromBlock);
-    const actor = decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous');
     if (created) console.info('[washtrace] %s is watching %d/%s', actor, chainId, address);
     // The worker's report, not this process's environment: only the worker reads the chain.
     // A console value counts too, so a URL saved a moment ago doesn't warn before the worker's next report.

@@ -41,7 +41,7 @@ export const STATE_WORDS: Record<StageState, string> = {
 export const TITLES = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'] as const;
 const FEEDS = [
   'stage 2: the history it holds arrives once it has downloaded.',
-  'every lens: the history up to where the stored data stops, and the money trail for Money loops back and Linked wallets.',
+  `every lens: the history up to where the stored data stops, and the money trail for ${LENSES.AU.name} and ${LENSES.AC.name}.`,
   'every number on this page until the chain is read.',
   'every lens. Unread history can move any share either way.',
   `${LENSES.AU.name} and ${LENSES.AC.name}. An unchecked wallet hides its links, so their shares are not final until it is checked.`,
@@ -66,7 +66,7 @@ const KEYS: StageKey[] = ['download', 'load', 'stored-analysis', 'chain', 'money
  * not count, since a load can be noted missing with no download. Stage 4 waits
  * on unloaded stored transfers only when no load or download failed: after
  * either note the worker reads the chain as if there were no stored data
- * (Worker.restore); a load being retried is not a failed one, so the note does
+ * (StoredSync.restore); a load being retried is not a failed one, so the note does
  * not count while it runs. Running shares of stages 1 and 2 stop at 99%, as
  * coverage() does: the data is not there until the load commits. Stage 6 checks running before failed,
  * so a retry of a failed analysis reads as running, not as still failed; and

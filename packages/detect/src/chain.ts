@@ -1,13 +1,13 @@
 import {
   AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
-  createPublicClient, http, toEventSelector, parseAbi, parseAbiItem, type Log, type PublicClient,
+  createPublicClient, http, parseAbi, type Log, type PublicClient,
 } from 'viem';
 import { ZERO } from './graph.js';
-import { tagSales } from './marketplaces.js';
+import { TRANSFER, tagSales } from './marketplaces.js';
 import type { Transfer } from './types.js';
 
-/** ERC-721 and ERC-20 share this selector; ERC-721 indexes the token id, so its log has four topics. */
-export const TRANSFER = toEventSelector(parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)'));
+// Defined in marketplaces.ts, which this file imports and so cannot be imported by; re-exported as the chain's own.
+export { TRANSFER };
 
 const METADATA = parseAbi(['function name() view returns (string)', 'function symbol() view returns (string)']);
 /** The contract's own answer that it has no such string: a revert, no return data, or data that is not a string. */
@@ -18,7 +18,7 @@ const NO_ANSWER = [ContractFunctionRevertedError, ContractFunctionZeroDataError,
  * results (Alchemy: 10,000 logs), and the cap is not advertised, so the span
  * halves on any refusal and grows back on success.
  */
-export const START_SPAN = 2_000;
+const START_SPAN = 2_000;
 const MAX_SPAN = 50_000;
 
 /**

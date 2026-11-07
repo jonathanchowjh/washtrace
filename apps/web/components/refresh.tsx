@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { localTime } from '@/lib/format';
+import { interval, localTime } from '@/lib/format';
 import { useZone } from './zone';
 
 /**
@@ -33,7 +33,7 @@ export function Refresh({ everyMs = 15_000 }: { everyMs?: number }) {
 
   return (
     <span className="text-xs text-muted-foreground" suppressHydrationWarning>
-      {pending ? 'refreshing…' : at === null ? `live · every ${everyMs / 1000}s` : `updated ${localTime(at, 'time', zone ?? undefined)}`}
+      {pending ? 'refreshing…' : at === null ? `live · every ${interval(everyMs)}` : `updated ${localTime(at, 'time', zone ?? undefined)}`}
     </span>
   );
 }

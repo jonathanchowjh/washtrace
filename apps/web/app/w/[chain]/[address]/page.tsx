@@ -4,14 +4,15 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { Answer, Elsewhere, Empty, Head, Section } from '@/components/head';
+import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/head';
+import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
 import { Transfers, Wallet } from '@/components/transfers';
 import { addressOf, chainOf } from '@/lib/api';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, explorer, lensList, plural, short } from '@/lib/format';
-import { walletLinks } from '@/lib/links';
-import { HEADLINE, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
+import { LENSES, eth, lensList, plural, short, num } from '@/lib/format';
+import { explorerAddress, explorerTx, walletLinks } from '@/lib/links';
+import { HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { COUNTERPARTIES, FLOWS, TRADES, walletOpts, walletView, type WalletOpts } from '@/lib/views';
 import { Time } from '@/components/time';
@@ -87,7 +88,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
   // The title counts every trade it has: the flagged count opens the flagged-only list, the total all of them.
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
-  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} className="hover:underline">{counts.flagged.toLocaleString()}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} className="hover:underline">{counts.trades.toLocaleString()}</Link></>;
+  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} className="hover:underline">{num(counts.trades)}</Link></>;
   const { title, tone } = counts.trades === 0 ? { title: 'Not in any watched collection', tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
     : transfers.length === 0 ? { title: 'No trade of it matches these filters', tone: 'clean' as const }
@@ -109,8 +110,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const covers = (them: string) => (elsewhere === null ? `; the verdict above covers ${them}.` : '.');
   const shown = narrowed || pages.trades.pages > 1
     ? transfers.length === 1
-      ? `Trade ${first.toLocaleString()} of ${pages.trades.total.toLocaleString()} is shown${covers('it')}`
-      : `Trades ${first.toLocaleString()}–${(first + transfers.length - 1).toLocaleString()} of ${pages.trades.total.toLocaleString()} are shown${covers('these')}`
+      ? `Trade ${num(first)} of ${num(pages.trades.total)} is shown${covers('it')}`
+      : `Trades ${num(first)}–${num(first + transfers.length - 1)} of ${num(pages.trades.total)} are shown${covers('these')}`
     : 'Every transfer it sent or received in a watched collection.';
   const named = narrow.find === undefined ? null : findOf(narrow.find);
   const unreadable = named !== null && named.kind !== 'token' && named.kind !== 'address' && named.kind !== 'prefix';
@@ -121,14 +122,14 @@ export default async function WalletPage({ params, searchParams }: Props) {
       <Head
         title={<span className="font-mono">{short(address)}</span>}
         crumb={[{ href: '/', label: 'Collections' }]}
-        sub={<>Wallet on {chainName(chainId)} · <a className="font-mono hover:underline" href={`${explorer(chainId)}/address/${address}`} target="_blank" rel="noopener noreferrer">{address} ↗</a></>}
+        sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext></>}
       >
         <Elsewhere links={walletLinks(chainId, address)} />
       </Head>
 
       <Answer tone={tone} title={title}>
         {elsewhere === null ? null : <p>{elsewhere} <Link href={`${base}?flagged=1`} className="font-medium hover:underline">Show the flagged ones</Link></p>}
-        {transfers.length > 0 && washTrade === null ? <p>Some of its trades are read, but no analysis has covered them yet. That is not the same as clean.</p> : null}
+        {transfers.length > 0 && washTrade === null ? <p>{NOT_JUDGED}</p> : null}
         {hits.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by.filter((m) => HEADLINE.includes(m)))}.</p> : null}
         {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
         <p className="text-muted-foreground">{money}</p>
@@ -143,9 +144,9 @@ export default async function WalletPage({ params, searchParams }: Props) {
             {other !== undefined ? <input type="hidden" name="with" value={other} /> : null}
             {other !== undefined && o.dir !== 'both' ? <input type="hidden" name="dir" value={o.dir} /> : null}
             {other !== undefined && o.flows > 1 ? <input type="hidden" name="flows" value={o.flows} /> : null}
-            <select name="collection" defaultValue={narrow.collection ?? ''} aria-label="Only its trades in this collection" className="rounded-md border bg-card px-2 py-1">
+            <select name="collection" defaultValue={narrow.collection ?? ''} aria-label="Only its trades in this collection" className="field">
               <option value="">Every collection</option>
-              {collections.map((c) => <option key={c.address} value={c.address}>{c.name ?? short(c.address)} ({c.trades.toLocaleString()})</option>)}
+              {collections.map((c) => <option key={c.address} value={c.address}>{c.name ?? short(c.address)} ({num(c.trades)})</option>)}
             </select>
             <label className="flex items-center gap-1.5">
               <input type="checkbox" name="flagged" value="1" defaultChecked={narrow.flaggedOnly === true} />
@@ -154,16 +155,15 @@ export default async function WalletPage({ params, searchParams }: Props) {
             <input
               type="search" name="q" defaultValue={narrow.find ?? ''} placeholder="Find a token number or wallet (0x…)"
               aria-label="Find its trades of a token, by its number, or with a wallet, by its address or the start of it"
-              className="w-64 rounded-md border bg-card px-2 py-1"
+              className="field w-64"
             />
-            <button type="submit" className="rounded-md border bg-card px-2.5 py-1 font-medium hover:bg-muted">Show</button>
+            <button type="submit" className="btn-secondary">Find</button>
           </form>
         )}
         {narrowed ? (
-          <p className="mb-2 text-sm text-muted-foreground">
-            {pages.trades.total.toLocaleString()} of {plural(counts.trades, 'trade')} {pages.trades.total === 1 ? 'matches' : 'match'} · <Link href={href({ filter: other === undefined ? {} : { with: other }, trades: 1 })} className="font-medium text-foreground hover:underline">Show every trade</Link>
+          <MatchLine n={pages.trades.total} of={plural(counts.trades, 'trade')} query={narrow.find ?? null} clear={href({ filter: other === undefined ? {} : { with: other }, trades: 1 })}>
             {unreadable ? <> · “{narrow.find}” is not a token number, or a wallet address or the start of one, so it matches nothing.</> : null}
-          </p>
+          </MatchLine>
         ) : null}
         {narrowed && transfers.length === 0 ? <Empty>No trade of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection />}
         {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="trades" pageParam="trades" /> : null}
@@ -171,7 +171,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
 
       <Section
         title="Who did it move money with?"
-        lead={<>{pages.partners.pages > 1 ? `${partnerFirst.toLocaleString()}–${(partnerFirst + counterparties.length - 1).toLocaleString()} of ${pages.partners.total.toLocaleString()} counterparties. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two.</>}
+        lead={<>{pages.partners.pages > 1 ? `${num(partnerFirst)}–${num(partnerFirst + counterparties.length - 1)} of ${num(pages.partners.total)} counterparties. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two.</>}
         aside="native, internal and wrapped-native flows, both directions"
       >
         {counterparties.length === 0 ? <Empty>No money flows read for this wallet.</Empty> : (
@@ -181,18 +181,14 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 <tr className="border-b">
                   <th className="px-3 py-2 font-medium">Wallet</th>
                   {PARTNER_COLUMNS.map((c) => (
-                    <th key={c.sort} aria-sort={o.psort === c.sort ? 'descending' : undefined} className={cn('px-3 py-2 font-medium', c.right ? 'text-right' : '')}>
-                      <Link href={href({ psort: c.sort, partners: 1 })} title="Sort by this, most first" className={cn('hover:underline', o.psort === c.sort ? 'text-foreground' : '')}>
-                        {c.label}{o.psort === c.sort ? ' ↓' : ''}
-                      </Link>
-                    </th>
+                    <SortHead key={c.sort} href={href({ psort: c.sort, partners: 1 })} dir={o.psort === c.sort ? 'desc' : null} title="Sort by this, most first" right={c.right}>{c.label}</SortHead>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {counterparties.map((c) => {
                   const opens = (n: number, dir: FlowDir) => n === 0 ? <span className="text-muted-foreground">0</span>
-                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} className="font-medium hover:underline">{n.toLocaleString()}</Link>;
+                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} className="font-medium hover:underline">{num(n)}</Link>;
                   return (
                     <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
                       <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
@@ -219,7 +215,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
               <Transfers chainId={chainId} transfers={between.trades} collection />
               {between.tradesTotal > TRADES ? (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  The latest {TRADES} of {between.tradesTotal.toLocaleString()} are shown. <Link href={href({ filter: { find: other, with: other }, trades: 1 })} className="font-medium text-foreground hover:underline">Page through all of them</Link> in its trades above.
+                  The latest {TRADES} of {num(between.tradesTotal)} are shown. <Link href={href({ filter: { find: other, with: other }, trades: 1 })} className="font-medium text-foreground hover:underline">Page through all of them</Link> in its trades above.
                 </p>
               ) : null}
             </>
@@ -249,15 +245,18 @@ export default async function WalletPage({ params, searchParams }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {between.flows.map((f) => (
+                    {between.flows.map((f) => {
+                      const tx = explorerTx(chainId, f.txHash);
+                      return (
                       <tr key={`${f.txHash}:${f.kind}:${f.from}:${f.token}:${f.valueWei}`} className="border-b last:border-b-0">
                         <td className="px-3 py-1.5 whitespace-nowrap text-xs tabular-nums"><Time ms={f.blockTime * 1000} /></td>
                         <td className="px-3 py-1.5">{f.from === address ? 'it sent' : 'it received'}</td>
                         <td className="px-3 py-1.5 text-muted-foreground">{FLOW_KIND[f.kind]}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{eth(f.valueWei, f.kind === 'token' ? 'WETH' : 'ETH')}</td>
-                        <td className="px-3 py-1.5"><a href={`${explorer(chainId)}/tx/${f.txHash}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs hover:underline">{short(f.txHash)} ↗</a></td>
+                        <td className="px-3 py-1.5 text-xs">{tx === null ? <span className="font-mono">{short(f.txHash)}</span> : <Ext href={tx} title={f.txHash}>tx</Ext>}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

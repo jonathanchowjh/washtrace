@@ -116,14 +116,14 @@ describe('status', () => {
     const s = snapshot({ collections: [failing] });
     expect(status(s, NOW, 'Asia/Tokyo').notices.filter((n) => n.severity === 'needs-you')).toEqual([{
       severity: 'needs-you', text: 'Analysis of BAYC failed: out of memory',
-      doThis: `Wait: it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker`,
+      doThis: `Wait: it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}, while the other collections are analyzed. If it keeps failing, check the worker's log: docker compose logs worker`,
       href: '/c/1/0xbc4c',
     }]);
     // No page shows a collection's rules: never sent to check them.
     expect(JSON.stringify(status(s, NOW).notices)).not.toContain('rules');
     // Its wait over, it is due, and waits only for the analysis thread.
     const due = status(snapshot({ collections: [collection({ analysisError: 'out of memory', analysisRetryAt: NOW - MIN })] }), NOW).notices.find((n) => n.severity === 'needs-you')!;
-    expect(due).toMatchObject({ doThis: "Wait: it is due to be tried again, while the other collections are analysed. If it keeps failing, check the worker's log: docker compose logs worker" });
+    expect(due).toMatchObject({ doThis: "Wait: it is due to be tried again, while the other collections are analyzed. If it keeps failing, check the worker's log: docker compose logs worker" });
   });
 
   it('says the failed analysis once, on the collection, when the failed pass was its own', () => {

@@ -148,7 +148,7 @@ describe('the wallet page', () => {
     expect(text).toContain('In 2 flagged trades out of 50');
     expect(text).toContain('None of them matches these filters.');
     expect(linkTo(el, 'Show the flagged ones')).toBe(`${here}?flagged=1`);
-    expect(text).toContain('1 of 50 trades matches · Show every trade');
+    expect(text).toContain('1 of 50 trades matches “30” · Clear');
   });
 
   it('a filter that matches nothing still titles a flagged wallet from its counts', async () => {
@@ -257,6 +257,8 @@ describe('the wallet page', () => {
     const header = (text: string) => [...el.querySelectorAll('th a')].find((a) => a.textContent?.startsWith(text))?.getAttribute('href');
     expect(header('Payments sent to it')).toBe(`${here}?trades=2&psort=sent`);
     expect(header('Payments received from it')).toBe(`${here}?trades=2&psort=received`);
+    // The default order is by payments in all, and only that head says so.
+    expect([...el.querySelectorAll('th[aria-sort]')].map((t) => `${t.textContent}:${t.getAttribute('aria-sort')}`)).toEqual(['Payments in all:descending']);
     const row = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(short(partner(0))))!;
     const cells = [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(cells).toContain(`${here}?trades=2&with=${partner(0)}&dir=sent#between`);
@@ -306,7 +308,7 @@ describe('the wallet page', () => {
     unjudgedTrades = 1;
     const text = await page();
     expect(text).toContain('Not judged yet');
-    expect(text).toContain('Some of its trades are read, but no analysis has covered them yet. That is not the same as clean.');
+    expect(text).toContain('Its transfers are read, but no analysis has covered them yet. That is not the same as clean.');
   });
 
   it('a Not judged yet wallet with a trade flagged only by Money loops back says that trade is not counted, with no "more"', async () => {

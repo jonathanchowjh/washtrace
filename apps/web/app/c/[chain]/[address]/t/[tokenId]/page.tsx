@@ -3,18 +3,19 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS, type Method } from '@washtrace/detect';
-import { Answer, Elsewhere, Head, Section, SectionHead } from '@/components/head';
+import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/head';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
 import { Transfers, because, rowList } from '@/components/transfers';
 import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
-import { lensList, short } from '@/lib/format';
+import { LENSES, lensList, num, short, tokenLabel } from '@/lib/format';
+import { chainName } from '@/lib/chains';
 import { tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
-import { tradesHref } from '@/lib/trades';
+import { pages } from '@/lib/params';
+import { tradesHref } from '@/lib/trades-url';
 import { APART_WHY, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
-import { cn } from '@/lib/utils';
 import { tokenView } from '@/lib/views';
 
 /** Transfers on one page of the table; the graph still draws every one. */
@@ -44,7 +45,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const tokenId = tokenIdOf(p.tokenId);
   if (chainId === null || address === null || tokenId === null) notFound();
   const view = await tokenView(chainId, address, tokenId);
-  if (view === null) notFound();
+  if (typeof view === 'string') notFound();
   // tokenView has already dropped the lenses that did not run.
   const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun } = view;
   const name = collection.name ?? short(address);
@@ -53,7 +54,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const flagged = transfers.filter(counted).length;
   const apart = transfers.filter((t) => toneOf(t) === 'apart').length;
   const lenses = by.filter((m) => HEADLINE.includes(m));
-  const apartNote = apart === 0 ? '' : ` ${apart} more ${apart === 1 ? 'is' : 'are'} flagged only by Money loops back, which is not counted.`;
+  const apartNote = apart === 0 ? '' : ` ${apart} more ${apart === 1 ? 'is' : 'are'} flagged only by ${LENSES.AU.name}, which is not counted.`;
   const { title, tone } = answer(view, by.includes('A') ? 'Its trades go round in circles' : 'Its buyers and sellers are linked by money');
   const why = reasons(transfers);
 
@@ -61,9 +62,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const show = SHOWS.find((s) => s === sp.show) ?? 'all';
   const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : METHODS.some((m) => t.flags[m]));
   const kept = transfers.flatMap((t, i) => (keeps(t) ? [i + 1] : []));
-  const pages = Math.max(1, Math.ceil(kept.length / PAGE));
+  const pageCount = pages(kept.length, PAGE);
   const asked = Number(sp.page ?? '1');
-  const page = Number.isSafeInteger(asked) ? Math.min(pages, Math.max(1, asked)) : 1;
+  const page = Number.isSafeInteger(asked) ? Math.min(pageCount, Math.max(1, asked)) : 1;
   const shown = kept.slice((page - 1) * PAGE, page * PAGE);
   const shownFlagged = kept.filter((n) => METHODS.some((m) => transfers[n - 1]!.flags[m])).length;
   const here = `${base}/t/${tokenId}`;
@@ -93,9 +94,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
   return (
     <>
       <Head
-        title={`${name} #${tokenId.length > 20 ? `${tokenId.slice(0, 18)}…` : tokenId}`}
+        title={`${name} #${tokenLabel(tokenId)}`}
         crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]}
-        sub={`${transfers.length} transfers, in the order the chain recorded them`}
+        sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
@@ -105,7 +106,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <>
             {NOT_JUDGED}
             {/* Not judged means no counted lens flags any of it (verdict), so only an apart flag is left to say. */}
-            {apart > 0 ? ` ${apart} of ${transfers.length} transfers are flagged only by Money loops back, which is not counted.` : ''}
+            {apart > 0 ? ` ${apart} of ${transfers.length} transfers are flagged only by ${LENSES.AU.name}, which is not counted.` : ''}
             {notRun.length > 0 ? ` ${lensList(notRun)} did not run.` : ''}
           </>
         ) : apartOnly ? (
@@ -131,8 +132,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
       <TokenLoops
         drawing={drawing} chainId={chainId} rowHrefs={rowHrefs} initial={initial}
         graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
-        whyHead={<SectionHead title={apartOnly ? 'Why Money loops back flags it' : 'Why it was flagged'} lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it. Show in graph lights the pattern.'} />}
-        empty={<p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : 'No analysis has covered these transfers yet, so no lens has looked for a pattern.'}</p>}
+        whyHead={<SectionHead title={apartOnly ? `Why ${LENSES.AU.name} flags it` : 'Why it was flagged'} lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it. Show in graph lights the pattern.'} />}
+        empty={<Empty>{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : NOT_JUDGED}</Empty>}
         items={why.map((r, i) => ({
           key: drawing.loops[i]!.key,
           body: because(r.witness, chainId),
@@ -147,29 +148,23 @@ export default async function TokenPage({ params, searchParams }: Props) {
 
       <Section title="Every transfer" lead={`${TINT_LEAD} The number in the first column is the arrow's label in the graph.`}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <nav aria-label="Show" className="flex rounded-md border bg-card p-0.5 text-sm">
-            {SHOWS.map((s) => (
-              <Link key={s} href={hrefFor(1, s)} aria-current={s === show ? 'page' : undefined}
-                className={cn('rounded px-3 py-1', s === show ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
-                {SHOW_NAME[s]}
-              </Link>
-            ))}
-          </nav>
+          <Segmented label="Show all, flagged or sales transfers" items={SHOWS.map((s) => ({ key: s, href: hrefFor(1, s), label: SHOW_NAME[s], current: s === show }))} />
+          {/* With more than one page the pager below says which rows these are; the flagged count is all that is left to say here. */}
           <p className="text-sm text-muted-foreground tabular-nums">
-            Showing {(shown[0] === undefined ? 0 : (page - 1) * PAGE + 1).toLocaleString()}–{((page - 1) * PAGE + shown.length).toLocaleString()} of {kept.length.toLocaleString()} transfers
-            {shownFlagged === 0 ? null : show === 'all' ? <> · <Link href={hrefFor(1, 'flagged')} className="hover:underline">{shownFlagged.toLocaleString()} flagged</Link></> : ` · ${shownFlagged.toLocaleString()} flagged`}
+            {pageCount > 1 ? null : <>Showing {num(shown[0] === undefined ? 0 : 1)}–{num(shown.length)} of {num(kept.length)} transfers</>}
+            {shownFlagged === 0 ? null : <>{pageCount > 1 ? null : ' · '}{show === 'all' ? <Link href={hrefFor(1, 'flagged')} className="hover:underline">{num(shownFlagged)} flagged</Link> : `${num(shownFlagged)} flagged`}</>}
           </p>
         </div>
         {kept.length === 0 ? (
-          <p className="rounded-lg border border-dashed bg-card p-4 text-sm text-muted-foreground">None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</p>
+          <Empty>None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</Empty>
         ) : (
           <>
             <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} />
-            {pages > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
+            {pageCount > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}
         {/* The same transfers in the Trades view, to filter, group or download. */}
-        <p className="mt-3 text-sm"><Link href={tradesHref(base, { kind: 'all', token: tokenId })} className="font-medium hover:underline">Every trade of this token →</Link></p>
+        <MoreLink href={tradesHref(base, { kind: 'all', token: tokenId })} className="mt-3">Every trade of this token →</MoreLink>
       </Section>
     </>
   );

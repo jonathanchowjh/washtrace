@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import type { TradeQuery } from '@washtrace/detect/trades';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
-import { LENSES, eth, pct, plural } from '@/lib/format';
-import { APART, APART_WHY, part, type Range } from '@/lib/metrics';
-import { tradesHref } from '@/lib/trades';
+import { LENSES, eth, pct, plural, num } from '@/lib/format';
+import { APART, APART_WHY, part, rangeEnds, type Range } from '@/lib/metrics';
+import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 import { TimeChart, type TimePoint } from './trend';
@@ -89,6 +90,26 @@ export function RangeKey({ range }: { range: Range }) {
   );
 }
 
+/** A range's number, "x–y%": each end made by `end`, so each can open its own lens. One link when both ends agree. */
+export function RangeFigure({ range, end }: { range: Range; end: (text: string, m: Method) => ReactNode }) {
+  const e = rangeEnds(range);
+  return e.same ? end(e.high, range.high) : <>{end(e.low, range.low)}–{end(e.high, range.high)}</>;
+}
+
+/**
+ * "X–Y ETH of Z ETH", each end opening what it counts, biggest sale first.
+ * `overlay` lifts the links above a row's whole-row link.
+ */
+export function VolumeDetail({ volume: r, totals, base, overlay = false }: { volume: Range; totals: Record<Method, MethodTotals>; base: string; overlay?: boolean }) {
+  const priciest = { sort: 'price', dir: 'desc' } as const;
+  const link = (q: Partial<TradeQuery>, text: string) => <Link href={tradesHref(base, { ...q, ...priciest })} className={cn('hover:underline', overlay && 'relative z-10')}>{text}</Link>;
+  const lo = totals[r.low].flaggedVolumeWei, hi = totals[r.high].flaggedVolumeWei;
+  return <>
+    {lo === hi ? link({ caught: [r.high] }, eth(hi)) : <>{link({ caught: [r.low] }, eth(lo, '').trim())}–{link({ caught: [r.high] }, eth(hi))}</>}
+    {' of '}{link({}, eth(totals.A.volumeWei))}
+  </>;
+}
+
 const FIGURE = 'font-medium text-foreground tabular-nums hover:underline';
 
 /**
@@ -111,7 +132,7 @@ export function LensStats({ m, t, loops, base, notFinal }: {
       <p>
         <Link href={caught} className={cn('text-lg', FIGURE)}>{pct(s.part, s.whole)}</Link> of sales
         {APART.includes(m) ? ' (not counted)' : ''}{notFinal.includes(m) ? ' so far' : ''}
-        {' · '}<Link href={caught} className={FIGURE}>{t.flaggedSales.toLocaleString()}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{t.sales.toLocaleString()}</Link>
+        {' · '}<Link href={caught} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{num(t.sales)}</Link>
         {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
       <p>
@@ -249,7 +270,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
   return (
     <details open={open} className="group rounded-lg border bg-card">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm [&::-webkit-details-marker]:hidden">
-        <span><span className="font-medium text-foreground">How washtrace spots wash trading.</span> <span className="text-muted-foreground">Three lenses. The answer is the range from Round trips to Linked wallets; Money loops back is shown apart.</span></span>
+        <span><span className="font-medium text-foreground">How washtrace spots wash trading.</span> <span className="text-muted-foreground">Three lenses. The answer is the range from {LENSES.A.name} to {LENSES.AC.name}; {LENSES.AU.name} is shown apart.</span></span>
         <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
       </summary>
       <div className="grid gap-4 border-t px-4 py-4 md:grid-cols-3">
@@ -263,7 +284,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
           </div>
         ))}
         <p className="text-xs text-muted-foreground md:col-span-3">
-          Solid arrows are the token changing hands; dashed arrows are money. A collection's answer is a range: Round trips' share up to Linked wallets'.
+          Solid arrows are the token changing hands; dashed arrows are money. A collection's answer is a range: {LENSES.A.name}' share up to {LENSES.AC.name}'.
           The two money lenses need to know who paid whom, which the worker reads wallet by wallet, so until every wallet is checked their shares are not final.
         </p>
       </div>

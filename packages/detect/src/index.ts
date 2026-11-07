@@ -9,8 +9,9 @@ export { Store, SECRET_KEYS, CHECKS_CHANNEL, type SettingSource, type CheckKind,
 export { VENUES, venueOf, NO_FILTER, findOf, type TradeQuery, type TradeContext, type TradeSort, type TradeGroupBy, type GroupRef, type Find } from './trades.js';
 export { MIGRATIONS } from './migrations.js';
 export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } from './analysis-thread.js';
-export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, needsRestore, needsTrail, reaches, TRAIL_NOTES, FOLLOW_FANOUT, messageOf, type WorkerConfig, type Job } from './worker.js';
-export { ConfigError, storeUrl, workerConfig, shownSecret } from './env.js';
+export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, FOLLOW_FANOUT, type Job } from './worker.js';
+export { needsRestore, needsTrail, reaches, TRAIL_NOTES } from './stored-sync.js';
+export { ConfigError, storeUrl, workerConfig, shownSecret, maskedUrl, messageOf, type WorkerConfig } from './env.js';
 export {
   StoredDataError, type StoredDataFault, DOWNLOAD_NOTES, storedDir, storedFile, trailPaths, trailSha, entryFor, upsertEntry, mergeManifest, datasetCard, parseTarget, cutCollection, readManifest, parseManifest, writeManifest, sha256File,
   writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type Written, type StoredPart, type StoredFileMeta, type TrailFiles,

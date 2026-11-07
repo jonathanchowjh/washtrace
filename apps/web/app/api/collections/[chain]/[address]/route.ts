@@ -1,6 +1,5 @@
-import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { moneyFor } from '@washtrace/detect';
-import { addressOf, bad, chainOf, handle, json, methodOf, readJson } from '@/lib/api';
+import { addressOf, bad, chainOf, handle, json, methodOf, writeBody } from '@/lib/api';
 import { lensesRan } from '@/lib/metrics';
 import { store } from '@/lib/store';
 
@@ -24,6 +23,7 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
     const collection = await s.collection(chainId, address);
     if (!collection) return bad('This collection is not watched.', 404);
     const method = methodOf(new URL(req.url).searchParams.get('method'));
+    // UTC, not the reader's cookie zone as the trades route reads: the lens lists do not bucket by month.
     const ctx = { money: moneyFor(chainId), ran: lensesRan(collection.latest), zone: 'UTC' };
     const top = { sort: 'caught', find: null, limit: 50, offset: 0 } as const;
     const [history, tokens, wallets] = await Promise.all([
@@ -36,10 +36,8 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
 /** DELETE: stop watching, and drop its transfers and analyses, but only once it is paused, so the worker is not serving what is being deleted. The pre-read gives 404 or 409; the store's own paused condition makes the delete safe against a concurrent resume, and a false from it is re-read once to answer 404 (gone) or 409 (resumed). Funding read for its wallets is kept: it is per chain. */
 export async function DELETE(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
-    // JSON is required here too, though there is no body worth sending: it is the CSRF defence.
-    const body = await readJson(req);
-    if (body instanceof Response) return body;
+    const written = await writeBody(req);
+    if (written instanceof Response) return written;
     const p = await params;
     const chainId = chainOf(p.chain);
     const address = addressOf(p.address);
@@ -52,7 +50,7 @@ export async function DELETE(req: Request, { params }: Ctx): Promise<Response> {
       // The store deletes only paused rows, so a resume between our read and its delete lands here: say which it was.
       return (await s.collection(chainId, address)) ? bad(NOT_PAUSED, 409) : bad('This collection is not watched.', 404);
     }
-    console.info('[washtrace] %s stopped watching %d/%s', decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous'), chainId, address);
+    console.info('[washtrace] %s stopped watching %d/%s', written.actor, chainId, address);
     return json({ removed: true });
   });
 }

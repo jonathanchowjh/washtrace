@@ -40,10 +40,26 @@ describe('GET trades', () => {
     expect(state.calls[0]!.slice(3)).toEqual([50, 50]);
   });
 
+  it('reads a repeated key as the Trades form sends it, every value and not only the last', async () => {
+    await get('caught=A&caught=AC&market=opensea&market=blur');
+    expect(state.calls[0]![1]).toMatchObject({ caught: ['A', 'AC'], venues: ['opensea', 'blur'] });
+  });
+
   it('clamps a page past the last, and holds nothing for a lens that did not run', async () => {
     expect((await (await get('page=99999')).json()).page).toBe(3);
     state.moneyRan = false;
     expect(await (await get('caught=AU')).json()).toMatchObject({ total: 0, pages: 1, rows: [], ran: ['A'] });
+  });
+
+  it('holds nothing for a group on a lens that did not run, as the Trades page does, and reads no store for it', async () => {
+    state.moneyRan = false;
+    expect(await (await get(`group=AU.t.5`)).json()).toMatchObject({ total: 0, pages: 1, rows: [], ran: ['A'] });
+    expect(await (await get(`group=AC.w.${SELLER}&format=csv`)).text()).toBe(HEADER + '\n');
+    expect(state.calls).toEqual([]);
+    expect(state.streamArgs).toEqual([]);
+    // A group on a lens that ran is read.
+    await get('group=A.t.5');
+    expect(state.calls).toHaveLength(1);
   });
 
   it('streams CSV, reading nothing before the body is read', async () => {

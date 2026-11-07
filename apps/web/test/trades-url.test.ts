@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
-import { bandLabel, chips, ethToWei, groupFilter, parseView, tradesHref } from '../lib/trades';
+import { bandLabel, chips, ethToWei, groupFilter, parseView, tradesHref } from '../lib/trades-url';
 
 const roundTrip = (href: string) => parseView(Object.fromEntries(new URL(href, 'http://x').searchParams));
 
@@ -38,13 +38,13 @@ describe('Trades in the URL', () => {
 
   it('names lenses in chips, never codes, and a chip keeps the grouping but not the page', () => {
     const c = chips('/c/1/0xabc', { ...NO_FILTER, caught: ['AC'], notCaught: ['AU'] }, { by: 'month', page: 4 }, 'UTC');
-    expect(c.map((x) => x.label)).toEqual(['Caught by Linked wallets', 'Not caught by Money loops back']);
+    expect(c.map((x) => x.label)).toEqual(['Flagged by Linked wallets', 'Not flagged by Money loops back']);
     expect(c[0]!.href).toBe('/c/1/0xabc/flagged?kind=trades&not=AU&by=month');
   });
 
   it('custom lens names replace the built-in ones', () => {
     const c = chips('/c', { ...NO_FILTER, caught: ['A'] }, { by: null, page: 1 }, 'UTC', { A: 'Fast flips' });
-    expect(c[0]!.label).toBe('Caught by Fast flips');
+    expect(c[0]!.label).toBe('Flagged by Fast flips');
   });
 
   it('words every chip', () => {

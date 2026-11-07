@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { tradesHref } from '@/lib/trades';
+import { tradesHref } from '@/lib/trades-url';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;

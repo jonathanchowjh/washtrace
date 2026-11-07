@@ -1,8 +1,9 @@
 import { EVERY, ZERO, entryFor, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
-import { addressOf } from './api';
+import { addressOf, findText, pageOf, pages as pagesOf } from './params';
 import { authConfigured, mayWrite } from './auth';
-import { analyzingOn, ranFlags, storedOnly, verdict, type Verdict } from './metrics';
-import { configFromSources, hopsFollowed, view } from './settings';
+import { analyzingOn, storedOnly } from './coverage';
+import { ranFlags, verdict, type Verdict } from './metrics';
+import { configFromSources, fieldViews, hopsFollowed } from './settings';
 import { pipeline } from './pipeline';
 import { status, workerSilent } from './status';
 import { store, storedManifest } from './store';
@@ -32,12 +33,13 @@ async function latestByAddress(s: Store, chainId: number, transfers: readonly Fl
   return new Map(await Promise.all(addresses.map(async (a) => [a, (await s.collection(chainId, a))?.latest ?? null] as const)));
 }
 
-export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | null> {
+/** One token's view, or why there is none: the collection is not watched, or none of the token's transfers is read. */
+export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | 'not-watched' | 'no-transfer'> {
   const s = store();
   const c = await s.collection(chainId, address);
-  if (!c) return null;
+  if (!c) return 'not-watched';
   const all = await s.token(c.id, tokenId);
-  if (all.length === 0) return null;
+  if (all.length === 0) return 'no-transfer';
   // Only the lenses that ran: the verdict, the middles and the rows all read these.
   const transfers = all.map((t) => ranFlags(t, c.latest));
   const middles = [...new Set(transfers.flatMap((t) => {
@@ -59,7 +61,10 @@ export async function txView(chainId: number, tx: string): Promise<{ transfers: 
   return { ...verdict(rows), transfers: rows.map((r) => ranFlags(r.t, r.latest)) };
 }
 
-/** What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`. */
+/**
+ * What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`.
+ * `partners` is the page of the money partners that the result and the store call counterparties (`COUNTERPARTIES`, `cut.counterparties`): the URL and `pages` say partners, so a caller's `partners=2` is read back as `pages.partners`.
+ */
 export type WalletOpts = { trades: number; partners: number; flows: number; filter: WalletFilter; dir: FlowDir; psort: PartnerSort };
 
 const PARTNER_SORTS: readonly PartnerSort[] = ['flows', 'sent', 'received', 'watched'];
@@ -72,23 +77,22 @@ const PARTNER_SORTS: readonly PartnerSort[] = ['flows', 'sent', 'received', 'wat
  */
 export function walletOpts(q: Record<string, string | string[] | undefined>): WalletOpts {
   const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
-  const page = (k: string) => { const n = Number.parseInt(one(k) ?? '1', 10); return Number.isSafeInteger(n) && n >= 1 ? n : 1; };
   const filter: WalletFilter = {};
   const collection = addressOf(one('collection') ?? '');
   if (collection !== null) filter.collection = collection;
   if (one('flagged') === '1') filter.flaggedOnly = true;
-  const find = one('q')?.trim().slice(0, 100);
+  const find = findText(one('q'));
   if (find) filter.find = find;
   const other = addressOf(one('with') ?? '');
   if (other !== null) filter.with = other;
   const dir = one('dir');
   const psort = PARTNER_SORTS.find((s) => s === one('psort')) ?? 'flows';
-  return { trades: page('trades'), partners: page('partners'), flows: page('flows'), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
+  return { trades: pageOf(one('trades')), partners: pageOf(one('partners')), flows: pageOf(one('flows')), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
 }
 
 /** Page `asked` of `total` rows, clamped to the last there is, before any offset is read from it. */
 function paged(asked: number, total: number, size: number): { page: number; pages: number; total: number } {
-  const pages = Math.max(1, Math.ceil(total / size));
+  const pages = pagesOf(total, size);
   return { page: Math.min(asked, pages), pages, total };
 }
 
@@ -155,11 +159,15 @@ export async function settingsView(headers: Headers) {
   const s = store();
   const writable = mayWrite(process.env, headers);
   const [settings, sources, collections] = await Promise.all([s.settings(), s.sources(), s.collections()]);
-  return { writable, open: writable && !authConfigured(process.env), fields: view(settings, sources, writable), trailFunded: await trailFunded(s, collections) };
+  return { writable, open: writable && !authConfigured(process.env), fields: fieldViews(settings, sources, writable), trailFunded: await trailFunded(s, collections) };
 }
 
-/** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
-export async function workerView(zone = 'UTC') {
+/**
+ * Is the detector keeping up: the reads behind /api/status, with the report built from them. The
+ * worker page reads the same, so the page and the route never disagree about a job. `zone` is the
+ * reader's, for the dates in the notices.
+ */
+export async function statusReport(zone = 'UTC') {
   const s = store();
   const [passes, collections, sources, settings] = await Promise.all([s.passes(), s.collections(), s.sources(), s.settings()]);
   // What the worker reported, not this process's environment: only the worker reads the chain.
@@ -167,9 +175,14 @@ export async function workerView(zone = 'UTC') {
   const backlog = await s.fundingBacklog(hopsFollowed(config));
   // With no key, whether a loaded money trail still feeds the money lenses.
   const fed = config.funding ? false : await trailFunded(s, collections);
-  // The same reading of the passes as /api/status, so the page and the route never disagree about a job.
   const manifest = await storedManifest();
   const report = status({ passes, collections, funding: backlog, config, trailFunded: fed, manifest }, Date.now(), zone);
+  return { passes, collections, config, backlog, fed, manifest, report };
+}
+
+/** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
+export async function workerView(zone = 'UTC') {
+  const { passes, collections, config, backlog, fed, manifest, report } = await statusReport(zone);
   const silent = workerSilent(passes, Date.now()) !== null;
   return {
     every: EVERY,

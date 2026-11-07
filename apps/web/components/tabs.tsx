@@ -67,7 +67,7 @@ export function CollectionTabs({ counts, current, find, sort, dir }: { counts: {
         Open on
         <select
           value={open} onChange={(e) => choose(e.target.value as Tab)}
-          className="rounded-[5px] border bg-card px-2 py-1 text-foreground focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none"
+          className="field"
         >
           <option value="sync">In sync</option>
           <option value="paused">Paused</option>

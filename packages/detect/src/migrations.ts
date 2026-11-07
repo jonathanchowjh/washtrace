@@ -387,4 +387,11 @@ UPDATE washtrace.collections c SET version = version + 1
 WHERE c.analyzed_version > 0
   AND NOT EXISTS (SELECT 1 FROM washtrace.analyses a WHERE a.collection_id = c.id AND a.loops IS NOT NULL);
 `,
+  `
+-- What the analysis's trade facts were worked out with: the facts' version,
+-- the floor window and the money they price in. The next analysis adds only
+-- the new facts when its own is the same, and writes them all again when not.
+-- NULL on analyses saved before this, so their next one writes them all.
+ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS facts_key text;
+`,
 ];

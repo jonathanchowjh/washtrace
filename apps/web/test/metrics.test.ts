@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { APART_WHY, TRAIL_LOADING, analyzingOn, coverage, judged, lensesRan, ranFlags, evidenceLead, unread, isRunning, progress, range, rangeText, summary, tabCounts, waiting } from '@/lib/metrics';
+import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, waiting } from '@/lib/coverage';
+import { APART_WHY, judged, lensesRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -22,22 +23,22 @@ describe('range', () => {
   it('runs from the strictest lens to the widest', () => {
     const r = range(DEMO, 'sales')!;
     expect([r.low, r.high]).toEqual(['A', 'AC']);
-    expect(rangeText(r)).toBe('18–25%');
+    expect(rangeEnds(r)).toEqual({ low: '18', high: '25%', same: false });
   });
 
   it('says an exact zero as 0, not 0.0', () => {
     const r = range({ ...DEMO, A: totals({ flaggedVolumeWei: '0' }) }, 'volume')!;
-    expect(rangeText(r)).toBe('0–63%');
+    expect(rangeEnds(r)).toEqual({ low: '0', high: '63%', same: false });
   });
 
   it('prices volume from wei', () => {
-    expect(rangeText(range(DEMO, 'volume')!)).toBe('35–63%');
+    expect(rangeEnds(range(DEMO, 'volume')!)).toEqual({ low: '35', high: '63%', same: false });
   });
 
   it('leaves out a lens that did not run, rather than reading it as 0%', () => {
     const r = range(OFF, 'sales')!;
     expect([r.low, r.high]).toEqual(['A', 'A']);
-    expect(rangeText(r)).toBe('18%');
+    expect(rangeEnds(r)).toEqual({ low: '18', high: '18%', same: true });
   });
 
   it('leaves Money loops back out: its top is Linked wallets even when Money loops back flags more', () => {
@@ -140,7 +141,7 @@ describe('coverage', () => {
     expect(c.download).toBeNull();
     expect(cov(row({ downloadFile: 'transfers', downloadProgress: null, pausedAt: 5 })).reading).toBe('paused');
     expect(cov(row({ downloadFile: 'trail', downloadProgress: null })).reading).not.toBe('queued');
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), ON, 0)).toBe('Waiting to download stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), ON, 0)).toBe('Waiting to download stored data · it is analyzed once it has loaded.');
   });
 
   it('a trail download is no reading of its own', () => {
@@ -150,7 +151,7 @@ describe('coverage', () => {
   });
 
   it('says it waits for a download before the first analysis', () => {
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), ON, 0)).toBe('Downloading stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), ON, 0)).toBe('Downloading stored data · it is analyzed once it has loaded.');
   });
 
   it('never shows a load as done before it has committed', () => {
@@ -371,11 +372,11 @@ describe('waiting', () => {
   const fresh = row({ latest: null });
 
   it('promises nothing for a paused collection', () => {
-    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, ON, NOW)).toBe('Paused · it is not analysed until you resume it.');
+    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, ON, NOW)).toBe('Paused · it is not analyzed until you resume it.');
   });
 
   it('waits for stored data to load, not for transfers to be read', () => {
-    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW)).toBe('Loading stored data · it is analysed once it has loaded.');
+    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW)).toBe('Loading stored data · it is analyzed once it has loaded.');
   });
 
   it('waits for transfers when none are read', () => {
@@ -414,13 +415,13 @@ describe('waiting', () => {
   });
 
   it('claims no download, load or analysis while the worker is silent, but still says a pause', () => {
-    const said = 'Not analysed yet · the worker is silent, so nothing is read or analysed until it reports again.';
+    const said = 'Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.';
     expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
     expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
     // A stalled pass on it is not an analysis running.
     expect(waiting(fresh, pass({ startedAt: NOW - 47 * 60_000, heartbeatAt: NOW - 40 * 60_000 }), names, ON, NOW, 'UTC', true)).toBe(said);
     expect(waiting(fresh, undefined, names, ON, NOW, 'UTC', true)).toBe(said);
-    expect(waiting(row({ latest: null, pausedAt: 1 }), undefined, names, ON, NOW, 'UTC', true)).toBe('Paused · it is not analysed until you resume it.');
+    expect(waiting(row({ latest: null, pausedAt: 1 }), undefined, names, ON, NOW, 'UTC', true)).toBe('Paused · it is not analyzed until you resume it.');
   });
 
   it('knows which collection the running analyze pass is on', () => {

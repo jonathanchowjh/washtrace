@@ -1,5 +1,4 @@
-import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { bad, handle, json, readJson } from '@/lib/api';
+import { bad, handle, json, writeBody } from '@/lib/api';
 import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
 
@@ -11,9 +10,9 @@ import { store } from '@/lib/store';
  */
 export async function POST(req: Request): Promise<Response> {
   return handle(async () => {
-    if (!mayWrite(process.env, req.headers)) return bad(LOCAL_ONLY, 403);
-    const body = await readJson(req);
-    if (body instanceof Response) return body;
+    const written = await writeBody(req);
+    if (written instanceof Response) return written;
+    const { body } = written;
     if (body.kind === 'etherscan') return json({ id: await store().requestCheck('etherscan', null) }, 201);
     if (body.kind !== 'rpc') return bad("kind must be 'rpc' or 'etherscan'.");
     const chainId = body.chainId;

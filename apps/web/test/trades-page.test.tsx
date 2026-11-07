@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parseView } from '@/lib/trades';
+import { parseView } from '@/lib/trades-url';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const SELLER = '0x' + '1'.repeat(40);
@@ -75,7 +75,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a caught filter on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', caught: 'AU' })).toContain('Money loops back did not run on this collection, so it catches nothing yet.');
+    expect(await page({ kind: 'trades', caught: 'AU' })).toContain('Money loops back did not run on this collection, so it flags nothing yet.');
     expect(state.calls.trades).toHaveLength(0);
   });
 
@@ -84,18 +84,18 @@ describe('the flagged page, Trades view', () => {
     const el = await dom({ kind: 'trades' });
     expect(el.textContent).toContain('3 trades match');
     expect(el.textContent).toContain(' 1 of them are newer than the latest analysis and not judged yet.');
-    const cell = [...el.querySelectorAll('td')].find((td) => td.textContent === 'not judged yet');
+    const cell = [...el.querySelectorAll('td')].find((td) => td.textContent === 'Not judged yet');
     expect(cell?.getAttribute('colspan')).toBe('3');
   });
 
   it('a not-caught lens that did not run is left out and said', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', not: 'AC' })).toContain('Linked wallets did not run, so "not caught by" it is left out.');
+    expect(await page({ kind: 'trades', not: 'AC' })).toContain('Linked wallets did not run, so "not flagged by" it is left out.');
   });
 
   it('each chip removes its own filter and keeps the grouping; each group row and share cell adds its group', async () => {
     const el = await dom({ kind: 'trades', caught: 'A', by: 'marketplace' });
-    expect(linkTo(el, `${BASE}/flagged?kind=trades&by=marketplace`)?.textContent).toContain('Caught by Round trips');
+    expect(linkTo(el, `${BASE}/flagged?kind=trades&by=marketplace`)?.textContent).toContain('Flagged by Round trips');
     const blur = el.querySelector('a[href*="market=blur"][href*="by=marketplace"]');
     expect(blur?.closest('tr')?.textContent).toContain('Blur');
     // Count and share agree: the share adds only the lens.
@@ -169,7 +169,7 @@ describe('the flagged page, Trades view', () => {
     Object.assign(state, { moneyRan: false, count: { total: 0, unjudged: 0 }, rows: [] });
     const text = await page({ kind: 'trades', not: 'AC' });
     expect(text).toContain('No trade matches these filters.');
-    expect(text).toContain('Linked wallets did not run, so "not caught by" it is left out.');
+    expect(text).toContain('Linked wallets did not run, so "not flagged by" it is left out.');
   });
 
   it('every header sorts and toggles the direction; a lens column sorts by the lens', async () => {
@@ -177,7 +177,7 @@ describe('the flagged page, Trades view', () => {
     const link = (name: string) => [...el.querySelectorAll('thead th a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(link('Price')).toBe(`${BASE}/flagged?kind=trades&sort=price`);
     expect(link('Round trips')).toBe(`${BASE}/flagged?kind=trades&sort=lens-A`);
-    expect(link('Seller → Buyer')).toContain('sort=seller');
+    expect(link('Seller → buyer')).toContain('sort=seller');
     expect(link('Date')).toBe(`${BASE}/flagged?kind=trades`);
   });
 
@@ -217,7 +217,7 @@ describe('the flagged page, Trades view', () => {
 
   it('the Tokens and Wallets tabs carry the first caught lens; a lens link replaces the caught filter', async () => {
     const el = await dom({ kind: 'trades', caught: 'AC,A' });
-    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label=Show] a')].find((a) => a.textContent === name)?.getAttribute('href');
+    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(tab('Tokens')).toBe(`${BASE}/flagged?method=A&kind=tokens`);
     expect(tab('Wallets')).toBe(`${BASE}/flagged?method=A&kind=wallets`);
     const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets');
@@ -295,7 +295,7 @@ describe('the flagged page, Trades view', () => {
   it('a group on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
     const text = await page({ kind: 'trades', group: `AU.t.7` });
-    expect(text).toContain('Money loops back did not run on this collection, so it catches nothing yet.');
+    expect(text).toContain('Money loops back did not run on this collection, so it flags nothing yet.');
     expect(text).not.toContain('No trade matches');
     expect(state.calls.trades).toHaveLength(0);
   });
@@ -318,14 +318,14 @@ describe('the flagged page, Trades view', () => {
   it('an analysis that predates the figures says the collection is queued again, not that its trades are newer', async () => {
     Object.assign(state, { loops: null, count: { total: 2, unjudged: 2 } });
     const text = await page({ kind: 'trades' });
-    expect(text).toContain('The latest analysis predates these figures; this collection is queued to be analysed again.');
+    expect(text).toContain('The latest analysis predates these figures; this collection is queued to be analyzed again.');
     expect(text).not.toContain('newer than the latest analysis');
   });
 
   it('a collection never analysed says so in the count line', async () => {
     Object.assign(state, { analysed: false, count: { total: 2, unjudged: 2 } });
     const text = await page({ kind: 'trades' });
-    expect(text).toContain('2 trades match · everything is in the address bar, so this view can be shared. Not analysed yet.');
+    expect(text).toContain('2 trades match · everything is in the address bar, so this view can be shared. Not judged yet.');
     expect(text).not.toContain('newer than the latest analysis');
   });
 });

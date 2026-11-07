@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { SECRET_KEYS, Store, type ListOpts, type TokenSort, type WalletSort } from '../src/store.js';
+import { FACTS_VERSION, FLOOR_DAYS, SECRET_KEYS, Store, type ListOpts, type TokenSort, type WalletSort } from '../src/store.js';
 import { analyze } from '../src/methods.js';
 import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
@@ -9,13 +9,13 @@ import { Chain } from '../src/chain.js';
 import { Etherscan } from '../src/etherscan.js';
 import { workerConfig } from '../src/env.js';
 import { HttpRequestError } from 'viem';
-import { LAB, LAB_MIXED, MONEY, at, chain, flow, input, transfer, w, type Fact } from './fixtures.js';
+import { LAB, LAB_MIXED, MONEY, USDC, WETH, at, chain, flow, input, transfer, w, type Fact } from './fixtures.js';
 import { ZERO } from '../src/graph.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StoredDataError, readTrail, trailPaths, trailSha, writeTrail, type StoredEntry, type TrailFiles } from '../src/stored.js';
-import { needsRestore } from '../src/worker.js';
+import { needsRestore } from '../src/stored-sync.js';
 import type { Flow, Method, Transfer } from '../src/types.js';
 import { NO_FILTER, type TradeQuery } from '../src/trades.js';
 import type { Payments } from '../src/payments.js';
@@ -69,12 +69,12 @@ describe('Store', () => {
   const LIST = { sort: 'caught' as const, find: null, limit: 50, offset: 0 };
 
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(25);
-    expect(await store.schemaVersion()).toBe(25);
-    expect(await store.migrate()).toBe(25);
-    expect(await store.migrate()).toBe(25);
+    expect(await store.migrate()).toBe(26);
+    expect(await store.schemaVersion()).toBe(26);
+    expect(await store.migrate()).toBe(26);
+    expect(await store.migrate()).toBe(26);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 25 }]);
+    expect(rows).toEqual([{ version: 26 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -83,7 +83,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(25);
+      expect(await store.migrate()).toBe(26);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -97,7 +97,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
-      expect(await store.migrate()).toBe(25);
+      expect(await store.migrate()).toBe(26);
       const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
       expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
     } finally {
@@ -116,7 +116,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(25);
+      expect(await store.migrate()).toBe(26);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -335,7 +335,7 @@ describe('Store', () => {
 
   it('a cursor is planned to be read to the end', async () => {
     const rows: string[] = [];
-    for await (const f of (store as any).cursor(`SELECT current_setting('cursor_tuple_fraction') AS f`, [], (r: any) => r.f)) rows.push(f);
+    for await (const f of (store as any).stream(`SELECT current_setting('cursor_tuple_fraction') AS f`, [], (r: any) => r.f)) rows.push(f);
     expect(rows).toEqual(['1']);
   });
 
@@ -1726,9 +1726,9 @@ describe('Store', () => {
         // Another collection on the chain, with no trail of its own.
         const z = (await store.addCollection(14, w('14c2'), null, 10)).id;
         expect(await store.importedFunding(id)).toBe(false);
-        await (w14 as any).trails((await mine()).filter((c) => c.id === id), { version: 3, collections: [e] });
+        await (w14.sync as any).trails((await mine()).filter((c) => c.id === id), { version: 3, collections: [e] });
         // The import runs in the background: wait for it.
-        await (w14 as any).importing?.done;
+        await (w14.sync as any).importing?.done;
         expect(await store.collection(14, coll)).toMatchObject({ trailImportedSha: sha256, trailNote: null });
         expect(await flowRows(14)).toHaveLength(3);
         expect(await store.importedFunding(id)).toBe(true);
@@ -1736,8 +1736,8 @@ describe('Store', () => {
         expect(await store.importedFunding(z)).toBe(false);
         // Loaded: not loaded again.
         let read = 0;
-        (w14 as any).storedTrail = (e: StoredEntry, verify: boolean) => { read += 1; return readTrail(trailPaths(dir, e), e.trail!.files, verify); };
-        await (w14 as any).trails(await mine(), { version: 3, collections: [e] });
+        (w14.sync as any).storedTrail = (e: StoredEntry, verify: boolean) => { read += 1; return readTrail(trailPaths(dir, e), e.trail!.files, verify); };
+        await (w14.sync as any).trails(await mine(), { version: 3, collections: [e] });
         expect(read).toBe(0);
 
         // No key, but checked wallets from the trail: the money lenses run.
@@ -1760,7 +1760,7 @@ describe('Store', () => {
         await store.addCollection(15, coll, null, 10);
         const { files } = await written(entry(15, coll, none));
         const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        await (worker(null) as any).trails([(await store.collection(15, coll))!], { version: 3, collections: [entry(15, coll, { ...files, flows: { ...files.flows, sha256: 'b'.repeat(64) } })] });
+        await (worker(null).sync as any).trails([(await store.collection(15, coll))!], { version: 3, collections: [entry(15, coll, { ...files, flows: { ...files.flows, sha256: 'b'.repeat(64) } })] });
         logged.mockRestore();
         expect(await walletRows(15)).toEqual([]);
         expect(await flowRows(15)).toEqual([]);
@@ -1908,6 +1908,181 @@ describe('trade facts', () => {
     expect(Object.keys(await factsOf(id))).toHaveLength(LAB.transfers.length);
     await drop(1, labAddress);
   });
+
+  describe('after an append', () => {
+    const twinAddress = w('lab2');
+    const [W2, W4, W5, W6, W8, K] = ['w2', 'w4', 'w5', 'w6', 'w8', 'k'].map(w) as [string, string, string, string, string, string];
+    const ETH = (10n ** 18n).toString();
+
+    /** What the engine makes of `ts` without funding, so each save carries a real `uncounted`. */
+    const judged = (ts: Transfer[], custodians: ReadonlySet<string> = new Set()) =>
+      analyze(input(ts, [], { fundingAvailable: false, money: MONEY, custodians }));
+
+    /** Each fact's row version, by fixture key: a row written again gets a new one. */
+    async function xminsOf(id: number): Promise<Record<string, string>> {
+      const { rows } = await store.pool.query('SELECT tx_hash, xmin::text AS xmin FROM washtrace.trade_facts WHERE collection_id = $1', [id]);
+      return Object.fromEntries(rows.map((r) => [LAB.keyOf(r.tx_hash), r.xmin]));
+    }
+
+    /** The facts a single save of every transfer writes, on a second collection that had no analysis before. */
+    async function rewritten(ts: Transfer[], analysis: ReturnType<typeof judged>, through: number, money = MONEY): Promise<Record<string, Fact>> {
+      const { id } = await store.addCollection(1, twinAddress, null, 1);
+      await store.ingest(id, 1, ts, through, []);
+      await store.saveAnalysis(id, 1, analysis, 5, through, money);
+      const facts = await factsOf(id);
+      await drop(1, twinAddress);
+      return facts;
+    }
+
+    /** As a stored-data load leaves it: the transfer in, the cursor where it was. */
+    async function loaded(id: number, t: Transfer): Promise<void> {
+      await store.pool.query(
+        `INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, block_time, token_id, from_address, to_address, marketplace, price_wei, currency)
+         VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $7, $8, $9, $10, $11)`,
+        [id, t.txHash, t.logIndex, t.blockNumber, t.blockTime, t.tokenId, t.from, t.to, t.marketplace, t.priceWei, t.currency],
+      );
+    }
+
+    it('writes the facts a full rewrite would, after one append and another', async () => {
+      const own = w('lab3');
+      const id = await lab(own);
+      await store.saveAnalysis(id, 1, judged(LAB.transfers), 5, 600, MONEY);
+      const once = [...LAB.transfers, LAB.late];
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      await store.saveAnalysis(id, 2, judged(once), 5, 900, MONEY);
+      // Token 2 sold again on day 61: its floor is LATE's price, a sale the previous save wrote.
+      const after = transfer('2', W8, W5, { txHash: '0xlab_after', blockNumber: 1000, blockTime: at(61), marketplace: 'blur', priceWei: (2n * 10n ** 18n).toString(), currency: '' });
+      const twice = [...once, after];
+      await store.ingest(id, 1, [after], 1000, []);
+      const [xmins, counted] = [await xminsOf(id), await factsOf(id)];
+      await store.saveAnalysis(id, 3, judged(twice), 5, 1000, MONEY);
+      const facts = await factsOf(id);
+      expect(facts).toEqual(await rewritten(twice, judged(twice), 1000));
+      // The third save added to the second's facts: every one it had, its counted the same, is the row it was.
+      const kept = Object.keys(counted).filter((k) => counted[k]!.counted === facts[k]!.counted);
+      expect(kept).toHaveLength(once.length);
+      const now = await xminsOf(id);
+      expect(kept.filter((k) => now[k] !== xmins[k])).toEqual([]);
+      expect(Object.keys(facts)).toHaveLength(twice.length);
+      expect(facts.AFTER).toEqual({ counted: true, heldS: 47 * 86_400, buyerAgeS: 50 * 86_400, floorRatio: 2 });
+      await drop(1, own);
+    });
+
+    it('writes again only the old facts whose counted changed: a custodian named since turns a park uncounted', async () => {
+      const own = w('lab4');
+      const id = (await store.addCollection(1, own, null, 1)).id;
+      const old = [
+        transfer('7', ZERO, W2, { txHash: '0xlab_mint7', blockNumber: 100, blockTime: at(0) }),
+        transfer('8', ZERO, W4, { txHash: '0xlab_mint8', blockNumber: 150, blockTime: at(0) }),
+        transfer('7', W2, K, { txHash: '0xlab_park', blockNumber: 200, blockTime: at(1) }),
+        transfer('8', W4, W6, { txHash: '0xlab_sale8', blockNumber: 300, blockTime: at(2), marketplace: 'blur', priceWei: ETH, currency: '' }),
+      ];
+      await store.ingest(id, 1, old, 600, []);
+      // K is no custodian yet: the park is a hop W2 -> K, and counted.
+      await store.saveAnalysis(id, 1, judged(old), 5, 600, MONEY);
+      expect((await factsOf(id)).PARK!.counted).toBe(true);
+      const before = await xminsOf(id);
+      const unpark = transfer('7', K, W5, { txHash: '0xlab_unpark', blockNumber: 900, blockTime: at(3) });
+      const all = [...old, unpark];
+      await store.ingest(id, 1, [unpark], 900, []);
+      // Now K holds without owning: W2 -> K -> W5 is one hop, the unpark's, and the park no hop at all.
+      const analysis = judged(all, new Set([K]));
+      expect(analysis.uncounted.map((u) => LAB.keyOf(u.txHash))).toEqual(['MINT7', 'MINT8', 'PARK']);
+      await store.saveAnalysis(id, 2, analysis, 5, 900, MONEY);
+      const facts = await factsOf(id);
+      expect(facts.PARK!.counted).toBe(false);
+      expect(facts.UNPARK!.counted).toBe(true);
+      expect(facts).toEqual(await rewritten(all, analysis, 900));
+      const after = await xminsOf(id);
+      expect(Object.keys(after).filter((k) => after[k] === before[k]).sort()).toEqual(['MINT7', 'MINT8', 'SALE8']);
+      expect(after.UNPARK).toBe(after.PARK);
+      expect(after.PARK).not.toBe(before.PARK);
+      await drop(1, own);
+    });
+
+    it('rewrites them all when a transfer came in below the old cursor', async () => {
+      const own = w('lab5');
+      const id = await lab(own);
+      await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+      const before = await xminsOf(id);
+      // A stored-data load: a trade at block 500, which the facts through 600 never saw.
+      const stored = transfer('2', W8, W5, { txHash: '0xlab_stored', blockNumber: 500, blockTime: at(51), marketplace: 'blur', priceWei: ETH, currency: '' });
+      await loaded(id, stored);
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      const all = [...LAB.transfers, stored, LAB.late];
+      await store.saveAnalysis(id, 2, judged(all), 5, 900, MONEY);
+      const facts = await factsOf(id);
+      expect(facts).toHaveProperty('STORED');
+      expect(facts).toEqual(await rewritten(all, judged(all), 900));
+      const after = await xminsOf(id);
+      expect(Object.keys(before).filter((k) => after[k] === before[k])).toEqual([]);
+      await drop(1, own);
+    });
+
+    it('rewrites them all when the money they price in changed', async () => {
+      const own = w('lab7');
+      const id = await lab(own);
+      await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+      const before = await xminsOf(id);
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      const all = [...LAB.transfers, LAB.late];
+      // USDC counted as money now: U1's sale has a floor, the days before it priced in ETH.
+      const money = new Set([...MONEY, USDC]);
+      await store.saveAnalysis(id, 2, judged(all), 5, 900, money);
+      const facts = await factsOf(id);
+      expect(facts.U1!.floorRatio).not.toBeNull();
+      expect(facts).toEqual(await rewritten(all, judged(all), 900, money));
+      const after = await xminsOf(id);
+      expect(Object.keys(before).filter((k) => after[k] === before[k])).toEqual([]);
+      await drop(1, own);
+    });
+
+    it('rewrites them all when the previous analysis keyed no facts, as one from before keys was', async () => {
+      const own = w('lab8');
+      const id = await lab(own);
+      await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+      const { rows: [key] } = await store.pool.query('SELECT facts_key FROM washtrace.analyses WHERE collection_id = $1', [id]);
+      expect(key.facts_key).toBe(`${FACTS_VERSION}/${FLOOR_DAYS}/,${WETH}`);
+      await store.pool.query('UPDATE washtrace.analyses SET facts_key = NULL WHERE collection_id = $1', [id]);
+      const before = await xminsOf(id);
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      const all = [...LAB.transfers, LAB.late];
+      await store.saveAnalysis(id, 2, judged(all), 5, 900, MONEY);
+      expect(await factsOf(id)).toEqual(await rewritten(all, judged(all), 900));
+      const after = await xminsOf(id);
+      expect(Object.keys(before).filter((k) => after[k] === before[k])).toEqual([]);
+      await drop(1, own);
+    });
+
+    it('rewrites them all when the cursor went back', async () => {
+      const own = w('lab9');
+      const id = await lab(own);
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      const all = [...LAB.transfers, LAB.late];
+      await store.saveAnalysis(id, 1, judged(all), 5, 900, MONEY);
+      const before = await xminsOf(id);
+      await store.saveAnalysis(id, 2, judged(LAB.transfers), 5, 600, MONEY);
+      const facts = await factsOf(id);
+      expect(facts).toEqual(LAB.facts);
+      expect(facts).toEqual(await rewritten(LAB.transfers, judged(LAB.transfers), 600));
+      const after = await xminsOf(id);
+      expect(Object.keys(after).filter((k) => after[k] === before[k])).toEqual([]);
+      await drop(1, own);
+    });
+
+    it('rewrites them all when the previous analysis read every transfer', async () => {
+      const own = w('lab6');
+      const id = await lab(own);
+      await store.saveAnalysis(id, 1, LAB.analysis, 5, null, MONEY);
+      const before = await xminsOf(id);
+      await store.ingest(id, 1, [LAB.late], 900, []);
+      await store.saveAnalysis(id, 2, judged([...LAB.transfers, LAB.late]), 5, 900, MONEY);
+      const after = await xminsOf(id);
+      expect(Object.keys(before).filter((k) => after[k] === before[k])).toEqual([]);
+      expect(Object.keys(after)).toHaveLength(LAB.transfers.length + 1);
+      await drop(1, own);
+    });
+  });
 });
 
 describe('loops', () => {
@@ -1995,10 +2170,10 @@ describe('loops', () => {
     await store.saveAnalysis(fresh, 1, LAB_MIXED.analysis, 5, null, MONEY);
     try {
       expect((await store.stale()).map((s) => s.id)).not.toContain(old);
-      // Run the newest migration again, as an install upgrading to it would.
+      // Run the re-analysis migration again, and the one after it, as an install upgrading to them would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (24)');
-      expect(await store.migrate()).toBe(25);
+      expect(await store.migrate()).toBe(26);
       const due = (await store.stale()).map((s) => s.id);
       expect(due).toContain(old);
       expect(due).not.toContain(fresh);

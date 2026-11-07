@@ -1,17 +1,22 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { Answer, Head, Section } from '@/components/head';
+import { Answer, Ext, Head, Section } from '@/components/head';
 import { LensName } from '@/components/methods';
 import { Transfers } from '@/components/transfers';
 import { chainOf, txOf } from '@/lib/api';
-import { explorer, lensList, short } from '@/lib/format';
+import { chainName } from '@/lib/chains';
+import { NOT_JUDGED_YET, lensList, short } from '@/lib/format';
+import { explorerTx } from '@/lib/links';
 import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer } from '@/lib/metrics';
 import { txView } from '@/lib/views';
 
 type Props = { params: Promise<{ chain: string; hash: string }> };
 
-export const metadata: Metadata = { title: 'Transaction' };
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { hash } = await params;
+  return { title: txOf(hash) === null ? 'Transaction' : short(hash) };
+}
 
 /** The console's form of GET /api/transfers/<chain>/<tx>: is this sale a wash trade, and by which lens. */
 export default async function TxPage({ params }: Props) {
@@ -23,7 +28,7 @@ export default async function TxPage({ params }: Props) {
   const v = await txView(chainId, tx);
   const { transfers, washTrade, by, apartOnly, notRun } = v;
   const unread = transfers.length === 0;
-  const { title, tone } = unread ? { title: 'Not judged', tone: 'clean' as const } : answer(v, 'Flagged as a wash trade');
+  const { title, tone } = unread ? { title: NOT_JUDGED_YET, tone: 'clean' as const } : answer(v, 'Flagged as a wash trade');
   const body = unread ? 'No watched collection has a transfer in this transaction, so washtrace has not read it. That is not the same as clean.'
     : washTrade === null ? NOT_JUDGED
     : washTrade ? 'The lenses on the right flag it. The reason is beside each transfer below; open its token to see the whole pattern.'
@@ -32,12 +37,13 @@ export default async function TxPage({ params }: Props) {
   // The lens names open that lens's tab when the transaction belongs to one collection; across several there is no one tab.
   const homes = new Set(transfers.flatMap((t) => (t.collection ? [`/c/${t.collection.chainId}/${t.collection.address}`] : [])));
   const home = homes.size === 1 ? [...homes][0]! : null;
+  const collection = home === null ? null : transfers.find((t) => t.collection)!.collection!;
   return (
     <>
       <Head
         title={<span className="font-mono">{short(tx)}</span>}
-        crumb={[{ href: '/', label: 'Collections' }]}
-        sub={<>Transaction · <a className="font-mono hover:underline" href={`${explorer(chainId)}/tx/${tx}`} target="_blank" rel="noopener noreferrer">{tx} ↗</a></>}
+        crumb={[{ href: '/', label: 'Collections' }, ...(home === null ? [] : [{ href: home, label: collection!.name ?? short(collection!.address) }])]}
+        sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       />
       <Answer
         tone={tone}

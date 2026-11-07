@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 // Types only: the package's values (the store, the chain client) must stay out of the browser bundle.
 import type { Bucket, Method } from '@washtrace/detect';
-import { LENSES as LENS_INFO, localTime, pct } from '@/lib/format';
+import { LENSES as LENS_INFO, localTime, pct, num } from '@/lib/format';
 import { dateIn, midnight, offsetAt } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 
@@ -237,7 +237,7 @@ export function TimeChart(props: TimeChartProps) {
           {[0, stripMax].map((v) => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={sy(v)} y2={sy(v)} className="stroke-border" strokeWidth={1} />
-              <text x={L - 8} y={sy(v)} dy="0.35em" textAnchor="end" className="fill-muted-foreground text-[11px] tabular-nums">{history ? v.toLocaleString() : v === 0 ? '0%' : '100%'}</text>
+              <text x={L - 8} y={sy(v)} dy="0.35em" textAnchor="end" className="fill-muted-foreground text-[11px] tabular-nums">{history ? num(v) : v === 0 ? '0%' : '100%'}</text>
             </g>
           ))}
           {history ? points.map((q, i) => (
@@ -271,7 +271,7 @@ export function TimeChart(props: TimeChartProps) {
                       <span className="font-semibold text-foreground tabular-nums">{v === null ? 'not run' : s === null ? 'no sale' : pctText(s)}</span>{' '}
                       {s !== null && notFinal.includes(m) ? <span className="text-muted-foreground">so far </span> : null}
                       <span className="text-muted-foreground">{NAME(m)}</span>
-                      {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{v.part.toLocaleString()} of {v.whole.toLocaleString()} sales</span> : null}
+                      {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{num(v.part)} of {num(v.whole)} sales</span> : null}
                     </span>
                   </li>
                 );
@@ -279,11 +279,11 @@ export function TimeChart(props: TimeChartProps) {
             </ul>
             <p className="mt-2 border-t pt-2 text-muted-foreground tabular-nums">
               {history ? (
-                <><span className="font-semibold text-foreground">{p.sales.toLocaleString()}</span> sales among {p.transfers.toLocaleString()} transfers this {props.bucket}</>
+                <><span className="font-semibold text-foreground">{num(p.sales)}</span> sales among {num(p.transfers)} transfers this {props.bucket}</>
               ) : (
                 <>
-                  <span className="font-semibold text-foreground">{!p.wallets ? '—' : pctText((p.funded ?? 0) / p.wallets)}</span> wallets checked ({(p.funded ?? 0).toLocaleString()} of {(p.wallets ?? 0).toLocaleString()})
-                  {p.through != null ? <span className="block">read through block {p.through.toLocaleString()}</span> : null}
+                  <span className="font-semibold text-foreground">{!p.wallets ? '—' : pctText((p.funded ?? 0) / p.wallets)}</span> wallets checked ({num(p.funded ?? 0)} of {num(p.wallets ?? 0)})
+                  {p.through != null ? <span className="block">read through block {num(p.through)}</span> : null}
                 </>
               )}
             </p>
@@ -315,7 +315,7 @@ export function TimeChart(props: TimeChartProps) {
                     {history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{periodText(q.at, props.bucket, zone)}</Link> : periodText(q.at, props.bucket, zone)) : localTime(q.at, 'datetime', zone)}
                   </td>
                   {LENSES.map((m) => { const s = share(q.lens[m]); const h = lensHrefs?.[i]?.[m]; return <td key={m} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? '—' : h ? <Link href={h} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
-                  <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{q.sales.toLocaleString()}</Link> : q.sales.toLocaleString()) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
+                  <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{num(q.sales)}</Link> : num(q.sales)) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
                 </tr>
               ))}
             </tbody>

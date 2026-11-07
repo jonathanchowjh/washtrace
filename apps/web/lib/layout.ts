@@ -1,4 +1,5 @@
 import { METHODS, ZERO, type FlaggedTransfer, type Flow, type Method, type Witness } from '@washtrace/detect';
+import { LENSES } from './format';
 import { toneOf, type Tone } from './metrics';
 
 /** Two witnesses that would read as the same sentence share a key. */
@@ -49,7 +50,7 @@ export interface DrawnLoop { key: string; methods: Method[]; edges: string[]; no
 export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
 /** What an edge's title says of its flags: nothing for a clean one, and that an apart lens alone does not count. */
-const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ' · flagged only by Money loops back, not counted' : ' · flagged');
+const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ` · flagged only by ${LENSES.AU.name}, not counted` : ' · flagged');
 
 /**
  * One token's graph, as the paper draws it in Figure 8: wallets as nodes,
