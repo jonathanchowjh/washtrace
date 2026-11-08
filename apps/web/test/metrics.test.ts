@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionRow, Method, MethodTotals, PassRow } from '@washtrace/detect';
+import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, waiting } from '@/lib/coverage';
-import { APART_WHY, judged, lensesRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
+import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
+import { APART_WHY, behindLine, behindOf, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -90,7 +91,7 @@ function row(more: Partial<CollectionRow> = {}): CollectionRow {
   return {
     id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 1_000, headBlock: 1_000,
     addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 80, fundedWallets: 80, stale: false,
-    latest: { ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0, loops: null },
+    latest: { id: 1, ranAt: 0, tookMs: 1, throughBlock: 1_000, totals: DEMO, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0, loops: null },
     servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
     restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
     downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, ...more,
@@ -484,5 +485,92 @@ describe('lensesRan', () => {
   });
   it('is none without an analysis', () => {
     expect(lensesRan(null)).toEqual([]);
+  });
+});
+
+describe('your lenses', () => {
+  const lens = (id: number, name: string) => ({ id, key: `L${id}` as const, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 });
+  const run = (totals: object | null) => ({ lensId: 1, collectionId: 1, status: 'done', totals }) as unknown as LensRun;
+  const runs = [{ lens: lens(7, 'Blur 3-hop'), run: run({}) }, { lens: lens(9, 'Slow flips'), run: run(null) }, { lens: lens(11, 'Never run'), run: null }];
+
+  it('ownRan keeps only the keys with a finished run', () => {
+    expect(ownRan(runs)).toEqual(['L7']);
+  });
+
+  it('ownLenses names every lens, in the own hue, with its rule in words', () => {
+    expect(ownLenses(runs)).toEqual({
+      L7: { name: 'Blur 3-hop', tone: 'own', says: ruleLine(DEFAULT_RULE) },
+      L9: { name: 'Slow flips', tone: 'own', says: ruleLine(DEFAULT_RULE) },
+      L11: { name: 'Never run', tone: 'own', says: ruleLine(DEFAULT_RULE) },
+    });
+  });
+
+  it('lensContext reads the lenses that ran and, for each of yours with figures, the block its run read through (Ruling FF)', () => {
+    const latest = { totals: { A: { available: true }, AU: { available: false }, AC: { available: true } } } as never;
+    const through = [{ lens: lens(7, 'Blur 3-hop'), run: { ...run({}), throughBlock: 90 } }, { lens: lens(8, 'Whole'), run: { ...run({}), throughBlock: null } }, ...runs.slice(1)];
+    expect(lensContext(latest, through)).toEqual({ ran: ['A', 'AC', 'L7', 'L8'], through: { L7: 90, L8: null } });
+    expect(lensContext(null, [])).toEqual({ ran: [], through: {} });
+  });
+
+  describe('chartLenses (the over-time chart draws at most three of yours)', () => {
+    const at = (id: number, finishedAt: number | null, totals: object | null = {}) => ({ lens: lens(id, `Lens ${id}`), run: { ...run(totals), finishedAt, throughBlock: 100 } });
+    const five = [at(1, 10), at(2, 50), at(3, 30), at(4, 40), at(5, 20)];
+
+    it('takes the most recently run three, and names the rest as left out', () => {
+      const { drawn, left } = chartLenses(five, 'A');
+      expect(drawn.map((o) => o.lens.key)).toEqual(['L2', 'L4', 'L3']);
+      expect(left.map((o) => o.lens.key)).toEqual(['L5', 'L1']);
+    });
+
+    it('puts the selected lens first, whatever its age', () => {
+      expect(chartLenses(five, 'L1').drawn.map((o) => o.lens.key)).toEqual(['L1', 'L2', 'L4']);
+    });
+
+    it('a lens with no figures is neither drawn nor left out: it is not run', () => {
+      const { drawn, left, notRun } = chartLenses([at(1, null, null), at(2, 5)], 'L1');
+      expect(drawn.map((o) => o.lens.key)).toEqual(['L2']);
+      expect(left).toEqual([]);
+      expect(notRun.map((o) => o.lens.key)).toEqual(['L1']);
+    });
+  });
+});
+
+describe('a lens of yours that is behind (Ruling FF)', () => {
+  const lens = { id: 7, key: 'L7' as const, name: 'Blur 3-hop', rule: DEFAULT_RULE, version: 2, createdAt: 0, updatedAt: 0 };
+  const run = (status: string, over: object = {}) => ({ lensId: 7, collectionId: 1, status, lensVersion: 2, analysisId: 5, totals: {}, ...over }) as never;
+  const latest = { id: 5 };
+
+  it('is behind after an edit, or after a newer analysis, in any status; the edit is said first', () => {
+    for (const status of ['done', 'queued', 'running', 'failed']) {
+      expect(behindOf(run(status), lens, latest), status).toBeNull();
+      expect(behindOf(run(status, { lensVersion: 1 }), lens, latest), status).toBe('edit');
+      expect(behindOf(run(status, { analysisId: 4 }), lens, latest), status).toBe('analysis');
+      expect(behindOf(run(status, { lensVersion: 1, analysisId: 4 }), lens, latest), status).toBe('edit');
+    }
+  });
+
+  it('is never behind with no figures to show: no run, or a run that has not saved', () => {
+    expect(behindOf(null, lens, latest)).toBeNull();
+    expect(behindOf(run('queued', { totals: null, lensVersion: 1, analysisId: null }), lens, latest)).toBeNull();
+    // Figures with no analysis now to match are from one that is gone: behind, by the rule as written.
+    expect(behindOf(run('done'), lens, null)).toBe('analysis');
+  });
+
+  it('says each lens behind by name, and why, in one line', () => {
+    expect(behindLine([])).toBeNull();
+    expect(behindLine([{ name: 'Blur 3-hop', behind: 'edit' }, { name: 'Slow flips', behind: 'analysis' }])).toBe(
+      "Blur 3-hop shows figures from before its latest edit, so its flags are the old rule's until the new run saves. "
+      + 'Slow flips shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
+  });
+
+  it('judgedBy: a lens of yours judged a trade only through its run\'s block; a built-in, every trade the analysis judged', () => {
+    const row = (blockNumber: number, judged = true) => ({ blockNumber, judged });
+    expect(judgedBy(row(10), 'L7', { L7: 10 })).toBe(true);
+    expect(judgedBy(row(11), 'L7', { L7: 10 })).toBe(false);
+    expect(judgedBy(row(11), 'L7', { L7: null })).toBe(true);
+    expect(judgedBy(row(11), 'L7', {})).toBe(true);
+    expect(judgedBy(row(11), 'A', { L7: 10 })).toBe(true);
+    expect(judgedBy(row(5, false), 'L7', { L7: 10 })).toBe(false);
+    expect(judgedBy(row(5, false), 'A', {})).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const SELLER = '0x' + '1'.repeat(40);
@@ -11,15 +12,23 @@ const row = (i: number, over: Record<string, unknown> = {}) => ({
   marketplace: 'seaport-1.5', priceWei: '1500000000000000000', currency: '', flags: {}, lenses: ['A'], judged: true, heldS: 7200, buyerAgeS: null, floorRatio: 1.25, ...over,
 });
 
+
+/** A saved lens of yours and its run on this collection (null: it has none here). */
+const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', throughBlock = 10) => ({
+  lens: { id, key: `L${id}`, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 },
+  run: { lensId: id, collectionId: 1, status, progress: null, lensVersion: 1, analysisId: 1, throughBlock, totals: status === 'done' ? { available: true } : null, error: null, retryAt: null, finishedAt: null, tookMs: 1 },
+});
+
 const fresh = () => ({
-  watched: true, moneyRan: true, total: 120, unjudged: 3, rows: [row(1)] as unknown[], calls: [] as unknown[][], streamArgs: [] as unknown[][],
+  runs: [] as ReturnType<typeof ownRun>[], watched: true, moneyRan: true, total: 120, unjudged: 3, rows: [row(1)] as unknown[], calls: [] as unknown[][], streamArgs: [] as unknown[][],
   stream: async function* () { yield row(1); } as () => AsyncGenerator<unknown>,
 });
 const state = fresh();
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => state.watched ? { id: 1, chainId: 1, address: ADDR, latest: { throughBlock: 10, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: m === 'A' || state.moneyRan }])) } } : null,
+    collection: async () => state.watched ? { id: 1, chainId: 1, address: ADDR, latest: { id: 1, throughBlock: 10, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: m === 'A' || state.moneyRan }])) } } : null,
+    lensRuns: async () => state.runs,
     tradeCount: async () => ({ total: state.total, unjudged: state.unjudged }),
     trades: async (...a: unknown[]) => { state.calls.push(a); return state.rows; },
     tradeStream: (...a: unknown[]) => { state.streamArgs.push(a); return state.stream(); },
@@ -79,8 +88,8 @@ describe('GET trades', () => {
     state.moneyRan = false;
     state.stream = async function* () { yield row(1, { lenses: [] }); yield row(2, { judged: false, lenses: [], currency: '0xabc' }); };
     const lines = (await (await get('format=csv')).text()).trim().split('\n').slice(1);
-    expect(lines[0]).toBe(`2023-03-28T10:40:00.000Z,1,${SELLER},${BUYER},1.5,ETH,OpenSea,7200,,1.25,,did not run,did not run,0xtx1`);
-    expect(lines[1]).toBe(`2023-03-28T10:40:00.000Z,2,${SELLER},${BUYER},,,OpenSea,7200,,1.25,not judged yet,did not run,did not run,0xtx2`);
+    expect(lines[0]).toBe(`2023-03-28T10:40:00.000Z,1,${SELLER},${BUYER},1.5,ETH,OpenSea,7200,,1.25,,not run,not run,0xtx1`);
+    expect(lines[1]).toBe(`2023-03-28T10:40:00.000Z,2,${SELLER},${BUYER},,,OpenSea,7200,,1.25,not judged yet,not run,not run,0xtx2`);
   });
 
   it('quotes per RFC 4180 and defuses a formula', async () => {
@@ -146,5 +155,48 @@ describe('GET trades', () => {
     const res = await get();
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'This collection is not watched.' });
+  });
+
+  it('appends a column per lens of yours after the three built-ins, by name, and reads it as caught, empty or did not run', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop'), ownRun(9, 'Slow flips', 'queued')];
+    state.stream = async function* () { yield row(1, { lenses: ['A', 'L7'] }); yield row(2, { lenses: [] }); };
+    const lines = (await (await get('format=csv')).text()).trim().split('\n');
+    expect(lines[0]).toBe(HEADER.replace('Linked wallets,tx', 'Linked wallets,Blur 3-hop,Slow flips,tx'));
+    expect(lines[1]!.endsWith(',caught,,,caught,not run,0xtx1')).toBe(true);
+    expect(lines[2]!.endsWith(',,,,,not run,0xtx2')).toBe(true);
+    expect(lines.join('\n')).not.toMatch(/\bL7\b/);
+  });
+
+  it('says not judged yet in a lens of yours\'s cell for a trade past the block its run read, and bounds every read by it (Ruling FF)', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', 8)];
+    state.stream = async function* () { yield row(1, { blockNumber: 8, lenses: ['A', 'L7'] }); yield row(2, { blockNumber: 9, lenses: ['A'] }); };
+    const lines = (await (await get('format=csv')).text()).trim().split('\n');
+    expect(lines[1]!.endsWith(',caught,,,caught,0xtx1')).toBe(true);
+    // Judged by the latest analysis (built-ins), but past what Blur 3-hop read: not "", which would read as not caught.
+    expect(lines[2]!.endsWith(',caught,,,not judged yet,0xtx2')).toBe(true);
+    expect(state.streamArgs[0]![2]).toMatchObject({ ran: ['A', 'AU', 'AC', 'L7'], through: { L7: 8 } });
+    const body = await (await get('caught=L7')).json();
+    expect(state.calls[0]![2]).toMatchObject({ through: { L7: 8 } });
+    // The JSON says it too, so a reader can tell a row past it from one Blur 3-hop judged clean.
+    expect(body.through).toEqual({ L7: 8 });
+  });
+
+  it('guards and quotes a hostile lens name in the header: a formula, commas and quotes, and a leading + - or @', async () => {
+    const names = ['=HYPERLINK("x")', 'a, "b"', '+1', '-1', '@me'];
+    state.runs = names.map((n, i) => ownRun(i + 1, n));
+    const header = (await (await get('format=csv')).text()).split('\n')[0]!;
+    expect(header).toBe(HEADER.replace('Linked wallets,tx', `Linked wallets,"'=HYPERLINK(""x"")","a, ""b""",'+1,'-1,'@me,tx`));
+  });
+
+  it('reads a filter on your lens that ran, holds nothing for one that did not, and drops a deleted one', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop'), ownRun(9, 'Slow flips', 'queued')];
+    const body = await (await get('caught=L7')).json();
+    expect(body.ran).toEqual(['A', 'AU', 'AC', 'L7']);
+    expect(state.calls[0]![1]).toMatchObject({ caught: ['L7'] });
+    state.calls.length = 0;
+    expect(await (await get('caught=L9')).json()).toMatchObject({ total: 0, rows: [] });
+    expect(state.calls).toEqual([]);
+    expect((await (await get('caught=L99')).json()).total).toBe(120);
+    expect(state.calls[0]![1]).toMatchObject({ caught: [] });
   });
 });

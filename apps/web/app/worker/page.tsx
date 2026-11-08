@@ -8,7 +8,7 @@ import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
 import { LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
-import type { JobState } from '@/lib/status';
+import { JOB_STEP, type JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { cn } from '@/lib/utils';
 import { ZONE_COOKIE, parseZone } from '@/lib/zone';
@@ -23,11 +23,12 @@ const DEFAULT = {
   hops: Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback),
 };
 
-/** The three jobs in the order data flows through them, each with what it feeds. */
+/** The four jobs in the order data flows through them, each with what it feeds. */
 const STEPS = {
-  ingest: { title: 'Read transfers', does: 'Reads every finalized ERC-721 transfer of each collection, and the receipts that make some of them sales.', feeds: 'every lens' },
-  fund: { title: 'Check wallets for money', does: 'Asks Etherscan who paid whom, for each wallet that traded, busiest first.', feeds: `${LENSES.AU.name} and ${LENSES.AC.name}` },
-  analyze: { title: 'Run the lenses', does: 'Reruns all three lenses over each collection that has new data.', feeds: 'every number in the console' },
+  ingest: { title: JOB_STEP.ingest, does: 'Reads every finalized ERC-721 transfer of each collection, and the receipts that make some of them sales.', feeds: 'every lens' },
+  fund: { title: JOB_STEP.fund, does: 'Asks Etherscan who paid whom, for each wallet that traded, busiest first.', feeds: `${LENSES.AU.name} and ${LENSES.AC.name}` },
+  analyze: { title: JOB_STEP.analyze, does: 'Reruns the three built-in lenses over each collection that has new data.', feeds: 'every number in the console' },
+  lens: { title: JOB_STEP.lens, does: 'Runs each lens of yours over the collections it was asked on, after their latest analysis.', feeds: 'the lists and tabs of your lenses' },
 } as const;
 
 const STATE: Record<JobState, { label: string; tone: PillTone }> = {
@@ -62,8 +63,8 @@ export default async function WorkerPage() {
         {now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')}
       </p>
 
-      <Section title="What it does" lead="Three jobs, in the order data flows through them. Each feeds the next, and the last feeds the console.">
-        <ol className="grid gap-3 lg:grid-cols-3">
+      <Section title="What it does" lead="Four jobs, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analysed.">
+        <ol className="grid gap-3 lg:grid-cols-4">
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
             const state = STATE[j.state];

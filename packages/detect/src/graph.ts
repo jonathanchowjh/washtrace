@@ -14,6 +14,13 @@ export interface Hop {
   from: string;
   to: string;
   ref: number | null;
+  /**
+   * For a move out of custody, the wallet that put the token in, which is
+   * `from`: the transfer's own sender is the custodian. Null for every other
+   * hop, a bridge included. Lets a reader name the seller the engine judged
+   * without walking the custody again.
+   */
+  parked: string | null;
 }
 
 export interface TokenGraph {
@@ -22,6 +29,26 @@ export interface TokenGraph {
   moves: number;
   /** Bridges inserted. Over `moves`, this is the paper's missing-data share. */
   gaps: number;
+  /** Moves out of custody back to the wallet that put the token in (a repaid loan), by ref: no hop, since no owner changed. */
+  returned: number[];
+}
+
+/** Code-unit order: a total order on addresses and hashes, and unlike localeCompare, fast. */
+export function compare(x: string, y: string): number {
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/**
+ * Transfers' indexes in chain order: by block, then log, then transaction.
+ * A total order, since the store keys a transfer by its tx and log. The
+ * store returns rows in no set order, and hops, and so flags, must not
+ * depend on it: analyze, a lens run and parkedOf all take this one.
+ */
+export function chainOrder(transfers: readonly Transfer[]): number[] {
+  return transfers.map((_, i) => i).sort((i, j) => {
+    const x = transfers[i]!, y = transfers[j]!;
+    return x.blockNumber - y.blockNumber || x.logIndex - y.logIndex || compare(x.txHash, y.txHash);
+  });
 }
 
 /**
@@ -44,6 +71,7 @@ export function tokenGraph(
   custodians: ReadonlySet<string>,
 ): TokenGraph {
   const hops: Hop[] = [];
+  const returned: number[] = [];
   let moves = 0;
   let gaps = 0;
   // `holder` owns the token now. `parked` owned it before it went into custody.
@@ -57,7 +85,7 @@ export function tokenGraph(
     if (!fromHeld) {
       const expected: string | null = holder ?? parked;
       if (expected !== null && expected !== t.from) {
-        hops.push({ from: expected, to: t.from, ref: null });
+        hops.push({ from: expected, to: t.from, ref: null, parked: null });
         gaps += 1;
       }
     }
@@ -70,11 +98,37 @@ export function tokenGraph(
     holder = t.to;
     parked = null;
     // A mint, or a token handed back to the wallet that parked it.
-    if (source === null || (fromHeld && source === t.to)) continue;
-    hops.push({ from: source, to: t.to, ref: i });
+    if (source === null) continue;
+    if (fromHeld && source === t.to) {
+      returned.push(i);
+      continue;
+    }
+    hops.push({ from: source, to: t.to, ref: i, parked: fromHeld ? source : null });
     moves += 1;
   }
-  return { hops, moves, gaps };
+  return { hops, moves, gaps, returned };
+}
+
+/**
+ * Who custody held a token for as each transfer took it out, by its place in
+ * `transfers` (one token's, in any order): the wallet that put it in, the
+ * seller graph.ts judges the move as a trade from, or the wallet it went back
+ * to for a repaid loan. Null when no move of it into custody was read before,
+ * and for a transfer that does not take it out of custody to a wallet. The
+ * zero address is a custodian here as in tokenGraph, so a re-mint after a burn
+ * names the burner.
+ *
+ * The seam a reader such as the trade page takes, rather than tokenGraph: it
+ * answers by transfer, not by hop, so the reader needs neither the chain
+ * order nor the graph's custody rules, and a repaid loan, which makes no hop,
+ * is still told apart from a move out with nothing read in.
+ */
+export function parkedOf(transfers: readonly Transfer[], custodians: ReadonlySet<string>): (string | null)[] {
+  const out: (string | null)[] = transfers.map(() => null);
+  const g = tokenGraph(transfers, chainOrder(transfers), custodians);
+  for (const h of g.hops) if (h.parked !== null) out[h.ref!] = h.parked;
+  for (const i of g.returned) out[i] = transfers[i]!.to;
+  return out;
 }
 
 function isCustodian(address: string, custodians: ReadonlySet<string>): boolean {

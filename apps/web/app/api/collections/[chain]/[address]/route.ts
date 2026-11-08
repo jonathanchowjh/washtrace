@@ -1,6 +1,6 @@
 import { moneyFor } from '@washtrace/detect';
-import { addressOf, bad, chainOf, handle, json, methodOf, writeBody } from '@/lib/api';
-import { lensesRan } from '@/lib/metrics';
+import { addressOf, bad, chainOf, handle, json, lensKeyOf, writeBody } from '@/lib/api';
+import { lensContext, ownLenses } from '@/lib/metrics';
 import { store } from '@/lib/store';
 
 const NOT_PAUSED = 'Pause this collection before deleting its data.';
@@ -9,9 +9,12 @@ type Ctx = { params: Promise<{ chain: string; address: string }> };
 
 /**
  * GET: one collection's latest analysis, its history, and the 50 tokens and
- * wallets with the most trades caught under `?method=` (A, AU or AC; AC by
+ * wallets with the most trades caught under `?method=` (a built-in's key or one of your lenses'; AC by
  * default), each `{ rows, total }`, as the console's lists read them. A lens
- * that did not run lists none.
+ * that did not run lists none. `lenses` is each lens of yours with its run
+ * here (`run` null when it has none), so a reader can tell one queued, failed
+ * or never run from one that ran and flags nothing, and one behind (its run's
+ * `lensVersion` and `analysisId`) from one that is current.
  */
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
@@ -22,14 +25,15 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
     const s = store();
     const collection = await s.collection(chainId, address);
     if (!collection) return bad('This collection is not watched.', 404);
-    const method = methodOf(new URL(req.url).searchParams.get('method'));
+    const runs = await s.lensRuns(collection.id);
+    const method = lensKeyOf(new URL(req.url).searchParams.get('method'), ownLenses(runs));
     // UTC, not the reader's cookie zone as the trades route reads: the lens lists do not bucket by month.
-    const ctx = { money: moneyFor(chainId), ran: lensesRan(collection.latest), zone: 'UTC' };
+    const ctx = { money: moneyFor(chainId), zone: 'UTC', ...lensContext(collection.latest, runs) };
     const top = { sort: 'caught', find: null, limit: 50, offset: 0 } as const;
     const [history, tokens, wallets] = await Promise.all([
       s.history(collection.id), s.lensTokens(collection.id, method, top, ctx), s.lensWallets(collection.id, method, top, ctx),
     ]);
-    return json({ collection, method, history, tokens, wallets });
+    return json({ collection, method, history, tokens, wallets, lenses: runs });
   });
 }
 

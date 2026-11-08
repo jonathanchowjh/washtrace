@@ -6,6 +6,7 @@
  */
 
 import type { TokenLine, WalletLine } from '@washtrace/detect';
+import type { LensKey } from '@washtrace/detect/trades';
 import { plural, num } from './format';
 
 export type WhyPart = { text: string; opens?: 'loops' | 'wallets' };
@@ -15,8 +16,17 @@ function counts(loops: number, pairs: number): string {
   return [loops > 0 ? plural(loops, 'loop') : null, pairs > 0 ? plural(pairs, 'linked pair') : null].filter((s) => s !== null).join(' and ');
 }
 
+/**
+ * A row's loop counts. A built-in's analysis fills them in and a lens of
+ * yours's run fills them from its flags (laps = loops, pairs = 0), so one
+ * form reads both. A count that is missing (null) silences only its own part,
+ * never the line, and a zero count is left out, so nothing reads "0 loops".
+ */
+type Counts<K extends string> = Record<K, number>;
+
 /** "3 loops among 4 wallets, 5 laps, 2 closed by money, 1 through a middle wallet". */
-export function tokenWhy(l: TokenLine): WhyPart[] {
+export function tokenWhy(_method: LensKey, line: TokenLine): WhyPart[] {
+  const l = line as TokenLine & Counts<'loops' | 'pairs' | 'wallets' | 'laps' | 'closedByMoney' | 'middles'>;
   const what = counts(l.loops, l.pairs);
   if (what === '') return [];
   const parts: WhyPart[] = [{ text: what, opens: 'loops' }];
@@ -32,7 +42,8 @@ export function tokenWhy(l: TokenLine): WhyPart[] {
 }
 
 /** "in 41 loops and 2 linked pairs with 6 wallets". */
-export function walletWhy(l: WalletLine): WhyPart[] {
+export function walletWhy(_method: LensKey, line: WalletLine): WhyPart[] {
+  const l = line as WalletLine & Counts<'loops' | 'pairs' | 'partners'>;
   const what = counts(l.loops, l.pairs);
   if (what === '') return [];
   const parts: WhyPart[] = [{ text: 'in ' }, { text: what, opens: 'loops' }];

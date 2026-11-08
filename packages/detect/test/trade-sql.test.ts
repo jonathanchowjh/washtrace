@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { tradeOrder, tradeWhere, walletWhere, betweenWhere } from '../src/trade-sql.js';
-import { NO_FILTER, type TradeContext, type TradeQuery } from '../src/trades.js';
+import { caughtOf, flagSource, tradeOrder, tradeSelect, tradeWhere, walletWhere, betweenWhere } from '../src/trade-sql.js';
+import { NO_FILTER, isLensKey, isOwnKey, lensIdOf, type TradeContext, type TradeQuery } from '../src/trades.js';
 
 const ctx: TradeContext = { money: new Set(['ETH', 'WETH']), ran: ['A', 'AU'], zone: 'Europe/Paris' };
 const rich: TradeQuery = {
@@ -29,5 +29,59 @@ describe('the console trade SQL', () => {
   });
   it('betweenWhere reads the payments one way, the other, or both', () => {
     expect((['sent', 'received', 'both'] as const).map((d) => betweenWhere(d))).toEqual(["f.chain_id = $1 AND f.from_address = $2 AND f.to_address = $3", "f.chain_id = $1 AND f.from_address = $3 AND f.to_address = $2", "f.chain_id = $1 AND ((f.from_address = $2 AND f.to_address = $3) OR (f.from_address = $3 AND f.to_address = $2))"]);
+  });
+  it('a saved lens binds its id and reads lens_flags, in the filter, the order and the group', () => {
+    const own: TradeContext = { ...ctx, ran: ['A', 'L7'] };
+    const params: unknown[] = [];
+    expect(tradeWhere(3, { ...NO_FILTER, caught: ['L7'], notCaught: ['A'] }, own, params)).toBe("t.collection_id = $1 AND (x.counted OR x.tx_hash IS NULL) AND t.marketplace IS NOT NULL AND EXISTS (SELECT 1 FROM washtrace.lens_flags f WHERE f.collection_id = t.collection_id AND f.lens_id = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND x.tx_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $3 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)");
+    expect(params).toEqual([3, 7, 'A']);
+    const sort: unknown[] = [];
+    expect(tradeOrder({ ...NO_FILTER, sort: 'lens-L7', dir: 'desc' }, own, sort)).toBe("EXISTS (SELECT 1 FROM washtrace.lens_flags f WHERE f.collection_id = t.collection_id AND f.lens_id = $1 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) DESC NULLS LAST, t.block_time DESC NULLS LAST, t.block_number DESC, t.log_index DESC, t.tx_hash DESC");
+    expect(sort).toEqual([7]);
+    const group: unknown[] = [];
+    expect(tradeWhere(3, { ...NO_FILTER, group: { method: 'L7', wallet: '0xAB' } }, own, group)).toContain("ARRAY(SELECT DISTINCT unnest(f.wallets) FROM washtrace.lens_flags f WHERE f.collection_id = $1 AND f.lens_id = $2 AND f.wallets @> ARRAY[$3]::text[])");
+    expect(group).toEqual([3, 7, '0xab']);
+  });
+  it('a lens not in ran, or a junk key, is never read', () => {
+    const params: unknown[] = [];
+    expect(tradeWhere(3, { ...NO_FILTER, caught: ['L8'] }, ctx, params)).toContain('AND false');
+    expect(params).toEqual([3]);
+  });
+  it("a saved lens judged only through its run's block: \"not flagged by\" binds that block after its id, and a built-in binds none (Ruling FF)", () => {
+    const own: TradeContext = { ...ctx, ran: ['A', 'L7'], through: { L7: 350, A: 5 } };
+    const params: unknown[] = [];
+    expect(tradeWhere(3, { ...NO_FILTER, notCaught: ['L7', 'A'] }, own, params)).toBe("t.collection_id = $1 AND (x.counted OR x.tx_hash IS NULL) AND t.marketplace IS NOT NULL AND x.tx_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.lens_flags f WHERE f.collection_id = t.collection_id AND f.lens_id = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND t.block_number <= $3::bigint AND NOT EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $4 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)");
+    expect(params).toEqual([3, 7, 350, 'A']);
+    // A run that read every trade (a null block), or no block given, binds nothing.
+    for (const through of [{ L7: null }, {}]) expect(tradeWhere(3, { ...NO_FILTER, notCaught: ['L7'] }, { ...own, through }, [])).not.toContain('block_number');
+    // Caught needs none: a lens's flags are of the trades it read.
+    expect(tradeWhere(3, { ...NO_FILTER, caught: ['L7'] }, own, [])).not.toContain('block_number');
+  });
+  it("caughtOf and tradeSelect keep a built-in's text, as main wrote it, with no lens of yours in ran", () => {
+    const p: unknown[] = [7];
+    expect(caughtOf('AU', p)).toEqual({
+      from: 'FROM washtrace.flags f\n  JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index\n  JOIN washtrace.trade_facts x ON x.collection_id = f.collection_id AND x.tx_hash = f.tx_hash AND x.log_index = f.log_index',
+      where: 'f.collection_id = $1 AND f.method = $2 AND x.counted',
+    });
+    expect(p).toEqual([7, 'AU']);
+    const params: unknown[] = [];
+    expect(tradeSelect(7, { ...NO_FILTER, caught: ['A'], notCaught: ['AU'] }, ctx, params)).toBe("\nSELECT t.tx_hash, t.log_index, t.block_number, extract(epoch FROM t.block_time)::float8 AS bt, t.token_id::text AS token_id,\n       t.from_address, t.to_address, t.marketplace, t.price_wei::text AS price_wei, t.currency, x.tx_hash IS NOT NULL AS judged, x.held_s, x.buyer_age_s, x.floor_ratio,\n    ARRAY(SELECT f.method FROM washtrace.flags f\n          WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY($1::text[])) AS lenses\n    FROM washtrace.transfers t\n  LEFT JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index WHERE t.collection_id = $2 AND (x.counted OR x.tx_hash IS NULL) AND t.marketplace IS NOT NULL AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $3 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND x.tx_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $4 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) ORDER BY t.block_time DESC NULLS LAST, t.block_number DESC, t.log_index DESC, t.tx_hash DESC");
+    expect(params).toEqual([['A', 'AU'], 7, 'A', 'AU']);
+  });
+  it('flagSource gives a built-in the flags table and a lens its own', () => {
+    const p: unknown[] = [1];
+    expect(flagSource('AU', p)).toEqual({ from: 'washtrace.flags f', where: 'f.method = $2' });
+    expect(flagSource('L12', p, 'g')).toEqual({ from: 'washtrace.lens_flags g', where: 'g.lens_id = $3' });
+    expect(p).toEqual([1, 'AU', 12]);
+  });
+  it('isLensKey takes a method or L and a number with no leading zero, and lensIdOf reads the id', () => {
+    for (const ok of ['A', 'AU', 'AC', 'L1', 'L7', 'L1234567890', 'L2147483647']) expect(isLensKey(ok)).toBe(true);
+    for (const bad of ['', 'L', 'L0', 'L01', 'Lx', 'l7', 'L-1', 'L12345678901', 'L2147483648', 'L9999999999', 'L1.5', ' L1', 'B']) expect(isLensKey(bad)).toBe(false);
+    expect([lensIdOf('A'), lensIdOf('L42')]).toEqual([null, 42]);
+  });
+
+  it('isOwnKey is the one test of "a lens of yours", for every reader: built-ins and junk are not', () => {
+    for (const own of ['L1', 'L7', 'L2147483647']) expect(isOwnKey(own)).toBe(true);
+    for (const not of ['A', 'AU', 'AC', 'L0', 'L01', 'Lx', 'L2147483648', '']) expect(isOwnKey(not)).toBe(false);
   });
 });

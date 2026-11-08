@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ZERO, type FlaggedTransfer } from '@washtrace/detect';
+import { ZERO, type FlaggedTransfer, type LoopEdge, type OwnFlag } from '@washtrace/detect';
 import { layout } from '@/lib/layout';
 
 const a = '0x' + 'a'.repeat(40), b = '0x' + 'b'.repeat(40), x = '0x' + 'c'.repeat(40);
@@ -8,7 +8,131 @@ function t(from: string, to: string, flags: FlaggedTransfer['flags'] = {}): Flag
   return { txHash: '0x1', logIndex: 0, blockNumber: 1, blockTime: null, tokenId: '1', from, to, marketplace: null, priceWei: null, currency: null, flags };
 }
 
+// The Cycle lab's token 1 (packages/detect/test/fixtures.ts LAB): minted to w1, then a ring w1 → w2 → w3 → w1 → w2, all Round trips.
+const w = (n: string) => `0x${n.padStart(40, '0')}`;
+const [W1, W2, W3] = [w('w1'), w('w2'), w('w3')];
+const labScc = { kind: 'scc' as const, wallets: [W1, W2, W3], cycles: 2 };
+const lab = (key: string, from: string, to: string, block: number, flagged: boolean): FlaggedTransfer => ({
+  txHash: `0xlab_${key.toLowerCase()}`, logIndex: 0, blockNumber: block, blockTime: null, tokenId: '1', from, to,
+  marketplace: flagged ? 'blur' : null, priceWei: flagged ? '1000000000000000000' : null, currency: flagged ? '' : null, flags: flagged ? { A: labScc } : {},
+});
+const LAB = [lab('M1', ZERO, W1, 100, false), lab('S1', W1, W2, 200, true), lab('S2', W2, W3, 300, true), lab('S3', W3, W1, 400, true), lab('S4', W1, W2, 500, true)];
+
 describe('layout', () => {
+  it('a built-in drawing is unchanged with no own flags', () => {
+    expect(layout(LAB, [], [])).toMatchInlineSnapshot(`
+      {
+        "edges": [
+          {
+            "d": "M 280 100 Q 344.0858798800485 243 428.2690268357464 359.4641819740558",
+            "from": "0x00000000000000000000000000000000000000w1",
+            "key": "t1",
+            "kind": "asset",
+            "label": "2",
+            "lx": 351.014083110324,
+            "ly": 239,
+            "row": 2,
+            "title": "#2 sale on blur · flagged",
+            "to": "0x00000000000000000000000000000000000000w2",
+            "tone": "cycle",
+            "tx": "0xlab_s1",
+          },
+          {
+            "d": "M 435.88457268119896 370 Q 280 354 137.04748630164502 368.6726528471252",
+            "from": "0x00000000000000000000000000000000000000w2",
+            "key": "t2",
+            "kind": "asset",
+            "label": "3",
+            "lx": 280,
+            "ly": 362,
+            "row": 3,
+            "title": "#3 sale on blur · flagged",
+            "to": "0x00000000000000000000000000000000000000w3",
+            "tone": "cycle",
+            "tx": "0xlab_s2",
+          },
+          {
+            "d": "M 124.11542731880107 370.00000000000006 Q 215.91412011995155 243.00000000000003 274.6834868626086 111.86316517881905",
+            "from": "0x00000000000000000000000000000000000000w3",
+            "key": "t3",
+            "kind": "asset",
+            "label": "4",
+            "lx": 208.98591688967605,
+            "ly": 239.00000000000003,
+            "row": 4,
+            "title": "#4 sale on blur · flagged",
+            "to": "0x00000000000000000000000000000000000000w1",
+            "tone": "cycle",
+            "tx": "0xlab_s3",
+          },
+          {
+            "d": "M 280 100 Q 314.6410161513775 260 426.2566050247291 361.2648847285242",
+            "from": "0x00000000000000000000000000000000000000w1",
+            "key": "t4",
+            "kind": "asset",
+            "label": "5",
+            "lx": 336.29165124598853,
+            "ly": 247.5,
+            "row": 5,
+            "title": "#5 sale on blur · flagged",
+            "to": "0x00000000000000000000000000000000000000w2",
+            "tone": "cycle",
+            "tx": "0xlab_s4",
+          },
+        ],
+        "loops": [
+          {
+            "edges": [
+              "t1",
+              "t2",
+              "t3",
+              "t4",
+            ],
+            "key": "r0",
+            "methods": [
+              "A",
+            ],
+            "nodes": [
+              "0x00000000000000000000000000000000000000w1",
+              "0x00000000000000000000000000000000000000w2",
+              "0x00000000000000000000000000000000000000w3",
+            ],
+          },
+        ],
+        "nodes": [
+          {
+            "first": true,
+            "id": "0x00000000000000000000000000000000000000w1",
+            "lx": 280,
+            "ly": 74,
+            "middle": false,
+            "x": 280,
+            "y": 100,
+          },
+          {
+            "first": false,
+            "id": "0x00000000000000000000000000000000000000w2",
+            "lx": 458.4012331795944,
+            "ly": 383,
+            "middle": false,
+            "x": 435.88457268119896,
+            "y": 370,
+          },
+          {
+            "first": false,
+            "id": "0x00000000000000000000000000000000000000w3",
+            "lx": 101.59876682040567,
+            "ly": 383.00000000000006,
+            "middle": false,
+            "x": 124.11542731880107,
+            "y": 370.00000000000006,
+          },
+        ],
+        "size": 560,
+      }
+    `);
+  });
+
   it('draws a transfer flagged only by Money loops back as apart, saying it is not counted', () => {
     const pair = { kind: 'pair' as const, pair: [a, b] as [string, string], middle: null, flowTx: '0x2' };
     const e = layout([t(a, b, { AU: pair })], [], []).edges[0]!;
@@ -88,5 +212,47 @@ describe('layout', () => {
     const d = layout(ping, [], []);
     expect(d.loops[0]!.edges).toHaveLength(2);
     expect(d.edges.map((e) => e.tx).sort()).toEqual(['0xp0', '0xp1']);
+  });
+
+  describe('a lens of yours', () => {
+    const y = '0x' + 'e'.repeat(40);
+    const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
+      ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, ...more });
+    const own = (path: LoopEdge[], wallets: string[], lensId = 7): OwnFlag => ({ lensId, collectionId: 1, txHash: '0xs1', logIndex: 0, path, wallets });
+    const ts = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b), txHash: '0xs1' }];
+
+    it('draws a lens path through a wallet outside the token’s graph', () => {
+      const path = [edge('nft-token', a, b, { tx: '0xs1', tokenId: '1' }), edge('eth', b, x, { amountWei: '500000000000000000' }), edge('eth', x, a)];
+      const d = layout(ts, [], [], [own(path, [a, b, x])]);
+      // The money middle is no holder and no built-in middle, so it joins the inner ring rather than being dropped.
+      expect(d.nodes.find((n) => n.id === x)).toMatchObject({ middle: true });
+      const loop = d.loops.find((l) => l.key === 'o0')!;
+      expect(loop.methods).toEqual(['L7']);
+      expect(loop.nodes).toEqual([a, b, x]);
+      // The trade lights its own arrow; the way back is two new arrows of the lens.
+      expect(loop.edges).toEqual(['t1', 'o0e1', 'o0e2']);
+      const [e1, e2] = ['o0e1', 'o0e2'].map((k) => d.edges.find((e) => e.key === k)!);
+      expect(e1).toMatchObject({ kind: 'money', tone: 'own', from: b, to: x, label: '0.5', tx: null, row: null });
+      expect(e2).toMatchObject({ kind: 'money', tone: 'own', from: x, to: a, label: '?' });
+      expect(d.edges.filter((e) => e.kind === 'asset')).toHaveLength(1);
+    });
+
+    it('draws another token’s transfer solid with its number, and a funding dashed with its amount', () => {
+      const path = [edge('nft-token', a, b, { tx: '0xs1', tokenId: '1' }), edge('nft-collection', b, y, { tx: '0xc9', tokenId: '9' }), edge('funds', y, a, { amountWei: '1234567000000000000' })];
+      const d = layout(ts, [], [], [own(path, [a, b, y])]);
+      expect(d.nodes.find((n) => n.id === y)).toMatchObject({ middle: true });
+      expect(d.edges.find((e) => e.key === 'o0e1')).toMatchObject({ kind: 'asset', tone: 'own', label: '#9', tx: '0xc9', row: null, token: '9' });
+      expect(d.edges.find((e) => e.key === 'o0e2')).toMatchObject({ kind: 'money', tone: 'own', label: '1.2345' });
+    });
+
+    it('lights an arrow of the token for every transfer of it on the path, and keeps the built-in loops first', () => {
+      const scc = { kind: 'scc' as const, wallets: [a, b], cycles: 1 };
+      const ring = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b, { A: scc }), txHash: '0xs1' }, { ...t(b, a, { A: scc }), txHash: '0xs2' }];
+      const path = [edge('nft-token', a, b, { tx: '0xs1', tokenId: '1' }), edge('nft-token', b, a, { tx: '0xs2', tokenId: '1' })];
+      const d = layout(ring, [], [], [own(path, [a, b]), own(path, [a, b], 8)]);
+      expect(d.loops.map((l) => [l.key, l.methods])).toEqual([['r0', ['A']], ['o0', ['L7']], ['o1', ['L8']]]);
+      expect(d.loops[1]!.edges).toEqual(['t1', 't2']);
+      expect(d.edges.some((e) => e.tone === 'own')).toBe(false);
+    });
   });
 });

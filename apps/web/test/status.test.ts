@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionRow, PassRow } from '@washtrace/detect';
-import { jobState, status, workerSilent, type Notice, type Snapshot } from '@/lib/status';
+import { BUDGET_MS, EVERY, STUCK_MS, type CollectionRow, type PassRow } from '@washtrace/detect';
+import { JOB_STEP, jobState, status, workerSilent, type Notice, type Snapshot } from '@/lib/status';
 import { eta, localTime } from '@/lib/format';
 
 const NOW = 1_800_000_000_000;
@@ -23,14 +23,17 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
 // What the worker reported, as configFromSources reads it: chain ids and whether funding is on, never a URL or the key.
 const CONFIG: Snapshot['config'] = { chains: [1], funding: true, perSecond: 4, followHops: 3 };
 
+// The lens job is not what most of these are about: a test that lists passes and leaves it out is given one that went through.
 function snapshot(more: Partial<Snapshot> = {}): Snapshot {
+  const listed = more.passes !== undefined && more.passes.length > 0 && !more.passes.some((p) => p.job === 'lens');
   return {
-    passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 10_000)],
+    passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 10_000), pass('lens', 10_000)],
     collections: [collection()],
     funding: [{ chainId: 1, pending: 3, done: 4, failed: 0, stranded: 0, truncated: 0, doneLastHour: 0 }],
     config: CONFIG,
     trailFunded: false,
     ...more,
+    ...(listed ? { passes: [...more.passes!, pass('lens', 10_000)] } : {}),
   };
 }
 
@@ -42,14 +45,23 @@ describe('status', () => {
     const report = status(snapshot(), NOW);
     expect(report.notices.filter((n) => n.severity !== 'info')).toEqual([]);
     expect(report.collections[0]).toMatchObject({ turn: 'keeping-up' });
-    expect(report.jobs.map((j) => [j.job, j.state])).toEqual([['ingest', 'ok'], ['fund', 'ok'], ['analyze', 'ok']]);
+    expect(report.jobs.map((j) => [j.job, j.state])).toEqual([['ingest', 'ok'], ['fund', 'ok'], ['analyze', 'ok'], ['lens', 'ok']]);
     expect(report.collections[0]).toMatchObject({ name: 'BAYC', behind: 5 });
   });
 
   it('names a job that has never run', () => {
     const report = status(snapshot({ passes: [] }), NOW);
     expect(report.jobs[0]!.state).toBe('never');
-    expect(texts(snapshot({ passes: [] }), 'needs-you')).toContain('ingest has never run.');
+    expect(texts(snapshot({ passes: [] }), 'needs-you')).toContain('Read transfers has never run.');
+  });
+
+  it('names each job by its step on the worker page, never by its code', () => {
+    const never = texts(snapshot({ passes: [] }), 'needs-you');
+    expect(never).toEqual(['Read transfers has never run.', 'Check wallets for money has never run.', 'Run the built-in lenses has never run.', 'Run your lenses has never run.']);
+    const silent = (job: string) => texts(snapshot({ passes: [pass(job, 5 * MIN, { finishedAt: null, heartbeatAt: NOW - 3 * MIN })] }), 'needs-you');
+    expect(silent('lens')).toContain('Run your lenses has been silent for 3 min.');
+    expect(silent('fund')).toContain('Check wallets for money has been silent for 3 min.');
+    expect(JOB_STEP).toEqual({ ingest: 'Read transfers', fund: 'Check wallets for money', analyze: 'Run the built-in lenses', lens: 'Run your lenses' });
   });
 
   it('calls a job running while its pass has started and not finished', () => {
@@ -59,7 +71,7 @@ describe('status', () => {
   it('calls a job stalled once no pass has finished in three intervals and a budget', () => {
     const s = snapshot({ passes: [pass('ingest', 4 * MIN + 1_000)] });
     expect(stateOf(s, 'ingest')).toBe('stalled');
-    expect(texts(s, 'needs-you')).toContain('ingest has not run for 4 min.');
+    expect(texts(s, 'needs-you')).toContain('Read transfers has not run for 4 min.');
   });
 
   it('measures a finished pass from when it finished, so a long pass that has just ended is not stalled', () => {
@@ -73,9 +85,9 @@ describe('status', () => {
       passes: [pass('analyze', 10_000), pass('fund', 2_000), pass('ingest', 17 * MIN + finishedAgo, { finishedAt: NOW - finishedAgo, tookMs: 17 * MIN, outcome: 'failed', detail: 'RPC answered HTTP 429' })],
     });
     expect(stateOf(failed(30_000), 'ingest')).toBe('failed');
-    expect(texts(failed(30_000), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429']);
+    expect(texts(failed(30_000), 'needs-you')).toEqual(['Read transfers failed: RPC answered HTTP 429']);
     expect(stateOf(failed(5 * MIN), 'ingest')).toBe('stalled');
-    expect(texts(failed(5 * MIN), 'needs-you')).toEqual(['ingest failed: RPC answered HTTP 429', 'ingest has not run for 5 min.']);
+    expect(texts(failed(5 * MIN), 'needs-you')).toEqual(['Read transfers failed: RPC answered HTTP 429', 'Read transfers has not run for 5 min.']);
     // The worker page colours what the pass said by how it ended, not by the job's state.
     expect(status(failed(5 * MIN), NOW).jobs.find((j) => j.job === 'ingest')).toMatchObject({ outcome: 'failed', detail: 'RPC answered HTTP 429' });
   });
@@ -87,7 +99,7 @@ describe('status', () => {
     const s = running('analyze', 75 * MIN);
     expect(stateOf(s, 'analyze')).toBe('stalled');
     expect(status(s, NOW).notices.filter((n) => n.severity === 'needs-you')).toEqual([
-      { severity: 'needs-you', text: 'analyze has been running for 75 min.', doThis: 'Restart the worker: docker compose restart worker' },
+      { severity: 'needs-you', text: 'Run the built-in lenses has been running for 75 min.', doThis: 'Restart the worker: docker compose restart worker' },
     ]);
     // An analysis can take most of an hour, a load of stored data many minutes, a funding pass not ten.
     for (const [job, ceiling] of [['analyze', 70], ['ingest', 30], ['fund', 10]] as const) {
@@ -106,7 +118,7 @@ describe('status', () => {
   it('reports a failed pass with its message', () => {
     const s = snapshot({ passes: [pass('fund', 1_000, { outcome: 'failed', detail: 'Etherscan answered HTTP 502' })] });
     expect(stateOf(s, 'fund')).toBe('failed');
-    expect(texts(s, 'needs-you')).toContain('fund failed: Etherscan answered HTTP 502');
+    expect(texts(s, 'needs-you')).toContain('Check wallets for money failed: Etherscan answered HTTP 502');
   });
 
   it('names and links a collection whose analysis failed, while it does, even after a later pass went through', () => {
@@ -140,9 +152,109 @@ describe('status', () => {
     for (const subjectId of [null, 9]) {
       const s = snapshot({ passes: [pass('analyze', 1_000, { outcome: 'failed', detail: 'connection lost', subjectId }), pass('fund', 2_000), pass('ingest', 10_000)] });
       expect(status(s, NOW).notices.filter((n) => n.severity === 'needs-you')).toEqual([
-        { severity: 'needs-you', text: 'analyze failed: connection lost', doThis: "Check the worker's log: docker compose logs worker" },
+        { severity: 'needs-you', text: 'Run the built-in lenses failed: connection lost', doThis: "Check the worker's log: docker compose logs worker" },
       ]);
     }
+  });
+
+  it('says a failed lens pass as the job\'s own failure, sent to the log, and counts the job among those that must have run', () => {
+    const s = snapshot({ passes: [pass('lens', 1_000, { outcome: 'failed', detail: 'out of memory' })] });
+    // Analyze has never run either, but the lens pass that just finished held their lock: it is covered (Ruling QQ).
+    expect(texts(s, 'needs-you')).toEqual(['Read transfers has never run.', 'Check wallets for money has never run.', 'Run your lenses failed: out of memory']);
+    expect(status(s, NOW).notices.find((n) => n.severity === 'needs-you' && n.text.startsWith('Run your lenses failed'))).toMatchObject({ doThis: "Check the worker's log: docker compose logs worker" });
+    expect(texts(snapshot({ passes: [pass('ingest', 10_000), pass('fund', 2_000), pass('analyze', 10_000)] }), 'needs-you')).toEqual([]);
+  });
+
+  describe('analyze and lens share the analysis lock (Ruling M)', () => {
+    const running = (job: string, ago: number, more: Partial<PassRow> = {}) => pass(job, ago, { finishedAt: null, outcome: null, heartbeatAt: NOW - 5_000, ...more });
+    const base = [pass('ingest', 10_000), pass('fund', 2_000)];
+
+    it('does not call analyze overdue while a lens run holds the lock', () => {
+      const s = snapshot({ passes: [...base, pass('analyze', 10 * MIN), running('lens', 8 * MIN)] });
+      expect(stateOf(s, 'analyze')).toBe('ok');
+      expect(texts(s, 'needs-you')).toEqual([]);
+    });
+
+    it('does not call lens overdue while an analysis holds the lock', () => {
+      const s = snapshot({ passes: [...base, running('analyze', 8 * MIN), pass('lens', 10 * MIN)] });
+      expect(stateOf(s, 'lens')).toBe('ok');
+      expect(texts(s, 'needs-you')).toEqual([]);
+    });
+
+    it('keeps a failed job failed, not ok, under the cover', () => {
+      const s = snapshot({ passes: [...base, pass('analyze', 10 * MIN, { outcome: 'failed', detail: 'boom' }), running('lens', 8 * MIN)] });
+      expect(stateOf(s, 'analyze')).toBe('failed');
+    });
+
+    it('counts overdue from when the partner finished: a long lens run that just ended does not make analyze overdue', () => {
+      // Analyze finished 70 min ago; the 60-min lens run ended 10 s ago.
+      const s = snapshot({ passes: [...base, pass('analyze', 70 * MIN), pass('lens', 60 * MIN + 10_000, { finishedAt: NOW - 10_000, tookMs: 60 * MIN })] });
+      expect(stateOf(s, 'analyze')).toBe('ok');
+      // Long after the partner ended too, it is overdue again.
+      const later = snapshot({ passes: [...base, pass('analyze', 70 * MIN), pass('lens', 20 * MIN, { finishedAt: NOW - 10 * MIN })] });
+      expect(stateOf(later, 'analyze')).toBe('stalled');
+    });
+
+    it('gives no cover to a partner that is stalled itself', () => {
+      const silent = running('lens', 8 * MIN, { heartbeatAt: NOW - 3 * MIN });
+      const s = snapshot({ passes: [...base, pass('analyze', 10 * MIN), silent] });
+      expect(stateOf(s, 'analyze')).toBe('stalled');
+      expect(stateOf(s, 'lens')).toBe('stalled');
+    });
+
+    describe('a job that has never run while its partner holds the lock (Ruling QQ)', () => {
+      // Built by hand: snapshot() would add a lens pass to a list without one.
+      const without = (passes: PassRow[]): Snapshot => ({ ...snapshot(), passes });
+      const never = 'Run your lenses has never run.';
+
+      it('says no never-run notice, and no worker-down hint, while analyze runs', () => {
+        const s = without([...base, running('analyze', 8 * MIN)]);
+        expect(texts(s, 'needs-you')).toEqual([]);
+        expect(stateOf(s, 'lens')).toBe('never');
+        expect(workerSilent(s.passes, NOW)).toBeNull();
+      });
+
+      it('says it once analyze is stalled: a stalled partner covers nothing', () => {
+        const s = without([...base, running('analyze', 8 * MIN, { heartbeatAt: NOW - 3 * MIN })]);
+        expect(status(s, NOW).notices).toContainEqual({ severity: 'needs-you', text: never, doThis: 'Check the worker process is running: docker compose ps worker' });
+      });
+
+      it('covers it for its own wait after analyze finished, and no longer', () => {
+        const window = 3 * EVERY.lens + BUDGET_MS;
+        const finished = (ago: number) => without([...base, pass('analyze', ago + 1_000, { finishedAt: NOW - ago })]);
+        expect(texts(finished(window - 1_000), 'needs-you')).toEqual([]);
+        expect(texts(finished(window + 1_000), 'needs-you')).toContain(never);
+        // Analyze never ran either: nothing covers either of them.
+        expect(texts(without(base), 'needs-you')).toEqual(['Run the built-in lenses has never run.', never]);
+      });
+
+      it('covers analyze the same way while a lens run holds the lock', () => {
+        const s = without([...base, running('lens', 8 * MIN)]);
+        expect(texts(s, 'needs-you')).toEqual([]);
+      });
+    });
+
+    it('lets workerSilent see the same cover', () => {
+      const stale = 24 * 3_600_000;
+      const passes = [pass('ingest', stale), pass('fund', stale), pass('analyze', 10 * MIN), running('lens', 8 * MIN)];
+      expect(workerSilent(passes, NOW)).toBeNull();
+    });
+
+    it('caps the cover at one partner ceiling: lens passes every minute do not keep a stopped analyze on time (Ruling O)', () => {
+      // Analyze last finished at `stopped`; from then on a lens pass finishes every minute, each 30 s before the moment read.
+      const stopped = NOW - 120 * MIN;
+      const due = stopped + STUCK_MS.lens + 3 * EVERY.analyze + BUDGET_MS;
+      const at = (now: number) => jobState({ ...pass('analyze', 0), startedAt: stopped - 1_000, finishedAt: stopped }, 'analyze', now,
+        { job: 'lens', pass: { ...pass('lens', 0), startedAt: now - 40_000, finishedAt: now - 30_000 } }).state;
+      for (let now = stopped + MIN; now < due; now += MIN) expect(at(now), `${(now - stopped) / MIN} min`).toBe('ok');
+      expect(at(due + 1_000)).toBe('stalled');
+      expect(at(due + 30 * MIN)).toBe('stalled');
+      // Lens, covered by analysis passes, is capped the same way, at analyze's ceiling.
+      const lens = (now: number) => jobState({ ...pass('lens', 0), startedAt: stopped - 1_000, finishedAt: stopped }, 'lens', now,
+        { job: 'analyze', pass: { ...pass('analyze', 0), startedAt: now - 40_000, finishedAt: now - 30_000 } }).state;
+      expect(lens(stopped + STUCK_MS.analyze + 3 * EVERY.lens + BUDGET_MS - 1_000)).toBe('ok');
+      expect(lens(stopped + STUCK_MS.analyze + 3 * EVERY.lens + BUDGET_MS + 1_000)).toBe('stalled');
+    });
   });
 
   it('says a paused collection\'s failed analysis as information: nothing tries it until it is resumed', () => {
@@ -461,7 +573,9 @@ describe('workerSilent', () => {
       [pass('ingest', 10_000)],
       [],
     ];
-    for (const passes of fixtures) {
+    for (const listed of fixtures) {
+      // The lens job stalled, so it decides nothing; the jobs a fixture names do.
+      const passes = listed.length > 0 ? [...listed, pass('lens', stale)] : listed;
       const jobs = status(snapshot({ passes }), NOW).jobs;
       const alive = jobs.some((j) => j.state === 'running' || j.state === 'ok' || j.state === 'failed');
       expect(workerSilent(passes, NOW) === null).toBe(alive);

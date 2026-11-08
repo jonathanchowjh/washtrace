@@ -8,8 +8,7 @@
  * still opens a list.
  */
 
-import type { Method } from '@washtrace/detect';
-import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, findOf, type GroupRef, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { LENSES, localTime, short } from './format';
 import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
@@ -21,10 +20,11 @@ export interface View { by: TradeGroupBy | null; page: number }
 export const TRADES_PAGE = 50;
 
 const BYS: readonly TradeGroupBy[] = ['marketplace', 'month', 'held', 'floor', 'buyerAge'];
-const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller', ...Object.keys(LENSES).map((m) => `lens-${m}`)];
+const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller'];
 const DAY = 86_400;
 
-const isMethod = (m: string): m is Method => Object.hasOwn(LENSES, m);
+/** Whether `k` is a lens key the URL may carry; `own` is the keys of your lenses that exist, so a deleted lens's key is junk like L0. */
+const keyIn = (own: ReadonlySet<string>) => (k: string): k is LensKey => isLensKey(k) && (!isOwnKey(k) || own.has(k));
 
 // ---- values -----------------------------------------------------------------
 
@@ -74,9 +74,9 @@ function parseRatio(v: string | undefined): number | null {
   return v !== undefined && /^\d{1,6}(\.\d{1,6})?$/.test(v) ? Number(v) : null;
 }
 
-function parseGroup(v: string | undefined): GroupRef | null {
+function parseGroup(v: string | undefined, known: (k: string) => k is LensKey): GroupRef | null {
   const m = /^(\w+)\.([tw])\.(\w+)$/.exec(v ?? '');
-  if (!m || !isMethod(m[1]!)) return null;
+  if (!m || !known(m[1]!)) return null;
   const method = m[1];
   if (m[2] === 't') {
     const token = tokenIdOf(m[3]!);
@@ -86,8 +86,14 @@ function parseGroup(v: string | undefined): GroupRef | null {
   return wallet === null ? null : { method, wallet };
 }
 
-function parseMethods(v: string | undefined): Method[] {
-  return [...new Set((v ?? '').split(',').filter(isMethod))];
+function parseMethods(v: string | undefined, known: (k: string) => k is LensKey): LensKey[] {
+  return [...new Set((v ?? '').split(',').filter(known))];
+}
+
+/** Built-ins in LENSES order, then yours by id, so one set of lenses has one URL whatever order it was typed in. */
+function lensOrder(have: readonly LensKey[]): string | null {
+  const own = have.filter(isOwnKey).sort((a, b) => lensIdOf(a)! - lensIdOf(b)!);
+  return [...Object.keys(LENSES).filter((m) => (have as readonly string[]).includes(m)), ...own].join(',') || null;
 }
 
 /**
@@ -96,7 +102,7 @@ function parseMethods(v: string | undefined): Method[] {
  * Find is one the store cannot read. The Trades page says why; the route
  * answers empty. One rule, so the page and the route never disagree.
  */
-export function holdsNothing(q: TradeQuery, ran: readonly Method[]): { state: 'absent'; absent: Method[] } | { state: 'unreadable' } | null {
+export function holdsNothing(q: TradeQuery, ran: readonly LensKey[]): { state: 'absent'; absent: LensKey[] } | { state: 'unreadable' } | null {
   const absent = [...new Set([...q.caught, ...(q.group === null ? [] : [q.group.method])])].filter((m) => !ran.includes(m));
   if (absent.length > 0) return { state: 'absent', absent };
   return q.find !== null && findOf(q.find).kind === 'none' ? { state: 'unreadable' } : null;
@@ -143,11 +149,16 @@ function dayStart(p: Params, k: string, zone: string): number | null {
 }
 
 /**
+ * `own` is the keys of the lenses of yours that exist: a key not in it is
+ * dropped like junk. It has no default, so no reader can forget to drop a
+ * deleted lens's key and hand the store a key it has no name for.
+ *
  * `zone` reads the form's plain `from_day`/`to_day` fields, which tradesHref
  * never writes: a combined parameter (`from`) wins when both are present, so
  * parseView then tradesHref turns a form submit into its one canonical URL.
  */
-export function parseView(p: Params, zone = 'UTC'): { q: TradeQuery; view: View } {
+export function parseView(p: Params, zone: string, own: ReadonlySet<string>): { q: TradeQuery; view: View } {
+  const known = keyIn(own);
   const s = (k: string) => param(p, k);
   const dur = (k: string) => parseDuration(s(k)) ?? (s(k) === undefined ? pairDuration(p, k) : null);
   const day = (k: string) => parseInstant(s(k)) ?? (s(k) === undefined ? dayStart(p, k, zone) : null);
@@ -156,7 +167,7 @@ export function parseView(p: Params, zone = 'UTC'): { q: TradeQuery; view: View 
   const q: TradeQuery = {
     ...NO_FILTER,
     kind: s('all') === '1' ? 'all' : 'sales',
-    caught: parseMethods(s('caught')), notCaught: parseMethods(s('not')),
+    caught: parseMethods(s('caught'), known), notCaught: parseMethods(s('not'), known),
     venues: [...new Set((s('market') ?? '').split(',').filter((v) => Object.hasOwn(VENUES, v)))],
     priceMinWei: ethToWei(s('pmin') ?? 'x'), priceMaxWei: ethToWei(s('pmax') ?? 'x'),
     heldOverS: dur('heldover'), heldUnderS: dur('heldunder'),
@@ -165,15 +176,15 @@ export function parseView(p: Params, zone = 'UTC'): { q: TradeQuery; view: View 
     fromMs: day('from'), toMs: day('to'),
     wallet: addressOf(s('wallet') ?? ''),
     token: tokenIdOf(s('token') ?? ''),
-    group: parseGroup(s('group')),
+    group: parseGroup(s('group'), known),
     find: findText(s('q')),
-    sort: sort !== undefined && SORTS.includes(sort) ? (sort as TradeSort) : NO_FILTER.sort,
+    sort: sort !== undefined && (SORTS.includes(sort) || (sort.startsWith('lens-') && known(sort.slice(5)))) ? (sort as TradeSort) : NO_FILTER.sort,
     dir: s('dir') === 'asc' ? 'asc' : 'desc',
   };
   return { q, view: { by: BYS.find((b) => b === by) ?? null, page: pageOf(s('page')) } };
 }
 
-/** The listed values that are in `have`, in the list's order and comma-joined (null when none), so one set of filters has one URL whatever order it was typed in. */
+/** The listed values that are in `have`, in the list's order and comma-joined (null when none). */
 const inOrder = (order: string[], have: readonly string[]) => order.filter((x) => have.includes(x)).join(',') || null;
 
 const enc = (v: string) => encodeURIComponent(v).replace(/%2C/g, ',').replace(/%3A/g, ':');
@@ -183,7 +194,7 @@ export function tradesHref(base: string, q: Partial<TradeQuery>, view: Partial<V
   const f = { ...NO_FILTER, ...q };
   const g = f.group;
   const pairs: [string, string | null][] = [
-    ['caught', inOrder(Object.keys(LENSES), f.caught)], ['not', inOrder(Object.keys(LENSES), f.notCaught)],
+    ['caught', lensOrder(f.caught)], ['not', lensOrder(f.notCaught)],
     ['market', inOrder(Object.keys(VENUES), f.venues)],
     ['pmin', f.priceMinWei === null ? null : weiToEth(f.priceMinWei)], ['pmax', f.priceMaxWei === null ? null : weiToEth(f.priceMaxWei)],
     ['heldover', f.heldOverS === null ? null : duration(f.heldOverS)], ['heldunder', f.heldUnderS === null ? null : duration(f.heldUnderS)],
@@ -218,19 +229,20 @@ function span(lo: string | null, hi: string | null, over = 'over', under = 'unde
 /**
  * One chip per filter in play, in URL order, each linking to the same list
  * without it. Dropping a filter drops the page (it may no longer exist) and
- * keeps the grouping. `names` is each lens's name; custom lenses pass theirs.
+ * keeps the grouping. `names` is your lenses' names by key; a key it has no name for is dropped.
  * A date range shows its end as given: `to` is exclusive, so a month reads
  * "1 Mar 2023 → 1 Apr 2023".
  */
-export function chips(base: string, q: TradeQuery, view: View, zone: string, names: Partial<Record<Method, string>> = {}): { key: string; label: string; href: string }[] {
-  const name = (m: Method) => names[m] ?? LENSES[m].name;
+export function chips(base: string, q: TradeQuery, view: View, zone: string, names: Partial<Record<LensKey, string>> = {}): { key: string; label: string; href: string }[] {
+  // A key with no name (a deleted lens) is dropped from the filters before it reaches here; a chip never shows a code.
+  const name = (m: LensKey) => names[m] ?? LENSES[m as keyof typeof LENSES]?.name ?? '';
   // A bound that is not midnight in the reader's zone shows its time, so two ranges that differ by hours do not read alike.
   const day = (ms: number) => {
     const d = dateIn(ms, zone);
     const date = localTime(ms, 'date', zone, 'en-GB');
     return midnight(d.y, d.m, d.d, zone) === ms ? date : `${date} ${localTime(ms, 'time', zone, 'en-GB')}`;
   };
-  const list = (ms: Method[]) => ms.map(name).join(' and ');
+  const named = (ms: LensKey[]) => ms.map(name).filter((n) => n !== '');
   const g = q.group;
   const price = span(q.priceMinWei === null ? null : weiToEth(q.priceMinWei), q.priceMaxWei === null ? null : weiToEth(q.priceMaxWei), 'at least', 'at most');
   const held = side('held', q.heldOverS, q.heldUnderS);
@@ -239,8 +251,8 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
   const when = q.fromMs !== null && q.toMs !== null ? `${day(q.fromMs)} → ${day(q.toMs)}` : q.fromMs !== null ? `From ${day(q.fromMs)}` : q.toMs !== null ? `Before ${day(q.toMs)}` : null;
 
   const all: [string, string | null, Partial<TradeQuery>][] = [
-    ['caught', q.caught.length ? `Flagged by ${list(q.caught)}` : null, { caught: [] }],
-    ['not', q.notCaught.length ? `Not flagged by ${list(q.notCaught)}` : null, { notCaught: [] }],
+    ['caught', named(q.caught).length ? `Flagged by ${named(q.caught).join(' and ')}` : null, { caught: [] }],
+    ['not', named(q.notCaught).length ? `Not flagged by ${named(q.notCaught).join(' and ')}` : null, { notCaught: [] }],
     ['market', q.venues.length ? `Marketplace: ${q.venues.map((v) => VENUES[v]?.name ?? v).join(', ')}` : null, { venues: [] }],
     ['price', price && `Price ${price} ETH`, { priceMinWei: null, priceMaxWei: null }],
     ['held', held && `Held ${held}`, { heldOverS: null, heldUnderS: null }],
@@ -249,7 +261,7 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
     ['when', when, { fromMs: null, toMs: null }],
     ['wallet', q.wallet && `Wallet ${short(q.wallet)}`, { wallet: null }],
     ['token', q.token && `Token #${q.token}`, { token: null }],
-    ['group', g && ('token' in g ? `Wallets in #${g.token}'s ${name(g.method)} loops` : `Wallets in ${name(g.method)} loops with ${short(g.wallet)}`), { group: null }],
+    ['group', g && name(g.method) !== '' ? ('token' in g ? `Wallets in #${g.token}'s ${name(g.method)} loops` : `Wallets in ${name(g.method)} loops with ${short(g.wallet)}`) : null, { group: null }],
     ['q', q.find && `Matching “${q.find}”`, { find: null }],
     ['all', q.kind === 'all' ? 'Every change of owner' : null, { kind: 'sales' }],
   ];

@@ -3,9 +3,10 @@ import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisReques
 import { Chain } from './chain.js';
 import { Etherscan, WALLET_MS } from './etherscan.js';
 import { ZERO } from './graph.js';
+import { LENS_TIMEOUT_MS, runLensInThread, runPreviewInThread, type LensRequest, type Lensed, type PreviewRequest } from './lens-thread.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
-import { CHECKS_CHANNEL, LOCKS, retryMs, type CheckKind, type CollectionRow, type FundingLane, type StaleRow, type Store } from './store.js';
+import { ANALYZE_GAP_MS, CHECKS_CHANNEL, LOCKS, PREVIEWS_CHANNEL, retryMs, type CheckKind, type CollectionRow, type FundingLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -16,7 +17,7 @@ import { StoredSync } from './stored-sync.js';
  */
 export const FOLLOW_FANOUT = 25;
 
-export type Job = 'ingest' | 'fund' | 'analyze';
+export type Job = 'ingest' | 'fund' | 'analyze' | 'lens';
 
 /**
  * How often each job runs. Ingest at a minute: finalized blocks advance
@@ -24,7 +25,16 @@ export type Job = 'ingest' | 'fund' | 'analyze';
  * finality lag already accepted. Funding runs back to back because it is
  * the long pole: four Etherscan calls a wallet at four calls a second.
  */
-export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_000, analyze: 60_000 };
+export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_000, analyze: 60_000, lens: 60_000 };
+
+/**
+ * Ruling KK: how long a due lens run gives way to due analyses before it runs
+ * anyway, counted from when it became due (Store.nextLensRun's `dueAt`). On a
+ * busy install some analysis is always due, and a lens that always gave way
+ * would never run. Past this an analysis waits one lens run, minutes, behind
+ * a lens that has waited ten.
+ */
+export const LENS_WAIT_MS = 10 * 60_000;
 
 /** How often a running pass says it is alive, so a step that takes minutes is not mistaken for a stall. */
 const HEARTBEAT_MS = 30_000;
@@ -40,7 +50,7 @@ export const BUDGET_MS = 45_000;
  * which takes minutes; a money trail imports outside it (see
  * StoredSync.startTrailImport); a funding pass keeps to its budget.
  */
-export const STUCK_MS: Readonly<Record<Job, number>> = { ingest: 30 * 60_000, fund: 10 * 60_000, analyze: ANALYZE_TIMEOUT_MS + 10 * 60_000 };
+export const STUCK_MS: Readonly<Record<Job, number>> = { ingest: 30 * 60_000, fund: 10 * 60_000, analyze: ANALYZE_TIMEOUT_MS + 10 * 60_000, lens: LENS_TIMEOUT_MS + 10 * 60_000 };
 
 /**
  * Finalized blocks advance about five a minute and ingest reads every
@@ -112,8 +122,8 @@ export function interleave(lanes: readonly FundingLane[], priorityIds: ReadonlyS
   return order;
 }
 
-/** A collection is not analysed again sooner than this after its last analysis. */
-const ANALYZE_GAP_MS = 5 * 60_000;
+/** A lens run's or a preview's progress is written at most this often. */
+const LENS_PROGRESS_MS = 2_000;
 
 /**
  * Which stale collection to analyse next, or null when none is due. Never
@@ -210,6 +220,27 @@ export class Worker {
   private checksSkipped = false;
   /** Analyses that failed, by collection, timed as Store.analysisFailed times them: kept here too, as StoredSync's downloadsFailed is, since the write that records the wait can fail with the analysis. */
   private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
+  /**
+   * Ruling RR: whether the last lens pass ran a run; cleared by one that gave
+   * way or found nothing. The next pass then gives way to a due analysis
+   * whatever its run's wait. Passes only try the lock, on fixed timers, so
+   * with a backlog of runs past LENS_WAIT_MS lens passes took it back to back
+   * and an analysis waited many runs; alternating keeps KK's cost at one run.
+   */
+  private lensRanLast = false;
+  /**
+   * Ruling S12: whether the last lens pass ran a preview. The next pass then
+   * gives way to a due analysis, once, and sets `handOver` so the lock goes
+   * to it (see lens).
+   */
+  private previewRanLast = false;
+  private handOver = false;
+  /**
+   * A preview was asked for while a lens pass was in flight here: that pass
+   * may have looked for one before it was queued, so one more runs after it
+   * (P5). Once, however many were heard: a pass takes one preview.
+   */
+  private lensAgain = false;
 
   /**
    * `storeUrl` is the store's own, for the analysis thread to open a
@@ -226,14 +257,24 @@ export class Worker {
     this.sync = new StoredSync(this, store, stored);
   }
 
+  /**
+   * Starts every job's timer, each job's first pass now. The lens job starts
+   * half a period after analyze's (C1): the two take one lock (R8), and Node
+   * fires timers of one length in the order made, so on the same beat analyze
+   * asked first every minute and a lens pass never got the lock.
+   */
   start(): void {
     if (this.timers.length > 0) return;
-    for (const job of ['ingest', 'fund', 'analyze'] as const) {
+    const every = (job: Job) => {
       const timer = setInterval(() => { void this.run(job); }, EVERY[job]);
       timer.unref?.();
       this.timers.push(timer);
       void this.run(job);
-    }
+    };
+    for (const job of ['ingest', 'fund', 'analyze'] as const) every(job);
+    const offset = setTimeout(() => every('lens'), EVERY.lens / 2);
+    offset.unref?.();
+    this.timers.push(offset);
   }
 
   /**
@@ -242,6 +283,7 @@ export class Worker {
    * so nothing of the worker's keeps the process alive.
    */
   stop(): void {
+    // clearInterval clears the lens job's starting timeout too: Node's timers are one kind.
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
     this.sync.stop();
@@ -284,7 +326,8 @@ export class Worker {
     }, HEARTBEAT_MS);
     alive.unref?.();
     try {
-      const outcome = await this.store.locked(LOCKS[job], false, async () => {
+      // R8: a lens run and an analysis never overlap, so the lens pass holds the analysis lock.
+      const outcome = await this.store.locked(LOCKS[job === 'lens' ? 'analyze' : job], false, async () => {
         await this.loadSettings();
         // passStarted is the first beat; with `current` set the keep-alive beats on, though the job's first call is slow.
         await this.store.passStarted(job);
@@ -305,6 +348,17 @@ export class Worker {
       clearInterval(alive);
       this.current.delete(job);
       this.running.delete(job);
+      if (job === 'lens' && this.handOver) {
+        // Ruling S12: the analysis takes the lock now, then a lens pass for the preview that waited; it stands in for the lensAgain re-run.
+        this.handOver = false;
+        this.lensAgain = false;
+        // A stopped worker starts nothing: its timers are cleared and it hears no more.
+        const on = () => this.listening || this.timers.length > 0;
+        if (on()) void this.run('analyze').then(() => { if (on()) void this.run('lens'); });
+      } else if (job === 'lens' && this.lensAgain) {
+        this.lensAgain = false;
+        if (this.listening) void this.run('lens');
+      }
     }
   }
 
@@ -481,19 +535,7 @@ export class Worker {
    */
   async analyze(): Promise<string> {
     const { etherscanKey } = this.resolved();
-    const now = Date.now();
-    const manifest = await this.sync.storedManifest();
-    const loading = new Set<number>();
-    if (manifest !== null) {
-      for (const r of await this.store.collections()) {
-        const entry = entryFor(manifest, r.chainId, r.address);
-        // A download that failed and waits holds nothing: analysed on what it has, as a load that failed is.
-        if (this.sync.restoreDue(r, entry, await this.sync.noteKey(r, entry), now) && !this.sync.downloadWaits(r, now)) loading.add(r.id);
-      }
-    }
-    const due = (await this.store.stale())
-      .filter((s) => !loading.has(s.id) && (s.retryAt ?? 0) <= now && (this.analysesFailed.get(s.id)?.retryAt ?? 0) <= now);
-    const c = nextAnalysis(due, now);
+    const c = await this.dueAnalysis(Date.now());
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
     const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.id);
@@ -526,6 +568,27 @@ export class Worker {
   }
 
   /**
+   * The collection an analyze pass would take now, by `nextAnalysis`, or null.
+   * Left out: one whose stored data is still to load and one waiting out a
+   * failure. The lens pass asks too, and gives way to one (until LENS_WAIT_MS,
+   * and once after a preview). Tests override it on the instance.
+   */
+  async dueAnalysis(now: number): Promise<StaleRow | null> {
+    const manifest = await this.sync.storedManifest();
+    const loading = new Set<number>();
+    if (manifest !== null) {
+      for (const r of await this.store.collections()) {
+        const entry = entryFor(manifest, r.chainId, r.address);
+        // A download that failed and waits holds nothing: analysed on what it has, as a load that failed is.
+        if (this.sync.restoreDue(r, entry, await this.sync.noteKey(r, entry), now) && !this.sync.downloadWaits(r, now)) loading.add(r.id);
+      }
+    }
+    const due = (await this.store.stale())
+      .filter((s) => !loading.has(s.id) && (s.retryAt ?? 0) <= now && (this.analysesFailed.get(s.id)?.retryAt ?? 0) <= now);
+    return nextAnalysis(due, now);
+  }
+
+  /**
    * Read the input and run `analyze` off the main thread, so ingest, funding
    * and /health go on meanwhile, and the flows are never held here. Tests
    * override it on the instance.
@@ -535,12 +598,133 @@ export class Worker {
   }
 
   /**
+   * Sweep previews past PREVIEW_KEEP_MS, then run one thing: a queued preview
+   * if there is one, else the next due lens run. A preview goes before any
+   * lens run, and before a due analysis (P2): someone is at the editor
+   * waiting on it, and it judges a sample of 2,000 sales, not the collection.
+   * But not two in a row while an analysis is due (Ruling S12): every page
+   * reads the latest analysis, so one held off while someone tunes a lens
+   * leaves every number older. After a pass that ran a preview, this one
+   * gives way to a due analysis, once, whether a preview or a run is next.
+   * Neither the preview nor that giving way touches `lensRanLast`: whether a
+   * lens run gives way is the lens runs' own business (Ruling RR).
+   *
+   * Giving way alone did not get the analysis the lock: passes only try it,
+   * and while previews are asked for, the lensAgain re-run and every notify
+   * ask the moment it is free, while analyze asks once a minute on its timer.
+   * So this pass hands over: `run` starts the analyze pass as it lets the
+   * lock go, in place of the lensAgain re-run, and a lens pass after it for
+   * the preview that waited. Skipping the re-run instead would leave the
+   * analysis to its timer and the preview a minute and an analysis later.
+   *
+   * A lens run, one a pass: while it has waited less than LENS_WAIT_MS it
+   * gives way to a due analysis (Ruling AA); past that it runs (Ruling KK),
+   * unless the last lens pass ran one (Ruling RR). Picking, starting, running
+   * and saving a preview or a run all happen under the analysis lock `run`
+   * holds (R8): one thread of the lens's size at a time keeps the memory
+   * budget, and `nextPreview` and `nextLensRun` take a `running` row as one a
+   * stopped worker left, which is safe only because nothing else can be
+   * running one. A failure is noted on the preview or the run and rethrown,
+   * so the pass fails as an analysis does.
+   */
+  async lens(): Promise<string> {
+    const now = Date.now();
+    await this.store.sweepPreviews(now);
+    if (this.previewRanLast && await this.dueAnalysis(now) !== null) {
+      this.previewRanLast = false;
+      this.handOver = true;
+      return 'an analysis is due first';
+    }
+    const preview = await this.store.nextPreview();
+    // Set before it runs: a preview that fails has cost the analysis its wait too.
+    this.previewRanLast = preview !== null;
+    if (preview !== null) return this.preview(preview);
+    const next = await this.store.nextLensRun(now);
+    if (next === null) {
+      this.lensRanLast = false;
+      return 'nothing to run';
+    }
+    if ((this.lensRanLast || now - next.dueAt < LENS_WAIT_MS) && await this.dueAnalysis(now) !== null) {
+      this.lensRanLast = false;
+      return 'an analysis is due first';
+    }
+    this.lensRanLast = true;
+    const { lens, collectionId, chainId, name, analysisId, through } = next;
+    const where = `${lens.name} on ${name}`;
+    const started = Date.now();
+    await this.store.lensRunStarted(lens.id, collectionId);
+    await this.beat('lens', `Running ${where}`, collectionId);
+    const { progress, written } = this.progressWriter(`Running ${where}`, collectionId, (share) => this.store.lensRunProgress(lens.id, collectionId, share));
+    try {
+      const { totals, flags } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through }, progress);
+      await written();
+      const saved = await this.store.saveLensRun(lens.id, collectionId, lens.version, analysisId, through, totals, flags, Date.now() - started);
+      if (saved === 'stale') return `${lens.name} changed while it ran: queued again`;
+      if (saved === 'gone') return `${lens.name} or ${name} was removed while it ran: nothing saved`;
+      return `Ran ${where}`;
+    } catch (err) {
+      await this.store.lensRunFailed(lens.id, collectionId, this.scrubbed(err))
+        .catch((e) => console.error('[washtrace] lens %d: failed run not noted: %s', lens.id, this.scrubbed(e)));
+      throw err;
+    }
+  }
+
+  /** Run the preview `nextPreview` took, in the lens thread, and save what it found; a failure is noted scrubbed, as a run's is. */
+  private async preview(p: NonNullable<Awaited<ReturnType<Store['nextPreview']>>>): Promise<string> {
+    const where = `a lens on ${p.name}`;
+    const { progress, written } = this.progressWriter(`Previewing ${where}`, p.collectionId, (share) => this.store.previewProgress(p.id, share));
+    try {
+      // Inside the try: a throw here fails this preview with its own error, not as a swept "worker stopped".
+      await this.beat('lens', `Previewing ${where}`, p.collectionId);
+      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through }, progress);
+      await written();
+      await this.store.savePreview(p.id, result);
+      return `Previewed ${where}`;
+    } catch (err) {
+      await this.store.previewFailed(p.id, this.scrubbed(err))
+        .catch((e) => console.error('[washtrace] preview %d: failure not noted: %s', p.id, this.scrubbed(e)));
+      throw err;
+    }
+  }
+
+  /**
+   * A progress callback for the lens thread that writes with `write` and says
+   * `doing` with the share in the heartbeat, at most every LENS_PROGRESS_MS,
+   * in order, and never failing the run. `written` waits for the last write.
+   */
+  private progressWriter(doing: string, subjectId: number, write: (share: number) => Promise<void>): { progress: (share: number) => void; written: () => Promise<void> } {
+    let wrote = -Infinity;
+    let writes = Promise.resolve();
+    const progress = (share: number) => {
+      if (Date.now() - wrote < LENS_PROGRESS_MS) return;
+      wrote = Date.now();
+      writes = writes.then(async () => {
+        await write(share);
+        await this.beat('lens', `${doing}: ${Math.floor(share * 100)}%`, subjectId);
+      }).catch((err) => console.warn('[washtrace] lens progress not written: %s', this.scrubbed(err)));
+    };
+    return { progress, written: () => writes };
+  }
+
+  /** Run the lens off the main thread, as `analyzeOff` does the analysis. Tests override it on the instance. */
+  lensOff(request: LensRequest, onProgress: (share: number) => void): Promise<Lensed> {
+    return runLensInThread(request, onProgress);
+  }
+
+  /** Run a preview off the main thread, on the lens thread. Tests override it on the instance, as `lensOff`. */
+  previewOff(request: PreviewRequest, onProgress: (share: number) => void): Promise<PreviewResult> {
+    return runPreviewInThread(request, onProgress);
+  }
+
+  /**
    * Hear the console's Test requests on a connection of its own and run them
    * at once, not next pass: the page polls for about 20 seconds. Runs the
    * checks on connecting too, for any asked while no worker listened. A lost
    * connection is a log line and a retry, 5 seconds later and longer each
    * time it fails in a row, up to a minute. The checks also run every
-   * SWEEP_MS, for a request not heard. Never rejects; `stop` ends it.
+   * SWEEP_MS, for a request not heard. On the same connection it hears the
+   * editor's Preview requests, and runs a lens pass for each (P5); one not
+   * heard waits for the lens timer. Never rejects; `stop` ends it.
    */
   async listen(): Promise<void> {
     if (this.listening) return;
@@ -595,10 +779,14 @@ export class Worker {
     };
     client.on('error', lose);
     client.on('end', () => lose(new Error('connection ended')));
-    client.on('notification', () => { void this.checksSoon(); });
+    client.on('notification', (n) => {
+      if (n.channel === PREVIEWS_CHANNEL) this.lensSoon();
+      else void this.checksSoon();
+    });
     try {
       await client.connect();
-      await client.query(`LISTEN ${CHECKS_CHANNEL}`);
+      // One round trip for both: the checks', and the previews' (P5).
+      await client.query(`LISTEN ${CHECKS_CHANNEL}; LISTEN ${PREVIEWS_CHANNEL}`);
     } catch (err) {
       lose(err);
       return;
@@ -606,6 +794,16 @@ export class Worker {
     if (this.listener !== client) return;
     this.listenFailures = 0;
     void this.checksSoon();
+  }
+
+  /**
+   * A preview was asked for: a lens pass now, which takes it first (P5), or
+   * once more after the pass in flight here. Without this it would wait up to
+   * a lens period for the timer while someone watches the editor.
+   */
+  private lensSoon(): void {
+    if (this.running.has('lens')) this.lensAgain = true;
+    else void this.run('lens');
   }
 
   /** Run the checks now, or once more after the run in flight. Never two runs at once, and never rejects. */

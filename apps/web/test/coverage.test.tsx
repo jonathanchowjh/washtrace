@@ -7,13 +7,21 @@ import { localTime, short } from '@/lib/format';
 import { TRAIL_LOADING, coverage, progress } from '@/lib/coverage';
 import { APART_WHY } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
-import { LensCards } from '@/components/methods';
+import { LensTabs } from '@/components/lens-tabs';
 import { TimeChart } from '@/components/trend';
 
 // The chart opens a period through the router.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(cleanup);
+
+type Totals = NonNullable<CollectionRow['latest']>['totals'];
+/** The lens tabs of a collection with no lens of yours, the chosen built-in's panel under them. */
+const lensTabs = (totals: Totals, selected: 'A' | 'AU' | 'AC', more: { notFinal?: ('A' | 'AU' | 'AC')[]; trail?: boolean; funded?: boolean; coming?: boolean; silent?: boolean } = {}) =>
+  render(
+    <LensTabs base="/c/1/0xabc" chainId={1} address="0xabc" selected={selected} totals={totals} latestId={1} paused={false} runs={[]} notFinal={more.notFinal ?? []}
+      coverage={{ trail: more.trail ?? false, funded: more.funded ?? false, coming: more.coming ?? false, silent: more.silent ?? false }} writable>{null}</LensTabs>,
+  ).container;
 
 /** Ethereum has an RPC, so only the stored-data tests see the stored-only reading. */
 const ON = new Set([1]);
@@ -399,23 +407,20 @@ describe('a money trail loaded from stored data', () => {
     expect(trust(c, coverage(c, ON, 0))).toBe("Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet's check is not seen.");
   });
 
-  it('LensCards says shares are so far, and why Money loops back is not in the range', () => {
+  it('the tabs say shares are so far, and the panel says why Money loops back is not in the range', () => {
     const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
-    const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const { container } = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={['AU', 'AC']}>{null}</LensCards>);
-    const text = container.textContent!;
-    expect(text).not.toContain('at least');
-    // Each share reads as its own parts, in order: the figure, what it is of, and that it is so far.
-    const parts = [...container.querySelectorAll('p')].filter((p) => p.textContent!.includes('so far')).map((p) => [...p.querySelectorAll('span')].map((x) => x.textContent));
-    expect(parts).toEqual([['25%', 'of sales', 'so far'], ['30%', 'of sales', 'so far']]);
-    expect(text).toContain(`Not in the range above: ${APART_WHY}.`);
+    const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as Totals;
+    const c = lensTabs(all, 'AU', { notFinal: ['AU', 'AC'] });
+    expect(c.textContent).not.toContain('at least');
+    const tabs = [...c.querySelector('nav')!.children].map((x) => x.textContent);
+    expect(tabs).toEqual(['Round trips 10.0%', 'Money loops back 25.0% so far', 'Linked wallets 30.0% so far', '+ New lens', 'Compare']);
+    expect(c.textContent).toContain(`Not in the range above: ${APART_WHY}.`);
   });
 
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const cards = (trail: boolean, funded: boolean) =>
-      render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+    const cards = (trail: boolean, funded: boolean) => lensTabs(all, 'AU', { trail, funded }).textContent!;
     expect(cards(true, true)).not.toMatch(/no funding source/i);
     expect(cards(true, true)).toContain('The stored money trail is loaded');
     expect(cards(true, true)).toContain('the next analysis runs this lens');
@@ -425,8 +430,7 @@ describe('a money trail loaded from stored data', () => {
   it('promises a money lens a run only when the next analysis will have funding for it, and otherwise says what is missing', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const cards = (trail: boolean, funded: boolean) =>
-      render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} trail={trail} funded={funded}>{null}</LensCards>).container.textContent!;
+    const cards = (trail: boolean, funded: boolean) => lensTabs(all, 'AU', { trail, funded }).textContent!;
     // Its trail checked no wallet, and there is no key: nothing to run on.
     const empty = cards(true, false);
     expect(empty).not.toContain('next analysis');
@@ -920,19 +924,19 @@ describe('a money trail on its way', () => {
     expect(text.endsWith('money trail loading')).toBe(true);
   });
 
-  it('the lens cards of a collection with no funding say it is on its way, never that a key is needed', () => {
+  it('the lens panel of a collection with no funding say it is on its way, never that a key is needed', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const text = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} coming>{null}</LensCards>).container.textContent!;
+    const text = lensTabs(all, 'AU', { coming: true }).textContent!;
     expect(text).toContain('Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it.');
     expect(text).not.toContain('once the worker reports again');
     expect(text).not.toMatch(/needs a key/i);
   });
 
-  it('the lens cards say the trail waits on the worker while it is silent', () => {
+  it('the lens panel says the trail waits on the worker while it is silent', () => {
     const t = (available: boolean) => ({ available, sales: 0, flaggedSales: 0, flaggedVolumeWei: '0', volumeWei: '0', tokens: 0, wallets: 0, transfers: 0, flagged: 0, owners: 0, flaggedOwners: 0 });
     const all = { A: t(true), AU: t(false), AC: t(false) } as unknown as NonNullable<CollectionRow['latest']>['totals'];
-    const text = render(<LensCards totals={all} selected="A" href={() => '#'} notFinal={[]} coming silent>{null}</LensCards>).container.textContent!;
+    const text = lensTabs(all, 'AU', { coming: true, silent: true }).textContent!;
     expect(text).toContain('Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it, once the worker reports again.');
   });
 });

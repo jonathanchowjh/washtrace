@@ -47,6 +47,7 @@ const JAN = Date.UTC(2023, 0, 1);
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => collection(),
+    lensRuns: async () => [],
     collections: async () => [collection()],
     history: async () => [latest(1_690_000_000_000), latest(1_700_000_000_000)].map((a) => ({ ...a, id: 1 })),
     timeline: async () => ({
@@ -62,6 +63,8 @@ vi.mock('@/lib/store', () => ({
     lensWallets: async () => ({ rows: [{ address: SELF, trades: 5, caught: 3, volumeWei: String(10n ** 18n), loops: 2 }], total: 1 }),
     token: async () => [trade(1), trade(2)],
     flowsAmong: async () => [],
+    lensFlagsOfToken: async () => [],
+    lensFlagsOfTx: async () => [],
     transaction: async () => [trade(0)],
     wallet: async () => null,
     counterparties: async () => [{ address: '0x' + '9'.repeat(40), flows: 2, sent: 1, received: 1, watched: false }],

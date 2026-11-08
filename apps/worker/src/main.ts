@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { EVERY, Store, Worker, messageOf, storeUrl, storedDir, workerConfig } from '@washtrace/detect';
+import { EVERY, Store, Worker, storeUrl, storedDir, workerConfig } from '@washtrace/detect';
+import { Migrating } from './migrating.js';
 
 /**
  * The worker service: the polling half of washtrace, as its own process.
@@ -19,17 +20,31 @@ const PORT = Number(process.env.WASHTRACE_WORKER_PORT ?? 8081);
 const url = storeUrl(process.env);
 const store = Store.connect(url);
 
-// The store may still be starting (an ordinary compose or k8s ordering):
-// keep trying rather than crash-looping.
-for (let attempt = 1; ; attempt++) {
-  try {
-    await store.migrate();
-    break;
-  } catch (err) {
-    if (attempt === 1 || attempt % 10 === 0) console.error('[worker] store not ready (attempt %d): %s', attempt, messageOf(err));
-    await new Promise((r) => setTimeout(r, Math.min(30_000, 1_000 * attempt)));
+/** The worker once it has started; null while the store is still migrating. */
+let started: Worker | null = null;
+const migrating = new Migrating(store, url);
+
+// GET /health: 200 while the store answers. Listening before the store is
+// migrated, and answering `migrating` meanwhile, 200 until an attempt fails
+// (see Migrating.health). The image's HEALTHCHECK passes on any 2xx. Also what
+// holds the process open: the worker's own timers are unref'd, so a worker
+// embedded in another process never keeps that process alive by itself.
+const health = createServer(async (req, res) => {
+  if (req.url !== '/health') { res.writeHead(404).end(); return; }
+  if (started === null) {
+    const { status, body } = migrating.health();
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+    return;
   }
-}
+  let ok = true;
+  try { await store.pool.query('SELECT 1'); } catch { ok = false; }
+  res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ ok, busy: started.busy }));
+});
+health.listen(PORT, () => console.info('[worker] health on :%d/health', PORT));
+
+await migrating.run();
 
 // Stored data is data/stored at the repo root (/app in the image), wherever
 // the process was started from: `npm run worker` starts it in apps/worker.
@@ -40,6 +55,7 @@ const worker = new Worker(store, (s) => workerConfig(process.env, s), url, store
 // Before the first pass, which may start a load of its own.
 await worker.sync.clearStaleProgress();
 worker.start();
+started = worker;
 // A Test asked for in the console is heard at once over LISTEN, not next pass.
 void worker.listen();
 
@@ -52,18 +68,6 @@ console.info(
   config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY or the key in Settings), so SCC AU and AC are unavailable' : 'from Etherscan',
   config.followHops,
 );
-
-// GET /health: 200 while the store answers. Also what holds the process
-// open: the worker's own timers are unref'd, so a worker embedded in another
-// process never keeps that process alive by itself.
-const health = createServer(async (req, res) => {
-  if (req.url !== '/health') { res.writeHead(404).end(); return; }
-  let ok = true;
-  try { await store.pool.query('SELECT 1'); } catch { ok = false; }
-  res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ ok, busy: worker.busy }));
-});
-health.listen(PORT, () => console.info('[worker] health on :%d/health', PORT));
 
 // docker stop sends SIGTERM, then SIGKILL ten seconds later.
 let stopping = false;

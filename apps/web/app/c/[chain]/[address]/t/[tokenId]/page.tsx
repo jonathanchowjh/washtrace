@@ -2,14 +2,15 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS, type Method } from '@washtrace/detect';
+import { METHODS } from '@washtrace/detect';
+import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/head';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
-import { Transfers, because, rowList } from '@/components/transfers';
+import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
-import { LENSES, lensList, num, short, tokenLabel } from '@/lib/format';
+import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
 import { tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
@@ -47,7 +48,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const view = await tokenView(chainId, address, tokenId);
   if (typeof view === 'string') notFound();
   // tokenView has already dropped the lenses that did not run.
-  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun } = view;
+  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun, own, ownLenses } = view;
   const name = collection.name ?? short(address);
   const base = `/c/${chainId}/${address}`;
   // Counted as the wallet page counts: a transfer flagged only by Money loops back is shown grey, and said apart.
@@ -55,7 +56,16 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const apart = transfers.filter((t) => toneOf(t) === 'apart').length;
   const lenses = by.filter((m) => HEADLINE.includes(m));
   const apartNote = apart === 0 ? '' : ` ${apart} more ${apart === 1 ? 'is' : 'are'} flagged only by ${LENSES.AU.name}, which is not counted.`;
-  const { title, tone } = answer(view, by.includes('A') ? 'Its trades go round in circles' : 'Its buyers and sellers are linked by money');
+  // Your lenses' catches, said apart: the verdict and its title stay the built-ins' (P8).
+  const ownByRow = new Map<string, LensKey[]>();
+  for (const f of own) {
+    const keys = ownByRow.get(`${f.txHash}:${f.logIndex}`) ?? [];
+    if (!keys.includes(`L${f.lensId}`)) keys.push(`L${f.lensId}`);
+    ownByRow.set(`${f.txHash}:${f.logIndex}`, keys);
+  }
+  const ownNames = [...new Set(own.map((f): LensKey => `L${f.lensId}`))].flatMap((k) => lensInfo(k, ownLenses)?.name ?? []);
+  const ownLine = ownByRow.size === 0 ? '' : ` Your lenses also catch ${ownByRow.size} of its trades: ${andList(ownNames)}.`;
+  const { title, tone } = answer(view, by.includes('A') ? 'Its trades go round in circles' : 'Its buyers and sellers are linked by money', ownByRow.size > 0);
   const why = reasons(transfers);
 
   // A row's number is its place in the whole chain order. The filter keeps some of them, the page shows a hundred of those.
@@ -85,11 +95,15 @@ export default async function TokenPage({ params, searchParams }: Props) {
     return `${query.length === 0 ? '' : `?${query.join('&')}`}#t${n}`;
   };
 
-  const drawing = layout(transfers, flows, middles);
+  const drawing = layout(transfers, flows, middles, own, ownLenses);
   // The table's link to every row the graph numbers, built here because only the server knows which page of the filter holds a row.
   const rowHrefs = Object.fromEntries(drawing.edges.flatMap((e) => (e.row === null ? [] : [[e.row, rowHref(e.row)] as const])));
   // A loop the link names wins over a lens; one that matches nothing lights nothing.
-  const initial = sp.loop ? { loop: sp.loop } : METHODS.find((m) => m === sp.method) ? { method: sp.method as Method } : null;
+  const lens: LensKey | undefined = sp.method === undefined ? undefined : METHODS.find((m) => m === sp.method) ?? (isOwnKey(sp.method) ? sp.method : undefined);
+  const initial = sp.loop ? { loop: sp.loop } : lens !== undefined ? { method: lens } : null;
+  // Row numbers are 1-based, as the graph labels them.
+  const rowOf = new Map(transfers.map((t, i) => [`${t.txHash}:${t.logIndex}`, i + 1]));
+  const ownLoops = drawing.loops.slice(why.length);
 
   return (
     <>
@@ -107,18 +121,19 @@ export default async function TokenPage({ params, searchParams }: Props) {
             {NOT_JUDGED}
             {/* Not judged means no counted lens flags any of it (verdict), so only an apart flag is left to say. */}
             {apart > 0 ? ` ${apart} of ${transfers.length} transfers are flagged only by ${LENSES.AU.name}, which is not counted.` : ''}
-            {notRun.length > 0 ? ` ${lensList(notRun)} did not run.` : ''}
+            {notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}
           </>
         ) : apartOnly ? (
           <>{apart} of {transfers.length} transfers flagged, by {lensList(by)}: {APART_WHY}.</>
         ) : by.length === 0 ? (
-          <>None of its {transfers.length} transfers is flagged by {notRun.length > 0 ? 'the lenses that ran' : 'any lens'}.{notRun.length > 0 ? ` ${lensList(notRun)} did not run.` : ''}</>
+          <>None of its {transfers.length} transfers is flagged by {ownByRow.size > 0 ? 'the built-in lenses' : notRun.length > 0 ? 'the lenses that ran' : 'any lens'}{ownByRow.size > 0 && notRun.length > 0 ? ' that ran' : ''}.{notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}</>
         ) : (
           <>
             {flagged} of {transfers.length} transfers flagged, by {lensList(lenses)}.{' '}
             They count toward <Link href={`${base}?method=${lenses[0]}`} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
           </>
         )}
+        {ownLine}
         {by.length > 0 && !apartOnly ? (
           <p className="mt-2 text-muted-foreground">
             <b className="font-medium text-foreground">What this means:</b>{' '}
@@ -130,20 +145,37 @@ export default async function TokenPage({ params, searchParams }: Props) {
       </Answer>
 
       <TokenLoops
-        drawing={drawing} chainId={chainId} rowHrefs={rowHrefs} initial={initial}
+        drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}
         graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
-        whyHead={<SectionHead title={apartOnly ? `Why ${LENSES.AU.name} flags it` : 'Why it was flagged'} lead={why.length === 0 ? undefined : 'One line per pattern found, with the transfers it covers and the lenses that agree on it. Show in graph lights the pattern.'} />}
-        empty={<Empty>{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `, and ${lensList(notRun)} did not run` : ', and no buyer and seller are linked by money'}.</> : NOT_JUDGED}</Empty>}
-        items={why.map((r, i) => ({
-          key: drawing.loops[i]!.key,
-          body: because(r.witness, chainId),
-          meta: (
-            <>
-              <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-              {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={`${base}?method=${m}#evidence`} />)}
-            </>
-          ),
-        }))}
+        whyHead={<SectionHead title={apartOnly && own.length === 0 ? `Why ${LENSES.AU.name} flags it` : 'Why it was flagged'} lead={drawing.loops.length === 0 ? undefined : `One line per pattern found, with the transfers it covers and the lenses that agree on it${own.length === 0 ? '' : ', then one per loop a lens of yours found'}. Show in graph lights the pattern.`} />}
+        empty={<Empty>{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `. ${notRunAll(notRun)}` : ', and no buyer and seller are linked by money.'}</> : NOT_JUDGED}</Empty>}
+        items={[
+          ...why.map((r, i) => ({
+            key: drawing.loops[i]!.key,
+            body: because(r.witness, chainId),
+            meta: (
+              <>
+                <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
+                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={`${base}?method=${m}#evidence`} />)}
+              </>
+            ),
+          })),
+          // layout() draws your lenses' loops after the built-ins', one per flag in `own`'s order.
+          ...own.map((f, i) => {
+            const row = rowOf.get(`${f.txHash}:${f.logIndex}`);
+            const key: LensKey = `L${f.lensId}`;
+            return {
+              key: ownLoops[i]!.key,
+              body: ownBecause(f),
+              meta: (
+                <>
+                  {row === undefined ? null : <span>transfer <RowLinks rows={[row]} rowHref={rowHref} /></span>}
+                  <LensName m={key} own={ownLenses} className="text-xs" href={`${base}?method=${key}#evidence`} />
+                </>
+              ),
+            };
+          }),
+        ]}
       />
 
       <Section title="Every transfer" lead={`${TINT_LEAD} The number in the first column is the arrow's label in the graph.`}>
@@ -159,7 +191,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <Empty>None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</Empty>
         ) : (
           <>
-            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} />
+            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} own={ownByRow} names={ownLenses} />
             {pageCount > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}

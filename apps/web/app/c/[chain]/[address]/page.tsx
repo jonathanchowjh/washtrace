@@ -8,20 +8,24 @@ import { Pipeline } from '@/components/pipeline';
 import { ReadingSummary } from '@/components/coverage';
 import { Elsewhere, Empty, Ext, Head, MoreLink, Section, Silent } from '@/components/head';
 import { LensList, clampedPage, listView } from '@/components/lens-lists';
-import { History, LensCards, LensStats, RangeBar, RangeFigure, RangeKey, Trend, VolumeDetail } from '@/components/methods';
+import { Compare } from '@/components/compare';
+import { LensEditor } from '@/components/lens-editor';
+import { LensTabs } from '@/components/lens-tabs';
+import { History, LensStats, RangeBar, RangeFigure, RangeKey, Trend, VolumeDetail } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { Time } from '@/components/time';
 import { Wallet } from '@/components/transfers';
 import { CollectionControls } from '@/components/watch';
-import { addressOf, chainOf, methodOf } from '@/lib/api';
+import { addressOf, chainOf, lensKeyOf } from '@/lib/api';
+import { editorStart } from '@/lib/lens-api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
-import { LENSES, pct, plural, short, num } from '@/lib/format';
-import { moneyFor, type CollectionProfile, type Method, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
+import { NOT_RUN_LATEST, atLeastOf, floorCauses, lensInfo, pct, pctTenth, plural, runStateWords, short, num } from '@/lib/format';
+import { moneyFor, type CollectionProfile, type Method, type MethodTotals, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { collectionLinks, explorerAddress, explorerTx, venues } from '@/lib/links';
 import { analyzingOn, coverage, unread, waiting } from '@/lib/coverage';
-import { evidenceLead, lensesRan, range, summary, type Range } from '@/lib/metrics';
+import { chartLenses, evidenceLead, leftOut, lensContext, ownLenses, range, summary, type Range } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
@@ -37,7 +41,7 @@ const TOP = 10;
  * The lens, and each list's page, order and Find: tokens' `tp`, `ts` and
  * `tq`, wallets' `wp`, `ws` and `wq`, so the two lists page apart.
  */
-type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ method?: string; tp?: string; ts?: string; tq?: string; wp?: string; ws?: string; wq?: string }> };
+type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ method?: string; lens?: string; tp?: string; ts?: string; tq?: string; wp?: string; ws?: string; wq?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { address } = await params;
@@ -60,28 +64,39 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const c = await s.collection(chainId, address);
   if (!c) notFound();
   const sp = await searchParams;
-  const method = methodOf(sp.method);
+  // Your lenses on this collection with their runs: ?method=L<id> picks one that exists, and an unknown or deleted one falls back like an unknown method.
+  const runs = await s.lensRuns(c.id);
+  const own = ownLenses(runs);
+  const method = lensKeyOf(sp.method, own);
+  // Compare is a tab, not a lens: lensKeyOf reads it as the default lens, which the panel then does not list.
+  const comparing = sp.method === 'compare';
+  const yours = Object.hasOwn(own, method) ? runs.find((r) => r.lens.key === method)! : null;
   // The reader's zone, detected in the browser: the history is bucketed by their calendar. UTC until it is known.
   const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
   const base = `/c/${chainId}/${address}`;
   const tv = listView('tokens', { page: sp.tp, sort: sp.ts, find: sp.tq });
   const wv = listView('wallets', { page: sp.wp, sort: sp.ws, find: sp.wq });
-  // Only a lens that ran is listed: when funding did not, the money lenses hold Round trips' flags, copied.
-  const ctx = { money: moneyFor(chainId), ran: lensesRan(c.latest), zone };
-  const listed = ctx.ran.includes(method);
+  // Only a lens that ran is listed: when funding did not, the money lenses hold Round trips' flags, copied. Yours join once they have
+  // figures, and are read only through the block their run read (Ruling FF).
+  const ctx = { money: moneyFor(chainId), zone, ...lensContext(c.latest, runs) };
+  const listed = !comparing && ctx.ran.includes(method);
+  // The over-time chart draws at most three of yours (the chosen one first); the timeline counts just those.
+  const chart = chartLenses(runs, method);
   // With a Find, each list is also counted without it, for "2 of 644": a limit of 0 reads the count alone.
-  const [history, timeline, tokens, wallets, tokensOf, walletsOf, profile, passes, all, sources, settings] = await Promise.all([
-    s.history(c.id), c.latest ? s.timeline(c.id, zone) : null,
+  const [history, timeline, tokens, wallets, tokensOf, walletsOf, profile, passes, all, sources, settings, grid] = await Promise.all([
+    s.history(c.id), c.latest ? s.timeline(c.id, zone, chart.drawn.map((o) => ({ lensId: o.lens.id, through: o.run!.throughBlock }))) : null,
     listed ? clampedPage(tv.page, TOP, (offset) => s.lensTokens(c.id, method, { sort: tv.sort as TokenSort, find: tv.find, limit: TOP, offset }, ctx)) : null,
     listed ? clampedPage(wv.page, TOP, (offset) => s.lensWallets(c.id, method, { sort: wv.sort as WalletSort, find: wv.find, limit: TOP, offset }, ctx)) : null,
     listed && tv.find !== null ? s.lensTokens(c.id, method, { sort: 'caught', find: null, limit: 0, offset: 0 }, ctx) : null,
     listed && wv.find !== null ? s.lensWallets(c.id, method, { sort: 'caught', find: null, limit: 0, offset: 0 }, ctx) : null,
     s.profile(c.id), s.passes(), s.collections(), s.sources(), s.settings(),
+    comparing ? s.compare(c.id, ctx) : null,
   ]);
   // The list's own count, never the analysis totals: those also count a token or wallet whose every flagged trade is uncounted.
   const tokenCount = tokensOf?.total ?? tokens?.total ?? 0;
   const walletCount = walletsOf?.total ?? wallets?.total ?? 0;
   const writable = mayWrite(process.env, await headers());
+  const editing = writable ? editorStart(sp.lens, runs.map((r) => r.lens)) : null;
   // This page with one list's page, order or Find changed, the other kept, back at the lens panel.
   const here = (over: Partial<{ tp: number; ts: string; tq: string | null; wp: number; ws: string; wq: string | null }>) => {
     const v = { tp: tokens?.page ?? 1, ts: tv.sort, tq: tv.find, wp: wallets?.page ?? 1, ws: wv.sort, wq: wv.find, ...over };
@@ -110,8 +125,11 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding, silent !== null);
   const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
   const name = c.name ?? short(address);
-  const lens = LENSES[method];
-  const t = a?.totals[method];
+  const lens = lensInfo(method, own)!;
+  // The chosen lens's figures: the latest analysis's for a built-in, its last finished run's for yours (a lens being run again keeps showing them).
+  const t: MethodTotals | null | undefined = yours ? yours.run?.totals : a?.totals[method as Method];
+  // A share of yours is a floor while what it needs is only partly read; its tab, its stat line and the lead below all say so alike.
+  const atLeast = yours !== null && yours.run?.totals != null && atLeastOf(yours.lens.rule, yours.run.totals, cov.notFinal, funded);
 
   return (
     <>
@@ -151,22 +169,30 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         </section>
       )}
 
-      {a ? (
-        <Section id="evidence" title="How was it found?" lead={evidenceLead(a.totals)}>
+      {a || runs.length > 0 ? (
+        <Section id="evidence" title="How was it found?" lead={a ? evidenceLead(a.totals) : 'Your lenses run on this collection once its first analysis is in.'}>
           {/* These are the rules now set, which the latest analysis may not have run under yet. */}
           {rules ? <p className="mb-4 text-sm text-muted-foreground">{rules}</p> : null}
-          <LensCards totals={a.totals} selected={method} href={(m) => `${base}?method=${m}`} notFinal={cov.notFinal} trail={c.trailImportedSha !== null} funded={funded} coming={coming} silent={silent !== null}>
-            {t ? <LensStats m={method} t={t} loops={a.loops && ctx.ran.includes(method) ? a.loops[method] : null} base={base} notFinal={cov.notFinal} /> : null}
-            <p className="mb-4 text-sm text-muted-foreground">
-              {t?.available
-                ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: its {pct(t.flaggedSales, t.sales)} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
-                : <><span className="font-medium text-foreground">{lens.name}</span> did not run, so it flags nothing. Choose another lens above.</>}
-            </p>
+          <LensTabs
+            base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal}
+            coverage={{ trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null }} writable={writable}
+            editor={editing ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} {...editing} /> : null}
+          >
+            {comparing ? <Compare base={base} both={grid?.both ?? {}} not={grid?.not ?? {}} keys={ctx.ran} own={own} left={leftOut(a, runs, ctx.ran, { trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null })} /> : null}
+            {t && !comparing ? <LensStats m={method} t={t} own={own} loops={!yours && a?.loops && ctx.ran.includes(method) ? a.loops[method as Method] : null} base={base} notFinal={cov.notFinal}
+              atLeast={atLeast} /> : null}
+            {a && !comparing ? (
+              <p className="mb-4 text-sm text-muted-foreground">
+                {t?.available
+                  ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: {yours ? `${atLeast ? 'at least ' : 'its '}${pctTenth(t.flaggedSales, t.sales)}` : `its ${pct(t.flaggedSales, t.sales)}`} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
+                  : <><span className="font-medium text-foreground">{lens.name}</span> {yours ? runStateWords(yours.run)?.full : NOT_RUN_LATEST} Choose another lens above.</>}
+              </p>
+            ) : null}
             {tokens && wallets ? (
               <div className="grid gap-6 lg:grid-cols-2">
                 <div>
                   <LensList
-                    kind="tokens" method={method} base={base} chainId={chainId} rows={tokens.rows} total={tokens.total} of={tokenCount}
+                    kind="tokens" method={method} own={own} base={base} chainId={chainId} rows={tokens.rows} total={tokens.total} of={tokenCount}
                     sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
                     pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
                   />
@@ -174,7 +200,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                 </div>
                 <div>
                   <LensList
-                    kind="wallets" method={method} base={base} chainId={chainId} rows={wallets.rows} total={wallets.total} of={walletCount}
+                    kind="wallets" method={method} own={own} base={base} chainId={chainId} rows={wallets.rows} total={wallets.total} of={walletCount}
                     sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
                     pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
                   />
@@ -182,7 +208,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                 </div>
               </div>
             ) : null}
-          </LensCards>
+          </LensTabs>
         </Section>
       ) : null}
 
@@ -191,7 +217,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           title="When did it happen?"
           lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} base={base} />
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} base={base}
+            own={chart.drawn.map((o) => ({ key: o.lens.key, name: o.lens.name, atLeast: atLeastOf(o.lens.rule, o.run!.totals!, cov.notFinal, funded), floorWhy: floorCauses(o.lens.rule, o.run!.totals!, cov.notFinal, funded).join('; ') }))} ownLeft={chart.left.map((o) => ({ key: o.lens.key, name: o.lens.name }))}
+            ownNotRun={chart.notRun.map((o) => ({ key: o.lens.key, name: o.lens.name, why: runStateWords(o.run)!.full }))} />
         </Section>
       ) : null}
 

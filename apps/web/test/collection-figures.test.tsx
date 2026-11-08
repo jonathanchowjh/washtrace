@@ -7,7 +7,7 @@ const BASE = `/c/1/${ADDR}`;
 
 // Round trips flags 41 of 1,000 sales, Money loops back 300, Linked wallets 120.
 const FLAGGED = { A: 41, AU: 300, AC: 120 } as const;
-const state = { moneyRan: true, loops: true };
+const state = { moneyRan: true, loops: true, lensRuns: [] as unknown[], history: [] as unknown[] };
 const totals = (m: 'A' | 'AU' | 'AC') => ({
   transfers: 5000, flagged: 400, sales: 1000, flaggedSales: FLAGGED[m], volumeWei: String(19_032n * 10n ** 18n),
   flaggedVolumeWei: String(BigInt(FLAGGED[m]) * 20n * 10n ** 18n), wallets: 1207, tokens: 644, available: m === 'A' || state.moneyRan,
@@ -29,7 +29,8 @@ const collection = () => ({
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => collection(),
-    history: async () => [],
+    lensRuns: async () => state.lensRuns ?? [],
+    history: async () => state.history,
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
     profile: async () => ({
       supply: 644, holders: 300, firstMint: null, firstSale: 1_600_000_000_000, lastSale: 1_680_000_000_000,
@@ -49,7 +50,7 @@ vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
-afterEach(() => { cleanup(); state.moneyRan = true; state.loops = true; });
+afterEach(() => { cleanup(); state.moneyRan = true; state.loops = true; state.history = []; });
 
 async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: Page } = await import('@/app/c/[chain]/[address]/page');
@@ -104,7 +105,18 @@ describe('the lens panel on the collection page', () => {
     state.moneyRan = false;
     const c = await draw({ method: 'AU' });
     expect(c.querySelector('[aria-label="Money loops back in numbers"]')).toBeNull();
-    expect(c.textContent).toContain('Money loops back did not run');
+    expect(c.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
+  });
+
+  it('a built-in that ran in an earlier analysis but not the latest says it did not run in the latest analysis, never that it has not run here (Ruling S16)', async () => {
+    // The owner analysed with a key, then cleared it: the earlier analysis ran Money loops back, the latest did not.
+    const earlier = { ...collection().latest, id: 1, ranAt: 1_690_000_000_000 };
+    state.moneyRan = false;
+    state.history = [{ ...collection().latest, id: 2 }, earlier];
+    const c = await draw({ method: 'AU' });
+    expect(c.textContent).toContain('How the answer settled as the reading filled in, at each of 2 analyses');
+    expect(c.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing. Choose another lens above.');
+    expect(c.textContent).not.toContain('has not run on this collection');
   });
 });
 

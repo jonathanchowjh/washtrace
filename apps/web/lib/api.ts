@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { messageOf, METHODS, type Method } from '@washtrace/detect';
+import type { LensKey } from '@washtrace/detect/trades';
 import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from './auth';
 import { ConfigError } from './config';
 
@@ -75,4 +76,10 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
 /** AC by default: the lens that counts the most, and a superset of Round trips. */
 export function methodOf(raw: string | null | undefined): Method {
   return METHODS.includes(raw as Method) ? (raw as Method) : 'AC';
+}
+
+/** A built-in's key, or the key of one of your lenses that exists (`own`'s keys); anything else is AC, as methodOf reads it. */
+export function lensKeyOf(raw: string | null | undefined, own: Record<string, unknown>): LensKey {
+  if (raw != null && Object.hasOwn(own, raw)) return raw as LensKey;
+  return methodOf(raw);
 }

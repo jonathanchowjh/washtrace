@@ -1,10 +1,37 @@
 /**
  * The bands a trade's facts fall into, and the words a Trades list is asked
  * in, shared by the store that reads them and the console that filters on
- * them. It imports only types, so the client can take it without the engine.
+ * them. It imports only types.ts and lens-rule.ts, which hold no server code,
+ * so the client can take it without the engine.
  */
 
-import type { Method } from './types.js';
+import { INT4_MAX } from './lens-rule.js';
+import { METHODS, type Method } from './types.js';
+
+/**
+ * A lens a list can be read by: a built-in method, or `L<id>` for a saved lens
+ * of yours. The id is the lens's row, so a key can outlive the lens it named.
+ */
+export type LensKey = Method | `L${number}`;
+
+const OWN_KEY = /^L[1-9]\d{0,9}$/;
+
+const ownId = (s: string): number | null => (OWN_KEY.test(s) && Number(s.slice(1)) <= INT4_MAX ? Number(s.slice(1)) : null);
+
+/** Whether `s` is a built-in's key or `L` and a positive whole number that fits int4: L0, L01, Lx and L2147483648 are junk. */
+export function isLensKey(s: string): s is LensKey {
+  return (METHODS as readonly string[]).includes(s) || ownId(s) !== null;
+}
+
+/** The saved lens a key names, or null for a built-in. */
+export function lensIdOf(k: LensKey): number | null {
+  return ownId(k);
+}
+
+/** Whether `s` is the key of a lens of yours (`L` and an int4 id): the one test of it, for the store, its SQL and the console alike. */
+export function isOwnKey(s: string): s is `L${number}` {
+  return ownId(s) !== null;
+}
 
 /** Band = count of edges at or below the value: 0 <1 h, 1 1 h–1 d, 2 1–30 d, 3 >30 d. */
 export const HELD_BANDS = [3_600, 86_400, 30 * 86_400] as const;
@@ -43,9 +70,9 @@ export function venueOf(raw: string): string {
   return VENUE_OF.get(raw) ?? raw;
 }
 
-export type TradeSort = 'date' | 'price' | 'held' | 'buyerAge' | 'floor' | 'token' | 'marketplace' | 'seller' | `lens-${Method}`;
+export type TradeSort = 'date' | 'price' | 'held' | 'buyerAge' | 'floor' | 'token' | 'marketplace' | 'seller' | `lens-${LensKey}`;
 /** The wallets in one lens's loops: those on a token, or those sharing a loop with a wallet. */
-export type GroupRef = { method: Method; token: string } | { method: Method; wallet: string };
+export type GroupRef = { method: LensKey; token: string } | { method: LensKey; wallet: string };
 export type TradeGroupBy = 'marketplace' | 'month' | 'held' | 'floor' | 'buyerAge';
 
 /**
@@ -56,7 +83,7 @@ export type TradeGroupBy = 'marketplace' | 'month' | 'held' | 'floor' | 'buyerAg
  */
 export interface TradeQuery {
   kind: 'sales' | 'all';
-  caught: Method[]; notCaught: Method[];
+  caught: LensKey[]; notCaught: LensKey[];
   /** VENUES keys. */
   venues: string[];
   priceMinWei: string | null; priceMaxWei: string | null;
@@ -80,10 +107,21 @@ export const NO_FILTER: TradeQuery = {
 /**
  * What a list is read against: what counts as money on its chain, the lenses
  * that ran in its latest analysis (the engine copies Round trips' flags into
- * the money lenses when no funding ran, so no other lens's flags are read),
+ * the money lenses when no funding ran, so no other lens's flags are read; a
+ * saved lens is there when it has a finished run),
  * and the reader's time zone, for months.
+ *
+ * `through` is, for each lens of yours in `ran`, the block its run read
+ * through (`LensRun.throughBlock`): it judged nothing past it, so a trade past
+ * it is "not judged yet" by that lens, neither caught nor "not flagged by",
+ * and no denominator of it counts the trade (Ruling FF). A lens with no entry,
+ * or a null one, read every trade. Built-ins take none: their flags and facts
+ * are written together.
  */
-export interface TradeContext { money: ReadonlySet<string>; ran: readonly Method[]; zone: string }
+export interface TradeContext {
+  money: ReadonlySet<string>; ran: readonly LensKey[]; zone: string;
+  through?: Readonly<Partial<Record<LensKey, number | null>>>;
+}
 
 export type Find =
   | { kind: 'token'; tokenId: string } | { kind: 'tx'; tx: string } | { kind: 'address'; address: string }

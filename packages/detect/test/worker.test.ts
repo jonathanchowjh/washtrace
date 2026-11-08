@@ -3,7 +3,8 @@ import { appendFile, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { BUDGET_MS, ingestTurns, interleave, MIN_SLICE_MS, nextAnalysis, Worker } from '../src/worker.js';
+import pg from 'pg';
+import { BUDGET_MS, EVERY, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, Worker } from '../src/worker.js';
 import { needsRestore, needsTrail, StoredSync, TRAIL_NOTES } from '../src/stored-sync.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
@@ -11,7 +12,8 @@ import { workerConfig, type WorkerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan, WALLET_MS } from '../src/etherscan.js';
 import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPaths, trailSha, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
 import { hubUrl, partPath } from '../src/hub.js';
-import type { CollectionRow, StaleRow } from '../src/store.js';
+import { LOCKS, type CollectionRow, type StaleRow } from '../src/store.js';
+import type { LensRequest, PreviewRequest } from '../src/lens-thread.js';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type AnalysisRequest } from '../src/analysis-thread.js';
 import type { Analysis } from '../src/types.js';
 
@@ -2604,5 +2606,523 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     const { detail } = await (w as any).runCheck({ kind: 'rpc', chainId: 1 }, workerConfig({}, await store.settings()));
     expect(detail.error).toContain('no such key');
     expect(detail.error).not.toContain('OLDKEY0123456789');
+  });
+});
+
+describe('Worker.lens', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const due = { lens: { id: 7, name: 'Blur 3-hop', version: 2, rule: { marker: 'rule' } }, collectionId: 4, chainId: 1, name: 'Terraforms', analysisId: 11, through: 99, dueAt: Date.now() };
+  const totals = { truncated: 0, untimed: 0 };
+  const analysisDue = { stale: async () => [{ id: 1, chainId: 1, version: 2, rules: {}, name: 'Lab', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }] };
+
+  /** A worker on a stub store holding one due run, recording the store calls in order. */
+  function setup(more: Record<string, unknown> = {}) {
+    const calls: unknown[][] = [];
+    const record = (name: string, result?: unknown) => async (...args: unknown[]) => { calls.push([name, ...args]); return result; };
+    const store: any = {
+      nextLensRun: record('next', due),
+      lensRunStarted: record('started'),
+      lensRunProgress: record('progress'),
+      lensRunFailed: record('failed'),
+      saveLensRun: record('saved', 'saved'),
+      heartbeat: record('beat'),
+      // No analysis is due, so the lens pass goes on; no preview is queued, and none is old enough to sweep.
+      stale: async () => [], collections: async () => [],
+      sweepPreviews: async () => 0, nextPreview: async () => null,
+      ...more,
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), 'postgres://washtrace:hunter2@db:5432/washtrace');
+    w.lensOff = async () => ({ totals: totals as any, flags: [] });
+    return { w, calls, store };
+  }
+  const names = (calls: unknown[][]) => calls.map((c) => c[0]);
+
+  it('says nothing to run when no run is due', async () => {
+    const { w, calls } = setup({ nextLensRun: async () => null });
+    const off = vi.fn();
+    w.lensOff = off;
+    expect(await w.lens()).toBe('nothing to run');
+    expect(off).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long (Ruling KK)', async () => {
+    const now = 2_000_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const fresh = setup({ ...analysisDue, nextLensRun: async () => ({ ...due, dueAt: now - LENS_WAIT_MS + 1 }) });
+    const off = vi.fn(async () => ({ totals: totals as any, flags: [] }));
+    fresh.w.lensOff = off;
+    expect(await fresh.w.lens()).toBe('an analysis is due first');
+    expect(off).not.toHaveBeenCalled();
+    expect(names(fresh.calls)).toEqual([]);
+    const waited = setup({ ...analysisDue, nextLensRun: async () => ({ ...due, dueAt: now - LENS_WAIT_MS }) });
+    expect(await waited.w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    expect(names(waited.calls)).toEqual(['started', 'beat', 'saved']);
+    // With no analysis due, a run that has just become due goes at once.
+    expect(await setup({ nextLensRun: async () => ({ ...due, dueAt: now }) }).w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+  });
+
+  it('after a pass that ran a run, gives way to a due analysis whatever the wait; a pass that gave way or found nothing clears that (Ruling RR)', async () => {
+    let next: unknown = { ...due, dueAt: Date.now() - LENS_WAIT_MS };
+    let analysis = true;
+    const { w } = setup({ nextLensRun: async () => next, stale: async () => (analysis ? (await analysisDue.stale()) : []) });
+    expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    expect(await w.lens()).toBe('an analysis is due first');
+    expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    // With no analysis due it runs on, back to back.
+    analysis = false;
+    expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    analysis = true;
+    next = null;
+    expect(await w.lens()).toBe('nothing to run');
+    next = { ...due, dueAt: Date.now() - LENS_WAIT_MS };
+    expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+  });
+
+  it('starts the run, runs the lens off the main thread with its rule, then saves it', async () => {
+    const { w, calls } = setup();
+    const sent: LensRequest[] = [];
+    w.lensOff = async (request) => { sent.push(request); calls.push(['off']); return { totals: totals as any, flags: [] }; };
+    expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    expect(names(calls)).toEqual(['next', 'started', 'beat', 'off', 'saved']);
+    expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', lensId: 7, collectionId: 4, chainId: 1, rule: { marker: 'rule' }, through: 99 }]);
+    expect(calls.find((c) => c[0] === 'started')).toEqual(['started', 7, 4]);
+    // Saved at the version it read, on the analysis it read.
+    expect(calls.find((c) => c[0] === 'saved')!.slice(1, 6)).toEqual([7, 4, 2, 11, 99]);
+  });
+
+  it('writes progress at most once every 2 seconds, and says it in the heartbeat', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { w, calls } = setup();
+    w.lensOff = async (_request, onProgress) => {
+      onProgress(0.1);
+      now += 1_999;
+      onProgress(0.2);
+      now += 1;
+      onProgress(0.4);
+      return { totals: totals as any, flags: [] };
+    };
+    await w.lens();
+    expect(calls.filter((c) => c[0] === 'progress')).toEqual([['progress', 7, 4, 0.1], ['progress', 7, 4, 0.4]]);
+    expect(calls.filter((c) => c[0] === 'beat').map((c) => c.slice(1))).toContainEqual(['lens', 'Running Blur 3-hop on Terraforms: 40%', 4]);
+  });
+
+  it('notes a failed run with the scrubbed error and rethrows', async () => {
+    const { w, calls } = setup();
+    w.lensOff = async () => { throw new Error('connect failed for postgres://washtrace:hunter2@db:5432/washtrace'); };
+    await expect(w.lens()).rejects.toThrow('connect failed');
+    const failed = calls.find((c) => c[0] === 'failed')!;
+    expect(failed.slice(1, 3)).toEqual([7, 4]);
+    expect(String(failed[3])).not.toContain('hunter2');
+    expect(names(calls)).not.toContain('saved');
+  });
+
+  it('says a lens edited mid-run was queued again, and one whose lens or collection went mid-run saved nothing', async () => {
+    const stale = setup({ saveLensRun: async () => 'stale' });
+    expect(await stale.w.lens()).toBe('Blur 3-hop changed while it ran: queued again');
+    const gone = setup({ saveLensRun: async () => 'gone' });
+    expect(await gone.w.lens()).toBe('Blur 3-hop or Terraforms was removed while it ran: nothing saved');
+    expect(names(gone.calls)).not.toContain('failed');
+  });
+
+  it('takes the analysis lock, not one of its own, and runs nothing while it is held', async () => {
+    const keys: number[] = [];
+    const { w } = setup({
+      locked: async (key: number, _wait: boolean, fn: () => Promise<void>) => { keys.push(key); if (keys.length === 1) return 'skipped'; await fn(); return 'ran'; },
+      settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {},
+    });
+    const off = vi.fn(async () => ({ totals: totals as any, flags: [] }));
+    w.lensOff = off;
+    expect(await w.run('lens')).toBe('skipped');
+    expect(off).not.toHaveBeenCalled();
+    expect(await w.run('lens')).toBe('ran');
+    expect(keys).toEqual([LOCKS.analyze, LOCKS.analyze]);
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a preview (P2)', () => {
+    const queuedPreview = { id: 31, collectionId: 4, chainId: 1, name: 'Terraforms', rule: { marker: 'preview' }, through: 99 };
+    const result = { sampled: 2_000, judged: 1_900, hops: 1_900, ofSales: 9_000, caught: 12, atLeast: false, roundTrips: { caught: 3 }, topMarket: { name: 'Blur', caught: 9 }, truncated: 0, untimed: 0, tookMs: 5 };
+
+    /** `setup`'s worker with one preview queued, recording the preview's store calls too. */
+    function withPreview(more: Record<string, unknown> = {}) {
+      // Due LENS_WAIT_MS ago when made, so it has waited that long whenever the pass reads its clock.
+      const dueAt = Date.now() - LENS_WAIT_MS;
+      const s = setup({ ...analysisDue, nextLensRun: async () => ({ ...due, dueAt }), ...more });
+      const record = (name: string, answer?: unknown) => async (...args: unknown[]) => { s.calls.push([name, ...args]); return answer; };
+      Object.assign(s.store, {
+        sweepPreviews: record('sweep', 0), nextPreview: record('nextPreview', queuedPreview),
+        previewProgress: record('previewProgress'), savePreview: record('savePreview'), previewFailed: record('previewFailed'),
+        nextLensRun: (() => { const next = s.store.nextLensRun; return async (...args: unknown[]) => { s.calls.push(['next']); return next(...args); }; })(),
+        ...more,
+      });
+      const sent: PreviewRequest[] = [];
+      s.w.previewOff = async (request) => { sent.push(request); s.calls.push(['previewOff']); return result; };
+      return { ...s, sent };
+    }
+
+    it('a queued preview runs before a due lens run, even with an analysis due, and leaves lensRanLast as it was; the pass after it gives way to that analysis (Ruling S12)', async () => {
+      for (const ranLast of [false, true]) {
+        const { w, calls, sent } = withPreview();
+        (w as any).lensRanLast = ranLast;
+        const off = vi.fn();
+        w.lensOff = off;
+        expect(await w.lens()).toBe('Previewed a lens on Terraforms');
+        // Swept, then taken, run and saved: no lens run is asked for, and no analysis is asked after.
+        expect(names(calls).filter((n) => n !== 'beat')).toEqual(['sweep', 'nextPreview', 'previewOff', 'savePreview']);
+        expect(off).not.toHaveBeenCalled();
+        expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', previewId: 31, collectionId: 4, chainId: 1, rule: { marker: 'preview' }, through: 99 }]);
+        expect(calls.find((c) => c[0] === 'savePreview')).toEqual(['savePreview', 31, result]);
+        expect((w as any).lensRanLast).toBe(ranLast);
+        // The next pass takes neither the next preview nor a lens run: the analysis goes first, once, and lensRanLast stays the lens runs' own.
+        calls.length = 0;
+        expect(await w.lens()).toBe('an analysis is due first');
+        expect(names(calls)).toEqual(['sweep']);
+        expect((w as any).lensRanLast).toBe(ranLast);
+        // Once: the pass after that takes the preview again, though the analysis is still due here.
+        expect(await w.lens()).toBe('Previewed a lens on Terraforms');
+      }
+      // With none queued, the lens run is next, as before.
+      const { w, calls } = withPreview({ nextPreview: async () => null });
+      expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+      expect(names(calls)).toContain('next');
+    });
+
+    it('sweeps old previews at the start of every lens pass, with its clock', async () => {
+      const now = 2_000_000_000_000;
+      vi.spyOn(Date, 'now').mockReturnValue(now);
+      const { w, calls } = withPreview({ nextPreview: async () => null, nextLensRun: async () => null });
+      expect(await w.lens()).toBe('nothing to run');
+      expect(calls[0]).toEqual(['sweep', now]);
+    });
+
+    it('writes its progress at most once every 2 seconds, and says it in the heartbeat', async () => {
+      let now = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const { w, calls } = withPreview();
+      w.previewOff = async (_request, onProgress) => {
+        onProgress(0.1);
+        now += 1_999;
+        onProgress(0.2);
+        now += 1;
+        onProgress(0.5);
+        return result;
+      };
+      await w.lens();
+      expect(calls.filter((c) => c[0] === 'previewProgress')).toEqual([['previewProgress', 31, 0.1], ['previewProgress', 31, 0.5]]);
+      expect(calls.filter((c) => c[0] === 'beat').map((c) => c.slice(1))).toContainEqual(['lens', 'Previewing a lens on Terraforms: 50%', 4]);
+    });
+
+    it('a preview that throws is marked failed with the scrubbed error', async () => {
+      const { w, calls } = withPreview();
+      w.previewOff = async () => { throw new Error('connect failed for postgres://washtrace:hunter2@db:5432/washtrace'); };
+      await expect(w.lens()).rejects.toThrow('connect failed');
+      const failed = calls.find((c) => c[0] === 'previewFailed')!;
+      expect(failed[1]).toBe(31);
+      expect(String(failed[2])).toContain('connect failed');
+      expect(String(failed[2])).not.toContain('hunter2');
+      expect(names(calls)).not.toContain('savePreview');
+    });
+
+    it('a throw from beat marks the preview failed with its own error, not "the worker stopped"', async () => {
+      const { w, calls } = withPreview();
+      w.beat = async () => { throw new Error('beat broke on postgres://washtrace:hunter2@db:5432/washtrace'); };
+      const off = vi.fn(async () => result);
+      w.previewOff = off;
+      await expect(w.lens()).rejects.toThrow('beat broke');
+      const failed = calls.find((c) => c[0] === 'previewFailed')!;
+      expect(failed[1]).toBe(31);
+      expect(String(failed[2])).toContain('beat broke');
+      expect(String(failed[2])).not.toContain('hunter2');
+      expect(off).not.toHaveBeenCalled();
+    });
+
+    it('runs under the analysis lock, as a lens run does', async () => {
+      const keys: number[] = [];
+      const { w } = withPreview({
+        locked: async (key: number, _wait: boolean, fn: () => Promise<void>) => { keys.push(key); await fn(); return 'ran'; },
+        settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {},
+      });
+      const off = vi.fn(async () => result);
+      w.previewOff = off;
+      expect(await w.run('lens')).toBe('ran');
+      expect(keys).toEqual([LOCKS.analyze]);
+      expect(off).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('Worker hears preview requests (P5)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A worker whose listener is a pg.Client that connects to nothing, and records what it was asked. */
+  function listening() {
+    const asked: string[] = [];
+    vi.spyOn(pg.Client.prototype, 'connect').mockImplementation(async () => {});
+    vi.spyOn(pg.Client.prototype, 'query').mockImplementation((async (sql: string) => { asked.push(sql); return { rows: [] }; }) as any);
+    vi.spyOn(pg.Client.prototype, 'end').mockImplementation(async () => {});
+    const passes: number[] = [];
+    const store: any = {
+      locked: async (key: number, _wait: boolean, fn: () => Promise<unknown>) => { if (key === LOCKS.analyze) passes.push(key); return fn(); },
+      settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
+      expireChecks: async () => 0, pendingChecks: async () => [],
+      sweepPreviews: async () => 0, nextPreview: async () => null, nextLensRun: async () => null,
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '');
+    return { w, asked, passes };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it('listens on washtrace_previews beside the checks', async () => {
+    const { w, asked } = listening();
+    await w.listen();
+    expect(asked.join(' ')).toContain('LISTEN washtrace_checks');
+    expect(asked.join(' ')).toContain('LISTEN washtrace_previews');
+    w.stop();
+  });
+
+  it('a notify on washtrace_previews runs a lens pass now', async () => {
+    const { w, passes } = listening();
+    await w.listen();
+    await settle();
+    expect(passes).toEqual([]);
+    const lens = vi.spyOn(w, 'lens');
+    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
+    await settle();
+    expect(passes).toEqual([LOCKS.analyze]);
+    expect(lens).toHaveBeenCalledTimes(1);
+    // A check's notify runs the checks, not a lens pass.
+    (w as any).listener.emit('notification', { channel: 'washtrace_checks', payload: '5' });
+    await settle();
+    expect(lens).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  it('a notify during a lens pass runs one more after it, which finds the preview the first did not', async () => {
+    const { w } = listening();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    let n = 0;
+    const lens = vi.spyOn(w, 'lens').mockImplementation(async () => { n += 1; if (n === 1) await held; return 'done'; });
+    await w.listen();
+    const first = w.run('lens');
+    await settle();
+    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
+    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
+    await settle();
+    expect(lens).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    for (let i = 0; i < 5; i++) await settle();
+    // Once more, not once per notify: a pass takes one preview, so a due analysis waits one at a time (P2); any more wait for a later notify or the timer.
+    expect(lens).toHaveBeenCalledTimes(2);
+    w.stop();
+  });
+});
+
+describe('Worker: a due analysis waits at most one preview (Ruling S12)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /**
+   * A listening worker whose store's try-lock is a JS lock, holding previews
+   * 31, 32 and 33 queued back to back and, if `analysisDue`, one analysis due
+   * until it is saved. `order` is the work done, in order: each preview run
+   * and each analysis, off the main thread. `hold` makes preview 31 wait for
+   * the promise it is given.
+   */
+  async function queuedBackToBack(analysisDue: boolean, hold?: Promise<void>) {
+    vi.spyOn(pg.Client.prototype, 'connect').mockImplementation(async () => {});
+    vi.spyOn(pg.Client.prototype, 'query').mockImplementation((async () => ({ rows: [] })) as any);
+    vi.spyOn(pg.Client.prototype, 'end').mockImplementation(async () => {});
+    const order: string[] = [];
+    const held = new Set<number>();
+    let due = analysisDue;
+    let queued = [31, 32, 33];
+    const store: any = {
+      locked: async (key: number, _wait: boolean, fn: () => Promise<unknown>) => {
+        if (held.has(key)) return 'skipped';
+        held.add(key);
+        try { return await fn(); } finally { held.delete(key); }
+      },
+      settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
+      expireChecks: async () => 0, pendingChecks: async () => [],
+      sweepPreviews: async () => 0,
+      nextPreview: async () => (queued.length === 0 ? null : { id: queued[0], collectionId: 4, chainId: 1, name: 'Terraforms', rule: {}, through: 99 }),
+      previewProgress: async () => {},
+      savePreview: async (id: number) => { queued = queued.filter((q) => q !== id); },
+      nextLensRun: async () => null,
+      stale: async () => (due ? [{ id: 1, chainId: 1, version: 2, rules: {}, name: 'Lab', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }] : []),
+      collections: async () => [],
+      importedFunding: async () => false,
+      saveAnalysis: async () => { due = false; },
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', '/nonexistent');
+    w.sync.storedManifest = async () => null;
+    const result = { sampled: 2_000, judged: 1_900, hops: 1_900, ofSales: 9_000, caught: 12, atLeast: false, roundTrips: { caught: 3 }, topMarket: { name: 'Blur', caught: 9 }, truncated: 0, untimed: 0, tookMs: 5 };
+    w.previewOff = async (request) => {
+      if (request.previewId === 31 && hold !== undefined) await hold;
+      order.push(`preview ${request.previewId}`);
+      return result;
+    };
+    w.analyzeOff = async (request) => { order.push(`analysis ${request.id}`); return { analysis: {} as Analysis, through: 7 }; };
+    await w.listen();
+    return { w, order };
+  }
+  const settled = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0)); };
+
+  it('with previews queued back to back and an analysis due, the analysis runs after one preview', async () => {
+    const { w, order } = await queuedBackToBack(true);
+    await w.run('lens');
+    await w.run('lens');
+    // The second pass gives the lock to an analyze pass, and a lens pass follows it for the next preview: no timer is waited for.
+    await settled();
+    expect(order).toEqual(['preview 31', 'analysis 1', 'preview 32']);
+    // With no analysis due, previews go on back to back.
+    await w.run('lens');
+    expect(order).toEqual(['preview 31', 'analysis 1', 'preview 32', 'preview 33']);
+    w.stop();
+  });
+
+  it('a lone preview with no analysis due runs, and the next pass takes the next preview', async () => {
+    const { w, order } = await queuedBackToBack(false);
+    const analyze = vi.spyOn(w, 'analyze');
+    await w.run('lens');
+    await w.run('lens');
+    await settled();
+    expect(order).toEqual(['preview 31', 'preview 32']);
+    // No analyze pass was started for nothing.
+    expect(analyze).not.toHaveBeenCalled();
+    w.stop();
+  });
+
+  it('a notify during a preview, with an analysis due, does not re-run the lens pass ahead of the analysis', async () => {
+    let release!: () => void;
+    const { w, order } = await queuedBackToBack(true, new Promise<void>((r) => { release = r; }));
+    const first = w.run('lens');
+    await settled();
+    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
+    await settled();
+    release();
+    await first;
+    await settled();
+    // The pass the notify asked for gives way, and preview 32 waits for the analysis: one preview's wait, not one per notify.
+    expect(order).toEqual(['preview 31', 'analysis 1', 'preview 32']);
+    w.stop();
+  });
+});
+
+describe('Worker.start: the lens and analyze passes share the analysis lock', () => {
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * A worker on a store whose try-lock is a JS lock and whose every query
+   * takes a millisecond, as the final review's timer model has it: the real
+   * start() and run(), with only the jobs' bodies and the store stubbed.
+   * `due` says whether an analysis is due each time the store is asked;
+   * `next` is the lens run the store holds, given when the worker started.
+   * `lens.ran` is when each lens run started, off the main thread.
+   * `analysisMs` is how long the analyze pass works while an analysis is due
+   * (0: it analyses nothing); `runMs` how long a lens run takes. `lens.taken`
+   * is every pass that took the analysis lock, in order, with what it said.
+   */
+  function started(due: () => boolean, next: (startedAt: number) => unknown = () => null, { analysisMs = 0, runMs = 60_000 } = {}) {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const tick = () => new Promise<void>((r) => setTimeout(r, 1));
+    const held = new Set<number>();
+    const lens = { asked: 0, finished: [] as string[], ran: [] as number[], startedAt, locks: 0, taken: [] as [string, string][] };
+    const store: any = new Proxy({
+      async locked(key: number, _wait: boolean, fn: () => Promise<unknown>) {
+        await tick();
+        if (held.has(key)) return 'skipped';
+        held.add(key);
+        if (key === LOCKS.analyze) lens.locks += 1;
+        try { return await fn(); } finally { await tick(); held.delete(key); }
+      },
+      async settings() { await tick(); return new Map(); },
+      async stale() { await tick(); return due() ? [{ id: 1, chainId: 1, version: 2, rules: {}, name: 'Lab', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }] : []; },
+      async collections() { await tick(); return []; },
+      async nextLensRun() { await tick(); lens.asked += 1; return next(startedAt); },
+      async nextPreview() { await tick(); return null; },
+      async passFinished(job: string, _ms: number, _outcome: string, detail: string) {
+        await tick();
+        if (job === 'lens') lens.finished.push(detail);
+        if (job === 'lens' || job === 'analyze') lens.taken.push([job, detail]);
+      },
+    }, { get: (t, k) => (k in t ? (t as any)[k] : async () => { await tick(); }) });
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), '', '/nonexistent');
+    w.sync.storedManifest = async () => null;
+    // A lens run holds the analysis lock while it goes.
+    w.lensOff = async () => { lens.ran.push(Date.now()); await new Promise((r) => setTimeout(r, runMs)); return { totals: { truncated: 0, untimed: 0 } as any, flags: [] }; };
+    // The analyze pass reads the store as it always does, for five round trips and more, and analyses nothing, or for `analysisMs` when one is due.
+    for (const job of ['ingest', 'fund', 'analyze'] as const) {
+      w[job] = async () => {
+        for (let i = 0; i < 4; i++) await tick();
+        if (job !== 'analyze' || analysisMs === 0 || !due()) return 'nothing due';
+        await new Promise((r) => setTimeout(r, analysisMs));
+        return 'analyzed';
+      };
+    }
+    w.start();
+    return { w, lens };
+  }
+
+  it('runs a lens pass every minute while no analysis is due, half a period after analyze takes the lock', async () => {
+    const { w, lens } = started(() => false);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    w.stop();
+    // Twenty minutes of passes, none lost to the analyze pass's lock.
+    expect(lens.asked).toBeGreaterThanOrEqual(19);
+  });
+
+  const queued = (startedAt: number) => ({
+    lens: { id: 7, name: 'Blur 3-hop', version: 1, rule: {} }, collectionId: 1, chainId: 1, name: 'Lab', analysisId: 1, through: null, dueAt: startedAt,
+  });
+
+  it('gives way to an analysis that is due: the lens pass runs nothing and says why', async () => {
+    const { w, lens } = started(() => true, queued);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    w.stop();
+    expect(lens.ran).toEqual([]);
+    expect(lens.finished.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(lens.finished)).toEqual(new Set(['an analysis is due first']));
+  });
+
+  it('runs a queued lens run within LENS_WAIT_MS and one period, though an analysis is always due (Ruling KK)', async () => {
+    const { w, lens } = started(() => true, queued);
+    await vi.advanceTimersByTimeAsync(LENS_WAIT_MS + EVERY.lens);
+    w.stop();
+    expect(lens.ran).toHaveLength(1);
+    const waited = lens.ran[0]! - lens.startedAt;
+    expect(waited).toBeGreaterThanOrEqual(LENS_WAIT_MS);
+    expect(waited).toBeLessThanOrEqual(LENS_WAIT_MS + EVERY.lens);
+    // Every pass before it gave way.
+    expect(new Set(lens.finished)).toEqual(new Set(['an analysis is due first']));
+    expect(lens.finished.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it('after a lens run, gives the lock to the due analysis next, though a backlog of runs has each waited LENS_WAIT_MS (Ruling RR)', async () => {
+    // Every run has waited already; a run takes 100 s, so it ends before a lens tick, which then comes before analyze's.
+    const waited = (startedAt: number) => ({ ...queued(startedAt), dueAt: startedAt - LENS_WAIT_MS });
+    const { w, lens } = started(() => true, waited, { analysisMs: 20_000, runMs: 100_000 });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    w.stop();
+    const work = lens.taken.filter(([job, said]) => (job === 'analyze' ? said === 'analyzed' : said.startsWith('Ran ')));
+    const runs = work.filter(([job]) => job === 'lens').length;
+    // The backlog drains, and the analyses go on beside it.
+    expect(runs).toBeGreaterThanOrEqual(5);
+    expect(work.length - runs).toBeGreaterThanOrEqual(runs - 1);
+    // After each lens run, every lock taken until analyze takes it is a lens pass that gives way; the next one that works is analyze's.
+    lens.taken.forEach(([job, said], i) => {
+      if (job !== 'lens' || !said.startsWith('Ran ')) return;
+      const after = lens.taken.slice(i + 1);
+      const until = after.findIndex(([j]) => j === 'analyze');
+      if (until < 0) return;
+      expect(after.slice(0, until).map(([, s]) => s), `pass ${i}`).toEqual(after.slice(0, until).map(() => 'an analysis is due first'));
+      expect(after[until], `pass ${i}`).toEqual(['analyze', 'analyzed']);
+    });
+    expect(lens.locks).toBe(lens.taken.length);
   });
 });

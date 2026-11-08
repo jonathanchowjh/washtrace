@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
-import { HEADLINE, METHODS, type AnalysisRow, type FlaggedTransfer, type Method, type MethodTotals, type Transfer } from '@washtrace/detect';
-import { LENSES, NOT_JUDGED_YET, pct, num } from './format';
+import { HEADLINE, METHODS, type AnalysisRow, type FlaggedTransfer, type Lens, type LensRun, type Method, type MethodTotals, type TradeRow, type Transfer } from '@washtrace/detect';
+import { ruleLine } from '@washtrace/detect/lens-rule';
+import { isOwnKey, type LensKey, type TradeContext } from '@washtrace/detect/trades';
+import { FIGURES_FROM, LENSES, NOT_JUDGED_YET, pct, num, runStateWords, type Lenses } from './format';
 
 /**
  * The analysis, said the way a reader asks it. One collection's answer is a
@@ -79,6 +81,103 @@ export function lensesRan(latest: Pick<AnalysisRow, 'totals'> | null): Method[] 
   return METHODS.filter((m) => latest?.totals[m]?.available === true);
 }
 
+/**
+ * Your lenses that finished a run on the collection, as keys for a Trades
+ * read's `ctx.ran` beside lensesRan's. A queued, running or failed run has no
+ * totals, and flags nothing yet.
+ */
+export function ownRan(runs: readonly { lens: Lens; run: LensRun | null }[]): LensKey[] {
+  return runs.filter((r) => r.run?.totals != null).map((r) => r.lens.key);
+}
+
+/**
+ * Which of your lenses the over-time chart draws (plan ruling P9): seven
+ * lines cannot be read, so at most three that have figures, the chosen one
+ * first and then the most recently run. The rest are `left`, which the chart
+ * names under itself rather than dropping them. A lens with no finished run
+ * has no share to draw: it is `notRun`, which the chart names too.
+ */
+export function chartLenses<T extends { lens: Lens; run: LensRun | null }>(runs: readonly T[], selected: LensKey): { drawn: T[]; left: T[]; notRun: T[] } {
+  const ran = ownRan(runs);
+  const shown = runs.filter((r) => ran.includes(r.lens.key));
+  const rank = (r: T) => (r.lens.key === selected ? Infinity : r.run!.finishedAt ?? 0);
+  const ordered = [...shown].sort((a, b) => rank(b) - rank(a));
+  return { drawn: ordered.slice(0, 3), left: ordered.slice(3), notRun: runs.filter((r) => !ran.includes(r.lens.key)) };
+}
+
+/**
+ * What a Trades read is told of the lenses (its context's `ran` and
+ * `through`): the built-ins that ran in the latest analysis, your lenses with
+ * figures, and for each of those the block its run read through. A lens of
+ * yours judged nothing past that block, so the store reads a trade past it as
+ * not judged yet by it, never as clean (Ruling FF). Every page and route that
+ * reads trades or a lens's lists takes it from here.
+ */
+export function lensContext(latest: Pick<AnalysisRow, 'totals'> | null, runs: readonly { lens: Lens; run: LensRun | null }[]): Pick<TradeContext, 'ran'> & { through: Partial<Record<LensKey, number | null>> } {
+  const yours = ownRan(runs);
+  const shown = runs.filter((r) => yours.includes(r.lens.key));
+  return { ran: [...lensesRan(latest), ...yours], through: Object.fromEntries(shown.map((r) => [r.lens.key, r.run!.throughBlock])) };
+}
+
+/**
+ * The lenses Compare leaves out, each with why: those not in `ran`, a built-in
+ * that did not run in the latest analysis and one of yours with no finished
+ * run. Compare names them rather than draw a row of zeros for a lens that
+ * judged nothing.
+ */
+export function leftOut(latest: Pick<AnalysisRow, 'totals'> | null, runs: readonly { lens: Lens; run: LensRun | null }[], ran: readonly LensKey[], funding: { trail: boolean; funded: boolean; coming: boolean; silent: boolean }): { key: LensKey; why: string }[] {
+  // The same states the lens panel tells apart (BuiltIn, lens-tabs.tsx), so a reason is true for its case: funding set but not yet analysed is not "needs a key".
+  const money = funding.funded ? 'has not run yet: funding is set, and the next analysis runs it.'
+    : funding.coming ? `has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it${funding.silent ? ', once the worker reports again' : ''}.`
+    : `did not run: ${funding.trail ? 'the stored money trail checked no wallet, and it needs a key' : 'it needs to know who paid whom, and a key'}: add an Etherscan key in Settings.`;
+  const builtIn = METHODS.filter((m) => !ran.includes(m)).map((key) => ({
+    key,
+    why: latest === null ? 'has not been read yet: the first analysis is not in.' : key === 'A' ? 'did not run in the latest analysis.' : money,
+  }));
+  const yours = runs.filter((r) => !ran.includes(r.lens.key)).map(({ lens, run }) => ({ key: lens.key, why: runStateWords(run)!.full }));
+  return [...builtIn, ...yours];
+}
+
+/**
+ * Whether lens `m` judged a row of a Trades list: an analysis covered it
+ * (`judged`), and for a lens of yours its run read through the row's block
+ * (`through`, as lensContext gives it). Past that block the row is not judged
+ * yet by that lens, however the built-ins read it.
+ */
+export function judgedBy(r: Pick<TradeRow, 'judged' | 'blockNumber'>, m: LensKey, through: TradeContext['through']): boolean {
+  const block = isOwnKey(m) ? through?.[m] : undefined;
+  return r.judged && (block === undefined || block === null || r.blockNumber <= block);
+}
+
+/** How a lens of yours can be behind: its figures are from before its latest edit, or from before the latest analysis. */
+export type Behind = 'edit' | 'analysis';
+
+/**
+ * Why the figures a lens of yours shows are not from its rule now on the
+ * latest analysis, or null when they are (or it has none to show). It holds
+ * in any status: a queued, running or failed run keeps the figures of the
+ * last one that saved, and `lensVersion` and `analysisId` are that run's
+ * (Ruling FF). An edit is said first: then the flags are another rule's.
+ */
+export function behindOf(run: LensRun | null, lens: Pick<Lens, 'version'>, latest: Pick<AnalysisRow, 'id'> | null): Behind | null {
+  if (run === null || run.totals === null) return null;
+  if (run.lensVersion < lens.version) return 'edit';
+  return run.analysisId !== (latest?.id ?? null) ? 'analysis' : null;
+}
+
+/** The line above Trades and the flagged lists: each lens in view that is behind, by name, and what that means for what is shown. Null when none is. */
+export function behindLine(lenses: readonly { name: string; behind: Behind }[]): string | null {
+  if (lenses.length === 0) return null;
+  return lenses.map(({ name, behind }) => behind === 'edit'
+    ? `${name} shows ${FIGURES_FROM.edit}, so its flags are the old rule's until the new run saves.`
+    : `${name} shows ${FIGURES_FROM.analysis}, so trades after it are not judged by it yet.`).join(' ');
+}
+
+/** Every saved lens by key (run or not, so a queued lens's chip still has its name): its name, the hue `own`, and its rule in words. */
+export function ownLenses(runs: readonly { lens: Lens; run: LensRun | null }[]): Lenses {
+  return Object.fromEntries(runs.map(({ lens }) => [lens.key, { name: lens.name, tone: 'own' as const, says: ruleLine(lens.rule) }]));
+}
+
 export interface Verdict {
   judged: boolean;
   /** True when a headline lens that ran flags a transfer; null when none does but some transfer is not judged; else false. */
@@ -100,12 +199,18 @@ export function verdict(rows: readonly { t: FlaggedTransfer; latest: AnalysisRow
   return { judged: all, washTrade, by, apartOnly: by.length > 0 && by.every((m) => APART.includes(m)), notRun };
 }
 
-/** The title and tone every page gives a verdict. `flagged` is the page's own title for a wash trade. */
-export function answer(v: Verdict, flagged: ReactNode): { title: ReactNode; tone: Tone } {
+/**
+ * The title and tone every page gives a verdict. `flagged` is the page's own
+ * title for a wash trade. The verdict is the built-ins' alone; `ownCatch`
+ * says a lens of yours flags some of it, so a clean title names whose
+ * verdict it is rather than saying no lens flags it.
+ */
+export function answer(v: Verdict, flagged: ReactNode, ownCatch = false): { title: ReactNode; tone: Tone } {
   if (v.washTrade === true) return { title: flagged, tone: v.by.includes('A') ? 'cycle' : 'money' };
   if (v.washTrade === null) return { title: NOT_JUDGED_YET, tone: 'clean' };
   if (v.apartOnly) return { title: `Flagged only by ${LENSES.AU.name}, which is not counted`, tone: 'apart' };
-  return { title: v.notRun.length === 0 ? 'Not flagged by any lens' : 'Not flagged by the lenses that ran', tone: 'clean' };
+  const which = ownCatch ? 'the built-in lenses' : v.notRun.length === 0 ? 'any lens' : 'the lenses';
+  return { title: `Not flagged by ${which}${v.notRun.length === 0 ? '' : ' that ran'}`, tone: 'clean' };
 }
 
 /** The one API shape of a verdict: `by` is published as `methods`. The tx, token and wallet routes spread it. */

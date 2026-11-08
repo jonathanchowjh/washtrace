@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { FACTS_VERSION, FLOOR_DAYS, SECRET_KEYS, Store, type ListOpts, type TokenSort, type WalletSort } from '../src/store.js';
+import { ANALYZE_GAP_MS, FACTS_VERSION, FLOOR_DAYS, SECRET_KEYS, Store, type ListOpts, type TokenSort, type WalletSort } from '../src/store.js';
 import { analyze } from '../src/methods.js';
 import { analyzeStored } from '../src/analysis-thread.js';
 import { Worker } from '../src/worker.js';
@@ -18,6 +18,9 @@ import { StoredDataError, readTrail, trailPaths, trailSha, writeTrail, type Stor
 import { needsRestore } from '../src/stored-sync.js';
 import type { Flow, Method, Transfer } from '../src/types.js';
 import { NO_FILTER, type TradeQuery } from '../src/trades.js';
+import { COPIES, DEFAULT_RULE } from '../src/lens-rule.js';
+import { lensStored, previewStored } from '../src/lens-thread.js';
+import { MIGRATIONS } from '../src/migrations.js';
 import type { Payments } from '../src/payments.js';
 
 let pg: StartedPostgreSqlContainer;
@@ -63,18 +66,159 @@ describe('Store.schemaVersion', () => {
   });
 });
 
+describe('migration #28: the money-edge index, built concurrently (Ruling EE)', () => {
+  const isValid = async () => (await store.pool.query(
+    `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS def, i.indexrelid::int AS oid FROM pg_index i
+     JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'washtrace' AND c.relname = 'flows_moves_idx'`,
+  )).rows;
+  const at = async (version: number) => {
+    await store.pool.query('DELETE FROM washtrace.schema_version');
+    await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES ($1)', [version]);
+  };
+  const DEF = 'CREATE INDEX flows_moves_idx ON washtrace.flows USING btree (chain_id, from_address, to_address, block_number)';
+
+  it('is a step the runner runs outside a transaction, and #27 holds the lens tables only', () => {
+    expect(MIGRATIONS).toHaveLength(30);
+    expect(typeof MIGRATIONS[26]).toBe('string');
+    expect(MIGRATIONS[26]).not.toContain('flows_moves_idx');
+    const step = MIGRATIONS[27]!;
+    expect(typeof step).toBe('object');
+    expect((step as { outside: readonly string[] }).outside.at(-1)).toMatch(/^CREATE INDEX CONCURRENTLY IF NOT EXISTS flows_moves_idx ON washtrace\.flows/);
+    // #29, after it, is a plain one: the previews' table, and the index your lenses' flags of one tx are read by.
+    expect(typeof MIGRATIONS[28]).toBe('string');
+    expect(MIGRATIONS[28]).toContain('washtrace.lens_previews');
+    expect(MIGRATIONS[28]).toContain('lens_flags_tx_idx ON washtrace.lens_flags (tx_hash)');
+  });
+
+  it('builds the index outside a transaction (CONCURRENTLY refuses one), and a second run changes nothing', async () => {
+    await store.migrate();
+    await store.pool.query('DROP INDEX washtrace.flows_moves_idx');
+    await at(27);
+    expect(await store.migrate()).toBe(30);
+    const built = await isValid();
+    expect(built).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
+    expect(await store.migrate()).toBe(30);
+    await at(27);
+    expect(await store.migrate()).toBe(30);
+    expect(await isValid()).toEqual(built);
+    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: 30 }]);
+  });
+
+  it('drops an INVALID index a stopped build left under its name, and builds it again', async () => {
+    await store.migrate();
+    await store.pool.query('DROP INDEX washtrace.flows_moves_idx');
+    await store.fund(1, w('1d01'), [flow(w('1d01'), w('1d02')), flow(w('1d01'), w('1d03'))], false);
+    try {
+      // A concurrent build that fails leaves its index behind, INVALID: here, a unique one over a column with repeats.
+      await expect(store.pool.query('CREATE UNIQUE INDEX CONCURRENTLY flows_moves_idx ON washtrace.flows (chain_id)')).rejects.toThrow();
+      expect(await isValid()).toEqual([expect.objectContaining({ valid: false })]);
+      await at(27);
+      expect(await store.migrate()).toBe(30);
+      expect(await isValid()).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
+    } finally {
+      await store.pool.query('DELETE FROM washtrace.flows WHERE from_address = $1', [w('1d01')]);
+    }
+  });
+
+  it('builds it with two migrators starting together: the one waiting holds no snapshot the build would wait out', async () => {
+    await store.migrate();
+    await store.pool.query('DROP INDEX washtrace.flows_moves_idx');
+    await at(27);
+    const named = (name: string) => new Store(new pgClient.Pool({ connectionString: pg.getConnectionUri(), application_name: name, max: 2 }));
+    const [one, two] = [named('migrate-one'), named('migrate-two')];
+    // A third replica holds the lock while both start, so both are waiting when it goes.
+    const holder = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await holder.connect();
+    try {
+      await holder.query('SELECT pg_advisory_lock($1, 0)', [0x77617368]);
+      const both = [one.migrate(), two.migrate()];
+      for (let i = 0; ; i++) {
+        const { rows } = await store.pool.query(
+          `SELECT count(DISTINCT application_name)::int AS n FROM pg_stat_activity WHERE application_name LIKE 'migrate-%' AND query LIKE '%advisory_lock(%'`,
+        );
+        if (rows[0].n === 2) break;
+        if (i > 200) throw new Error('the migrators never asked for the lock');
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await holder.query('SELECT pg_advisory_unlock($1, 0)', [0x77617368]);
+      expect(await Promise.all(both)).toEqual([30, 30]);
+      expect(await isValid()).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
+    } finally {
+      await holder.end();
+      await one.pool.end();
+      await two.pool.end();
+    }
+  });
+});
+
+describe('migration #30: flows_from_idx dropped, flows_moves_idx serves its lookups', () => {
+  const indexes = async () => (await store.pool.query(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'flows' AND indexname IN ('flows_from_idx', 'flows_moves_idx') ORDER BY indexname`,
+  )).rows.map((r) => r.indexname);
+  const at = async (version: number) => {
+    await store.pool.query('DELETE FROM washtrace.schema_version');
+    await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES ($1)', [version]);
+  };
+
+  it('is a step the runner runs outside a transaction (DROP INDEX CONCURRENTLY refuses one)', () => {
+    const step = MIGRATIONS[29]!;
+    expect(typeof step).toBe('object');
+    expect((step as { outside: readonly string[] }).outside).toEqual(['DROP INDEX CONCURRENTLY IF EXISTS washtrace.flows_from_idx']);
+  });
+
+  it('drops flows_from_idx and keeps flows_moves_idx', async () => {
+    await store.migrate();
+    await store.pool.query('CREATE INDEX IF NOT EXISTS flows_from_idx ON washtrace.flows (chain_id, from_address)');
+    await at(29);
+    expect(await store.migrate()).toBe(30);
+    expect(await indexes()).toEqual(['flows_moves_idx']);
+  });
+
+  it('on a store without flows_from_idx is a no-op, and the version is 30', async () => {
+    await store.migrate();
+    expect(await indexes()).toEqual(['flows_moves_idx']);
+    await at(29);
+    expect(await store.migrate()).toBe(30);
+    expect(await indexes()).toEqual(['flows_moves_idx']);
+    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: 30 }]);
+  });
+
+  it('a query by (chain_id, from_address) on flows still uses an index: flows_moves_idx', async () => {
+    await store.migrate();
+    const c = await store.pool.connect();
+    try {
+      await c.query('BEGIN');
+      // Enough rows that the planner costs an index scan, not a seq scan over a handful; rolled back.
+      await c.query(
+        `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
+         SELECT 1, '0xfill' || g, 'eth', '0x' || lpad(to_hex(g % 2000), 40, '0'), '0x' || lpad(to_hex(g), 40, '0'), 1, '', g, now() FROM generate_series(1, 20000) g`,
+      );
+      await c.query('ANALYZE washtrace.flows');
+      const plan = (await c.query(
+        'EXPLAIN SELECT * FROM washtrace.flows WHERE chain_id = $1 AND from_address = $2',
+        [1, '0x' + (7).toString(16).padStart(40, '0')],
+      )).rows.map((r) => r['QUERY PLAN']).join('\n');
+      expect(plan).toMatch(/flows_moves_idx/);
+    } finally {
+      await c.query('ROLLBACK');
+      c.release();
+    }
+  });
+});
+
 describe('Store', () => {
   // Funding ran in this block's analysis, so every lens did.
   const RAN = { money: new Set(['']), ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
   const LIST = { sort: 'caught' as const, find: null, limit: 50, offset: 0 };
 
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(26);
-    expect(await store.schemaVersion()).toBe(26);
-    expect(await store.migrate()).toBe(26);
-    expect(await store.migrate()).toBe(26);
+    expect(await store.migrate()).toBe(30);
+    expect(await store.schemaVersion()).toBe(30);
+    expect(await store.migrate()).toBe(30);
+    expect(await store.migrate()).toBe(30);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 26 }]);
+    expect(rows).toEqual([{ version: 30 }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -83,7 +227,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(26);
+      expect(await store.migrate()).toBe(30);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -97,7 +241,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
-      expect(await store.migrate()).toBe(26);
+      expect(await store.migrate()).toBe(30);
       const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
       expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
     } finally {
@@ -116,7 +260,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(26);
+      expect(await store.migrate()).toBe(30);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -2173,7 +2317,7 @@ describe('loops', () => {
       // Run the re-analysis migration again, and the one after it, as an install upgrading to them would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (24)');
-      expect(await store.migrate()).toBe(26);
+      expect(await store.migrate()).toBe(30);
       const due = (await store.stale()).map((s) => s.id);
       expect(due).toContain(old);
       expect(due).not.toContain(fresh);
@@ -2619,5 +2763,1441 @@ describe('a wallet', () => {
     expect(await store.flowsBetweenCount(CHAIN, W, P, 'received')).toBe(1);
     expect(await store.flowsBetweenCount(CHAIN, W, P, 'both')).toBe(4);
     expect(await store.flowsBetweenCount(CHAIN, W, R, 'sent')).toBe(0);
+  });
+});
+
+describe('lenses', () => {
+  beforeAll(async () => { await store.migrate(); });
+
+  const FLAGS = [
+    { txHash: '0xaa', logIndex: 0, path: [{ from: a, to: b, kind: 'nft-token' as const, tx: '0xaa', time: 100, amountWei: null, tokenId: '1' }], wallets: [a, b] },
+    { txHash: '0xbb', logIndex: 1, path: [{ from: b, to: a, kind: 'funds' as const, tx: null, time: null, amountWei: '5', tokenId: null }], wallets: [b, a] },
+  ];
+  const TOTALS = { transfers: 9, flagged: 2, sales: 5, flaggedSales: 2, volumeWei: '10', flaggedVolumeWei: '4', wallets: 4, tokens: 3, available: true, truncated: 1, untimed: 0 };
+
+  /** A collection ingested and analysed as the worker would leave it. */
+  async function analysed(address: string): Promise<{ id: number; analysis: number }> {
+    const { id } = await store.addCollection(1, address, 'Lab', 1);
+    await store.ingest(id, 1, LAB.transfers, LAB.cursor, []);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+    return { id, analysis: await latest(id) };
+  }
+  async function latest(id: number): Promise<number> {
+    const { rows } = await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT 1', [id]);
+    return Number(rows[0].id);
+  }
+  const flagCount = async (lensId: number) =>
+    Number((await store.pool.query('SELECT count(*) FROM washtrace.lens_flags WHERE lens_id = $1', [lensId])).rows[0].count);
+
+  it('creates, updates and finds a lens by name, the built-ins\' names included', async () => {
+    const lens = await store.createLens('Blur 3-hop', DEFAULT_RULE);
+    try {
+      expect(lens).toMatchObject({ key: `L${lens.id}`, name: 'Blur 3-hop', version: 1, rule: DEFAULT_RULE });
+      expect(await store.lens(lens.id)).toEqual(lens);
+      expect(await store.lens(lens.id + 999)).toBeNull();
+      const edited = await store.updateLens(lens.id, 'Blur 3-hop v2', { ...DEFAULT_RULE, minCycles: 1 });
+      expect(edited).toMatchObject({ version: 2, name: 'Blur 3-hop v2' });
+      expect(await store.updateLens(lens.id + 999, 'x', DEFAULT_RULE)).toBeNull();
+      expect((await store.lenses()).map((l) => l.id)).toContain(lens.id);
+      expect(await store.nameTaken('blur 3-HOP V2')).toBe(true);
+      expect(await store.nameTaken('Blur 3-hop v2', lens.id)).toBe(false);
+      expect(await store.nameTaken('Blur 3-hop')).toBe(false);
+      for (const built of ['Round trips', 'money LOOPS back', 'Linked wallets']) expect(await store.nameTaken(built)).toBe(true);
+      await expect(store.createLens('BLUR 3-hop V2', DEFAULT_RULE)).rejects.toThrow();
+    } finally {
+      await store.deleteLens(lens.id);
+    }
+  });
+
+  it('refuses to read one lens whose rule no longer checks, naming it, and leaves it out of the lists', async () => {
+    const lens = await store.createLens('Corrupt', DEFAULT_RULE);
+    const healthy = await store.createLens('Healthy', DEFAULT_RULE);
+    const { id } = await analysed(w('1e50'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.requestLensRun(healthy.id, id);
+      await store.pool.query('UPDATE washtrace.lenses SET rule = \'{"edges": 3}\' WHERE id = $1', [lens.id]);
+      await expect(store.lens(lens.id)).rejects.toThrow(new RegExp(`lens ${lens.id}\\b`));
+      expect((await store.lenses()).map((l) => l.id)).toEqual([healthy.id]);
+      expect((await store.lensRuns(id)).map((r) => r.lens.id)).toEqual([healthy.id]);
+      // The corrupt lens's run is the oldest due, and is failed so the healthy one is picked in the same call.
+      expect(await store.nextLensRun(Date.now())).toMatchObject({ lens: { id: healthy.id }, collectionId: id });
+      const { rows } = await store.pool.query('SELECT status, error, failures, retry_at > now() AS later FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id]);
+      expect(rows).toEqual([{ status: 'failed', error: expect.stringMatching(/^This lens's rule can't be read: .+/), failures: 1, later: true }]);
+    } finally {
+      await store.deleteLens(lens.id);
+      await store.deleteLens(healthy.id);
+      await drop(1, w('1e50'));
+    }
+  });
+
+  it('creates a lens with its first run queued in one statement, so a failure leaves neither', async () => {
+    const { id } = await analysed(w('1e62'));
+    const named = async (name: string) => (await store.pool.query('SELECT 1 FROM washtrace.lenses WHERE name = $1', [name])).rowCount;
+    try {
+      const lens = await store.createLens('With its run', DEFAULT_RULE, id);
+      expect((await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: null });
+      await store.deleteLens(lens.id);
+      // A collection gone by then fails the run's insert, and the lens goes with it.
+      await expect(store.createLens('Orphaned', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      expect(await named('Orphaned')).toBe(0);
+      // With no collection, the lens alone, as before.
+      const alone = await store.createLens('Alone', DEFAULT_RULE);
+      expect((await store.lensRuns(id)).find((r) => r.lens.id === alone.id)!.run).toBeNull();
+      await store.deleteLens(alone.id);
+    } finally {
+      await drop(1, w('1e62'));
+    }
+  });
+
+  it('queues a run on the collection an edit names, in the same statement, once whether or not one is there (M2)', async () => {
+    const { id } = await analysed(w('1e63'));
+    const { id: other } = await analysed(w('1e64'));
+    const lens = await store.createLens('Edited here', DEFAULT_RULE, other);
+    const runOf = async (c: number) => (await store.lensRuns(c)).find((r) => r.lens.id === lens.id)!.run;
+    const rows = async () => Number((await store.pool.query('SELECT count(*) FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rows[0].count);
+    try {
+      // None here yet: the edit queues one at the new version; the run elsewhere is queued again as before.
+      expect(await runOf(id)).toBeNull();
+      expect(await store.updateLens(lens.id, 'Edited here', { ...DEFAULT_RULE, minCycles: 1 }, id)).toMatchObject({ version: 2 });
+      expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2, totals: null });
+      expect(await runOf(other)).toMatchObject({ status: 'queued' });
+      expect(await rows()).toBe(2);
+      // One already here: queued again by the same statement, never a second row, and its version stays the one its totals are from.
+      await store.pool.query(`UPDATE washtrace.lens_runs SET status = 'done', totals = '{}'::jsonb WHERE lens_id = $1 AND collection_id = $2`, [lens.id, id]);
+      expect(await store.updateLens(lens.id, 'Edited here', DEFAULT_RULE, id)).toMatchObject({ version: 3 });
+      expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2 });
+      expect(await rows()).toBe(2);
+      // A collection gone by then fails the run's insert, and the edit goes with it.
+      await expect(store.updateLens(lens.id, 'Renamed', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      expect(await store.lens(lens.id)).toMatchObject({ name: 'Edited here', version: 3 });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e63'));
+      await drop(1, w('1e64'));
+    }
+  });
+
+  it('refuses a second lens whose name differs only in case with the unique index (23505), which the route answers as 409', async () => {
+    const lens = await store.createLens('Case Twin', DEFAULT_RULE);
+    try {
+      await expect(store.createLens('CASE twin', DEFAULT_RULE)).rejects.toMatchObject({ code: '23505' });
+      await expect(store.updateLens(lens.id, 'Case Twin', DEFAULT_RULE)).resolves.toMatchObject({ name: 'Case Twin' });
+      const other = await store.createLens('Other Twin', DEFAULT_RULE);
+      try {
+        await expect(store.updateLens(other.id, 'case TWIN', DEFAULT_RULE)).rejects.toMatchObject({ code: '23505' });
+      } finally {
+        await store.deleteLens(other.id);
+      }
+    } finally {
+      await store.deleteLens(lens.id);
+    }
+  });
+
+  it('leaves a running run alone when asked to run again', async () => {
+    const lens = await store.createLens('Busy', DEFAULT_RULE);
+    const { id } = await analysed(w('1e5c'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.lensRunStarted(lens.id, id);
+      await store.requestLensRun(lens.id, id);
+      expect((await store.lensRuns(id))[0]!.run!.status).toBe('running');
+      // An edit still requeues it.
+      await store.updateLens(lens.id, 'Busy', DEFAULT_RULE);
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'queued', lensVersion: 1 });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5c'));
+    }
+  });
+
+  it('counts a run a stopped worker left running as a failed try, backs it off, and after three waits to be asked again (Ruling DD)', async () => {
+    const lens = await store.createLens('Orphan', DEFAULT_RULE);
+    const { id } = await analysed(w('1e5b'));
+    const runOf = async () => (await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run!;
+    const FAR = Date.now() + 365 * 86_400_000;
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.lensRunStarted(lens.id, id);
+      expect((await runOf()).status).toBe('running');
+      // A run that took the worker down would take it down again: it is not picked at once.
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      const first = await runOf();
+      expect(first).toMatchObject({ status: 'failed', error: 'The worker stopped during this run.', progress: null });
+      expect(first.retryAt! - Date.now()).toBeGreaterThan(4 * 60_000);
+      expect(await store.nextLensRun(first.retryAt! + 1_000)).toMatchObject({ lens: { id: lens.id }, collectionId: id });
+      // The second and third tries stop the worker too.
+      await store.lensRunStarted(lens.id, id);
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      expect(await runOf()).toMatchObject({ status: 'failed', retryAt: expect.any(Number) });
+      expect(await store.nextLensRun(FAR)).toMatchObject({ lens: { id: lens.id } });
+      await store.lensRunStarted(lens.id, id);
+      expect(await store.nextLensRun(FAR)).toBeNull();
+      expect(await runOf()).toMatchObject({ status: 'failed', error: 'The worker stopped during this run.', retryAt: null });
+      expect(await store.nextLensRun(FAR)).toBeNull();
+      const { rows } = await store.pool.query('SELECT failures FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id]);
+      expect(rows).toEqual([{ failures: 3 }]);
+      // Asked again, it runs at once.
+      await store.requestLensRun(lens.id, id);
+      expect(await store.nextLensRun(Date.now())).toMatchObject({ lens: { id: lens.id } });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5b'));
+    }
+  });
+
+  it('stops trying a run that failed three times in a row until it is asked again or edited', async () => {
+    const lens = await store.createLens('Thrice', DEFAULT_RULE);
+    const { id } = await analysed(w('1e5f'));
+    const FAR = Date.now() + 365 * 86_400_000;
+    try {
+      await store.requestLensRun(lens.id, id);
+      for (let i = 0; i < 3; i++) {
+        expect(await store.nextLensRun(FAR)).toMatchObject({ lens: { id: lens.id } });
+        await store.lensRunStarted(lens.id, id);
+        await store.lensRunFailed(lens.id, id, `boom ${i}`);
+      }
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'failed', error: 'boom 2', retryAt: null });
+      expect(await store.nextLensRun(FAR)).toBeNull();
+      await store.updateLens(lens.id, 'Thrice', DEFAULT_RULE);
+      expect(await store.nextLensRun(Date.now())).toMatchObject({ lens: { id: lens.id, version: 2 } });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5f'));
+    }
+  });
+
+  /**
+   * Waits until the backend running a statement like `like` is blocked on a lock, so the interleaves below
+   * need no sleep of a guessed length, and a lock some other backend waits on is not taken for it.
+   */
+  async function blocked(like: string): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      const { rowCount } = await store.pool.query(
+        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database() AND query LIKE $1", [like],
+      );
+      if (rowCount) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(`no ${like} ever waited on a lock`);
+  }
+  const SAVE_WAITS = '%FROM washtrace.lenses WHERE id = $1 FOR SHARE';
+
+  it('waits for an edit in flight, then gives stale and writes no flags', async () => {
+    const lens = await store.createLens('Race edit', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e5c'));
+    const other = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await other.connect();
+    try {
+      await store.requestLensRun(lens.id, id);
+      // As updateLens does it: the lens's row, then its runs'.
+      await other.query('BEGIN');
+      await other.query('UPDATE washtrace.lenses SET version = 2 WHERE id = $1', [lens.id]);
+      await other.query('UPDATE washtrace.lens_runs SET status = \'queued\' WHERE lens_id = $1', [lens.id]);
+      const saving = store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1);
+      await blocked(SAVE_WAITS);
+      await other.query('COMMIT');
+      expect(await saving).toBe('stale');
+      expect(await flagCount(lens.id)).toBe(0);
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: null });
+    } finally {
+      await other.end();
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5c'));
+    }
+  });
+
+  it('waits for a delete in flight, then gives gone and writes no flags', async () => {
+    const lens = await store.createLens('Race delete', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e5d'));
+    const other = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await other.connect();
+    try {
+      await store.requestLensRun(lens.id, id);
+      await other.query('BEGIN');
+      await other.query('DELETE FROM washtrace.lenses WHERE id = $1', [lens.id]);
+      const saving = store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1);
+      await blocked(SAVE_WAITS);
+      await other.query('COMMIT');
+      expect(await saving).toBe('gone');
+      expect(await flagCount(lens.id)).toBe(0);
+    } finally {
+      await other.end();
+      await drop(1, w('1e5d'));
+    }
+  });
+
+  it('a delete that arrives once the save holds its locks waits for it, and neither deadlocks (M1)', async () => {
+    const lens = await store.createLens('Race delete late', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e60'));
+    const [hold, del] = [new pgClient.Client({ connectionString: pg.getConnectionUri() }), new pgClient.Client({ connectionString: pg.getConnectionUri() })];
+    await hold.connect();
+    await del.connect();
+    try {
+      await store.requestLensRun(lens.id, id);
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      // Its old flags held elsewhere, so the second save stops at them with its own locks taken.
+      await hold.query('BEGIN');
+      await hold.query('SELECT 1 FROM washtrace.lens_flags WHERE lens_id = $1 FOR UPDATE', [lens.id]);
+      const saving = store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, [FLAGS[0]!], 2);
+      await blocked('DELETE FROM washtrace.lens_flags%');
+      const deleting = del.query('DELETE FROM washtrace.lenses WHERE id = $1', [lens.id]);
+      await blocked('DELETE FROM washtrace.lenses%');
+      await hold.query('COMMIT');
+      expect(await saving).toBe('saved');
+      expect((await deleting).rowCount).toBe(1);
+      expect(await flagCount(lens.id)).toBe(0);
+      expect((await store.pool.query('SELECT 1 FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rowCount).toBe(0);
+    } finally {
+      await hold.end();
+      await del.end();
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e60'));
+    }
+  });
+
+  /**
+   * The collection's delete against the run's save. The delete (removeCollection, only of a paused collection)
+   * takes the collections row FOR UPDATE, then its cascade takes lens_runs' and lens_flags' rows. The save used
+   * to take the lenses row FOR SHARE, the lens_runs row FOR UPDATE and the old lens_flags rows, and only then,
+   * through lens_flags' foreign key, the collections row FOR KEY SHARE: the reverse order, so each waited on
+   * the other until Postgres ended one (40P01). Rare, because a run only starts on a collection that is not
+   * paused: it needs the collection paused and deleted while the run is in flight.
+   */
+  it('a collection paused and deleted once the save holds its locks waits for it, and neither deadlocks', async () => {
+    const lens = await store.createLens('Race collection late', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e66'));
+    const hold = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await hold.connect();
+    try {
+      await store.requestLensRun(lens.id, id);
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      // Its old flags held elsewhere, so the second save stops at them with its own locks taken.
+      await hold.query('BEGIN');
+      await hold.query('SELECT 1 FROM washtrace.lens_flags WHERE lens_id = $1 FOR UPDATE', [lens.id]);
+      const saving = store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, [FLAGS[0]!], 2);
+      await blocked('DELETE FROM washtrace.lens_flags%');
+      expect(await store.pause(1, w('1e66'))).toBe(true);
+      const deleting = store.removeCollection(1, w('1e66'));
+      await blocked('DELETE FROM washtrace.collections%');
+      await hold.query('COMMIT');
+      // Both settled before either is checked, so a save that throws never leaves the delete's rejection unhandled.
+      const [saved, deleted] = await Promise.allSettled([saving, deleting]);
+      expect(saved).toEqual({ status: 'fulfilled', value: 'saved' });
+      expect(deleted).toEqual({ status: 'fulfilled', value: true });
+      expect(await flagCount(lens.id)).toBe(0);
+      expect((await store.pool.query('SELECT 1 FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rowCount).toBe(0);
+    } finally {
+      await hold.end();
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e66'));
+    }
+  });
+
+  it('waits for a collection delete in flight, then gives gone and writes no flags', async () => {
+    const lens = await store.createLens('Race collection', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e67'));
+    const other = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await other.connect();
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.pause(1, w('1e67'));
+      await other.query('BEGIN');
+      await other.query('DELETE FROM washtrace.collections WHERE id = $1', [id]);
+      const saving = store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1);
+      await blocked('%FROM washtrace.collections WHERE id = $1 FOR KEY SHARE');
+      await other.query('COMMIT');
+      expect(await saving).toBe('gone');
+      expect(await flagCount(lens.id)).toBe(0);
+      // Run here on it now is refused by the run's foreign key, which the web's routes answer as not watched.
+      await expect(store.requestLensRun(lens.id, id)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+    } finally {
+      await other.end();
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e67'));
+    }
+  });
+
+  it("keeps a run's lens_version the version its totals came from: an edit and Run here leave it, the next save moves it (Ruling FF)", async () => {
+    const lens = await store.createLens('Versions', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e61'));
+    const runOf = async () => (await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!;
+    try {
+      await store.requestLensRun(lens.id, id);
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      await store.updateLens(lens.id, 'Versions', DEFAULT_RULE);
+      expect(await runOf()).toMatchObject({ lens: { version: 2 }, run: { status: 'queued', lensVersion: 1, totals: TOTALS, analysisId: analysis } });
+      await store.requestLensRun(lens.id, id);
+      expect((await runOf()).run).toMatchObject({ status: 'queued', lensVersion: 1 });
+      // Picked at the new version, and saved at it.
+      const picked = (await store.nextLensRun(Date.now()))!;
+      expect(picked.lens.version).toBe(2);
+      expect(await store.saveLensRun(lens.id, id, 2, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      expect((await runOf()).run).toMatchObject({ status: 'done', lensVersion: 2 });
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      // The latest analysis's id is on the collection, beside the run's.
+      expect((await store.collection(1, w('1e61')))!.latest!.id).toBe(analysis);
+      expect((await store.history(id)).map((a) => a.id)).toEqual([analysis]);
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e61'));
+    }
+  });
+
+  it('deletes a lens, and its runs and flags go with it', async () => {
+    const lens = await store.createLens('Doomed', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e51'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 3);
+      expect(await flagCount(lens.id)).toBe(2);
+      expect(await store.deleteLens(lens.id)).toBe(true);
+      expect(await store.deleteLens(lens.id)).toBe(false);
+      expect(await flagCount(lens.id)).toBe(0);
+      expect((await store.pool.query('SELECT 1 FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rowCount).toBe(0);
+    } finally {
+      await drop(1, w('1e51'));
+    }
+  });
+
+  it('lists every lens for a collection, run or not', async () => {
+    const lens = await store.createLens('Unrun', DEFAULT_RULE);
+    const { id } = await analysed(w('1e52'));
+    try {
+      expect((await store.lensRuns(id)).find((r) => r.lens.id === lens.id)).toEqual({ lens, run: null });
+      await store.requestLensRun(lens.id, id);
+      expect((await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run).toMatchObject({ lensId: lens.id, collectionId: id, status: 'queued', lensVersion: 1, totals: null, finishedAt: null });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e52'));
+    }
+  });
+
+  it('picks a queued run of the latest analysis, and none for a collection never analysed', async () => {
+    const lens = await store.createLens('Pick', DEFAULT_RULE);
+    const bare = (await store.addCollection(1, w('1e53'), null, 1)).id;
+    const { id, analysis } = await analysed(w('1e54'));
+    try {
+      await store.requestLensRun(lens.id, bare);
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      await store.requestLensRun(lens.id, id);
+      const next = await store.nextLensRun(Date.now());
+      expect(next).toMatchObject({ lens: { id: lens.id }, collectionId: id, chainId: 1, name: 'Lab', analysisId: analysis, through: 600 });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e53'));
+      await drop(1, w('1e54'));
+    }
+  });
+
+  it('saves a run with its flags, and saving again replaces them', async () => {
+    const lens = await store.createLens('Save', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e55'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.lensRunStarted(lens.id, id);
+      await store.lensRunProgress(lens.id, id, 0.5);
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'running', progress: 0.5 });
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 7)).toBe('saved');
+      const run = (await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run!;
+      expect(run).toMatchObject({ status: 'done', progress: null, lensVersion: 1, analysisId: analysis, throughBlock: 600, totals: TOTALS, error: null, retryAt: null, tookMs: 7 });
+      expect(run.finishedAt).toBeGreaterThan(0);
+      const { rows } = await store.pool.query('SELECT tx_hash, log_index, path, wallets FROM washtrace.lens_flags WHERE lens_id = $1 ORDER BY tx_hash', [lens.id]);
+      expect(rows).toEqual(FLAGS.map((f) => ({ tx_hash: f.txHash, log_index: f.logIndex, path: f.path, wallets: f.wallets })));
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, [FLAGS[0]!], 7)).toBe('saved');
+      expect(await flagCount(lens.id)).toBe(1);
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e55'));
+    }
+  });
+
+  it('queues again a run saved after its lens was edited, keeps its old totals, and writes no flags', async () => {
+    const lens = await store.createLens('Stale', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e56'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, [FLAGS[0]!], 1);
+      await store.requestLensRun(lens.id, id);
+      const picked = (await store.nextLensRun(Date.now()))!;
+      await store.lensRunStarted(lens.id, id);
+      await store.updateLens(lens.id, 'Stale', DEFAULT_RULE);
+      expect(await store.saveLensRun(lens.id, id, picked.lens.version, analysis, 600, { ...TOTALS, flagged: 99 }, FLAGS, 1)).toBe('stale');
+      expect(await flagCount(lens.id)).toBe(1);
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: TOTALS });
+      expect((await store.nextLensRun(Date.now()))!.lens.version).toBe(2);
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e56'));
+    }
+  });
+
+  it('requeues every run of an edited lens', async () => {
+    const lens = await store.createLens('Requeue', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e57'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1);
+      await store.updateLens(lens.id, 'Requeue', DEFAULT_RULE);
+      expect((await store.lensRuns(id))[0]!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: TOTALS });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e57'));
+    }
+  });
+
+  it('writes nothing for a lens deleted mid-run', async () => {
+    const lens = await store.createLens('Gone', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e58'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.nextLensRun(Date.now());
+      await store.deleteLens(lens.id);
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('gone');
+      expect(await flagCount(lens.id)).toBe(0);
+    } finally {
+      await drop(1, w('1e58'));
+    }
+  });
+
+  it('runs a done lens again after a newer analysis, and not while the collection is paused', async () => {
+    const lens = await store.createLens('Again', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e59'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1);
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      await store.saveAnalysis(id, 2, LAB.analysis, 5, 700, MONEY);
+      const later = Date.now() + ANALYZE_GAP_MS + 1_000;
+      const next = (await store.nextLensRun(later))!;
+      expect(next).toMatchObject({ collectionId: id, analysisId: await latest(id), through: 700 });
+      await store.pause(1, w('1e59'));
+      expect(await store.nextLensRun(later)).toBeNull();
+    } finally {
+      await drop(1, w('1e59'));
+      await store.deleteLens(lens.id);
+    }
+  });
+
+  it('runs a done lens again for a newer analysis only once the gap has passed since it finished, twice its length if longer; an edit or Run here does not wait (Ruling AA)', async () => {
+    const lens = await store.createLens('Gap', DEFAULT_RULE);
+    const { id, analysis } = await analysed(w('1e5e'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      await store.saveAnalysis(id, 2, LAB.analysis, 5, 700, MONEY);
+      const now = Date.now();
+      expect(await store.nextLensRun(now)).toBeNull();
+      expect(await store.nextLensRun(now + ANALYZE_GAP_MS + 1_000)).toMatchObject({ collectionId: id, through: 700 });
+      // A run that took ten minutes waits twenty.
+      await store.pool.query('UPDATE washtrace.lens_runs SET took_ms = 600000 WHERE lens_id = $1', [lens.id]);
+      expect(await store.nextLensRun(now + ANALYZE_GAP_MS + 1_000)).toBeNull();
+      expect(await store.nextLensRun(now + 20 * 60_000 + 1_000)).toMatchObject({ collectionId: id });
+      // Asked for, it is due at once.
+      await store.requestLensRun(lens.id, id);
+      expect(await store.nextLensRun(now)).toMatchObject({ collectionId: id });
+      expect(await store.saveLensRun(lens.id, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      await store.updateLens(lens.id, 'Gap', DEFAULT_RULE);
+      expect(await store.nextLensRun(now)).toMatchObject({ collectionId: id, lens: { version: 2 } });
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5e'));
+    }
+  });
+
+  it('picks a run asked for before re-runs that have waited longer, and says since when each was due (Rulings OO and KK)', async () => {
+    const { id, analysis } = await analysed(w('1e65'));
+    const made = [];
+    for (const name of ['Rerun 1', 'Rerun 2', 'Rerun 3', 'Fresh']) made.push(await store.createLens(name, DEFAULT_RULE));
+    const fresh = made.at(-1)!;
+    const reruns = made.slice(0, 3).map((l) => l.id);
+    try {
+      for (const l of reruns) {
+        await store.requestLensRun(l, id);
+        expect(await store.saveLensRun(l, id, 1, analysis, 600, TOTALS, FLAGS, 1)).toBe('saved');
+      }
+      // Asked for a day ago, each a minute apart, so the oldest is first among them.
+      await store.pool.query(`UPDATE washtrace.lens_runs SET requested_at = now() - interval '1 day' + make_interval(mins => lens_id - $2) WHERE collection_id = $1`, [id, reruns[0]]);
+      await store.saveAnalysis(id, 2, LAB.analysis, 5, 700, MONEY);
+      const later = Date.now() + ANALYZE_GAP_MS + 1_000;
+      const rerun = (await store.nextLensRun(later))!;
+      expect(rerun.lens.id).toBe(reruns[0]);
+      // A re-run is due once the gap has passed since it finished (the newer analysis came before that).
+      const finished = (await store.lensRuns(id)).find((r) => r.lens.id === reruns[0])!.run!.finishedAt!;
+      expect(Math.abs(rerun.dueAt - (finished + ANALYZE_GAP_MS))).toBeLessThan(5);
+
+      const asked = Date.now();
+      await store.requestLensRun(fresh.id, id);
+      const next = (await store.nextLensRun(later))!;
+      expect(next.lens.id).toBe(fresh.id);
+      // A queued one is due from when it was asked for.
+      expect(Math.abs(next.dueAt - asked)).toBeLessThan(2_000);
+      // A failed one is due from its retry.
+      await store.lensRunStarted(fresh.id, id);
+      await store.lensRunFailed(fresh.id, id, 'boom');
+      const retry = (await store.lensRuns(id)).find((r) => r.lens.id === fresh.id)!.run!.retryAt!;
+      await store.pool.query(`UPDATE washtrace.lens_runs SET requested_at = now() - interval '2 days' WHERE lens_id = $1`, [fresh.id]);
+      const failed = (await store.nextLensRun(retry + 1_000))!;
+      expect(failed.lens.id).toBe(fresh.id);
+      expect(Math.abs(failed.dueAt - retry)).toBeLessThan(5);
+    } finally {
+      for (const l of made) await store.deleteLens(l.id);
+      await drop(1, w('1e65'));
+    }
+  });
+
+  it('backs a failed run off, and picks it only once its time has come', async () => {
+    const lens = await store.createLens('Fails', DEFAULT_RULE);
+    const { id } = await analysed(w('1e5a'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.lensRunStarted(lens.id, id);
+      await store.lensRunFailed(lens.id, id, 'boom');
+      const run = (await store.lensRuns(id))[0]!.run!;
+      expect(run).toMatchObject({ status: 'failed', error: 'boom' });
+      expect(run.retryAt! - Date.now()).toBeGreaterThan(4 * 60_000);
+      expect(await store.nextLensRun(Date.now())).toBeNull();
+      expect(await store.nextLensRun(run.retryAt! + 1000)).toMatchObject({ lens: { id: lens.id } });
+      // A second failure in a row waits longer.
+      await store.lensRunStarted(lens.id, id);
+      await store.lensRunFailed(lens.id, id, 'again');
+      expect((await store.lensRuns(id))[0]!.run!.retryAt! - Date.now()).toBeGreaterThan(9 * 60_000);
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5a'));
+    }
+  });
+
+  it('a saved lens runs end to end: the worker picks it, runs it and keeps its flags, which are the built-in\'s', async () => {
+    const lens = await store.createLens('Round trips copy', COPIES.A.rule);
+    const { id } = await analysed(w('1e5b'));
+    try {
+      await store.requestLensRun(lens.id, id);
+      const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri());
+      // In-process, as analyzeOff is in the tests above: the thread only runs compiled.
+      worker.lensOff = (request, onProgress) => lensStored(store, request, onProgress);
+      // Other tests leave collections waiting to be analysed, and a due analysis goes first (Ruling AA): this one is about the lens.
+      worker.dueAnalysis = async () => null;
+      expect(await worker.run('lens')).toBe('ran');
+      const run = (await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run!;
+      expect(run).toMatchObject({ status: 'done', error: null, lensVersion: 1 });
+      const keys = async (sql: string, params: unknown[]) => (await store.pool.query(sql, params)).rows.map((r) => `${r.tx_hash} ${r.log_index}`).sort();
+      const mine = await keys('SELECT tx_hash, log_index FROM washtrace.lens_flags WHERE collection_id = $1 AND lens_id = $2', [id, lens.id]);
+      const theirs = await keys("SELECT tx_hash, log_index FROM washtrace.flags WHERE collection_id = $1 AND method = 'A'", [id]);
+      expect(theirs.length).toBeGreaterThan(0);
+      expect(mine).toEqual(theirs);
+      // Nothing is due now: the pass ends with nothing to run.
+      expect(await worker.lens()).toBe('nothing to run');
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5b'));
+    }
+  });
+});
+
+describe('previews (P2–P5)', () => {
+  beforeAll(async () => { await store.migrate(); });
+
+  const sale = (i: number, more: Partial<Transfer> = {}) =>
+    transfer(String(i), a, b, { txHash: `0xpv${i}`, logIndex: 0, blockNumber: i, blockTime: 1_000 + i, marketplace: 'blur', priceWei: '1', currency: '', ...more });
+  const keysOf = async (id: number, through: number | null) => (await store.pool.query(
+    `SELECT tx_hash || ':' || log_index AS k FROM washtrace.transfers WHERE collection_id = $1 AND marketplace IS NOT NULL AND ($2::bigint IS NULL OR block_number <= $2::bigint)`, [id, through],
+  )).rows.map((r) => r.k as string).sort();
+
+  /** A collection ingested and analysed as the worker would leave it, through block 600. */
+  async function analysed(address: string): Promise<number> {
+    const { id } = await store.addCollection(1, address, 'Lab', 1);
+    await store.ingest(id, 1, LAB.transfers, LAB.cursor, []);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, 600, MONEY);
+    return id;
+  }
+
+  /** The next notification on `channel`, or null after `ms`. */
+  async function heard(channel: string, act: () => Promise<unknown>, ms = 2_000): Promise<string | null> {
+    const listener = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await listener.connect();
+    try {
+      await listener.query(`LISTEN ${channel}`);
+      const got = new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => resolve(null), ms);
+        listener.on('notification', (n) => { clearTimeout(timer); resolve(n.payload ?? ''); });
+      });
+      await act();
+      return await got;
+    } finally {
+      await listener.end();
+    }
+  }
+
+  it('keeps previews in a table of their own, with the queued ones indexed by when they were asked for', async () => {
+    const { rows } = await store.pool.query(`SELECT indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'lens_previews' AND indexdef LIKE '%requested_at%'`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].indexdef).toMatch(/\(requested_at\) WHERE \(status = 'queued'::text\)/);
+    await expect(store.pool.query(`INSERT INTO washtrace.lens_previews (collection_id, rule, status) VALUES (-1, '{}', 'queued')`)).rejects.toThrow(/foreign key/);
+  });
+
+  it('previewSample is seeded and repeatable, and takes all sales under 2,000', async () => {
+    const big = (await store.addCollection(1, w('1b01'), 'Big', 1)).id;
+    const small = await analysed(w('1b02'));
+    try {
+      // 2,600 sales and 50 changes of owner that are not; the last 100 sales are past the block the preview reads through.
+      const ts = [...Array.from({ length: 2_600 }, (_, i) => sale(i + 1)), ...Array.from({ length: 50 }, (_, i) => sale(5_000 + i, { marketplace: null, priceWei: null, currency: null }))];
+      await store.ingest(big, 1, ts, 6_000, []);
+      const eligible = new Set(await keysOf(big, 2_500));
+      expect(eligible.size).toBe(2_500);
+      const one = await store.previewSample(big, 7, 2_500);
+      expect(one).toHaveLength(2_000);
+      expect(new Set(one).size).toBe(2_000);
+      expect(one.every((k) => eligible.has(k))).toBe(true);
+      // The same seed gives the same sample, in the same order; another seed another.
+      expect(await store.previewSample(big, 7, 2_500)).toEqual(one);
+      const other = await store.previewSample(big, 8, 2_500);
+      expect(other).toHaveLength(2_000);
+      expect(new Set(other)).not.toEqual(new Set(one));
+      // Under 2,000 sales, all of them, and none past the block.
+      expect((await store.previewSample(small, 7, 600)).sort()).toEqual(await keysOf(small, 600));
+      expect((await store.previewSample(small, 7, 600))).toHaveLength(7);
+      expect((await store.previewSample(small, 7, null)).sort()).toEqual(await keysOf(small, null));
+      expect(await store.previewSample(small, 7, 0)).toEqual([]);
+    } finally {
+      await drop(1, w('1b01'));
+      await drop(1, w('1b02'));
+    }
+  });
+
+  it('requestPreview answers no-sales for a collection with none, and notifies', async () => {
+    const none = (await store.addCollection(1, w('1b11'), 'No analysis', 1)).id;
+    const unsold = (await store.addCollection(1, w('1b12'), 'Unsold', 1)).id;
+    const lab = await analysed(w('1b13'));
+    const count = async () => Number((await store.pool.query('SELECT count(*) FROM washtrace.lens_previews WHERE collection_id = ANY($1)', [[none, unsold, lab]])).rows[0].count);
+    try {
+      expect(await store.requestPreview(none, DEFAULT_RULE)).toBe('not-analysed');
+      const ts = chain('1', a, b, x);
+      await store.ingest(unsold, 1, ts, 1_000, []);
+      await store.saveAnalysis(unsold, 1, analyze(input(ts)), 5, 1_000, MONEY);
+      let said: unknown;
+      expect(await heard('washtrace_previews', async () => { said = await store.requestPreview(unsold, DEFAULT_RULE); }, 500)).toBeNull();
+      expect(said).toBe('no-sales');
+      // A sale past the block the latest analysis read through is not one it can preview.
+      await store.ingest(unsold, 1, [transfer('1', x, a, { blockNumber: 2_000, marketplace: 'blur', priceWei: '1', currency: '' })], 2_000, []);
+      expect(await store.requestPreview(unsold, DEFAULT_RULE)).toBe('no-sales');
+      expect(await count()).toBe(0);
+      // With sales, queued, and the worker told its id.
+      let asked: unknown;
+      const payload = await heard('washtrace_previews', async () => { asked = await store.requestPreview(lab, DEFAULT_RULE); });
+      expect(asked).toEqual({ id: expect.any(Number) });
+      const { id } = asked as { id: number };
+      expect(payload).toBe(String(id));
+      expect(await store.preview(id)).toMatchObject({ id, collectionId: lab, rule: DEFAULT_RULE, status: 'queued', progress: null, result: null, error: null, finishedAt: null });
+      expect(Math.abs((await store.preview(id))!.requestedAt - Date.now())).toBeLessThan(5_000);
+      expect(await store.preview(id + 9_999)).toBeNull();
+    } finally {
+      await drop(1, w('1b11'));
+      await drop(1, w('1b12'));
+      await drop(1, w('1b13'));
+    }
+  });
+
+  it('nextPreview takes the oldest queued and marks it running, failing one a stopped worker left running', async () => {
+    const lab = await analysed(w('1b21'));
+    try {
+      const left = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      const first = await store.requestPreview(lab, COPIES.A.rule) as { id: number };
+      const second = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      await store.pool.query(`UPDATE washtrace.lens_previews SET status = 'running' WHERE id = $1`, [left.id]);
+      // The latest analysis is the one read through.
+      await store.saveAnalysis(lab, 1, LAB.analysis, 5, 650, MONEY);
+      expect(await store.nextPreview()).toEqual({ id: first.id, collectionId: lab, chainId: 1, name: 'Lab', rule: COPIES.A.rule, through: 650 });
+      expect(await store.preview(left.id)).toMatchObject({ status: 'failed', error: 'The worker stopped during this preview.', finishedAt: expect.any(Number) });
+      expect(await store.preview(first.id)).toMatchObject({ status: 'running', progress: 0 });
+      await store.previewProgress(first.id, 0.4);
+      expect((await store.preview(first.id))!.progress).toBeCloseTo(0.4);
+      const result = { sampled: 7, judged: 7, hops: 7, ofSales: 7, caught: 4, atLeast: false, roundTrips: { caught: 4 }, topMarket: { name: 'Blur', caught: 4 }, truncated: 0, untimed: 0, tookMs: 12 };
+      await store.savePreview(first.id, result);
+      expect(await store.preview(first.id)).toMatchObject({ status: 'done', result, error: null, finishedAt: expect.any(Number) });
+      // The next one's turn; it fails.
+      expect((await store.nextPreview())!.id).toBe(second.id);
+      await store.previewFailed(second.id, 'boom');
+      expect(await store.preview(second.id)).toMatchObject({ status: 'failed', error: 'boom', result: null, finishedAt: expect.any(Number) });
+      expect(await store.nextPreview()).toBeNull();
+    } finally {
+      await drop(1, w('1b21'));
+    }
+  });
+
+  it('a preview is deleted with its collection', async () => {
+    const lab = await analysed(w('1b31'));
+    const { id } = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+    expect(await store.preview(id)).not.toBeNull();
+    await drop(1, w('1b31'));
+    expect(await store.preview(id)).toBeNull();
+  });
+
+  it('sweepPreviews deletes rows past an hour', async () => {
+    const lab = await analysed(w('1b41'));
+    try {
+      const old = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      const done = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      const fresh = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      await store.pool.query(`UPDATE washtrace.lens_previews SET requested_at = now() - interval '61 minutes' WHERE id = ANY($1)`, [[old.id, done.id]]);
+      await store.pool.query(`UPDATE washtrace.lens_previews SET status = 'done', finished_at = now() WHERE id = $1`, [done.id]);
+      expect(await store.sweepPreviews(Date.now())).toBe(2);
+      expect(await store.preview(old.id)).toBeNull();
+      expect(await store.preview(done.id)).toBeNull();
+      expect(await store.preview(fresh.id)).not.toBeNull();
+      // By the clock it is given: an hour on, the fresh one goes too.
+      expect(await store.sweepPreviews(Date.now() + 61 * 60_000)).toBe(1);
+      expect(await store.preview(fresh.id)).toBeNull();
+    } finally {
+      await drop(1, w('1b41'));
+    }
+  });
+
+  it('previews Round trips\' copy on the sample, catching what Round trips caught there, without reading any money edge\'s hash', async () => {
+    const lab = await analysed(w('1b51'));
+    const moveTxs = vi.spyOn(store, 'moveTxs');
+    try {
+      const { id } = await store.requestPreview(lab, COPIES.A.rule) as { id: number };
+      const request = { storeUrl: pg.getConnectionUri(), previewId: id, ...(await store.nextPreview())! };
+      const shares: number[] = [];
+      const result = await previewStored(store, request, (s) => shares.push(s));
+      // Seven sales, all sampled: the copy catches Round trips' four, three on Blur and one on OpenSea.
+      expect(result).toEqual({
+        sampled: 7, judged: 7, hops: 7, ofSales: 7, caught: 4, atLeast: false, roundTrips: { caught: 4 }, topMarket: { name: 'Blur', caught: 3 },
+        truncated: 0, untimed: 0, tookMs: expect.any(Number),
+      });
+      expect(shares.at(-1)).toBe(1);
+      expect(moveTxs).not.toHaveBeenCalled();
+      // Nothing saved by it: the worker saves.
+      expect(await store.preview(id)).toMatchObject({ status: 'running', result: null });
+      // Round trips did not run on the latest analysis: no share of it to give.
+      await store.pool.query(`UPDATE washtrace.analyses SET totals = jsonb_set(totals, '{A,available}', 'false') WHERE collection_id = $1`, [lab]);
+      expect((await previewStored(store, request, () => {})).roundTrips).toBeNull();
+    } finally {
+      moveTxs.mockRestore();
+      await drop(1, w('1b51'));
+    }
+  });
+
+  it('the worker runs a queued preview end to end in its lens pass, and saves the result', async () => {
+    const lab = await analysed(w('1b61'));
+    try {
+      const { id } = await store.requestPreview(lab, COPIES.A.rule) as { id: number };
+      const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri());
+      worker.previewOff = (request, onProgress) => previewStored(store, request, onProgress);
+      expect(await worker.run('lens')).toBe('ran');
+      expect(await store.preview(id)).toMatchObject({ status: 'done', error: null, result: { sampled: 7, caught: 4, roundTrips: { caught: 4 } } });
+    } finally {
+      await drop(1, w('1b61'));
+    }
+  });
+});
+
+describe('Store.lensInput', () => {
+  const eth = (n: number) => String(BigInt(Math.round(n * 1000)) * 10n ** 15n);
+  // Only the edges among a setup's own wallets: a full run leaves other tests' followed wallets, whose flows every read includes.
+  const edgesOf = (m: Awaited<ReturnType<Store['lensInput']>>['moves'], s: { d1: string; d2: string; d3: string; out: string; fol: string }) => {
+    const mine = new Set([s.d1, s.d2, s.d3, s.out, s.fol]);
+    return Array.from({ length: m.size }, (_, i) => ({ from: m.name(m.from[i]!), to: m.name(m.to[i]!), kind: m.kind[i]!, eth: m.eth[i]!, time: m.time[i]!, block: m.block[i]!, sale: m.sale[i]! }))
+      .filter((e) => mine.has(e.from) && mine.has(e.to));
+  };
+
+  // Flows outlive a dropped collection, so each setup has wallets and hashes of its own.
+  let runs = 0;
+  async function setup() {
+    await store.migrate(); // a no-op in a full run; lets these run by themselves
+    const n = ++runs;
+    const d1 = w(`1a1${n}`), d2 = w(`1a2${n}`), d3 = w(`1a3${n}`), out = w(`1a4${n}`), fol = w(`1af${n}`), addr = w(`1a0c${n}`);
+    const { id } = await store.addCollection(1, addr, null, 1);
+    const ts = chain('9', d1, d2);
+    await store.ingest(id, 1, ts, 1_000_000, []);
+    const saleTx = ts[1]!.txHash;
+    await store.pool.query(`INSERT INTO washtrace.wallets (chain_id, address, depth, status) VALUES (1, $1, 1, 'done') ON CONFLICT DO NOTHING`, [fol]);
+    const dust = flow(d1, d2, { valueWei: eth(0.001), txHash: `0xla_dust${n}` });
+    const inSale = flow(d1, d2, { valueWei: eth(0.05), txHash: saleTx });
+    const usdc = flow(d1, d2, { kind: 'token', token: USDC, valueWei: eth(0.5), txHash: `0xla_usdc${n}` });
+    const bid = flow(d1, d3, { kind: 'token', token: WETH, valueWei: eth(0.02), txHash: `0xla_weth${n}` });
+    const internal = flow(d3, d1, { kind: 'internal', valueWei: eth(0.03), txHash: `0xla_int${n}` });
+    const fromFollowed = flow(fol, out, { valueWei: eth(0.05), txHash: `0xla_fol${n}` });
+    const intoFollowed = flow(out, fol, { valueWei: eth(0.05), txHash: `0xla_into${n}` });
+    await store.fund(1, d1, [dust, inSale, usdc, bid, internal], false);
+    await store.fund(1, fol, [fromFollowed, intoFollowed], false);
+    return { id, addr, ts, d1, d2, d3, out, fol, saleTx, inSale, bid, internal, fromFollowed };
+  }
+
+  /** Drops the collection, and the flows and followed wallet that would otherwise reach the next test. */
+  async function finish(s: Awaited<ReturnType<typeof setup>>) {
+    await drop(1, s.addr);
+    await store.pool.query('DELETE FROM washtrace.flows WHERE from_address = ANY($1) OR to_address = ANY($1)', [[s.d1, s.d2, s.d3, s.out, s.fol]]);
+    await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = 1 AND address = $1', [s.fol]);
+  }
+
+  it('reads the money the rule may use: kinds, floors, sale-tx edges kept and marked, followed reach as analysisInput', async () => {
+    const s = await setup();
+    try {
+      const read = await store.lensInput(s.id, 1, DEFAULT_RULE, null);
+      const edges = edgesOf(read.moves, s);
+      // Absent: the 0.001 ETH dust, the USDC flow, and the outside -> followed flow.
+      expect(edges).toHaveLength(4);
+      expect(edges.find((e) => e.from === s.d1 && e.to === s.d2)).toMatchObject({ kind: 0, eth: Math.fround(0.05), block: s.inSale.blockNumber, time: s.inSale.blockTime, sale: 1 });
+      expect(read.tradeTxs.indexOf(s.saleTx)).toBeGreaterThanOrEqual(0);
+      expect(edges.find((e) => e.to === s.d3)).toMatchObject({ kind: 2, eth: Math.fround(0.02), sale: 0 });
+      expect(edges.find((e) => e.from === s.d3)).toMatchObject({ kind: 1, eth: Math.fround(0.03), sale: 0 });
+      expect(edges.find((e) => e.from === s.fol)).toMatchObject({ kind: 0, to: s.out, sale: 0 });
+      expect(edges.some((e) => e.to === s.fol)).toBe(false);
+      // The same reach as analysisInput: every payment it reads is among these (it drops the sale-tx one, which a lens keeps).
+      const paid = (await store.analysisInput(s.id, 1)).payments;
+      const mine = new Set(edges.map((e) => `${e.from}>${e.to}`));
+      const own = new Set([s.d1, s.d2, s.d3, s.out, s.fol]);
+      const theirs = Array.from({ length: paid.size }, (_, i) => [paid.names[paid.ends[2 * i]!]!, paid.names[paid.ends[2 * i + 1]!]!] as const)
+        .filter(([f, t]) => own.has(f) && own.has(t));
+      expect(theirs.length).toBeGreaterThan(0);
+      for (const [f, t] of theirs) expect(mine.has(`${f}>${t}`)).toBe(true);
+      expect(read.transfers).toHaveLength(s.ts.length);
+      expect(read.tradeTxs).toEqual(s.ts.map((t) => t.txHash));
+      expect(read.through).toBeNull();
+      expect(read.money.has(WETH)).toBe(true);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it('reads which of its wallets had their funding history cut short, as analysisInput does, and none with no money row (Ruling BB)', async () => {
+    const s = await setup();
+    try {
+      // D2 traded here and has more history than the funding source pages through; D3 never traded here.
+      await store.pool.query(
+        `INSERT INTO washtrace.wallets (chain_id, address, depth, status, truncated) VALUES (1, $1, 0, 'done', true), (1, $2, 0, 'done', true)`, [s.d2, s.d3],
+      );
+      const read = await store.lensInput(s.id, 1, DEFAULT_RULE, null);
+      expect([...read.truncated].filter((t) => [s.d1, s.d2, s.d3].includes(t))).toEqual([s.d2]);
+      expect([...(await store.analysisInput(s.id, 1)).truncated].filter((t) => [s.d1, s.d2, s.d3].includes(t))).toEqual([s.d2]);
+      const off = (k: 'eth' | 'internal' | 'weth') => ({ ...DEFAULT_RULE.edges[k], use: false });
+      const none = { ...DEFAULT_RULE, edges: { ...DEFAULT_RULE.edges, eth: off('eth'), internal: off('internal'), weth: off('weth') } };
+      expect((await store.lensInput(s.id, 1, none, null)).truncated.size).toBe(0);
+    } finally {
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = 1 AND address = ANY($1)', [[s.d2, s.d3]]);
+      await finish(s);
+    }
+  });
+
+  it('pushes the switched-off kinds and the floor into SQL, and reads no flows with no money row', async () => {
+    const s = await setup();
+    try {
+      const noEth = { ...DEFAULT_RULE, edges: { ...DEFAULT_RULE.edges, eth: { ...DEFAULT_RULE.edges.eth, use: false } } };
+      const kinds = async (rule: typeof DEFAULT_RULE) => new Set(edgesOf((await store.lensInput(s.id, 1, rule, null)).moves, s).map((e) => e.kind));
+      expect(await kinds(noEth)).toEqual(new Set([1, 2]));
+      // A zero floor lets the dust in; a 0.04 ETH floor takes out the 0.02 WETH.
+      const low = { ...DEFAULT_RULE, edges: { ...DEFAULT_RULE.edges, eth: { ...DEFAULT_RULE.edges.eth, minWei: null } } };
+      expect(edgesOf((await store.lensInput(s.id, 1, low, null)).moves, s)).toHaveLength(5);
+      const high = { ...DEFAULT_RULE, edges: { ...DEFAULT_RULE.edges, weth: { ...DEFAULT_RULE.edges.weth, minWei: eth(0.04) } } };
+      expect(await kinds(high)).toEqual(new Set([0, 1]));
+      const off = (k: 'eth' | 'internal' | 'weth') => ({ ...DEFAULT_RULE.edges[k], use: false });
+      const none = { ...DEFAULT_RULE, edges: { ...DEFAULT_RULE.edges, eth: off('eth'), internal: off('internal'), weth: off('weth') } };
+      const read = await store.lensInput(s.id, 1, none, null);
+      expect(read.moves.size).toBe(0);
+      expect(read.transfers).toHaveLength(s.ts.length);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it("reads money of the same second in the flows key's order, so a capped search is the same every run (Ruling I)", async () => {
+    const s = await setup();
+    try {
+      // Two ties, one stored in its hashes' order and one against it: whatever order the table keeps, one would show it.
+      const first = { blockNumber: 777_000 + runs, blockTime: 1_700_000_000 + runs };
+      const second = { blockNumber: 778_000 + runs, blockTime: 1_700_100_000 + runs };
+      // Values against the hashes' order too, so neither the amount nor the storing order can stand in for the key.
+      await store.fund(1, s.d1, [
+        flow(s.d1, s.d3, { ...first, valueWei: eth(0.06), txHash: `0xla_tie_b${runs}` }),
+        flow(s.d1, s.d3, { ...first, valueWei: eth(0.07), txHash: `0xla_tie_a${runs}` }),
+        flow(s.d1, s.d3, { ...second, valueWei: eth(0.09), txHash: `0xla_tie_c${runs}` }),
+        flow(s.d1, s.d3, { ...second, valueWei: eth(0.08), txHash: `0xla_tie_d${runs}` }),
+      ], false);
+      // A small table is read through its primary key, which is already that order; a big one is scanned, as here.
+      const url = new URL(pg.getConnectionUri());
+      url.searchParams.set('options', '-c enable_indexscan=off -c enable_bitmapscan=off -c enable_indexonlyscan=off');
+      const scanned = Store.connect(url.toString());
+      try {
+        const edges = edgesOf((await scanned.lensInput(s.id, 1, DEFAULT_RULE, null)).moves, s)
+          .filter((e) => e.time === first.blockTime || e.time === second.blockTime);
+        expect(edges.map((e) => e.eth)).toEqual([0.07, 0.06, 0.09, 0.08].map(Math.fround));
+      } finally {
+        await scanned.pool.end();
+      }
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it('reads no payment of no value, none a wallet paid itself, none to or from the zero address, and none of another chain', async () => {
+    const s = await setup();
+    try {
+      await store.fund(1, s.d1, [
+        flow(s.d1, s.d2, { valueWei: '0', txHash: `0xla_nothing${runs}` }),
+        flow(s.d1, s.d1, { valueWei: eth(0.04), txHash: `0xla_self${runs}` }),
+        flow(ZERO, s.d1, { valueWei: eth(0.06), txHash: `0xla_minted${runs}` }),
+        flow(s.d1, ZERO, { valueWei: eth(0.07), txHash: `0xla_burned${runs}` }),
+      ], false);
+      await store.fund(2, s.d1, [flow(s.d1, s.d2, { valueWei: eth(0.08), txHash: `0xla_chain2${runs}` })], false);
+      // No floor on any row, so only the predicates under test keep these out.
+      const floorless = structuredClone(DEFAULT_RULE);
+      for (const k of ['eth', 'internal', 'weth'] as const) floorless.edges[k].minWei = null;
+      const { moves } = await store.lensInput(s.id, 1, floorless, null);
+      const d1 = moves.id(s.d1)!;
+      const touching = [...moves.out(d1), ...moves.into(d1)].map((e) => ({ from: moves.name(moves.from[e]!), to: moves.name(moves.to[e]!), eth: moves.eth[e]! }));
+      expect(touching.length).toBeGreaterThan(0);
+      expect(touching.filter((e) => e.eth === 0)).toEqual([]);
+      expect(touching.filter((e) => e.from === e.to)).toEqual([]);
+      expect(moves.id(ZERO)).toBeUndefined();
+      expect(touching.filter((e) => e.eth === Math.fround(0.08))).toEqual([]);
+      // Each of them is in flows: only the filter keeps it out.
+      const { rows } = await store.pool.query('SELECT count(*)::int AS n FROM washtrace.flows WHERE tx_hash = ANY($1)', [[`0xla_nothing${runs}`, `0xla_self${runs}`, `0xla_minted${runs}`, `0xla_burned${runs}`, `0xla_chain2${runs}`]]);
+      expect(rows[0].n).toBe(5);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it("refuses a collection with more money edges than the ceiling, saying how many it has (Ruling DD)", async () => {
+    const s = await setup();
+    const was = store.moneyEdgeCeiling;
+    try {
+      expect(was).toBe(40_000_000);
+      const n = (await store.lensInput(s.id, 1, DEFAULT_RULE, null)).moves.size;
+      expect(n).toBeGreaterThan(1);
+      store.moneyEdgeCeiling = n - 1;
+      await expect(store.lensInput(s.id, 1, DEFAULT_RULE, null))
+        .rejects.toThrow(`This collection's money is too big for a lens run yet (${n.toLocaleString('en-US')} money edges).`);
+      store.moneyEdgeCeiling = n;
+      expect((await store.lensInput(s.id, 1, DEFAULT_RULE, null)).moves.size).toBe(n);
+    } finally {
+      store.moneyEdgeCeiling = was;
+      await finish(s);
+    }
+  });
+
+  it('stops the transfers at through', async () => {
+    const s = await setup();
+    try {
+      const read = await store.lensInput(s.id, 1, DEFAULT_RULE, s.ts[0]!.blockNumber);
+      expect(read.transfers.map((t) => t.txHash)).toEqual([s.ts[0]!.txHash]);
+      expect(read.through).toBe(s.ts[0]!.blockNumber);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  /** What `moveTxs` is told of the run: the chain, the collection, the rule and the block it read through. */
+  const runOf = (s: { id: number }, rule = DEFAULT_RULE, through: number | null = null) => ({ chainId: 1, collectionId: s.id, rule, through });
+
+  it('re-reads the hash and exact amount of a money edge by its ends, kind and block, and null for one that is not there', async () => {
+    const s = await setup();
+    try {
+      const got = await store.moveTxs(runOf(s), [
+        { from: s.d1, to: s.d3, kind: 'weth', block: s.bid.blockNumber },
+        { from: s.d3, to: s.d1, kind: 'internal', block: s.internal.blockNumber },
+        { from: s.d1, to: s.d2, kind: 'eth', block: 999_999 },
+        { from: s.d1, to: s.d2, kind: 'nft-token', block: s.inSale.blockNumber },
+        { from: s.d1, to: s.d3, kind: 'eth', block: s.bid.blockNumber },
+      ]);
+      expect(got).toEqual([{ tx: s.bid.txHash, amountWei: eth(0.02) }, { tx: s.internal.txHash, amountWei: eth(0.03) }, null, null, null]);
+      expect(await store.moveTxs(runOf(s), [])).toEqual([]);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it('matches only a payment the rule let in: the 1 ETH beside dust in one block, not the dust (Ruling LL)', async () => {
+    const s = await setup();
+    try {
+      const block = { blockNumber: 790_000 + runs, blockTime: 1_700_200_000 + runs };
+      // The dust's hash sorts first, so the old tie rule alone took it.
+      const dust = flow(s.d1, s.d2, { ...block, valueWei: eth(0.001), txHash: `0xla_a_dust${runs}` });
+      const one = flow(s.d1, s.d2, { ...block, valueWei: eth(1), txHash: `0xla_b_one${runs}` });
+      const none = flow(s.d1, s.d2, { ...block, valueWei: '0', txHash: `0xla_0_none${runs}` });
+      await store.fund(1, s.d1, [dust, one, none], false);
+      const edge = [{ from: s.d1, to: s.d2, kind: 'eth', block: block.blockNumber }] as const;
+      expect(await store.moveTxs(runOf(s), [...edge])).toEqual([{ tx: one.txHash, amountWei: eth(1) }]);
+      // With no floor the dust is a payment the rule reads, and the tie goes to the smaller hash; a payment of nothing never is.
+      const floorless = structuredClone(DEFAULT_RULE);
+      floorless.edges.eth.minWei = null;
+      expect(await store.moveTxs(runOf(s, floorless), [...edge])).toEqual([{ tx: dust.txHash, amountWei: eth(0.001) }]);
+      // Each kind keeps its own floor: a high WETH floor leaves the ETH one as it was.
+      const highWeth = structuredClone(DEFAULT_RULE);
+      highWeth.edges.weth.minWei = eth(5);
+      expect(await store.moveTxs(runOf(s, highWeth), [...edge, { from: s.d1, to: s.d3, kind: 'weth', block: s.bid.blockNumber }]))
+        .toEqual([{ tx: one.txHash, amountWei: eth(1) }, null]);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it("never matches a payment in a transaction that moves one of this collection's tokens, though it shares the pair and block (Ruling LL)", async () => {
+    const s = await setup();
+    try {
+      // inSale is in the sale's transaction; a mint's transaction moves a token too. Their hashes sort before the payment outside both.
+      const inMint = flow(s.d1, s.d2, { blockNumber: s.inSale.blockNumber, blockTime: s.inSale.blockTime, valueWei: eth(0.5), txHash: s.ts[0]!.txHash });
+      const outside = flow(s.d1, s.d2, { blockNumber: s.inSale.blockNumber, blockTime: s.inSale.blockTime, valueWei: eth(0.06), txHash: `0xzz_out${runs}` });
+      expect([s.saleTx, inMint.txHash].every((h) => h < outside.txHash)).toBe(true);
+      await store.fund(1, s.d1, [inMint], false);
+      const edge = { from: s.d1, to: s.d2, kind: 'eth', block: s.inSale.blockNumber } as const;
+      expect(await store.moveTxs(runOf(s), [edge])).toEqual([null]);
+      await store.fund(1, s.d1, [outside], false);
+      expect(await store.moveTxs(runOf(s), [edge])).toEqual([{ tx: outside.txHash, amountWei: eth(0.06) }]);
+      // A run that read through the mint only: the sale's transaction is not one of the transfers it loaded, so its payment is one it read.
+      expect(await store.moveTxs(runOf(s, DEFAULT_RULE, s.ts[0]!.blockNumber), [edge])).toEqual([{ tx: s.saleTx, amountWei: eth(0.05) }]);
+    } finally {
+      await finish(s);
+    }
+  });
+
+  it('asks in batches, each answer still in its own place: an NFT edge between them, a batch with no match, an edge asked twice', async () => {
+    const s = await setup();
+    const was = store.moveTxBatch;
+    store.moveTxBatch = 2;
+    const asked = vi.spyOn(store.pool, 'query');
+    try {
+      const bid = { from: s.d1, to: s.d3, kind: 'weth', block: s.bid.blockNumber } as const;
+      const got = await store.moveTxs(runOf(s), [
+        { from: s.d1, to: s.d2, kind: 'eth', block: 999_999 },
+        { from: s.d1, to: s.d2, kind: 'nft-token', block: s.inSale.blockNumber },
+        { from: s.d3, to: s.d1, kind: 'eth', block: s.internal.blockNumber },
+        { from: s.d3, to: s.d1, kind: 'internal', block: s.internal.blockNumber },
+        bid,
+        // In the sale's transaction: never a match (Ruling LL), wherever it falls in a batch.
+        { from: s.d1, to: s.d2, kind: 'eth', block: s.inSale.blockNumber },
+        bid,
+        { from: s.fol, to: s.out, kind: 'eth', block: s.fromFollowed.blockNumber },
+      ]);
+      // Seven money edges at two a query; the first query's two find nothing.
+      expect(asked).toHaveBeenCalledTimes(4);
+      expect(got).toEqual([
+        null, null, null, { tx: s.internal.txHash, amountWei: eth(0.03) }, { tx: s.bid.txHash, amountWei: eth(0.02) },
+        null, { tx: s.bid.txHash, amountWei: eth(0.02) }, { tx: s.fromFollowed.txHash, amountWei: eth(0.05) },
+      ]);
+    } finally {
+      asked.mockRestore();
+      store.moveTxBatch = was;
+      await finish(s);
+    }
+  });
+});
+
+describe('a saved lens in the reads', () => {
+  const address = w('1e6a');
+  const MONEY_CTX = (ran: string[]) => ({ money: MONEY, ran: ran as Method[], zone: 'UTC' });
+  const [W1, W2, W3] = ['w1', 'w2', 'w3'].map(w) as [string, string, string];
+  const hashOf = (key: string) => LAB.transfers.find((t) => LAB.keyOf(t.txHash) === key)!.txHash;
+  // The lens flags S1 and S2 (a path of W1, W2, W3) and S5, a sale elsewhere; Round trips flags S1 to S4.
+  const flag = (key: string, wallets: string[]) => ({ txHash: hashOf(key), logIndex: 0, path: [], wallets });
+  const TOTALS = { transfers: 7, flagged: 3, sales: 6, flaggedSales: 3, volumeWei: '1', flaggedVolumeWei: '1', wallets: 3, tokens: 2, available: true, truncated: 0, untimed: 0 };
+  const LIST = { sort: 'caught' as const, find: null, limit: 50, offset: 0 };
+  let id: number, lens: string, other: string;
+  let ctx: ReturnType<typeof MONEY_CTX>;
+
+  beforeAll(async () => {
+    await store.migrate();
+    id = (await store.addCollection(1, address, 'Lab', 1)).id;
+    await store.ingest(id, 1, [...LAB.transfers, LAB.late], LAB.cursor, []);
+    await store.saveAnalysis(id, 1, LAB.analysis, 5, LAB.cursor, MONEY);
+    const analysis = Number((await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].id);
+    const l = await store.createLens('Mine', DEFAULT_RULE);
+    lens = l.key;
+    other = (await store.createLens('Never run', DEFAULT_RULE)).key;
+    await store.requestLensRun(l.id, id);
+    await store.saveLensRun(l.id, id, 1, analysis, 600, TOTALS, [flag('S1', [W1, W2, W3]), flag('S2', [W1, W2, W3]), flag('S5', [w('w5'), w('w6')])], 1);
+    ctx = MONEY_CTX(['A', lens]);
+  });
+  afterAll(async () => {
+    await store.pool.query('DELETE FROM washtrace.lenses');
+    await drop(1, address);
+  });
+
+  const keys = (rows: { txHash: string }[]) => rows.map((r) => LAB.keyOf(r.txHash));
+  const list = async (q: Partial<TradeQuery>, c = ctx) => keys(await store.trades(id, { ...NO_FILTER, ...q }, c, 50, 0));
+
+  it('lists the trades the lens flags, and counts the same', async () => {
+    const q = { ...NO_FILTER, caught: [lens as 'L1'] };
+    expect(await list(q)).toEqual(['S2', 'S5', 'S1']);
+    expect(await store.tradeCount(id, q, ctx)).toEqual({ total: 3, unjudged: 0 });
+  });
+  it('not caught is the rest of the judged trades, and a row names the lens where it is flagged', async () => {
+    expect(await list({ notCaught: [lens as 'L1'] })).toEqual(['S4', 'S3', 'P1', 'U1']);
+    const rows = await store.trades(id, NO_FILTER, ctx, 50, 0);
+    const by = Object.fromEntries(rows.map((r) => [LAB.keyOf(r.txHash), r.lenses]));
+    expect(by.S1).toEqual(['A', lens]);
+    expect(by.S5).toEqual([lens]);
+    expect(by.S3).toEqual(['A']);
+    expect(by.LATE).toEqual([]);
+  });
+  it('sorts by the lens, flagged first', async () => {
+    expect((await list({ sort: `lens-${lens}` as 'lens-L1', dir: 'desc' })).slice(0, 3)).toEqual(['S2', 'S5', 'S1']);
+  });
+  it('groups count what the lens caught, beside the built-ins', async () => {
+    expect(await store.tradeGroups(id, NO_FILTER, 'marketplace', ctx)).toEqual([
+      { key: 'blur', trades: 7, caught: { A: 3, [lens]: 2 }, judged: { [lens]: 7 } }, { key: 'opensea', trades: 1, caught: { A: 1, [lens]: 1 }, judged: { [lens]: 1 } },
+    ]);
+  });
+  it('lists tokens and wallets with the counts its paths give', async () => {
+    const t = await store.lensTokens(id, lens as 'L1', LIST, ctx);
+    // Its stored paths here are empty: no money edge, and a middle only where a flag holds a third wallet.
+    expect(t.rows).toEqual([
+      expect.objectContaining({ tokenId: '1', caught: 2, trades: 4, loops: 2, pairs: 0, laps: 2, closedByMoney: 0, middles: 2, wallets: 3 }),
+      expect.objectContaining({ tokenId: '2', caught: 1, trades: 3, loops: 1, middles: 0, wallets: 2 }),
+    ]);
+    expect(t.total).toBe(2);
+    const wl = await store.lensWallets(id, lens as 'L1', LIST, ctx);
+    expect(wl.rows.map((r) => r.address).sort()).toEqual([W1, W2, W3, w('w5'), w('w6')].sort());
+    expect(wl.rows.every((r) => r.loops !== null && r.caught > 0)).toBe(true);
+  });
+
+  describe('a lens with real paths', () => {
+    const edge = (from: string, to: string, kind: 'nft-token' | 'eth' | 'funds' | 'nft-collection') =>
+      ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null });
+    let paths: { id: number; key: string };
+    beforeAll(async () => {
+      const analysis = Number((await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].id);
+      paths = await store.createLens('Paths', DEFAULT_RULE);
+      await store.requestLensRun(paths.id, id);
+      // Three flags on token 1: two close over money (one through a middle wallet), one over an NFT alone.
+      await store.saveLensRun(paths.id, id, 1, analysis, 600, TOTALS, [
+        { txHash: hashOf('S1'), logIndex: 0, path: [edge(W1, W2, 'nft-token'), edge(W2, W3, 'eth'), edge(W3, W1, 'funds')], wallets: [W1, W2, W3] },
+        { txHash: hashOf('S2'), logIndex: 0, path: [edge(W1, W2, 'nft-token'), edge(W2, W1, 'funds')], wallets: [W1, W2] },
+        { txHash: hashOf('S3'), logIndex: 0, path: [edge(W1, W2, 'nft-token'), edge(W2, W1, 'nft-collection')], wallets: [W1, W2] },
+      ], 1);
+    });
+
+    it("lensFlagsOfToken returns your lens's path for each flagged transfer of the token, only for the lens ids asked", async () => {
+      const got = await store.lensFlagsOfToken(id, '1', [paths.id]);
+      expect(got.map((f) => LAB.keyOf(f.txHash))).toEqual(['S1', 'S2', 'S3']);
+      expect(got.every((f) => f.lensId === paths.id && f.collectionId === id)).toBe(true);
+      expect(got[0]!.path.map((e) => e.kind)).toEqual(['nft-token', 'eth', 'funds']);
+      expect(got[0]!.wallets).toEqual([W1, W2, W3]);
+      expect(await store.lensFlagsOfToken(id, '2', [paths.id])).toEqual([]);
+      expect(await store.lensFlagsOfToken(id, '1', [])).toEqual([]);
+      const mine = Number(lens.slice(1));
+      expect((await store.lensFlagsOfToken(id, '1', [mine])).map((f) => LAB.keyOf(f.txHash))).toEqual(['S1', 'S2']);
+      expect((await store.lensFlagsOfToken(id, '1', [mine, paths.id])).length).toBe(5);
+    });
+
+    it('lensFlagsOfTx returns the flags of a tx across two collections, each with its collectionId', async () => {
+      const second = w('1e6b');
+      const c2 = (await store.addCollection(1, second, 'Twin', 1)).id;
+      try {
+        await store.ingest(c2, 1, LAB.transfers, LAB.cursor, []);
+        await store.saveAnalysis(c2, 1, LAB.analysis, 5, LAB.cursor, MONEY);
+        const analysis = Number((await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1', [c2])).rows[0].id);
+        await store.requestLensRun(paths.id, c2);
+        await store.saveLensRun(paths.id, c2, 1, analysis, 600, TOTALS, [flag('S1', [W1, W2])], 1);
+        const got = await store.lensFlagsOfTx(1, hashOf('S1'));
+        expect(got.map((f) => [f.collectionId, f.lensId]).sort()).toEqual([
+          [id, Number(lens.slice(1))], [id, paths.id], [c2, paths.id],
+        ].sort());
+        expect(got.find((f) => f.collectionId === c2)!.wallets).toEqual([W1, W2]);
+        expect(await store.lensFlagsOfTx(1, hashOf('P1'))).toEqual([]);
+        expect(await store.lensFlagsOfTx(2, hashOf('S1'))).toEqual([]);
+      } finally {
+        await drop(1, second);
+      }
+    });
+
+    it('lensFlagsOfTx seeks its tx by an index on tx_hash, as the built-ins’ flags do, not through every lens’s entries on the chain', async () => {
+      const { rows } = await store.pool.query(`SELECT indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'lens_flags' AND indexname = 'lens_flags_tx_idx'`);
+      expect(rows.map((r) => r.indexdef)).toEqual(['CREATE INDEX lens_flags_tx_idx ON washtrace.lens_flags USING btree (tx_hash)']);
+      const c = await store.pool.connect();
+      try {
+        await c.query('BEGIN');
+        // A collection's worth of one lens's flags, so the plan is costed as on a real install, not on a handful of rows; rolled back.
+        await c.query(
+          `INSERT INTO washtrace.lens_flags (collection_id, lens_id, tx_hash, log_index, path, wallets)
+           SELECT $1, $2, '0xfill' || g, 0, '[]', '{}' FROM generate_series(1, 20000) g`,
+          [id, paths.id],
+        );
+        await c.query('ANALYZE washtrace.lens_flags');
+        // lensFlagsOfTx's own WHERE.
+        const plan = (await c.query(
+          `EXPLAIN SELECT f.* FROM washtrace.lens_flags f JOIN washtrace.collections c ON c.id = f.collection_id WHERE c.chain_id = $1 AND f.tx_hash = $2 ORDER BY f.collection_id, f.log_index, f.lens_id`,
+          [1, hashOf('S1')],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/lens_flags_tx_idx/);
+      } finally {
+        await c.query('ROLLBACK');
+        c.release();
+      }
+    });
+
+    it("your lens's token line counts loops, wallets, closedByMoney and middles from its paths", async () => {
+      const c = MONEY_CTX(['A', paths.key]);
+      const { rows } = await store.lensTokens(id, paths.key as 'L1', LIST, c);
+      expect(rows).toEqual([expect.objectContaining({ tokenId: '1', caught: 3, loops: 3, wallets: 3, closedByMoney: 2, middles: 1, laps: 3, pairs: 0 })]);
+    });
+
+    it("your lens's wallet line counts loops and partners", async () => {
+      const c = MONEY_CTX(['A', paths.key]);
+      const { rows } = await store.lensWallets(id, paths.key as 'L1', LIST, c);
+      const by = Object.fromEntries(rows.map((r) => [r.address, r]));
+      expect(by[W1]).toMatchObject({ loops: 3, pairs: 0, partners: 2 });
+      expect(by[W2]).toMatchObject({ loops: 3, partners: 2 });
+      expect(by[W3]).toMatchObject({ loops: 1, partners: 2 });
+      // A page cut off the top still counts the rows it shows.
+      const paged = await store.lensWallets(id, paths.key as 'L1', { ...LIST, sort: 'caught', limit: 1, offset: 2 }, c);
+      expect(paged.rows.map((r) => r.address)).toEqual([W3]);
+      expect(paged.rows[0]).toMatchObject({ loops: 1, partners: 2 });
+    });
+  });
+
+  it('a group narrows to the wallets in the flags of that lens, on a token or around a wallet', async () => {
+    expect(await list({ kind: 'all', group: { method: lens as 'L1', token: '1' } })).toEqual(['S4', 'S3', 'S2', 'S1']);
+    expect(await list({ kind: 'all', group: { method: lens as 'L1', wallet: w('w5') } })).toEqual(['S5']);
+    expect(await list({ kind: 'all', group: { method: lens as 'L1', wallet: w('w9') } })).toEqual([]);
+  });
+  it('a lens that is not in ran gives the empty state everywhere', async () => {
+    const none = MONEY_CTX(['A']);
+    expect(await store.trades(id, { ...NO_FILTER, caught: [lens as 'L1'] }, none, 50, 0)).toEqual([]);
+    expect(await store.tradeCount(id, { ...NO_FILTER, caught: [lens as 'L1'] }, none)).toEqual({ total: 0, unjudged: 0 });
+    expect(await list({ kind: 'all', group: { method: lens as 'L1', token: '1' } }, none)).toEqual([]);
+    expect(await store.lensTokens(id, lens as 'L1', LIST, none)).toEqual({ rows: [], total: 0 });
+    expect(await store.lensWallets(id, lens as 'L1', LIST, none)).toEqual({ rows: [], total: 0 });
+    expect(await list({ sort: `lens-${lens}` as 'lens-L1' }, none)).toEqual(await list({}, none));
+    // A lens with no flags saved here, put in ran, still lists nothing rather than failing.
+    expect(await list({ caught: [other as 'L1'] }, MONEY_CTX(['A', other]))).toEqual([]);
+    expect((await store.tradeGroups(id, NO_FILTER, 'marketplace', none))[0]!.caught).toEqual({ A: 3 });
+  });
+
+  const idOf = (k: string) => Number(k.slice(1));
+  const sum = (t: Awaited<ReturnType<typeof store.timeline>>, k: string) => t.points.reduce((n, p) => n + ((p.flaggedSales as Record<string, number>)[k] ?? 0), 0);
+
+  it("timeline counts a lens of yours's caught sales per bucket, and none past its through block", async () => {
+    // Flags on S1 (block 200), S5 (250) and S2 (300), all sales.
+    const all = await store.timeline(id, 'UTC', [{ lensId: idOf(lens), through: null }]);
+    expect(sum(all, lens)).toBe(3);
+    expect(all.points[0]!.flaggedSales).toMatchObject({ A: expect.any(Number), AU: expect.any(Number), AC: expect.any(Number) });
+    // Judged through block 250: S2 is not judged yet, so not caught.
+    expect(sum(await store.timeline(id, 'UTC', [{ lensId: idOf(lens), through: 250 }]), lens)).toBe(2);
+    // A lens with no flags here counts zero, not nothing.
+    expect((await store.timeline(id, 'UTC', [{ lensId: idOf(other), through: null }])).points[0]!.flaggedSales[other as 'L1']).toBe(0);
+  });
+  it("timeline gives a lens of yours's judged sales per bucket: all with no through, only those up to it otherwise (Ruling S6)", async () => {
+    const judged = (t: Awaited<ReturnType<typeof store.timeline>>, k: string) => t.points.reduce((n, p) => n + (p.judgedSales?.[k as 'L1'] ?? 0), 0);
+    // The sales at or before a block, counted straight from the table.
+    const salesTo = async (block: number | null) => (await store.pool.query(
+      'SELECT count(*)::int AS n FROM washtrace.transfers WHERE collection_id = $1 AND marketplace IS NOT NULL AND ($2::bigint IS NULL OR block_number <= $2::bigint)', [id, block])).rows[0].n as number;
+    const everySale = await salesTo(null);
+    expect(everySale).toBeGreaterThan(await salesTo(250));
+    expect(await salesTo(250)).toBeGreaterThan(0);
+    expect(judged(await store.timeline(id, 'UTC', [{ lensId: idOf(lens), through: null }]), lens)).toBe(everySale);
+    expect(judged(await store.timeline(id, 'UTC', [{ lensId: idOf(lens), through: 250 }]), lens)).toBe(await salesTo(250));
+    expect((await store.timeline(id, 'UTC', [{ lensId: idOf(lens), through: 100 }])).points[0]!.judgedSales).toEqual({ [lens]: 0 });
+    // The built-ins' points carry no such field.
+    expect((await store.timeline(id)).points[0]).not.toHaveProperty('judgedSales');
+  });
+  it("timeline's SQL is unchanged with no lens of yours", async () => {
+    const asked: { text: string; values: unknown[] }[] = [];
+    const was = store.pool.query.bind(store.pool);
+    (store.pool as any).query = (text: any, values?: unknown[]) => { asked.push({ text: String(text), values: values ?? [] }); return (was as any)(text, values); };
+    try {
+      await store.timeline(id);
+    } finally {
+      (store.pool as any).query = was;
+    }
+    const sql = asked.at(-1)!;
+    expect(sql.values).toEqual([id, expect.any(String), 'UTC']);
+    expect(sql.text.replace(/\s+/g, ' ').trim()).toBe(
+      "WITH f AS ( SELECT tx_hash, log_index, bool_or(method = 'A') AS a, bool_or(method = 'AU') AS au, bool_or(method = 'AC') AS ac FROM washtrace.flags WHERE collection_id = $1 GROUP BY tx_hash, log_index) " +
+      "SELECT extract(epoch FROM date_trunc($2, t.block_time, $3))::float8 * 1000 AS at, count(*)::int AS transfers, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales, " +
+      "count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac " +
+      'FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index WHERE t.collection_id = $1 AND t.block_time IS NOT NULL GROUP BY 1 ORDER BY 1',
+    );
+  });
+
+  // Every cell, diagonal and "not" against the query its link opens.
+  const checkCompare = async (c: { money: ReadonlySet<string>; ran: Method[]; zone: string; through?: Record<string, number | null> }) => {
+    const got = await store.compare(id, c);
+    const both = got.both as Record<string, Record<string, number>>, not = got.not as Record<string, Record<string, number>>;
+    const count = async (q: Partial<TradeQuery>) => (await store.tradeCount(id, { ...NO_FILTER, ...q }, c)).total;
+    for (const r of c.ran as string[]) {
+      expect(both[r]![r]).toBe(await count({ caught: [r as 'A'] }));
+      for (const col of c.ran as string[]) {
+        if (col === r) continue;
+        expect(both[r]![col]).toBe(await count({ caught: [r as 'A', col as 'A'] }));
+        expect(not[r]![col]).toBe(await count({ caught: [r as 'A'], notCaught: [col as 'A'] }));
+      }
+    }
+    return { both, not };
+  };
+  it("compare: each cell equals tradeCount of its link's query", async () => {
+    const { both } = await checkCompare(MONEY_CTX(['A', 'AU', lens]));
+    // The lens caught S1, S2 and S5 as sales; the matrix is symmetric.
+    expect(both[lens]![lens]).toBe(3);
+    expect(both[lens]!.A).toBe(both.A![lens]);
+  });
+  it('compare: "not" counts only what the other lens judged, when its run is behind (Ruling FF)', async () => {
+    // The lens read through block 250: S2 (300), S3 (400) and later sales are not judged by it yet.
+    const behind = { ...MONEY_CTX(['A', lens]), through: { [lens]: 250 } };
+    const { both, not } = await checkCompare(behind);
+    // Round trips caught S3, which the lens has not judged: it is in neither "both" nor "not", though in A's total.
+    expect(both.A![lens]! + not.A![lens]!).toBeLessThan(both.A!.A!);
+  });
+  it('compare leaves out a lens not in ctx.ran', async () => {
+    const got = (await store.compare(id, MONEY_CTX(['A', lens]))).both;
+    expect(Object.keys(got).sort()).toEqual(['A', lens].sort());
+    expect(Object.keys(got.A!).sort()).toEqual(['A', lens].sort());
+    expect(got[other as 'L1']).toBeUndefined();
+  });
+
+  describe('a lens whose run read through an earlier block than the latest analysis (Ruling FF)', () => {
+    // Its run read through block 350: S1 (200), S5 (250), S2 (300) and U1 (350), not P1 (360), S3 (400) or S4 (500).
+    let behind: string;
+    let at: ReturnType<typeof MONEY_CTX> & { through: Record<string, number | null> };
+    beforeAll(async () => {
+      const analysis = Number((await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].id);
+      const b = await store.createLens('Behind', DEFAULT_RULE);
+      behind = b.key;
+      await store.requestLensRun(b.id, id);
+      await store.saveLensRun(b.id, id, 1, analysis, 350, TOTALS, [flag('S1', [W1, W2])], 1);
+      at = { ...MONEY_CTX(['A', lens, behind]), through: { [lens]: 600, [behind]: 350 } };
+    });
+
+    it('calls clean only what it judged: a trade past its block is not judged yet', async () => {
+      expect(await list({ notCaught: [behind as 'L1'] }, at)).toEqual(['U1', 'S2', 'S5']);
+      expect(await store.tradeCount(id, { ...NO_FILTER, notCaught: [behind as 'L1'] }, at)).toEqual({ total: 3, unjudged: 0 });
+      // Caught needs no bound: its flags are of the trades it read.
+      expect(await list({ caught: [behind as 'L1'] }, at)).toEqual(['S1']);
+      // With no block for it, it read them all.
+      expect(await list({ notCaught: [behind as 'L1'] }, MONEY_CTX(['A', behind]))).toEqual(['S4', 'S3', 'P1', 'U1', 'S2', 'S5']);
+    });
+
+    it("counts a group's trades it judged as its denominator, and the built-ins' stay every trade", async () => {
+      expect(await store.tradeGroups(id, NO_FILTER, 'marketplace', at)).toEqual([
+        { key: 'blur', trades: 7, caught: { A: 3, [lens]: 2, [behind]: 1 }, judged: { [lens]: 6, [behind]: 3 } },
+        { key: 'opensea', trades: 1, caught: { A: 1, [lens]: 1, [behind]: 0 }, judged: { [lens]: 1, [behind]: 1 } },
+      ]);
+    });
+
+    it("counts a token's and a wallet's trades it judged as theirs in its lists", async () => {
+      const t = await store.lensTokens(id, behind as 'L1', LIST, at);
+      expect(t.rows).toEqual([expect.objectContaining({ tokenId: '1', caught: 1, trades: 2 })]);
+      const wl = await store.lensWallets(id, behind as 'L1', LIST, at);
+      expect(Object.fromEntries(wl.rows.map((r) => [r.address, r.trades]))).toEqual({ [W1]: 1, [W2]: 2 });
+      // The one-pass count, which an order by share reads first, the same.
+      const share = await store.lensWallets(id, behind as 'L1', { ...LIST, sort: 'share' }, at);
+      expect(Object.fromEntries(share.rows.map((r) => [r.address, r.trades]))).toEqual({ [W1]: 1, [W2]: 2 });
+    });
+
+    it('counts its lists alone, with a Find and past the last page, though the block is bound for the page only', async () => {
+      const L = behind as 'L1';
+      for (const find of [null, '1']) {
+        expect(await store.lensTokens(id, L, { ...LIST, find, limit: 0 }, at)).toEqual({ rows: [], total: 1 });
+        expect(await store.lensTokens(id, L, { ...LIST, find, offset: 10 }, at)).toEqual({ rows: [], total: 1 });
+      }
+      for (const find of [null, '0x000000']) {
+        expect(await store.lensWallets(id, L, { ...LIST, find, limit: 0 }, at)).toEqual({ rows: [], total: 2 });
+        expect(await store.lensWallets(id, L, { ...LIST, find, offset: 10 }, at)).toEqual({ rows: [], total: 2 });
+        expect(await store.lensWallets(id, L, { ...LIST, find, sort: 'share', offset: 10 }, at)).toEqual({ rows: [], total: 2 });
+      }
+    });
   });
 });

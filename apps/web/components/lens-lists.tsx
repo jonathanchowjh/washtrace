@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import type { Method, TokenLine, WalletLine } from '@washtrace/detect';
-import { findOf } from '@washtrace/detect/trades';
-import { LENSES, eth, num, plural, tokenLabel } from '@/lib/format';
+import type { TokenLine, WalletLine } from '@washtrace/detect';
+import { findOf, isOwnKey, type LensKey } from '@washtrace/detect/trades';
+import { eth, lensInfo, num, plural, tokenLabel, type Lenses } from '@/lib/format';
 import { findText, pageOf, pages } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
@@ -38,19 +38,24 @@ export async function clampedPage<T>(asked: number, size: number, read: (offset:
  * The tokens or wallets one lens flagged trades of, each saying why in words,
  * with every count a link to the trades it counts: the loops to the token
  * page with them lit (or to a wallet's flagged trades), the wallets to their
- * group, the flagged and the total to those trades. Above it, the orders and a
+ * group, the flagged and the total to those trades. A token opens its page
+ * (a lens of yours's with its loops lit). Above it, the orders and a
  * Find box that keeps every other parameter; below it, its pages. A Find that
  * names nothing this list holds says so.
  */
-export function LensList({ kind, method, base, chainId, rows, total, of, sort, sortHref, find, findParam, pager, empty }: {
-  kind: 'tokens' | 'wallets'; method: Method; base: string; chainId: number; rows: TokenLine[] | WalletLine[]; total: number;
+export function LensList({ kind, method, own = {}, base, chainId, rows, total, of, sort, sortHref, find, findParam, pager, empty }: {
+  kind: 'tokens' | 'wallets'; method: LensKey;
+  /** Your lenses by key, for the name of a list that is one of them. */
+  own?: Lenses; base: string; chainId: number; rows: TokenLine[] | WalletLine[]; total: number;
   /** How many the list holds with no Find. */
   of: number;
   sort: string; sortHref: (s: string) => string; find: string | null; findParam: string;
   pager: { page: number; size: number; href: (p: number) => string; param?: string }; empty: string;
 }) {
-  const lens = LENSES[method];
+  const lens = lensInfo(method, own);
+  if (lens === null) return null;
   const unit = kind === 'tokens' ? 'token' : 'wallet';
+  const yours = isOwnKey(method);
   // The Find form carries every parameter the first page's link does, except its own.
   const first = new URL(pager.href(1), 'http://list.invalid');
   const kept = [...first.searchParams].filter(([k]) => k !== findParam);
@@ -97,9 +102,10 @@ export function LensList({ kind, method, base, chainId, rows, total, of, sort, s
         <ol start={start + 1} className="rounded-lg border bg-card">
           {kind === 'tokens'
             ? (rows as TokenLine[]).map((l, i) => (
-              <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(l)}
-                name={<Link href={`${base}/t/${l.tokenId}`} title={`Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link>}
-                loops={`${base}/t/${l.tokenId}?method=${method}`}
+              <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
+                // A lens of yours opens the token page with its loops lit, down at the why section.
+                name={<Link href={yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link>}
+                loops={`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
                 caught={tradesHref(base, { kind: 'all', caught: [method], token: l.tokenId })}
@@ -107,7 +113,7 @@ export function LensList({ kind, method, base, chainId, rows, total, of, sort, s
               />
             ))
             : (rows as WalletLine[]).map((l, i) => (
-              <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(l)}
+              <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
                 name={<Wallet chainId={chainId} address={l.address} />}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}

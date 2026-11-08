@@ -1,9 +1,17 @@
 /**
+ * A migration the runner runs outside a transaction, one statement at a time,
+ * then records: CREATE INDEX CONCURRENTLY runs no other way. Each statement
+ * must be safe to run again, since a stop between them runs them all again.
+ */
+export interface Outside { outside: readonly string[] }
+
+/**
  * Forward-only, numbered, idempotent. Index 0 is migration 001. A TypeScript
  * module rather than .sql files: the package builds with plain `tsc`, which
- * would not copy a .sql file into dist/. The only place in the product with DDL.
+ * would not copy a .sql file into dist/. The only place in the product with
+ * DDL. A string runs in one transaction with its version; an `Outside` does not.
  */
-export const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly (string | Outside)[] = [
   `
 CREATE SCHEMA IF NOT EXISTS washtrace;
 
@@ -394,4 +402,104 @@ WHERE c.analyzed_version > 0
 -- NULL on analyses saved before this, so their next one writes them all.
 ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS facts_key text;
 `,
+  `
+-- Your own lenses (Cycle lab 3b). A lens is a rule the engine runs per
+-- collection. Its version moves with each edit, so a run saved against an
+-- older one is thrown away. A run keeps its last totals while it is queued
+-- again, and its flags live apart from the built-ins' (flags.method stays as
+-- it is). Everything of a lens goes with it, and with its collection.
+CREATE TABLE IF NOT EXISTS washtrace.lenses (
+  id         serial PRIMARY KEY,
+  name       text NOT NULL,
+  rule       jsonb NOT NULL,
+  version    int NOT NULL DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lenses_name_idx ON washtrace.lenses (lower(name));
+
+CREATE TABLE IF NOT EXISTS washtrace.lens_runs (
+  lens_id       int NOT NULL REFERENCES washtrace.lenses(id) ON DELETE CASCADE,
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  status        text NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  progress      real,
+  lens_version  int NOT NULL,
+  analysis_id   bigint,
+  through_block bigint,
+  totals        jsonb,
+  error         text,
+  failures      int NOT NULL DEFAULT 0,
+  retry_at      timestamptz,
+  requested_at  timestamptz NOT NULL DEFAULT now(),
+  started_at    timestamptz,
+  finished_at   timestamptz,
+  took_ms       int,
+  PRIMARY KEY (lens_id, collection_id)
+);
+CREATE INDEX IF NOT EXISTS lens_runs_collection_idx ON washtrace.lens_runs (collection_id);
+
+CREATE TABLE IF NOT EXISTS washtrace.lens_flags (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  lens_id       int NOT NULL REFERENCES washtrace.lenses(id) ON DELETE CASCADE,
+  tx_hash       text NOT NULL,
+  log_index     int NOT NULL,
+  path          jsonb NOT NULL,
+  wallets       text[] NOT NULL,
+  PRIMARY KEY (collection_id, lens_id, tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS lens_flags_wallets_idx ON washtrace.lens_flags USING gin (wallets);
+CREATE INDEX IF NOT EXISTS lens_flags_lens_idx ON washtrace.lens_flags (lens_id);
+`,
+  {
+    // A lens run reads back the hash and amount of each money edge it found by
+    // the edge's ends and block (Store.moveTxs). By the sender alone, one busy
+    // sender's whole history was read per edge. Built concurrently: on a live
+    // install flows holds ~69M rows, ten minutes and more of building that
+    // must not hold #27's lens tables back or stop writes to flows. A build
+    // stopped part way leaves an INVALID index of this name, which IF NOT
+    // EXISTS would take for done: it is dropped first and built again.
+    // It leads with (chain_id, from_address), so it also serves every lookup
+    // by the sender alone, which is why #30 drops flows_from_idx.
+    outside: [
+      `DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'washtrace' AND c.relname = 'flows_moves_idx' AND NOT i.indisvalid) THEN
+    DROP INDEX washtrace.flows_moves_idx;
+  END IF;
+END $$`,
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS flows_moves_idx ON washtrace.flows (chain_id, from_address, to_address, block_number)',
+    ],
+  },
+  `
+-- Preview (Cycle lab 3b, P2): a lens tried on a sample before it is saved.
+-- The editor queues a row and polls it; the worker's lens pass takes the
+-- oldest queued one first. A row is kept an hour at most (the worker sweeps
+-- it) and goes with its collection; a poll after either answers "gone".
+CREATE TABLE IF NOT EXISTS washtrace.lens_previews (
+  id            serial PRIMARY KEY,
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  rule          jsonb NOT NULL,
+  status        text NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  progress      real,
+  result        jsonb,
+  error         text,
+  requested_at  timestamptz NOT NULL DEFAULT now(),
+  finished_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS lens_previews_queued_idx ON washtrace.lens_previews (requested_at) WHERE status = 'queued';
+
+-- The trade page reads your lenses' flags of one tx
+-- (Store.lensFlagsOfTx). The key leads with collection and lens, so without
+-- this every lens's entries on the chain were read to find it; the built-ins'
+-- flags have flags_tx_idx for the same read.
+CREATE INDEX IF NOT EXISTS lens_flags_tx_idx ON washtrace.lens_flags (tx_hash);
+`,
+  {
+    // flows_from_idx (chain_id, from_address) is an exact prefix of
+    // flows_moves_idx (#28), which serves any query it did, so on ~69M rows it
+    // only cost writes and disk. Dropped concurrently, as #28 built the other:
+    // no lock that stops writes to flows. IF EXISTS makes it a no-op on an
+    // install that never had it; the runner records the version either way.
+    outside: ['DROP INDEX CONCURRENTLY IF EXISTS washtrace.flows_from_idx'],
+  },
 ];

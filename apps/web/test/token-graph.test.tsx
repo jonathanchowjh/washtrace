@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
 import { layout } from '@/lib/layout';
-import { TokenLoops } from '@/components/token-graph';
+import { LoopFigure, TokenLoops } from '@/components/token-graph';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
@@ -121,5 +121,73 @@ describe('the token graph', () => {
     expect(g.querySelector('title')?.textContent).toBe('1 money flow');
     fireEvent.click(g.querySelector('path')!);
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe('the figure alone', () => {
+  // A lens of yours's loop on row 2: back from B to A through another token of the collection.
+  const own = { lensId: 7, collectionId: 1, txHash: '0xs1', logIndex: 0, wallets: [A, B], path: [
+    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1' },
+    { from: B, to: A, kind: 'nft-collection' as const, tx: '0xc9', time: null, amountWei: null, tokenId: '9' },
+  ] };
+  const drawn = layout(transfers, [], [], [own]);
+  const loop = drawn.loops.find((l) => l.key === 'o0')!;
+
+  it('links its wallets, its trades and another token’s number, with no buttons, as a server page draws it', () => {
+    render(<LoopFigure drawing={drawn} chainId={1} base="/c/1/0xc" lit={{ edges: loop.edges, nodes: loop.nodes }} />);
+    const href = (sel: string) => document.querySelector(sel)?.closest('a')?.getAttribute('href');
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getByRole('link', { name: /^Wallet 0x3/ }).getAttribute('href')).toBe('/w/1/0x3');
+    expect(href('[data-edge="t2"] path[stroke="transparent"]')).toBe('/tx/1/0xs2');
+    expect(href('[data-edge="o0e1"] path[stroke="transparent"]')).toBe('/tx/1/0xc9');
+    expect([...document.querySelectorAll('svg text a')].find((a) => a.textContent === '#9')?.getAttribute('href')).toBe('/c/1/0xc/t/9');
+    expect(litKeys()).toEqual(['o0e1', 't1']);
+    expect(document.querySelector('[data-edge="t3"]')?.getAttribute('class')).toContain('opacity-25');
+    expect(document.querySelector('[data-edge="o0e1"] path')?.getAttribute('class')).toBe('stroke-flow');
+  });
+});
+
+describe('a trade no built-in flagged, on a loop of a lens of yours', () => {
+  // A and B pass the token back and forth once: too few cycles for Round trips, but Fast flips's loop on row 2 comes back through row 3.
+  const clean = [t('0x0000000000000000000000000000000000000000', A, '0xs0'), t(A, B, '0xs1'), t(B, A, '0xs2'), t(A, C, '0xs3')];
+  const own = { lensId: 7, collectionId: 1, txHash: '0xs1', logIndex: 0, wallets: [A, B], path: [
+    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1' },
+    { from: B, to: A, kind: 'nft-token' as const, tx: '0xs2', time: null, amountWei: null, tokenId: '1' },
+  ] };
+  const drawn = layout(clean, [], [], [own], { L7: { name: 'Fast flips', tone: 'own', says: '' } });
+  const loop = drawn.loops.find((l) => l.key === 'o0')!;
+
+  it('is drawn in your lens’s hue, says whose loop it is, and the legend never calls it not flagged', () => {
+    render(<LoopFigure drawing={drawn} chainId={1} base="" lit={{ edges: loop.edges, nodes: loop.nodes }} />);
+    expect(loop.edges.sort()).toEqual(['t1', 't2']);
+    for (const k of ['t1', 't2']) expect(document.querySelector(`[data-edge="${k}"] path`)?.getAttribute('class')).toBe('stroke-flow');
+    expect(document.querySelector('[data-edge="t1"] title')?.textContent).toBe('#2 transfer · not flagged by a built-in lens; on a loop of Fast flips');
+    const legend = [...document.querySelectorAll('figcaption span')].map((s) => s.textContent);
+    expect(legend).toContain('not flagged by a built-in lens, on a loop of Fast flips');
+    // Row 4, on no loop, is the only arrow the plain swatch stands for.
+    expect(legend).toContain('not flagged');
+    expect(document.querySelector('[data-edge="t3"] path')?.getAttribute('class')).toBe('stroke-clean');
+  });
+});
+
+describe('the arrows’ links', () => {
+  const tradeLinks = () => [...document.querySelectorAll('svg a[data-tx]')];
+  const ping = Array.from({ length: 8 }, (_, i) => t(i % 2 === 0 ? A : B, i % 2 === 0 ? B : A, `0xp${i}`, { A: scc([A, B]) }));
+
+  it('each says what it opens, from its arrow’s title, in lens names', () => {
+    render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    const names = tradeLinks().map((a) => a.getAttribute('aria-label'));
+    expect(names).toEqual(['Open the trade: #2 transfer · flagged', 'Open the trade: #3 transfer · flagged', 'Open the trade: #4 transfer · flagged']);
+    cleanup();
+    // A bundle opens the first of its transfers, and says so.
+    render(<LoopFigure drawing={layout(ping, [], [])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    for (const a of tradeLinks()) expect(a.getAttribute('aria-label')).toMatch(/^Open the first trade: 4 transfers this way/);
+    for (const a of tradeLinks()) expect(a.getAttribute('aria-label')).not.toMatch(/\b(A|AU|AC|L\d+)\b/);
+  });
+
+  it('stay out of the tab order: the table’s rows are the keyboard’s way to a trade, as before', () => {
+    show();
+    expect(tradeLinks().length).toBeGreaterThan(0);
+    for (const a of tradeLinks()) expect(a.getAttribute('tabindex')).toBe('-1');
   });
 });

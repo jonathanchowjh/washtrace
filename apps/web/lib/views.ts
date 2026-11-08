@@ -1,8 +1,10 @@
-import { EVERY, ZERO, entryFor, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type Lens, type LensRun, type OwnFlag, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
+import { lensIdOf } from '@washtrace/detect/trades';
+import type { Lenses } from './format';
 import { addressOf, findText, pageOf, pages as pagesOf } from './params';
 import { authConfigured, mayWrite } from './auth';
 import { analyzingOn, storedOnly } from './coverage';
-import { ranFlags, verdict, type Verdict } from './metrics';
+import { lensContext, ownLenses, ranFlags, verdict, type Verdict } from './metrics';
 import { configFromSources, fieldViews, hopsFollowed } from './settings';
 import { pipeline } from './pipeline';
 import { status, workerSilent } from './status';
@@ -13,14 +15,28 @@ import { store, storedManifest } from './store';
  * never shows what the API would not say.
  */
 
-export type TokenView = {
-  collection: { id: number; chainId: number; address: string; name: string | null };
-  tokenId: string;
+/**
+ * What a token's graph is drawn from: its transfers with the flags of the
+ * built-ins that ran, and your lenses' flags of it, of the lenses that ran
+ * there (lensContext's `ran`). The token page and the trade page both read it
+ * through tokenGraph, so layout() over it gives both the same loop keys, and
+ * a trade's card opens the token page with its loop lit by ?loop=.
+ */
+export interface TokenGraph {
   transfers: FlaggedTransfer[];
   /** Wallets that joined two holders by money without holding the token: AC's middles. */
   middles: string[];
   flows: Flow[];
-} & Verdict;
+  /** In chain order, then by lens: each one loop, drawn and said beside the built-ins'. */
+  own: OwnFlag[];
+}
+
+export type TokenView = {
+  collection: { id: number; chainId: number; address: string; name: string | null };
+  tokenId: string;
+  /** Your lenses' names, for their chips and lines. */
+  ownLenses: Lenses;
+} & TokenGraph & Verdict;
 
 /** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
 export const TRADES = 100;
@@ -33,13 +49,8 @@ async function latestByAddress(s: Store, chainId: number, transfers: readonly Fl
   return new Map(await Promise.all(addresses.map(async (a) => [a, (await s.collection(chainId, a))?.latest ?? null] as const)));
 }
 
-/** One token's view, or why there is none: the collection is not watched, or none of the token's transfers is read. */
-export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | 'not-watched' | 'no-transfer'> {
-  const s = store();
-  const c = await s.collection(chainId, address);
-  if (!c) return 'not-watched';
-  const all = await s.token(c.id, tokenId);
-  if (all.length === 0) return 'no-transfer';
+/** A token's graph from its transfers as read (`all`), keeping the built-ins that ran in `c.latest` and your lenses in `ran` (lens ids). */
+async function tokenGraph(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, tokenId: string, all: readonly FlaggedTransfer[], ran: readonly number[]): Promise<TokenGraph> {
   // Only the lenses that ran: the verdict, the middles and the rows all read these.
   const transfers = all.map((t) => ranFlags(t, c.latest));
   const middles = [...new Set(transfers.flatMap((t) => {
@@ -47,18 +58,147 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
     return w?.kind === 'pair' && w.middle !== null ? [w.middle] : [];
   }))];
   const holders = [...new Set(transfers.flatMap((t) => [t.from, t.to]))].filter((a) => a !== ZERO);
-  const flows = holders.length === 0 ? [] : await s.flowsAmong(chainId, [...holders, ...middles]);
-  return { collection: { id: c.id, chainId, address, name: c.name }, tokenId, transfers, middles, flows, ...verdict(transfers.map((t) => ({ t, latest: c.latest }))) };
+  const [flows, own] = await Promise.all([
+    holders.length === 0 ? [] : s.flowsAmong(chainId, [...holders, ...middles]),
+    s.lensFlagsOfToken(c.id, tokenId, ran),
+  ]);
+  return { transfers, middles, flows, own };
 }
 
-/** A transaction's transfers and the one verdict the page and the route both give, from each collection's latest analysis. */
-export async function txView(chainId: number, tx: string): Promise<{ transfers: FlaggedTransfer[] } & Verdict> {
+/** Your lenses that ran on a collection, by id: a lens of yours with no finished run there has flagged nothing on it yet. */
+function ownRanIds(latest: AnalysisRow | null, runs: readonly { lens: Lens; run: LensRun | null }[]): number[] {
+  return lensContext(latest, runs).ran.flatMap((k) => lensIdOf(k) ?? []);
+}
+
+/** One token's view, or why there is none: the collection is not watched, or none of the token's transfers is read. */
+export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | 'not-watched' | 'no-transfer'> {
   const s = store();
-  const transfers = await s.transaction(chainId, tx);
-  const latest = await latestByAddress(s, chainId, transfers);
-  const rows = transfers.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
+  const c = await s.collection(chainId, address);
+  if (!c) return 'not-watched';
+  const [all, runs] = await Promise.all([s.token(c.id, tokenId), s.lensRuns(c.id)]);
+  if (all.length === 0) return 'no-transfer';
+  const graph = await tokenGraph(s, chainId, c, tokenId, all, ownRanIds(c.latest, runs));
+  return {
+    collection: { id: c.id, chainId, address, name: c.name }, tokenId, ...graph, ownLenses: ownLenses(runs),
+    ...verdict(graph.transfers.map((t) => ({ t, latest: c.latest }))),
+  };
+}
+
+/** What GET /api/transfers answers, and the trade page's verdict: a transaction's transfers, each with the flags of the built-ins that ran on its collection. */
+export type TxVerdict = {
+  transfers: FlaggedTransfer[];
+  /** By address: each watched collection its transfers are in, with its latest analysis (null: none yet). */
+  watched: Record<string, Pick<CollectionRow, 'id' | 'name' | 'latest'>>;
+} & Verdict;
+
+/**
+ * A transaction's transfers and the one verdict the page and the route both
+ * give, from each collection's latest analysis. Nothing else: the route
+ * returns this, so it reads nothing the page alone draws (txView).
+ */
+export async function txVerdict(chainId: number, tx: string): Promise<TxVerdict> {
+  const s = store();
+  const moved = await s.transaction(chainId, tx);
+  const watched: TxVerdict['watched'] = {};
+  await Promise.all([...new Set(moved.map((t) => t.collection?.address ?? ''))].map(async (address) => {
+    const c = await s.collection(chainId, address);
+    if (c) watched[address] = c;
+  }));
+  const rows = moved.map((t) => ({ t, latest: watched[t.collection?.address ?? '']?.latest ?? null }));
   // Rows carry only the lenses that ran, so the API and the page never name one that did not.
-  return { ...verdict(rows), transfers: rows.map((r) => ranFlags(r.t, r.latest)) };
+  return { ...verdict(rows), transfers: rows.map((r) => ranFlags(r.t, r.latest)), watched };
+}
+
+/** A watched collection a transaction moved tokens of, with what its lens cards read. */
+export interface TxCollection {
+  id: number; chainId: number; address: string; name: string | null;
+  /** Its latest analysis (null: none yet): which built-ins ran, and through which block they judged. */
+  latest: AnalysisRow | null;
+  /** Each lens of yours, with its run here or none. */
+  runs: { lens: Lens; run: LensRun | null }[];
+}
+
+export type TxView = {
+  /** Your lenses' catches in it, of the lenses that ran on each one's collection (lensContext's `ran`). */
+  own: OwnFlag[];
+  /** By address: each collection its transfers are in. */
+  collections: Record<string, TxCollection>;
+  /** Beside `transfers`: its token's graph when some lens caught it, else null, since a card that does not catch draws nothing. */
+  graphs: (TokenGraph | null)[];
+  /**
+   * Beside `transfers`: for a move out of custody to a wallet (outOfCustody),
+   * the wallet the engine holds the token for, the one that put it in (null:
+   * no move of it into custody is read before); null for any other transfer.
+   */
+  custody: ({ parked: string | null } | null)[];
+  /** Your lenses' names, for their cards and chips. */
+  ownLenses: Lenses;
+} & Omit<TxVerdict, 'watched'>;
+
+/**
+ * The trade page's read: the route's verdict (txVerdict), and for its lens
+ * cards what each collection ran, your lenses' catches, each caught
+ * transfer's token graph and who a move out of custody is a trade from.
+ */
+export async function txView(chainId: number, tx: string): Promise<TxView> {
+  const s = store();
+  const [{ watched, ...v }, stored] = await Promise.all([txVerdict(chainId, tx), s.lensFlagsOfTx(chainId, tx)]);
+  const collections: Record<string, TxCollection> = {};
+  await Promise.all(Object.entries(watched).map(async ([address, c]) => {
+    collections[address] = { id: c.id, chainId, address, name: c.name, latest: c.latest, runs: await s.lensRuns(c.id) };
+  }));
+  const of = (t: FlaggedTransfer): TxCollection | undefined => collections[t.collection?.address ?? ''];
+  const ran = new Map(Object.values(collections).map((c) => [c.id, ownRanIds(c.latest, c.runs)]));
+  const own = stored.filter((f) => ran.get(f.collectionId)?.includes(f.lensId) === true);
+  // A token is read only when some lens caught a transfer of it here or it came out of custody, and once however many of its transfers the transaction moved.
+  const history = new Map<string, Promise<FlaggedTransfer[]>>();
+  const historyOf = (c: TxCollection, tokenId: string) => {
+    const key = `${c.address}/${tokenId}`;
+    if (!history.has(key)) history.set(key, s.token(c.id, tokenId));
+    return history.get(key)!;
+  };
+  const read = new Map<string, Promise<TokenGraph>>();
+  const graphs = await Promise.all(v.transfers.map((t) => {
+    const c = of(t);
+    if (c === undefined) return null;
+    const caught = Object.keys(t.flags).length > 0 || own.some((f) => f.collectionId === c.id && f.logIndex === t.logIndex);
+    if (!caught) return null;
+    const key = `${c.address}/${t.tokenId}`;
+    if (!read.has(key)) read.set(key, historyOf(c, t.tokenId).then((all) => tokenGraph(s, chainId, c, t.tokenId, all, ran.get(c.id)!)));
+    return read.get(key)!;
+  }));
+  const custody = await Promise.all(v.transfers.map(async (t) => {
+    const c = of(t);
+    return c === undefined || !outOfCustody(t) ? null : { parked: parkedFor(t, await historyOf(c, t.tokenId)) };
+  }));
+  // Your lenses are the install's, not a collection's: any collection's runs name them all.
+  const any = Object.values(collections)[0];
+  return { ...v, own, collections, graphs, custody, ownLenses: any === undefined ? {} : ownLenses(any.runs) };
+}
+
+/** The escrows the engine folds custody through, as the worker and a lens run pass them (graph.ts adds the zero address itself). */
+const ESCROWS: ReadonlySet<string> = new Set(CUSTODIANS);
+
+/** Whether `address` is an escrow: the one test of it the trade page and this file make, over the list the engine is given. */
+export function inEscrow(address: string): boolean {
+  return ESCROWS.has(address);
+}
+
+/** A move out of an escrow to a wallet: of the custody moves, the only one the engine may read as a trade. */
+export function outOfCustody(t: Pick<FlaggedTransfer, 'from' | 'to'>): boolean {
+  return inEscrow(t.from) && t.to !== ZERO && !inEscrow(t.to);
+}
+
+/**
+ * The wallet the engine holds a token for as move `t` takes it out of
+ * custody: graph.ts reads A → escrow → B as one trade A → B, and
+ * A → escrow → A as none. Asked of graph.ts (parkedOf over the token's
+ * transfers), not worked out again here. Null when no move of the token into
+ * custody is read before it.
+ */
+function parkedFor(t: FlaggedTransfer, all: readonly FlaggedTransfer[]): string | null {
+  const at = all.findIndex((x) => x.txHash === t.txHash && x.logIndex === t.logIndex);
+  return at < 0 ? null : parkedOf(all, ESCROWS)[at] ?? null;
 }
 
 /**

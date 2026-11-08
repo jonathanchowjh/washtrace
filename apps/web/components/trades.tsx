@@ -1,10 +1,11 @@
 import Link from 'next/link';
-import { METHODS, type Method, type TradeRow } from '@washtrace/detect';
-import { VENUES, venueOf, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { METHODS, type TradeRow } from '@washtrace/detect';
+import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/head';
 import { DOT } from '@/components/methods';
 import { Wallet } from '@/components/transfers';
-import { LENSES, NOT_JUDGED_YET, eth, localTime, num, pct, tokenLabel } from '@/lib/format';
+import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, type Lenses } from '@/lib/format';
+import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, weiToEth, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -15,10 +16,14 @@ import { cn } from '@/lib/utils';
  * control is a link or a plain GET form, so the address bar holds the view.
  */
 
-interface Where { base: string; q: TradeQuery; view: View; zone: string }
+/** `own` is your lenses by key, for their names and hues; the built-ins need no entry. */
+interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: Lenses }
 
 const NOT_COUNTED = ' (not counted)';
-const lensTitle = (m: Method) => LENSES[m].name + (LENSES[m].tone === 'apart' ? NOT_COUNTED : '');
+const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : i.name + (i.tone === 'apart' ? NOT_COUNTED : ''); };
+
+/** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
+const withOwn = (ran: readonly LensKey[]) => [...METHODS.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
 
 /** The current view's parameters as hidden inputs, less the ones a form shows itself or must not keep. */
 function carried({ base, q, view }: Where, keep: (key: string) => boolean) {
@@ -95,8 +100,9 @@ function Checks({ title, name, options, on }: { title: string; name: string; opt
 
 /** Find, the filters in play as chips that each remove one, and the form that adds more. */
 export function FilterBar(w: Where) {
-  const { base, q, view, zone } = w;
-  const lenses = METHODS.map((m): [string, string] => [m, LENSES[m].name]);
+  const { base, q, view, zone, own = {} } = w;
+  const lenses = [...METHODS, ...Object.keys(own)].flatMap((k): [string, string][] => { const i = lensInfo(k, own); return i === null ? [] : [[k, i.name]]; });
+  const names = Object.fromEntries(Object.entries(own).map(([k, i]) => [k, i.name]));
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
     <section aria-label="Filters" className="mt-4 space-y-3">
@@ -107,7 +113,7 @@ export function FilterBar(w: Where) {
       </form>
 
       <div className="flex flex-wrap items-start gap-2">
-        {chips(base, q, view, zone).map((c) => (
+        {chips(base, q, view, zone, names).map((c) => (
           <Link key={c.key} href={c.href} title="Remove this filter" className="rounded-full border bg-muted/50 px-2.5 py-1 text-sm hover:bg-card">
             {c.label} <span aria-hidden className="text-muted-foreground">×</span>
           </Link>
@@ -169,9 +175,17 @@ function groupLabel(by: TradeGroupBy, key: string): string {
   return bandLabel(by, key);
 }
 
-/** How the matching trades split up, each row a link to its own trades. */
-export function GroupBy({ base, q, view, zone, groups, ran }: Where & { groups: { key: string; trades: number; caught: Partial<Record<Method, number>> }[] | null; ran: readonly Method[] }) {
+/**
+ * How the matching trades split up, each row a link to its own trades. A lens
+ * of yours's share is of the trades it judged in the group (`judged`), not of
+ * every one: those past the block its run read are not judged yet (Ruling FF).
+ */
+export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & {
+  groups: { key: string; trades: number; caught: Partial<Record<LensKey, number>>; judged?: Partial<Record<LensKey, number>> }[] | null; ran: readonly LensKey[];
+}) {
   const by = view.by;
+  // The built-ins always, with NOT_RUN where one did not run; yours only once they have run.
+  const cols = [...METHODS, ...ran.filter(isOwnKey)];
   return (
     <section aria-label="Group by" className="mt-6">
       <nav className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
@@ -191,7 +205,7 @@ export function GroupBy({ base, q, view, zone, groups, ran }: Where & { groups: 
               <tr>
                 <th className="px-3 py-2 font-medium">{BY_NAME[by]}</th>
                 <th className="px-3 py-2 text-right font-medium">Trades</th>
-                {METHODS.map((m) => <th key={m} className="px-3 py-2 text-right font-medium">{lensTitle(m)}</th>)}
+                {cols.map((m) => <th key={m} className="px-3 py-2 text-right font-medium">{lensTitle(m, own)}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -203,9 +217,9 @@ export function GroupBy({ base, q, view, zone, groups, ran }: Where & { groups: 
                   <tr key={g.key} data-unlisted={f === null ? '' : undefined}>
                     <td className="px-3 py-2">{groupLabel(by, g.key)}</td>
                     <td className="px-3 py-2 text-right tabular-nums"><Cell href={to()}>{num(g.trades)}</Cell></td>
-                    {METHODS.map((m) => (
+                    {cols.map((m) => (
                       <td key={m} className="px-3 py-2 text-right tabular-nums">
-                        {ran.includes(m) ? <Cell href={to({ caught: [m] })}>{pct(g.caught[m] ?? 0, g.trades)}</Cell> : <span className="text-muted-foreground">did not run</span>}
+                        {ran.includes(m) ? <Cell href={to({ caught: [m] })}>{pct(g.caught[m] ?? 0, g.judged?.[m] ?? g.trades)}</Cell> : <span className="text-muted-foreground">{NOT_RUN}</span>}
                       </td>
                     ))}
                   </tr>
@@ -237,21 +251,29 @@ function span(s: number | null): string {
 }
 
 
-function Th({ sort, label, where, tone }: { sort: TradeSort; label: string; where: Where; tone?: Method }) {
+function Th({ sort, label, where, tone }: { sort: TradeSort; label: string; where: Where; tone?: LensKey }) {
   const { base, q, view } = where;
   const here = q.sort === sort;
   const dir = here ? (q.dir === 'asc' ? 'desc' : 'asc') : FIRST_ASC.includes(sort) ? 'asc' : 'desc';
   return (
     <SortHead href={tradesHref(base, { ...q, sort, dir }, { by: view.by })} dir={here ? (q.dir === 'asc' ? 'asc' : 'desc') : null}>
-      {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[LENSES[tone].tone])} /> : null}
+      {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[lensInfo(tone, where.own ?? {})?.tone ?? 'apart'])} /> : null}
       {label}
     </SortHead>
   );
 }
 
-/** One page of trades: a dot per lens that ran, and links from every name and number to what it opens. */
-export function TradesTable({ chainId, rows, ran, money, ...where }: Where & { chainId: number; rows: readonly TradeRow[]; ran: readonly Method[]; money: ReadonlySet<string> }) {
-  const { base, q, view, zone } = where;
+/**
+ * One page of trades: a dot per lens that ran, and links from every name and
+ * number to what it opens. `through` is, for each lens of yours, the block its
+ * run read (lensContext): a trade past it reads not judged yet in that lens's
+ * column, as a trade no analysis covered reads across them all.
+ */
+export function TradesTable({ chainId, rows, ran, through, money, ...where }: Where & {
+  chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
+}) {
+  const { base, q, view, zone, own = {} } = where;
+  const lenses = withOwn(ran);
   const only = (extra: Partial<TradeQuery>, title: string) => (
     <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
   );
@@ -264,7 +286,7 @@ export function TradesTable({ chainId, rows, ran, money, ...where }: Where & { c
         <thead className="text-xs text-muted-foreground">
           <tr>
             {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
-            {ran.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m)} where={where} tone={m} />)}
+            {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -290,15 +312,17 @@ export function TradesTable({ chainId, rows, ran, money, ...where }: Where & { c
                 <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{span(r.buyerAgeS)}</td>
                 <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`}</td>
                 {r.judged
-                  ? ran.map((m) => (
+                  ? lenses.map((m) => (
                     <td key={m} className="px-3 py-2">
-                      {r.lenses.includes(m)
-                        ? <i role="img" aria-label={`Flagged by ${LENSES[m].name}`} className={cn('inline-block size-2.5 rounded-full', DOT[LENSES[m].tone])} />
+                      {!judgedBy(r, m, through)
+                        ? <span title={`Newer than the block ${lensInfo(m, own)?.name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
+                        : r.lenses.includes(m)
+                        ? <i role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className={cn('inline-block size-2.5 rounded-full', DOT[lensInfo(m, own)?.tone ?? 'apart'])} />
                         : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
                     </td>
                   ))
                   // With no lens run there is no lens column to say it in.
-                  : ran.length > 0 ? <td colSpan={ran.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
+                  : lenses.length > 0 ? <td colSpan={lenses.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
               </tr>
             );
           })}

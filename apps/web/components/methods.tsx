@@ -1,24 +1,25 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import type { TradeQuery } from '@washtrace/detect/trades';
+import type { LensKey, TradeQuery } from '@washtrace/detect/trades';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
-import { LENSES, eth, pct, plural, num } from '@/lib/format';
-import { APART, APART_WHY, part, rangeEnds, type Range } from '@/lib/metrics';
+import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
+import { APART, part, rangeEnds, type Range } from '@/lib/metrics';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
-export const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
-const TEXT = { cycle: 'text-cycle', money: 'text-money', apart: 'text-muted-foreground' } as const;
+export const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
 
 /** A lens by its name, with its verdict hue; `href` makes the name open that lens's tab (leave it off inside a link). */
-export function LensName({ m, className, href }: { m: Method; className?: string; href?: string }) {
-  const name = LENSES[m].name;
+export function LensName({ m, className, href, own = {} }: { m: string; className?: string; href?: string; own?: Lenses }) {
+  const info = lensInfo(m, own);
+  if (info === null) return null;
+  const name = info.name;
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
-      <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[LENSES[m].tone])} />
+      <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[info.tone])} />
       {href === undefined ? <span className="font-medium text-foreground">{name}</span>
         : <Link href={href} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
     </span>
@@ -114,13 +115,17 @@ const FIGURE = 'font-medium text-foreground tabular-nums hover:underline';
 
 /**
  * The chosen lens in numbers, at the top of its panel: every figure opens the
- * list it counts. It lives outside the cards because each card is one link,
- * and a link cannot hold links. `loops` is the lens's own count, null for an
- * analysis saved before loops were counted; a lens that did not run has no
- * numbers, and its card says why.
+ * list it counts. It lives outside the tabs because each tab is one link, and
+ * a link cannot hold links. `loops` is the lens's own count, null for an
+ * analysis saved before loops were counted and for a lens of yours, which
+ * counts none; a lens that did not run has no numbers, and its panel says why.
+ * `atLeast`: a lens of yours whose share the run could not settle (money not
+ * final, or searches cut short), read as "at least" rather than "so far".
  */
-export function LensStats({ m, t, loops, base, notFinal }: {
-  m: Method; t: MethodTotals; loops: { loops: number; pairs: number } | null; base: string; notFinal: readonly Method[];
+export function LensStats({ m, t, loops, base, notFinal, own = {}, atLeast = false }: {
+  m: LensKey; t: MethodTotals; loops: { loops: number; pairs: number } | null; base: string; notFinal: readonly Method[];
+  /** Your lenses by key, for the name of one of them. */
+  own?: Lenses; atLeast?: boolean;
 }) {
   if (!t.available) return null;
   const s = part(t, 'sales'), o = part(t, 'owners');
@@ -128,10 +133,10 @@ export function LensStats({ m, t, loops, base, notFinal }: {
   const priciest = { sort: 'price', dir: 'desc' } as const;
   const flagged = (kind: 'tokens' | 'wallets') => `${base}/flagged?method=${m}&kind=${kind}`;
   return (
-    <div aria-label={`${LENSES[m].name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
+    <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>
-        <Link href={caught} className={cn('text-lg', FIGURE)}>{pct(s.part, s.whole)}</Link> of sales
-        {APART.includes(m) ? ' (not counted)' : ''}{notFinal.includes(m) ? ' so far' : ''}
+        {atLeast ? 'at least ' : null}<Link href={caught} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
+        {(APART as readonly string[]).includes(m) ? ' (not counted)' : ''}{(notFinal as readonly string[]).includes(m) ? ' so far' : ''}
         {' · '}<Link href={caught} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{num(t.sales)}</Link>
         {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
@@ -141,72 +146,6 @@ export function LensStats({ m, t, loops, base, notFinal }: {
         {loops ? <>{' · '}<Link href={flagged('tokens')} className={FIGURE}>{loops.pairs > 0 ? `${plural(loops.loops, 'loop')} and ${plural(loops.pairs, 'linked pair')}` : plural(loops.loops, 'loop')}</Link></> : null}
       </p>
       <p><Link href={tradesHref(base, { caught: [m], kind: 'all' })} className={FIGURE}>{pct(o.part, o.whole)}</Link> of every change of owner, sold or not</p>
-    </div>
-  );
-}
-
-const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground' } as const;
-const SEAM = { A: 'md:rounded-tl-none', AU: '', AC: 'md:rounded-tr-none' } as const;
-
-/**
- * One card per lens, and under them the panel of what the chosen lens flags.
- * The cards are tabs: the chosen one has no bottom edge and runs into the
- * panel, so what is listed is visibly that card's, with nothing between them.
- * A lens that could not run says why in grey.
- */
-export function LensCards({ totals, selected, href, notFinal, trail = false, funded = false, coming = false, silent = false, children }: {
-  totals: Record<Method, MethodTotals>; selected: Method; href: (m: Method) => string; notFinal: readonly Method[];
-  /** This collection loaded a money trail from stored data. */
-  trail?: boolean;
-  /** The next analysis has funding to run the money lenses on: a key, or this collection's trail with checked wallets. */
-  funded?: boolean;
-  /** A stored money trail with checked wallets is on its way (trailComing): the money lenses run on it once it has loaded. */
-  coming?: boolean;
-  /** No pass has reported (workerSilent): a trail on its way loads only once the worker reports again. */
-  silent?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <nav aria-label="Lens" className="grid gap-3 md:grid-cols-3">
-        {METHODS.map((m) => {
-          const t = totals[m];
-          const s = part(t, 'sales');
-          const on = m === selected;
-          return (
-            <Link key={m} href={href(m)} scroll={false} aria-current={on ? 'page' : undefined}
-              className={cn('group relative flex flex-col gap-3 rounded-lg border border-t-[3px] p-4 transition-colors',
-                on ? cn('bg-card', ACCENT[LENSES[m].tone], 'md:z-10 md:-mb-px md:rounded-b-none md:border-b-0 md:pb-7')
-                  : 'border-t-border bg-muted/50 hover:bg-card md:mb-3')}>
-              <div className="flex items-start justify-between gap-3">
-                <LensName m={m} />
-                <LensPicture m={m} className={on ? undefined : 'opacity-70 group-hover:opacity-100'} />
-              </div>
-              <p className="text-sm text-muted-foreground">{LENSES[m].says}</p>
-              {APART.includes(m) ? <p className="text-xs text-muted-foreground">Not in the range above: {APART_WHY}.</p> : null}
-              {t.available ? (
-                <div className="mt-auto">
-                  <p className="flex items-baseline gap-1.5">
-                    <span className={cn('text-2xl font-semibold tabular-nums', t.flaggedSales > 0 ? TEXT[LENSES[m].tone] : 'text-foreground')}>{pct(s.part, s.whole)}</span>
-                    <span className="text-sm text-muted-foreground">of sales</span>
-                    {notFinal.includes(m) ? <span className="text-xs text-muted-foreground">so far</span> : null}
-                  </p>
-                </div>
-              ) : (
-                <p className="mt-auto text-sm text-muted-foreground">
-                  {coming && !funded
-                    ? `Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it${silent ? ', once the worker reports again' : ''}.`
-                    : funded
-                    ? (trail ? 'Not run yet. The stored money trail is loaded, so it says who paid whom, and the next analysis runs this lens on it.' : 'Not run yet. A funding source is set, and the next analysis runs this lens.')
-                    : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and it needs a key: add an Etherscan key in Settings (<code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>).</>}
-                </p>
-              )}
-              {on ? null : <span className="text-xs text-muted-foreground group-hover:text-foreground">Show what it flags</span>}
-            </Link>
-          );
-        })}
-      </nav>
-      <div className={cn('mt-3 rounded-lg border bg-card p-4 md:mt-0', SEAM[selected])}>{children}</div>
     </div>
   );
 }
@@ -240,22 +179,26 @@ function sales(totals: Record<Method, MethodTotals>, m: Method): { part: number;
  * period they happened in. A lens that did not run in the latest analysis
  * is drawn as not run in every period, never as 0%.
  */
-export function History({ timeline, totals, notFinal, now, zone, base }: {
+export function History({ timeline, totals, notFinal, now, zone, base, own = [], ownLeft = [], ownNotRun = [] }: {
   timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; notFinal: Method[]; now: number; zone: string;
+  /** Your lenses to draw (the page picks at most three; `timeline` was asked for each) and those it left out, which the chart names. */
+  own?: { key: `L${number}`; name: string; atLeast: boolean; floorWhy?: string }[]; ownLeft?: { key: string; name: string }[]; ownNotRun?: { key: string; name: string; why: string }[];
   /** The collection's path: each period opens its trades under it. */
   base: string;
 }) {
   if (timeline.points.length === 0) return null;
   const points: TimePoint[] = timeline.points.map((q) => {
     const lens = (m: Method) => (totals[m].available ? { part: q.flaggedSales[m], whole: q.sales } : null);
-    return { at: q.at, lens: { A: lens('A'), AU: lens('AU'), AC: lens('AC') }, sales: q.sales, transfers: q.transfers };
+    const mine = Object.fromEntries(own.map((o) => [o.key, { part: q.flaggedSales[o.key] ?? 0, whole: q.judgedSales?.[o.key] ?? 0 }]));
+    return { at: q.at, lens: { A: lens('A'), AU: lens('AU'), AC: lens('AC'), ...mine }, sales: q.sales, transfers: q.transfers };
   });
   // A period is the span its bar covers: from its start to the next period's start, whether or not that one has trades. Instants, so they round-trip.
   const spans = timeline.points.map((q) => ({ fromMs: q.at, toMs: nextStart(q.at, timeline.bucket, zone) }));
   const periodHrefs = spans.map((r) => tradesHref(base, r));
   // A lens's share of a period opens what that lens caught in it; a lens that did not run has no share, so no link.
-  const lensHrefs = spans.map((r) => Object.fromEntries(METHODS.filter((m) => totals[m].available).map((m) => [m, tradesHref(base, { ...r, caught: [m] })])) as Partial<Record<Method, string>>);
-  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} />;
+  const linked = [...METHODS.filter((m) => totals[m].available), ...own.map((o) => o.key)] as LensKey[];
+  const lensHrefs = spans.map((r) => Object.fromEntries(linked.map((m) => [m, tradesHref(base, { ...r, caught: [m] })])) as Partial<Record<LensKey, string>>);
+  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} own={own} ownLeft={ownLeft} ownNotRun={ownNotRun} />;
 }
 
 /** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */

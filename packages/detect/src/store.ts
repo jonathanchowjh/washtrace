@@ -1,10 +1,12 @@
 import pg from 'pg';
 import { ZERO } from './graph.js';
-import { traders } from './marketplaces.js';
+import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
+import { MOVE_KIND, Moves } from './moves.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
-import { findOf, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
-import { CAUGHT_COLUMNS, CAUGHT_FROM, CAUGHT_WHERE, COUNTED_JOIN, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
+import { findOf, isOwnKey, NO_FILTER, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
+import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED_JOIN, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
+import { checkRule, type EdgeKind, type LensRule } from './lens-rule.js';
 import type { Rules } from './methods.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
 import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type Transfer, type Witness } from './types.js';
@@ -13,6 +15,8 @@ export type { FlaggedTransfer, FlowDir, ListOpts, PartnerSort, TokenLine, TokenS
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
 const LOCK_NS = 0x77617368; // "wash"
+/** How often a caller that waits for a lock (the migrations) asks for it again. */
+const LOCK_POLL_MS = 500;
 
 /**
  * Every advisory-lock key `locked()` is given, in one table so a new one cannot
@@ -45,6 +49,32 @@ export function retryMs(failures: number): number {
   return Math.min(60 * 60_000, 5 * 60_000 * 2 ** (failures - 1));
 }
 
+/**
+ * A lens run that failed this many times in a row is not tried again until
+ * someone asks (Run here, or an edit): a run that ran the worker out of
+ * memory would do it again on every try (Ruling DD).
+ */
+const LENS_TRIES = 3;
+/** The SET of a failed lens run, its error `$3`: after LENS_TRIES no retry_at, so dueLensRun never picks it. */
+const LENS_FAILED = `status = 'failed', error = $3, progress = NULL, failures = failures + 1,
+  retry_at = CASE WHEN failures + 1 >= ${LENS_TRIES} THEN NULL ELSE ${backoffSql('failures')} END`;
+
+/**
+ * The most money edges a lens run holds. Task 11 measured Terraforms' 37M
+ * money edges at 1,653 MB of the worker's 1.9 GB budget, inside the lens
+ * thread; 40M is that with the margin it left. Past it the run fails, saying
+ * so, before it can run the worker out of memory (Ruling DD). BAYC-sized
+ * collections are not measured.
+ */
+export const MONEY_EDGE_CEILING = 40_000_000;
+
+/**
+ * A collection is not analysed again sooner than this after its last
+ * analysis (see nextAnalysis), and a lens's done run is not run again for a
+ * newer analysis sooner than this after it finished (see dueLensRun).
+ */
+export const ANALYZE_GAP_MS = 5 * 60_000;
+
 /** Postgres's code for a row whose parent is gone. */
 const FOREIGN_KEY_VIOLATION = '23503';
 /** Postgres's code for a statement it ended to break a deadlock. */
@@ -54,6 +84,8 @@ const TRAIL_LOCK_TIMEOUT = '5min';
 /** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
 const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
+const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
+const toOwnFlag = (r: any): OwnFlag => ({ lensId: r.lens_id, collectionId: r.collection_id, txHash: r.tx_hash, logIndex: r.log_index, path: r.path, wallets: r.wallets });
 /** Rows a cursor fetches at a time when stored data is cut. */
 const CURSOR_PAGE = 10_000;
 /** A load of stored data looks up from its work at most this often: Terraforms is a thousand batches. */
@@ -161,6 +193,9 @@ export interface Configure {
   rules?: { [K in keyof Rules]?: number | null };
 }
 
+/** Counts for each pair of lenses, row then column. */
+export type CompareCounts = Partial<Record<LensKey, Partial<Record<LensKey, number>>>>;
+
 export type Bucket = 'hour' | 'day' | 'week' | 'month';
 
 /** One bucket of a collection's history. `at` is the bucket's start, in ms. */
@@ -169,10 +204,14 @@ export interface TimelinePoint {
   transfers: number;
   sales: number;
   /** Sales each method flags. A method that did not run flags none, so read it with the analysis's `available`. */
-  flaggedSales: Record<Method, number>;
+  flaggedSales: Record<Method, number> & Partial<Record<`L${number}`, number>>;
+  /** Present only when lenses of yours were asked for: the sales each has judged here (its run read through their block), the denominator of its share. */
+  judgedSales?: Partial<Record<`L${number}`, number>>;
 }
 
 export interface AnalysisRow {
+  /** Which analysis: a lens run's `analysisId` names the one it read, so a run behind the latest can say so (Ruling FF). */
+  id: number;
   ranAt: number;
   tookMs: number;
   throughBlock: number | null;
@@ -274,6 +313,62 @@ export interface SearchHits {
 /** A collection waiting for analysis, as `Store.stale` reads it. */
 export type StaleRow = Awaited<ReturnType<Store['stale']>>[number];
 
+/** The built-in lenses' names, which no lens of yours may take (the web's LENSES holds the same three for display). */
+export const BUILT_IN_NAMES = ['Round trips', 'Money loops back', 'Linked wallets'];
+
+export interface Lens { id: number; key: `L${number}`; name: string; rule: LensRule; version: number; createdAt: number; updatedAt: number }
+export type LensRunStatus = 'queued' | 'running' | 'done' | 'failed';
+export interface LensTotals extends MethodTotals { truncated: number; untimed: number }
+export interface LensRun {
+  lensId: number; collectionId: number; status: LensRunStatus; progress: number | null; lensVersion: number;
+  analysisId: number | null; throughBlock: number | null; totals: LensTotals | null; error: string | null;
+  retryAt: number | null; finishedAt: number | null; tookMs: number | null;
+}
+export interface LoopEdge { from: string; to: string; kind: EdgeKind | 'funds'; tx: string | null; time: number | null; amountWei: string | null; tokenId: string | null }
+export interface LensFlag { txHash: string; logIndex: number; path: LoopEdge[]; wallets: string[] }
+/** A stored flag of a lens of yours, with the lens and the collection it belongs to. */
+export type OwnFlag = LensFlag & { lensId: number; collectionId: number };
+
+/** The channel `requestPreview` notifies, so a listening worker starts the preview at once rather than next lens pass (P5). */
+export const PREVIEWS_CHANNEL = 'washtrace_previews';
+/** How many sales a preview judges (P4): the spec's "2,000 random sales". */
+export const PREVIEW_SAMPLE = 2_000;
+/** A preview is kept this long from when it was asked for, then swept: the editor that asked has long stopped polling. */
+export const PREVIEW_KEEP_MS = 60 * 60_000;
+
+/**
+ * What a preview found. `sampled` is the drawn sample (all the sales when
+ * the collection has `ofSales` under PREVIEW_SAMPLE); `judged` the part of
+ * it the lens judged, and the lens caught `caught` of those. `hops` is the
+ * sampled sales with a hop, which Round trips judges all of (it has no
+ * window), so `roundTrips.caught` is of these; `roundTrips` is null when it
+ * did not run on the latest analysis. `atLeast` when a search was cut short:
+ * an untimed sale is out of `judged`, so it is no floor here, unlike a run's
+ * share (`untimed` still counts them). `topMarket` is the VENUES name of the
+ * market most of the caught were sold on, null with none caught.
+ */
+export interface PreviewResult {
+  sampled: number; judged: number; hops: number; ofSales: number; caught: number; atLeast: boolean;
+  roundTrips: { caught: number } | null;
+  topMarket: { name: string; caught: number } | null;
+  truncated: number; untimed: number; tookMs: number;
+}
+/** A preview as the editor polls it: `result` once done, `error` (scrubbed) once failed. */
+export interface Preview {
+  id: number; collectionId: number; rule: LensRule; status: LensRunStatus; progress: number | null;
+  result: PreviewResult | null; error: string | null; requestedAt: number; finishedAt: number | null;
+}
+
+/** What a lens run reads: the transfers, and the money edges its rule may follow, held as numbers. */
+export interface LensInput {
+  transfers: Transfer[]; through: number | null; moves: Moves;
+  contracts: ReadonlySet<string>; custodians: ReadonlySet<string>; money: ReadonlySet<string>;
+  /** Wallets with more history than the funding source would page through, as analysisInput reads them: never a middle of a money lens. Empty with no money row. */
+  truncated: ReadonlySet<string>;
+  /** The collection's transfer transaction hashes, each once: the engine tells a hop's transaction by its index here. */
+  tradeTxs: string[];
+}
+
 /**
  * Every read and write of the `washtrace` schema. A class because every one
  * of them needs the pool, and nothing else.
@@ -284,6 +379,17 @@ export class Store {
   /** How many payments `analysisInput` fetches at a time. A field so a test can make it small. */
   paymentBatch = 20_000;
 
+  /**
+   * How many money edges `moveTxs` asks about in one query. Each is one
+   * index probe, so a query's time grows with it; at 1,000 a cold batch is a
+   * few seconds of random reads at most, and the round trip is nothing
+   * beside it. A field so a test can make it small.
+   */
+  moveTxBatch = 1_000;
+
+  /** MONEY_EDGE_CEILING; a field so a test can make it small. */
+  moneyEdgeCeiling = MONEY_EDGE_CEILING;
+
   static connect(url: string): Store {
     // Keep-alive probes find a connection that died without a word (a NAT's idle timeout, a host gone), so a
     // query on it errors instead of waiting forever. Probed after 30 seconds idle, not the OS's two hours.
@@ -293,21 +399,32 @@ export class Store {
     return new Store(pool);
   }
 
-  /** Applies every migration the store lacks, under a lock so replicas starting together migrate once. */
+  /**
+   * Applies every migration the store lacks, under a lock so replicas starting
+   * together migrate once. A string migration commits with its version; an
+   * `Outside` one runs statement by statement, then records its version.
+   */
   async migrate(): Promise<number> {
     return this.locked(LOCKS.migrate, true, async (c) => {
       await c.query('CREATE SCHEMA IF NOT EXISTS washtrace');
       await c.query('CREATE TABLE IF NOT EXISTS washtrace.schema_version (version int NOT NULL, singleton bool NOT NULL DEFAULT true UNIQUE CHECK (singleton))');
       const { rows } = await c.query<{ version: number }>('SELECT version FROM washtrace.schema_version');
       const at = rows[0]?.version ?? 0;
+      const record = (version: number) => c.query(
+        'INSERT INTO washtrace.schema_version (version) VALUES ($1) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version',
+        [version],
+      );
       for (let v = at; v < MIGRATIONS.length; v++) {
+        const m = MIGRATIONS[v]!;
+        if (typeof m !== 'string') {
+          for (const statement of m.outside) await c.query(statement);
+          await record(v + 1);
+          continue;
+        }
         await c.query('BEGIN');
         try {
-          await c.query(MIGRATIONS[v]!);
-          await c.query(
-            'INSERT INTO washtrace.schema_version (version) VALUES ($1) ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version',
-            [v + 1],
-          );
+          await c.query(m);
+          await record(v + 1);
           await c.query('COMMIT');
         } catch (err) {
           await c.query('ROLLBACK');
@@ -331,15 +448,19 @@ export class Store {
    * Run `fn` holding job `job`'s advisory lock, or return `skipped` at once
    * when another replica holds it. This is what lets the same image run as
    * many API replicas while each worker pass runs in exactly one of them.
+   * With `wait`, it is asked for again every LOCK_POLL_MS until it is got,
+   * never waited on in one statement: a session blocked in pg_advisory_lock
+   * holds a snapshot, and CREATE INDEX CONCURRENTLY (migration #28) waits for
+   * every older snapshot to go, so the waiter and the build would deadlock.
    */
   async locked<T>(job: number, wait: boolean, fn: (c: pg.PoolClient) => Promise<T>): Promise<T | 'skipped'> {
     const c = await this.pool.connect();
     try {
+      const got = async () => (await c.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1, $2) AS ok', [LOCK_NS, job])).rows[0]!.ok;
       if (wait) {
-        await c.query('SELECT pg_advisory_lock($1, $2)', [LOCK_NS, job]);
-      } else {
-        const { rows } = await c.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1, $2) AS ok', [LOCK_NS, job]);
-        if (!rows[0]!.ok) return 'skipped';
+        while (!(await got())) await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+      } else if (!(await got())) {
+        return 'skipped';
       }
       try {
         return await fn(c);
@@ -1135,6 +1256,127 @@ export class Store {
   }
 
   /**
+   * What a lens run reads for one collection: its transfers up to `through`,
+   * and the money edges its rule has switched on. The same wallets and reach
+   * as `analysisInput`, but every edge is kept, with its kind, amount and
+   * time, not one per pair: a lens judges those. So are payments inside the
+   * collection's own sales, which the built-ins drop: the engine drops them
+   * itself, from `Moves.sale`, as an NFT's price is neither a way back nor
+   * funding. Each enabled kind is filtered by its minimum in SQL, so a
+   * rule with a high floor never reads the dust, and one with no money row
+   * reads no flows at all. Money past `moneyEdgeCeiling` edges throws, and the
+   * run fails saying how many there are.
+   */
+  async lensInput(id: number, chainId: number, rule: LensRule, through: number | null): Promise<LensInput> {
+    const transfers = (await this.pool.query(
+      `${SELECT_TRANSFER} ${TRANSFERS} WHERE t.collection_id = $1 AND ($2::bigint IS NULL OR t.block_number <= $2::bigint)`, [id, through],
+    )).rows.map(toTransfer);
+    const tradeTxs: string[] = [];
+    const tradeAt = new Map<string, number>();
+    for (const t of transfers) if (!tradeAt.has(t.txHash)) tradeAt.set(t.txHash, tradeTxs.push(t.txHash) - 1);
+    const money = moneyFor(chainId);
+    const moves = new Moves();
+    let truncated = new Set<string>();
+    const params: unknown[] = [chainId];
+    const bind = binder(params);
+    const kinds: string[] = [];
+    const floor = (kind: 'eth' | 'internal' | 'weth') => `${bind(rule.edges[kind].minWei ?? '0')}::numeric`;
+    if (rule.edges.eth.use) kinds.push(`(f.kind = 'native' AND f.value_wei >= ${floor('eth')})`);
+    if (rule.edges.internal.use) kinds.push(`(f.kind = 'internal' AND f.value_wei >= ${floor('internal')})`);
+    if (rule.edges.weth.use) kinds.push(`(f.kind = 'token' AND f.token = ANY(${bind([...money].filter((m) => m !== ''))}::text[]) AND f.value_wei >= ${floor('weth')})`);
+    if (kinds.length > 0) {
+      // Arrays, not subqueries, for the reason analysisInput gives.
+      const wallets = [...new Set(transfers.flatMap((t) => [t.from, t.to]))];
+      const followed = (await this.pool.query<{ address: string }>(
+        `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
+        [chainId],
+      )).rows.map((r) => r.address);
+      const w = bind(wallets), fw = bind(followed), zero = bind(ZERO);
+      const rows = this.stream(
+        `SELECT f.from_address, f.to_address, f.tx_hash,
+                CASE f.kind WHEN 'native' THEN ${MOVE_KIND.eth} WHEN 'internal' THEN ${MOVE_KIND.internal} ELSE ${MOVE_KIND.weth} END AS k,
+                extract(epoch FROM f.block_time)::int AS t, f.block_number::int AS b, (f.value_wei / 1e18)::float8 AS eth
+         FROM washtrace.flows f
+         WHERE f.chain_id = $1 AND (f.from_address = ANY(${w}::text[]) OR f.to_address = ANY(${w}::text[])
+           -- Followed wallets' payments onward, as analysisInput reads them.
+           OR f.from_address = ANY(${fw}::text[]))
+           AND f.value_wei > 0 AND f.from_address <> f.to_address AND f.from_address <> ${zero} AND f.to_address <> ${zero}
+           AND (${kinds.join(' OR ')})
+         -- By time, as Moves holds them, so it need not sort them (a sort of Terraforms' 37M edges
+         -- held them all twice over); then the flows key, whole: Moves keeps equal-time edges in the
+         -- order read, and a capped search meets them in that order, so the same data must be read
+         -- the same way every run.
+         ORDER BY t, f.kind, f.tx_hash, f.from_address, f.to_address, f.token, f.value_wei`,
+        params, (r) => r, this.paymentBatch,
+      );
+      // The hash is looked up and dropped: no string per edge. Past the ceiling an edge is only counted, so the
+      // run can say how big the money is without holding it.
+      let n = 0;
+      for await (const r of rows) {
+        if (++n <= this.moneyEdgeCeiling) moves.add(r.from_address, r.to_address, r.k, r.t, r.b, r.eth, tradeAt.has(r.tx_hash));
+      }
+      if (n > this.moneyEdgeCeiling) throw new Error(`This collection's money is too big for a lens run yet (${n.toLocaleString('en-US')} money edges).`);
+      // The same wallets analysisInput asks about: few, the busiest there are.
+      truncated = new Set((await this.pool.query<{ address: string }>(
+        `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND truncated AND (address = ANY($2::text[]) OR depth > 0)`,
+        [chainId, wallets],
+      )).rows.map((r) => r.address));
+    }
+    moves.seal();
+    return { transfers, through, moves, contracts: contractsFor(chainId), custodians: new Set(CUSTODIANS), money, truncated, tradeTxs };
+  }
+
+  /**
+   * The transaction hash and exact amount of each of a found loop's money
+   * edges, in the order given, or null where none matches: the engine holds
+   * no hash per edge and the amount only as a float, so only the few that
+   * make a flag are looked up. An edge is found by its ends, kind and block,
+   * among only the rows `lensInput` could have loaded for the run's rule
+   * (Ruling LL): of some value, at least its kind's floor, and in no
+   * transaction that moves one of the collection's tokens through the block
+   * the run read. A flag's evidence is then a payment the lens admitted, not
+   * dust or a sale's own leg that shares the pair and block. Of those, the
+   * smallest hash answers when several match, with its own amount.
+   *
+   * Asked `moveTxBatch` edges at a time, each a probe of `flows_moves_idx`
+   * that reads only its own few rows: joined on its sender alone, one busy
+   * sender's whole history was read per edge, and 5,000 edges took 92 s.
+   */
+  async moveTxs(
+    run: { chainId: number; collectionId: number; rule: LensRule; through: number | null },
+    edges: { from: string; to: string; kind: EdgeKind; block: number }[],
+  ): Promise<({ tx: string; amountWei: string } | null)[]> {
+    const out: ({ tx: string; amountWei: string } | null)[] = edges.map(() => null);
+    const asked = edges.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'eth' || e.kind === 'internal' || e.kind === 'weth');
+    const money = [...moneyFor(run.chainId)].filter((m) => m !== '');
+    for (let at = 0; at < asked.length; at += this.moveTxBatch) {
+      const batch = asked.slice(at, at + this.moveTxBatch);
+      const { rows } = await this.pool.query<{ i: string; tx: string; wei: string }>(
+        // Its ends are a Moves edge's, which are never the zero address or one wallet twice; said here too, as lensInput reads.
+        `SELECT u.i, m.tx, m.wei
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::bigint[], $6::numeric[]) WITH ORDINALITY AS u(src, dst, k, b, floor, i)
+         CROSS JOIN LATERAL (
+           SELECT f.tx_hash AS tx, f.value_wei::text AS wei FROM washtrace.flows f
+           WHERE f.chain_id = $1 AND f.from_address = u.src AND f.to_address = u.dst AND f.block_number = u.b AND f.kind = u.k
+             AND (u.k <> 'token' OR f.token = ANY($7::text[]))
+             AND f.value_wei > 0 AND f.value_wei >= u.floor
+             AND f.from_address <> f.to_address AND f.from_address <> $8 AND f.to_address <> $8
+             AND NOT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $9 AND t.tx_hash = f.tx_hash
+               AND ($10::bigint IS NULL OR t.block_number <= $10::bigint))
+           ORDER BY f.tx_hash, f.value_wei LIMIT 1) m`,
+        [
+          run.chainId, batch.map(({ e }) => e.from), batch.map(({ e }) => e.to),
+          batch.map(({ e }) => (e.kind === 'eth' ? 'native' : e.kind === 'internal' ? 'internal' : 'token')), batch.map(({ e }) => e.block),
+          batch.map(({ e }) => run.rule.edges[e.kind].minWei ?? '0'),
+          money, ZERO, run.collectionId, run.through,
+        ],
+      );
+      for (const r of rows) out[batch[Number(r.i) - 1]!.i] = { tx: r.tx, amountWei: r.wei };
+    }
+    return out;
+  }
+
+  /**
    * Record an analysis and replace the collection's flags and trade facts with its own, and
    * forget any analysis that failed before it. A collection removed while
    * its analysis ran has nowhere to keep it, so the analysis is dropped
@@ -1256,7 +1498,7 @@ export class Store {
       `SELECT *, extract(epoch FROM ran_at)::float8 AS ran FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT $2`,
       [id, limit],
     );
-    return rows.map(toAnalysis).reverse();
+    return rows.map((r) => toAnalysis(r, r.id)).reverse();
   }
 
   // ---- stored data --------------------------------------------------------
@@ -1391,9 +1633,11 @@ export class Store {
    * and keeps the tokens whose number starts with it; anything else matches
    * no token.
    */
-  async lensTokens(id: number, method: Method, o: ListOpts<TokenSort>, ctx: TradeContext): Promise<{ rows: TokenLine[]; total: number }> {
+  async lensTokens(id: number, method: LensKey, o: ListOpts<TokenSort>, ctx: TradeContext): Promise<{ rows: TokenLine[]; total: number }> {
     if (!ctx.ran.includes(method)) return { rows: [], total: 0 };
-    const params: unknown[] = [id, method, [...ctx.money]];
+    const params: unknown[] = [id];
+    const src = caughtOf(method, params);
+    params.push([...ctx.money]);
     let narrow = '';
     if (o.find !== null) {
       const f = findOf(o.find);
@@ -1401,12 +1645,14 @@ export class Store {
       // Digits only, so the pattern holds no wildcard but its own.
       narrow = `AND t.token_id::text LIKE ${binder(params)(`${f.tokenId}%`)}`;
     }
-    const caught = `SELECT t.token_id, ${CAUGHT_COLUMNS} ${CAUGHT_FROM} WHERE ${CAUGHT_WHERE} ${narrow} GROUP BY t.token_id`;
+    const caught = `SELECT t.token_id, ${caughtColumns(method)} ${src.from} WHERE ${src.where} ${narrow} GROUP BY t.token_id`;
+    const caughtArgs = params.length;
+    const judged = judgedOnly(method, ctx, params);
     const counts = (rows: string | null) => `SELECT t.token_id, count(*)::int AS trades, extract(epoch FROM max(t.block_time))::float8 * 1000 AS at
       FROM washtrace.transfers t ${COUNTED_JOIN}
-      WHERE t.collection_id = $1 ${rows === null ? '' : `AND t.token_id IN (SELECT token_id FROM ${rows})`} GROUP BY t.token_id`;
+      WHERE t.collection_id = $1 ${rows === null ? '' : `AND t.token_id IN (SELECT token_id FROM ${rows})`}${judged} GROUP BY t.token_id`;
     const order = `${LIST_ORDER[o.sort === 'newest' ? 'at' : o.sort]}, c.token_id`;
-    const rows = await this.lensPage(params, 'token_id', caught, counts, o.sort === 'share' || o.sort === 'newest', order, null, o);
+    const rows = await this.lensPage(params, caughtArgs, 'token_id', caught, counts, o.sort === 'share' || o.sort === 'newest', order, null, o, isOwnKey(method));
     return {
       rows: rows.rows.map((r) => ({
         tokenId: r.token_id, caught: r.caught, trades: r.trades, volumeWei: r.volume, lastAt: r.at,
@@ -1420,9 +1666,11 @@ export class Store {
    * The wallets `method` caught trades of, as lensTokens reads tokens. A Find
    * takes a whole address or the start of one; anything else matches no wallet.
    */
-  async lensWallets(id: number, method: Method, o: ListOpts<WalletSort>, ctx: TradeContext): Promise<{ rows: WalletLine[]; total: number }> {
+  async lensWallets(id: number, method: LensKey, o: ListOpts<WalletSort>, ctx: TradeContext): Promise<{ rows: WalletLine[]; total: number }> {
     if (!ctx.ran.includes(method)) return { rows: [], total: 0 };
-    const params: unknown[] = [id, method, [...ctx.money]];
+    const params: unknown[] = [id];
+    const src = caughtOf(method, params);
+    params.push([...ctx.money]);
     let narrow = '';
     if (o.find !== null) {
       const f = findOf(o.find);
@@ -1431,20 +1679,22 @@ export class Store {
       else if (f.kind === 'prefix') narrow = `AND s.address LIKE ${binder(params)(`${f.prefix}%`)}`;
       else return { rows: [], total: 0 };
     }
-    const caught = `SELECT s.address, ${CAUGHT_COLUMNS} ${CAUGHT_FROM} ${SIDES} WHERE ${CAUGHT_WHERE} ${narrow} GROUP BY s.address`;
+    const caught = `SELECT s.address, ${caughtColumns(method)} ${src.from} ${SIDES} WHERE ${src.where} ${narrow} GROUP BY s.address`;
+    const caughtArgs = params.length;
+    const judged = judgedOnly(method, ctx, params);
     // A page's wallets each side by its own index; every wallet at once in one pass over the collection.
     const counts = (rows: string | null) => rows === null
       ? `SELECT s.address, count(*)::int AS trades, extract(epoch FROM min(t.block_time))::float8 * 1000 AS at
-         FROM washtrace.transfers t ${COUNTED_JOIN} ${SIDES} WHERE t.collection_id = $1 GROUP BY s.address`
+         FROM washtrace.transfers t ${COUNTED_JOIN} ${SIDES} WHERE t.collection_id = $1${judged} GROUP BY s.address`
       : `SELECT t.address, count(*)::int AS trades, extract(epoch FROM min(t.block_time))::float8 * 1000 AS at FROM (
            SELECT c.address, t.collection_id, t.tx_hash, t.log_index, t.block_time FROM ${rows} c
-           JOIN washtrace.transfers t ON t.collection_id = $1 AND t.from_address = c.address
+           JOIN washtrace.transfers t ON t.collection_id = $1 AND t.from_address = c.address${judged}
            UNION ALL
            SELECT c.address, t.collection_id, t.tx_hash, t.log_index, t.block_time FROM ${rows} c
-           JOIN washtrace.transfers t ON t.collection_id = $1 AND t.to_address = c.address AND t.from_address <> c.address) t
+           JOIN washtrace.transfers t ON t.collection_id = $1 AND t.to_address = c.address AND t.from_address <> c.address${judged}) t
          ${COUNTED_JOIN} GROUP BY t.address`;
     const order = `${LIST_ORDER[o.sort === 'first' ? 'at' : o.sort]}, c.address`;
-    const rows = await this.lensPage(params, 'address', caught, counts, o.sort === 'share' || o.sort === 'first', order, 'c.address', o);
+    const rows = await this.lensPage(params, caughtArgs, 'address', caught, counts, o.sort === 'share' || o.sort === 'first', order, 'c.address', o, isOwnKey(method));
     return {
       rows: rows.rows.map((r) => ({
         address: r.address, caught: r.caught, trades: r.trades, volumeWei: r.volume, firstAt: r.at, loops: r.loops, pairs: r.pairs, partners: r.wallets,
@@ -1462,12 +1712,15 @@ export class Store {
    * page's rows are read, after. So ten rows of a collection do not read all
    * of its trades. The loops are always read after. `self` is left out of a
    * wallet's own partners. A page past the last still counts the list, and a
-   * limit of 0 reads the count alone.
+   * limit of 0 reads the count alone. A saved lens (`own`) has no witnesses:
+   * its loops are counted from its stored paths (ownLoopsOf). `caught` binds the first
+   * `caughtArgs` of `params`, and the count sends only those: Postgres refuses
+   * a value its text never names, as a lens's block bound only for `counts`.
    */
   private async lensPage(
-    params: unknown[], key: string, caught: string, counts: (rows: string | null) => string, early: boolean, order: string, self: string | null, o: ListOpts<string>,
+    params: unknown[], caughtArgs: number, key: string, caught: string, counts: (rows: string | null) => string, early: boolean, order: string, self: string | null, o: ListOpts<string>, own: boolean,
   ): Promise<{ rows: any[]; total: number }> {
-    const count = async () => (await this.withoutJit(`WITH caught AS (${caught}) SELECT count(*)::int AS total FROM caught`, params))[0].total as number;
+    const count = async () => (await this.withoutJit(`WITH caught AS (${caught}) SELECT count(*)::int AS total FROM caught`, params.slice(0, caughtArgs)))[0].total as number;
     if (o.limit === 0) return { rows: [], total: await count() };
     const ranked = `ranked AS (SELECT c.*, count(*) OVER ()::int AS total
       FROM ${early ? `(SELECT c.*, n.trades, n.at FROM caught c JOIN counts n USING (${key}))` : 'caught'} c
@@ -1477,7 +1730,7 @@ export class Store {
     const rows = await this.withoutJit(
       `WITH ${ctes.join(', ')}
        SELECT c.${key}::text AS ${key}, c.caught, c.volume::text AS volume, c.total, ${n}.trades, ${n}.at, s.*
-       FROM ranked c ${early ? '' : `JOIN counts n USING (${key})`} ${loopsOf(self)} ORDER BY ${order}`,
+       FROM ranked c ${early ? '' : `JOIN counts n USING (${key})`} ${own ? ownLoopsOf(key, self) : loopsOf(self)} ORDER BY ${order}`,
       [...params, o.limit, o.offset],
     );
     if (rows.length > 0 || o.offset === 0) return { rows, total: rows[0]?.total ?? 0 };
@@ -1515,9 +1768,11 @@ export class Store {
    * with a marketplace fill; the analysis also drops custody round trips,
    * so a period's share can sit a little under the headline's. A transfer
    * whose block time the RPC did not return is left out, and counted in
-   * `untimed` so the gap is said rather than hidden.
+   * `untimed` so the gap is said rather than hidden. A lens of yours in `own`
+   * is counted from its own flags, and a sale past its `through` block is not
+   * counted: its run has not judged it (Ruling FF).
    */
-  async timeline(id: number, zone = 'UTC'): Promise<{ bucket: Bucket; untimed: number; readThrough: number | null; points: TimelinePoint[] }> {
+  async timeline(id: number, zone = 'UTC', own: readonly { lensId: number; through: number | null }[] = []): Promise<{ bucket: Bucket; untimed: number; readThrough: number | null; points: TimelinePoint[] }> {
     const span = await this.pool.query(
       `SELECT extract(epoch FROM max(block_time) - min(block_time))::float8 AS seconds, extract(epoch FROM max(block_time))::float8 * 1000 AS last,
               count(*) FILTER (WHERE block_time IS NULL)::int AS untimed
@@ -1527,6 +1782,19 @@ export class Store {
     const seconds: number = span.rows[0]?.seconds ?? 0;
     const day = 86_400;
     const bucket: Bucket = seconds > 730 * day ? 'month' : seconds > 120 * day ? 'week' : seconds > 4 * day ? 'day' : 'hour';
+    const params: unknown[] = [id, bucket, zone];
+    const mine = own.map((l) => {
+      params.push(l.lensId);
+      const flagged = `EXISTS (SELECT 1 FROM washtrace.lens_flags lf WHERE lf.collection_id = $1 AND lf.lens_id = $${params.length} AND lf.tx_hash = t.tx_hash AND lf.log_index = t.log_index)`;
+      let bound = '';
+      if (l.through !== null) {
+        params.push(l.through);
+        bound = ` AND t.block_number <= $${params.length}::bigint`;
+      }
+      return `,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND ${flagged}${bound})::int AS l${l.lensId},
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL${bound})::int AS j${l.lensId}`;
+    }).join('');
     const { rows } = await this.pool.query(
       `WITH f AS (
          SELECT tx_hash, log_index, bool_or(method = 'A') AS a, bool_or(method = 'AU') AS au, bool_or(method = 'AC') AS ac
@@ -1535,18 +1803,22 @@ export class Store {
               count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
               count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a,
               count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au,
-              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac${mine}
        FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index
        WHERE t.collection_id = $1 AND t.block_time IS NOT NULL
        GROUP BY 1 ORDER BY 1`,
-      [id, bucket, zone],
+      params,
     );
     return {
       bucket,
       untimed: span.rows[0]?.untimed ?? 0,
       // The newest trade read. Past it the chain may be unread or merely quiet; the caller knows which.
       readThrough: span.rows[0]?.last ?? null,
-      points: rows.map((r) => ({ at: r.at, transfers: r.transfers, sales: r.sales, flaggedSales: { A: r.a, AU: r.au, AC: r.ac } })),
+      points: rows.map((r) => ({
+        at: r.at, transfers: r.transfers, sales: r.sales,
+        flaggedSales: { A: r.a, AU: r.au, AC: r.ac, ...Object.fromEntries(own.map((l) => [`L${l.lensId}`, r[`l${l.lensId}`] as number])) },
+        ...(own.length > 0 ? { judgedSales: Object.fromEntries(own.map((l) => [`L${l.lensId}`, r[`j${l.lensId}`] as number])) } : {}),
+      })),
     };
   }
 
@@ -1654,6 +1926,36 @@ export class Store {
     return rows.map(toFlagged);
   }
 
+  /**
+   * The stored paths of the lenses `lensIds` on a token, one per flagged
+   * transfer, in chain order. The caller keeps the lenses that ran.
+   */
+  async lensFlagsOfToken(id: number, tokenId: string, lensIds: readonly number[]): Promise<OwnFlag[]> {
+    if (lensIds.length === 0) return [];
+    const { rows } = await this.pool.query(
+      `${OWN_FLAG} FROM washtrace.lens_flags f
+       JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
+       WHERE f.collection_id = $1 AND t.token_id = $2::numeric AND f.lens_id = ANY($3::int[])
+       ORDER BY t.block_number, t.log_index, f.lens_id`,
+      [id, tokenId, [...lensIds]],
+    );
+    return rows.map(toOwnFlag);
+  }
+
+  /**
+   * Every lens's stored paths for a transaction, on every watched collection
+   * it moved tokens of. The caller keeps each collection's lenses that ran.
+   */
+  async lensFlagsOfTx(chainId: number, tx: string): Promise<OwnFlag[]> {
+    const { rows } = await this.pool.query(
+      `${OWN_FLAG} FROM washtrace.lens_flags f
+       JOIN washtrace.collections c ON c.id = f.collection_id
+       WHERE c.chain_id = $1 AND f.tx_hash = $2 ORDER BY f.collection_id, f.log_index, f.lens_id`,
+      [chainId, tx],
+    );
+    return rows.map(toOwnFlag);
+  }
+
   /** A page of a collection's trades, as `q` asks and in its order. */
   async trades(id: number, q: TradeQuery, ctx: TradeContext, limit: number, offset: number): Promise<TradeRow[]> {
     const params: unknown[] = [];
@@ -1675,6 +1977,32 @@ export class Store {
   }
 
   /**
+   * Compare's counts over the sales of `ctx.ran`'s lenses. `both[r][c]` is the
+   * sales r and c both caught (the diagonal is r's total); `not[r][c]` is the
+   * sales r caught that c judged and did not, which differs from `both[r][r] -
+   * both[r][c]` when c's run is behind (Ruling FF). Built on `tradeWhere` and
+   * the Trades list's `lenses` column, so each is exactly `tradeCount` of the
+   * query its link opens.
+   */
+  async compare(id: number, ctx: TradeContext): Promise<{ both: CompareCounts; not: CompareCounts }> {
+    const params: unknown[] = [];
+    const lenses = lensesColumn(ctx, params);
+    const judged = judgedColumn(ctx, params);
+    const where = tradeWhere(id, NO_FILTER, ctx, params);
+    const { rows } = await this.pool.query(
+      `WITH s AS (SELECT ${lenses} AS lenses, ${judged} AS judged ${TRADES_FROM} WHERE ${where})
+       SELECT 'both' AS kind, a, b, count(*)::int AS n FROM s, unnest(s.lenses) a, unnest(s.lenses) b GROUP BY a, b
+       UNION ALL
+       SELECT 'not', a, b, count(*)::int FROM s, unnest(s.lenses) a, unnest(s.judged) b WHERE NOT b = ANY(s.lenses) GROUP BY a, b`,
+      params,
+    );
+    const grid = (): CompareCounts => Object.fromEntries(ctx.ran.map((r) => [r, Object.fromEntries(ctx.ran.map((c) => [c, 0]))]));
+    const out = { both: grid(), not: grid() };
+    for (const r of rows) out[r.kind as 'both' | 'not'][r.a as LensKey]![r.b as LensKey] = r.n;
+    return out;
+  }
+
+  /**
    * The trades `q` holds, split by `by`, with what each lens that ran caught
    * in each. Bands and months in order, marketplaces busiest first, and
    * unknown ('-': no facts yet, or none to give) last.
@@ -1685,16 +2013,22 @@ export class Store {
     const key = groupKey(by, ctx, params);
     // Joined, not probed per row as a filter is: a month's groups count every trade in the collection.
     const joins = ctx.ran.map((m, i) => {
-      params.push(m);
-      return `LEFT JOIN washtrace.flags c${i} ON c${i}.collection_id = t.collection_id AND c${i}.method = $${params.length} AND c${i}.tx_hash = t.tx_hash AND c${i}.log_index = t.log_index`;
+      const src = flagSource(m, params, `c${i}`);
+      return `LEFT JOIN ${src.from} ON c${i}.collection_id = t.collection_id AND ${src.where} AND c${i}.tx_hash = t.tx_hash AND c${i}.log_index = t.log_index`;
     });
     const caught = ctx.ran.map((_, i) => `, count(c${i}.tx_hash)::int AS c${i}`).join('');
+    // A lens of yours judged only through its run's block: its denominator leaves out the trades past it (Ruling FF).
+    const own = ctx.ran.flatMap((m, i) => (!isOwnKey(m) ? [] : [{ m, i, bound: judgedThrough(m, ctx, params) }]));
+    const judged = own.map((o) => (o.bound === null ? '' : `, count(*) FILTER (WHERE ${o.bound})::int AS j${o.i}`)).join('');
     const { rows } = await this.pool.query(
-      `SELECT * FROM (SELECT ${key} AS key, count(*)::int AS trades${caught} ${TRADES_FROM} ${joins.join(' ')} WHERE ${where} GROUP BY 1) g
+      `SELECT * FROM (SELECT ${key} AS key, count(*)::int AS trades${caught}${judged} ${TRADES_FROM} ${joins.join(' ')} WHERE ${where} GROUP BY 1) g
        ORDER BY g.key = '-', ${by === 'marketplace' ? 'g.trades DESC, ' : ''}g.key`,
       params,
     );
-    return rows.map((r) => ({ key: r.key, trades: r.trades, caught: Object.fromEntries(ctx.ran.map((m, i) => [m, r[`c${i}`]])) }));
+    return rows.map((r) => ({
+      key: r.key, trades: r.trades, caught: Object.fromEntries(ctx.ran.map((m, i) => [m, r[`c${i}`]])),
+      ...(own.length === 0 ? {} : { judged: Object.fromEntries(own.map(({ m, i }) => [m, r[`j${i}`] ?? r.trades])) }),
+    }));
   }
 
   /** Every trade `q` holds, in its order, streamed: the same rows as every page of `trades` put together. */
@@ -1909,6 +2243,459 @@ export class Store {
     const r = rows[0];
     return r ? { finished: r.finished, ok: r.ok, detail: r.detail } : null;
   }
+
+  // ---- your own lenses ----
+
+  async lenses(): Promise<Lens[]> {
+    const { rows } = await this.pool.query(`${LENS_SELECT} ORDER BY l.id`);
+    return rows.filter(readable).map(toLens);
+  }
+
+  async lens(id: number): Promise<Lens | null> {
+    const { rows } = await this.pool.query(`${LENS_SELECT} WHERE l.id = $1`, [id]);
+    return rows[0] ? toLens(rows[0]) : null;
+  }
+
+  /**
+   * Save a lens, and queue its first run on collection `runOn` when given, in
+   * one statement: a failure leaves neither, so a retry never finds the name
+   * taken by a lens nobody saw saved. The caller has checked the rule and the
+   * name; a name taken after all (a race) throws the unique index's error, and
+   * a collection removed meanwhile the foreign key's.
+   */
+  async createLens(name: string, rule: LensRule, runOn?: number): Promise<Lens> {
+    const { rows } = await this.pool.query(
+      `WITH l AS (
+         INSERT INTO washtrace.lenses (name, rule) VALUES ($1, $2) RETURNING id, name, rule, version, created_at, updated_at
+       ), r AS (
+         INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version) SELECT id, $3, 'queued', version FROM l WHERE $3::int IS NOT NULL
+       )
+       SELECT id, name, rule, version, extract(epoch FROM created_at)::float8 AS created, extract(epoch FROM updated_at)::float8 AS updated FROM l`,
+      [name, JSON.stringify(rule), runOn ?? null],
+    );
+    return toLens(rows[0]);
+  }
+
+  /**
+   * Edit a lens: its version moves, and every run of it is queued again in the
+   * same statement. A run of the old version still in flight then finds its
+   * version behind (saveLensRun), and the totals it had stay on show until the
+   * new run saves; its `lens_version` stays the one they came from (Ruling FF),
+   * so a reader can tell they are the old rule's. `runOn` is a collection the
+   * lens has no run on yet, queued in the same statement (as createLens does),
+   * so an edit made from that collection's page runs there too: the editor's
+   * button says it will. A failure, such as no such collection (23503), leaves
+   * the lens as it was. Null when there is no such lens.
+   */
+  async updateLens(id: number, name: string, rule: LensRule, runOn?: number): Promise<Lens | null> {
+    const { rows } = await this.pool.query(
+      `WITH l AS (
+         UPDATE washtrace.lenses SET name = $2, rule = $3, version = version + 1, updated_at = now() WHERE id = $1
+         RETURNING id, name, rule, version, created_at, updated_at
+       ), r AS (
+         UPDATE washtrace.lens_runs SET status = 'queued', progress = NULL, error = NULL, failures = 0, retry_at = NULL, requested_at = now()
+         FROM l WHERE lens_id = l.id
+       ), n AS (
+         -- A run already here is queued by r; the NOT EXISTS reads the rows as they were before this statement, so the two never touch one row.
+         INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version)
+         SELECT id, $4, 'queued', version FROM l
+         WHERE $4::int IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.lens_runs x WHERE x.lens_id = l.id AND x.collection_id = $4)
+         ON CONFLICT (lens_id, collection_id) DO NOTHING
+       )
+       SELECT id, name, rule, version, extract(epoch FROM created_at)::float8 AS created, extract(epoch FROM updated_at)::float8 AS updated FROM l`,
+      [id, name, JSON.stringify(rule), runOn ?? null],
+    );
+    return rows[0] ? toLens(rows[0]) : null;
+  }
+
+  /** Its runs and flags go with it (cascade). False when there was none. */
+  async deleteLens(id: number): Promise<boolean> {
+    const { rowCount } = await this.pool.query('DELETE FROM washtrace.lenses WHERE id = $1', [id]);
+    return rowCount === 1;
+  }
+
+  /** Whether a lens of yours, or a built-in, already has this name (ignoring case); `exceptId` is the lens being edited. */
+  async nameTaken(name: string, exceptId?: number): Promise<boolean> {
+    if (BUILT_IN_NAMES.some((n) => n.toLowerCase() === name.toLowerCase())) return true;
+    const { rows } = await this.pool.query('SELECT 1 FROM washtrace.lenses WHERE lower(name) = lower($1) AND id IS DISTINCT FROM $2', [name, exceptId ?? null]);
+    return rows.length > 0;
+  }
+
+  /**
+   * Queue a run of the lens here (or again), keeping the totals of its last one
+   * until the new one saves, and the version they came from (Ruling FF: only
+   * saveLensRun moves it; a new row takes the lens's own, with no totals yet).
+   * A run already running is left alone: queueing it would start a second one
+   * beside it, and an edit requeues through updateLens.
+   */
+  async requestLensRun(lensId: number, collectionId: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version)
+       SELECT id, $2, 'queued', version FROM washtrace.lenses WHERE id = $1
+       ON CONFLICT (lens_id, collection_id) DO UPDATE SET
+         status = 'queued', progress = NULL, error = NULL, failures = 0, retry_at = NULL, requested_at = now()
+       WHERE washtrace.lens_runs.status <> 'running'`,
+      [lensId, collectionId],
+    );
+  }
+
+  /** Every lens, with its run on this collection, or null when it has none here. */
+  async lensRuns(collectionId: number): Promise<{ lens: Lens; run: LensRun | null }[]> {
+    const { rows } = await this.pool.query(
+      `SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
+              r.lens_id AS run_lens, r.collection_id, r.status, r.progress, r.lens_version, r.analysis_id, r.through_block, r.totals, r.error,
+              extract(epoch FROM r.retry_at)::float8 AS retry, extract(epoch FROM r.finished_at)::float8 AS finished, r.took_ms
+       FROM washtrace.lenses l
+       LEFT JOIN washtrace.lens_runs r ON r.lens_id = l.id AND r.collection_id = $1
+       ORDER BY l.id`,
+      [collectionId],
+    );
+    return rows.filter(readable).map((r) => ({ lens: toLens(r), run: r.run_lens === null ? null : toLensRun(r) }));
+  }
+
+  /**
+   * The next run that is due, on a collection that has an analysis (its latest
+   * is what the run reads) and is not paused: a queued one, a done one whose
+   * lens has since moved on, a done one whose analysis has moved on once
+   * ANALYZE_GAP_MS (or twice its length, if longer) has passed since it
+   * finished, a failed one past its back-off, or one still `running`. The gap
+   * is Ruling AA's: a busy collection is analysed every five minutes, and
+   * re-running each of K lenses on every one would hold the analysis lock
+   * most of the time. An edit, Run here or a first run queues the run, and a
+   * queued one never waits: queued runs go first, then the retries and the
+   * re-runs, each oldest-requested first (Ruling OO), so one asked for is not
+   * behind every re-run a newer analysis made due. `dueAt` is when the run
+   * became due, for the lens pass's wait (Ruling KK): when it was asked for,
+   * its retry time, the edit, or the later of the newer analysis and the gap's
+   * end. `name` is the collection's name, or its short address.
+   *
+   * Two due runs are marked failed (with the usual back-off) instead of
+   * returned, and the next due run is taken in the same call, so neither
+   * holds the queue: one whose lens's stored rule no longer checks, and one
+   * still `running`. Its only caller, the worker's lens pass, holds the
+   * analysis lock (R8), so nothing else is running one: a `running` row seen
+   * here was left by a worker that stopped mid-run, and a run that ran the
+   * worker out of memory would stop the next one too (Ruling DD). After
+   * LENS_TRIES failures in a row a run waits to be asked again.
+   */
+  async nextLensRun(now: number): Promise<{ lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number } | null> {
+    for (;;) {
+      const next = await this.dueLensRun(now);
+      if (next === null || 'lens' in next) return next;
+      await this.pool.query(`UPDATE washtrace.lens_runs SET ${LENS_FAILED} WHERE lens_id = $1 AND collection_id = $2`, [next.lensId, next.collectionId, next.error]);
+    }
+  }
+
+  /** The next due run, as nextLensRun orders them, or the ids of one to fail instead, and why. */
+  private async dueLensRun(now: number): Promise<{ lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number } | { lensId: number; collectionId: number; error: string } | null> {
+    const { rows } = await this.pool.query(
+      `SELECT l.id, l.name AS lens_name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
+              c.id AS collection_id, c.chain_id, coalesce(c.name, left(c.address, 6) || '…' || right(c.address, 4)) AS name,
+              a.id AS analysis_id, a.through_block, r.status,
+              extract(epoch FROM CASE
+                WHEN r.status IN ('queued', 'running') THEN r.requested_at
+                WHEN r.status = 'failed' THEN r.retry_at
+                WHEN r.lens_version < l.version THEN l.updated_at
+                ELSE greatest(a.ran_at, r.finished_at + make_interval(secs => greatest($2::float8, 2 * coalesce(r.took_ms, 0)) / 1000))
+              END)::float8 * 1000 AS due_at
+       FROM washtrace.lens_runs r
+       JOIN washtrace.lenses l ON l.id = r.lens_id
+       JOIN washtrace.collections c ON c.id = r.collection_id AND c.paused_at IS NULL
+       JOIN LATERAL (SELECT id, through_block, ran_at FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC, x.id DESC LIMIT 1) a ON true
+       WHERE r.status IN ('queued', 'running')
+          OR (r.status = 'done' AND (r.lens_version < l.version
+            OR (r.analysis_id IS DISTINCT FROM a.id
+              AND r.finished_at <= to_timestamp($1::float8 / 1000) - make_interval(secs => greatest($2::float8, 2 * coalesce(r.took_ms, 0)) / 1000))))
+          OR (r.status = 'failed' AND r.retry_at <= to_timestamp($1::float8 / 1000))
+       -- A 'running' row goes with the queued: it is failed in this same call, never run, so it holds no one back.
+       ORDER BY r.status IN ('queued', 'running') DESC, r.requested_at LIMIT 1`,
+      [now, ANALYZE_GAP_MS],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    if (r.status === 'running') return { lensId: r.id, collectionId: r.collection_id, error: 'The worker stopped during this run.' };
+    const checked = checkRule(r.rule);
+    if ('error' in checked) return { lensId: r.id, collectionId: r.collection_id, error: `This lens's rule can't be read: ${checked.error}` };
+    return {
+      lens: toLens({ ...r, name: r.lens_name }), collectionId: r.collection_id, chainId: r.chain_id, name: r.name,
+      analysisId: Number(r.analysis_id), through: r.through_block === null ? null : Number(r.through_block), dueAt: r.due_at,
+    };
+  }
+
+  async lensRunStarted(lensId: number, collectionId: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_runs SET status = 'running', progress = 0, started_at = now() WHERE lens_id = $1 AND collection_id = $2`,
+      [lensId, collectionId],
+    );
+  }
+
+  /** Only while it runs: an edit that queued it again leaves nothing to report on. */
+  async lensRunProgress(lensId: number, collectionId: number, share: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_runs SET progress = $3 WHERE lens_id = $1 AND collection_id = $2 AND status = 'running'`,
+      [lensId, collectionId, share],
+    );
+  }
+
+  /**
+   * Note a failed run and when it is tried again (backoffSql), or that it is not,
+   * after LENS_TRIES in a row. Only while it runs, so an edit's fresh queueing is not undone.
+   */
+  async lensRunFailed(lensId: number, collectionId: number, error: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_runs SET ${LENS_FAILED} WHERE lens_id = $1 AND collection_id = $2 AND status = 'running'`,
+      [lensId, collectionId, error],
+    );
+  }
+
+  /**
+   * Save a finished run: its flags replace the lens's here, in batches, and the
+   * run reads done. 'stale' when the lens was edited since the run began: the
+   * result is thrown away, the run is queued again at the new version and its
+   * old totals stay. 'gone' when the lens (or the collection) was removed.
+   */
+  async saveLensRun(
+    lensId: number, collectionId: number, lensVersion: number, analysisId: number, through: number | null,
+    totals: LensTotals, flags: readonly LensFlag[], tookMs: number,
+  ): Promise<'saved' | 'stale' | 'gone'> {
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      // The collection's row, then the lens's, then the run's: removeCollection locks the collection before its
+      // cascade reaches the run and the flags, and deleteLens and updateLens lock the lens before its runs (M1). A
+      // delete or an edit then lands before this reads or after the run is saved, never in a deadlock with the
+      // flags' foreign-key checks on those two rows. KEY SHARE is what that check takes, so the worker's updates of
+      // the collection never wait on it. An edit after it queues the run again.
+      const collection = await c.query('SELECT 1 FROM washtrace.collections WHERE id = $1 FOR KEY SHARE', [collectionId]);
+      if (collection.rowCount === 0) { await c.query('ROLLBACK'); return 'gone'; }
+      const lens = await c.query<{ version: number }>('SELECT version FROM washtrace.lenses WHERE id = $1 FOR SHARE', [lensId]);
+      if (lens.rowCount === 0) { await c.query('ROLLBACK'); return 'gone'; }
+      const run = await c.query('SELECT 1 FROM washtrace.lens_runs WHERE lens_id = $1 AND collection_id = $2 FOR UPDATE', [lensId, collectionId]);
+      if (run.rowCount === 0) { await c.query('ROLLBACK'); return 'gone'; }
+      if (lens.rows[0]!.version !== lensVersion) {
+        // Its lens_version stays the one its old totals came from (Ruling FF).
+        await c.query(
+          `UPDATE washtrace.lens_runs SET status = 'queued', progress = NULL, requested_at = now() WHERE lens_id = $1 AND collection_id = $2`,
+          [lensId, collectionId],
+        );
+        await c.query('COMMIT');
+        return 'stale';
+      }
+      await c.query('DELETE FROM washtrace.lens_flags WHERE lens_id = $1 AND collection_id = $2', [lensId, collectionId]);
+      for (let at = 0; at < flags.length;) {
+        const batch: LensFlag[] = [];
+        const paths: string[] = [];
+        for (let size = 0; at < flags.length && batch.length < FLAG_BATCH_ROWS && size < FLAG_BATCH_CHARS; at++) {
+          batch.push(flags[at]!);
+          paths.push(JSON.stringify(flags[at]!.path));
+          size += paths.at(-1)!.length;
+        }
+        await c.query(
+          // Wallets go as one comma-joined text each (a text[] cannot nest in a text[]); addresses hold no comma.
+          `INSERT INTO washtrace.lens_flags (collection_id, lens_id, tx_hash, log_index, path, wallets)
+           SELECT $1, $2, tx, li, p, string_to_array(ws, ',') FROM unnest($3::text[], $4::int[], $5::jsonb[], $6::text[]) AS u(tx, li, p, ws)`,
+          [collectionId, lensId, batch.map((f) => f.txHash), batch.map((f) => f.logIndex), paths, batch.map((f) => f.wallets.join(','))],
+        );
+      }
+      await c.query(
+        `UPDATE washtrace.lens_runs SET status = 'done', progress = NULL, lens_version = $3, analysis_id = $4, through_block = $5, totals = $6,
+           error = NULL, failures = 0, retry_at = NULL, finished_at = now(), took_ms = $7
+         WHERE lens_id = $1 AND collection_id = $2`,
+        [lensId, collectionId, lensVersion, analysisId, through, JSON.stringify(totals), tookMs],
+      );
+      await c.query('COMMIT');
+      return 'saved';
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      if ((err as { code?: string }).code === FOREIGN_KEY_VIOLATION) return 'gone';
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  // ---- previews (P2–P5) ----
+
+  /**
+   * Queue a preview of `rule` on the collection and tell the worker at once:
+   * the insert and the notify are one statement, as requestCheck's are. A
+   * preview reads through the latest analysis's block (P3), so a collection
+   * never analysed has nothing to preview yet, and one with no sale up to
+   * that block nothing to sample: neither is queued, and the editor says why.
+   */
+  async requestPreview(collectionId: number, rule: LensRule): Promise<{ id: number } | 'no-sales' | 'not-analysed'> {
+    const { rows } = await this.pool.query<{ sales: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.marketplace IS NOT NULL
+                        AND (a.through_block IS NULL OR t.block_number <= a.through_block)) AS sales
+       FROM (SELECT through_block FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC, id DESC LIMIT 1) a`,
+      [collectionId],
+    );
+    if (rows.length === 0) return 'not-analysed';
+    if (!rows[0]!.sales) return 'no-sales';
+    try {
+      const { rows: made } = await this.pool.query<{ id: number }>(
+        `WITH i AS (INSERT INTO washtrace.lens_previews (collection_id, rule, status) VALUES ($1, $2, 'queued') RETURNING id)
+         SELECT id, pg_notify($3, id::text) FROM i`,
+        [collectionId, JSON.stringify(rule), PREVIEWS_CHANNEL],
+      );
+      return { id: made[0]!.id };
+    } catch (err) {
+      // Removed since it was read: there is nothing to preview on.
+      if ((err as { code?: string }).code === FOREIGN_KEY_VIOLATION) return 'not-analysed';
+      throw err;
+    }
+  }
+
+  /** One preview as the editor polls it, or null once it is swept or its collection removed. */
+  async preview(id: number): Promise<Preview | null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, collection_id, rule, status, progress, result, error,
+              extract(epoch FROM requested_at)::float8 AS requested, extract(epoch FROM finished_at)::float8 AS finished
+       FROM washtrace.lens_previews WHERE id = $1`,
+      [id],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id, collectionId: r.collection_id, rule: r.rule, status: r.status, progress: r.progress, result: r.result, error: r.error,
+      requestedAt: r.requested * 1000, finishedAt: r.finished === null ? null : r.finished * 1000,
+    };
+  }
+
+  /**
+   * Take the oldest queued preview and mark it running, with what its run
+   * reads: the latest analysis's through block (P3). `name` is the
+   * collection's name, or its short address. Its only caller, the lens pass,
+   * holds the analysis lock (R8), so no other preview is running: one still
+   * `running` was left by a worker that stopped, and is failed here rather
+   * than tried again, since one that ran the worker out of memory would do it
+   * again (as Ruling DD has it for a run). One whose stored rule no longer
+   * checks is failed, and the next taken in the same call.
+   */
+  async nextPreview(): Promise<{ id: number; collectionId: number; chainId: number; name: string; rule: LensRule; through: number | null } | null> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_previews SET status = 'failed', progress = NULL, error = 'The worker stopped during this preview.', finished_at = now()
+       WHERE status = 'running'`,
+    );
+    for (;;) {
+      const { rows } = await this.pool.query(
+        `SELECT p.id, p.collection_id, p.rule, c.chain_id, coalesce(c.name, left(c.address, 6) || '…' || right(c.address, 4)) AS name, a.through_block
+         FROM washtrace.lens_previews p
+         JOIN washtrace.collections c ON c.id = p.collection_id
+         LEFT JOIN LATERAL (SELECT through_block FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC, x.id DESC LIMIT 1) a ON true
+         WHERE p.status = 'queued' ORDER BY p.requested_at, p.id LIMIT 1`,
+      );
+      const r = rows[0];
+      if (!r) return null;
+      const checked = checkRule(r.rule);
+      if ('error' in checked) {
+        await this.previewEnded(r.id, 'failed', null, `This rule can't be read: ${checked.error}`, 'queued');
+        continue;
+      }
+      await this.pool.query(`UPDATE washtrace.lens_previews SET status = 'running', progress = 0 WHERE id = $1`, [r.id]);
+      return {
+        id: r.id, collectionId: r.collection_id, chainId: r.chain_id, name: r.name, rule: checked.rule,
+        through: r.through_block === null ? null : Number(r.through_block),
+      };
+    }
+  }
+
+  /**
+   * Preview's sample (P4): up to PREVIEW_SAMPLE of the collection's sales
+   * through block `through`, as `${txHash}:${logIndex}` keys, ordered by an
+   * md5 of the key and `seed` (the preview's id). Seeded, so a preview reads
+   * the same sample every time it is asked, and Round trips' catch is counted
+   * of exactly it; with fewer sales, all of them.
+   */
+  async previewSample(collectionId: number, seed: number, through: number | null): Promise<string[]> {
+    const { rows } = await this.pool.query<{ key: string }>(
+      `SELECT t.tx_hash || ':' || t.log_index AS key FROM washtrace.transfers t
+       WHERE t.collection_id = $1 AND t.marketplace IS NOT NULL AND ($3::bigint IS NULL OR t.block_number <= $3::bigint)
+       ORDER BY md5(t.tx_hash || ':' || t.log_index || ':' || $2::int), t.tx_hash, t.log_index
+       LIMIT $4`,
+      [collectionId, seed, through, PREVIEW_SAMPLE],
+    );
+    return rows.map((r) => r.key);
+  }
+
+  /**
+   * How many of `keys` (a preview's sample) Round trips flagged, or null when
+   * it did not run on the latest analysis. The flags are that analysis's; the
+   * analysis lock the lens pass holds (R8) keeps them from being replaced
+   * while a preview reads through its block.
+   */
+  async roundTripsCaught(collectionId: number, keys: readonly string[]): Promise<number | null> {
+    const cut = keys.map((k) => k.lastIndexOf(':'));
+    const { rows } = await this.pool.query<{ ran: boolean | null; caught: number }>(
+      `SELECT (SELECT a.totals -> 'A' ->> 'available' = 'true' FROM washtrace.analyses a WHERE a.collection_id = $1 ORDER BY a.ran_at DESC, a.id DESC LIMIT 1) AS ran,
+              (SELECT count(*)::int FROM washtrace.flags f JOIN unnest($2::text[], $3::int[]) AS k(tx, li) ON f.tx_hash = k.tx AND f.log_index = k.li
+               WHERE f.collection_id = $1 AND f.method = 'A') AS caught`,
+      [collectionId, keys.map((k, i) => k.slice(0, cut[i])), keys.map((k, i) => Number(k.slice(cut[i]! + 1)))],
+    );
+    return rows[0]!.ran ? rows[0]!.caught : null;
+  }
+
+  /** Only while it runs, as lensRunProgress: a swept preview has nothing to report on. */
+  async previewProgress(id: number, share: number): Promise<void> {
+    await this.pool.query(`UPDATE washtrace.lens_previews SET progress = $2 WHERE id = $1 AND status = 'running'`, [id, share]);
+  }
+
+  async savePreview(id: number, result: PreviewResult): Promise<void> {
+    await this.previewEnded(id, 'done', result, null, 'running');
+  }
+
+  /** `error` is shown in the editor, so it comes already scrubbed. */
+  async previewFailed(id: number, error: string): Promise<void> {
+    await this.previewEnded(id, 'failed', null, error, 'running');
+  }
+
+  /** Finish a preview that is `from`, done or failed. One swept or removed meanwhile stays gone. */
+  private async previewEnded(id: number, status: 'done' | 'failed', result: PreviewResult | null, error: string | null, from: 'queued' | 'running'): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_previews SET status = $2, progress = NULL, result = $3, error = $4, finished_at = now() WHERE id = $1 AND status = $5`,
+      [id, status, result === null ? null : JSON.stringify(result), error, from],
+    );
+  }
+
+  /** Delete every preview asked for more than PREVIEW_KEEP_MS before `now`, whatever its state. Returns how many. */
+  async sweepPreviews(now: number): Promise<number> {
+    const { rowCount } = await this.pool.query(
+      `DELETE FROM washtrace.lens_previews WHERE requested_at < to_timestamp($1::float8 / 1000) - make_interval(secs => $2::float8 / 1000)`,
+      [now, PREVIEW_KEEP_MS],
+    );
+    return rowCount ?? 0;
+  }
+}
+
+/**
+ * ` AND` the bound that keeps a lens list's counted trades to those `method`
+ * judged, for its rows' denominators (Ruling FF), or '' when it judged them all.
+ */
+function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): string {
+  const judged = judgedThrough(method, ctx, params);
+  return judged === null ? '' : ` AND ${judged}`;
+}
+
+const LENS_SELECT = `
+SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated
+FROM washtrace.lenses l`;
+/** Whether a row's stored rule still checks; a list leaves out the rows that don't. */
+const readable = (r: any): boolean => !('error' in checkRule(r.rule));
+
+/** A stored rule is checked on the way out: the routes check it on the way in, so one that fails is a corrupt row. */
+function toLens(r: any): Lens {
+  const checked = checkRule(r.rule);
+  if ('error' in checked) throw new Error(`The rule of lens ${r.id} is corrupt: ${checked.error}`);
+  return { id: r.id, key: `L${r.id}`, name: r.name, rule: checked.rule, version: r.version, createdAt: r.created * 1000, updatedAt: r.updated * 1000 };
+}
+
+function toLensRun(r: any): LensRun {
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  return {
+    lensId: r.run_lens, collectionId: r.collection_id, status: r.status, progress: r.progress, lensVersion: r.lens_version,
+    analysisId: num(r.analysis_id), throughBlock: num(r.through_block), totals: r.totals, error: r.error,
+    retryAt: r.retry === null ? null : r.retry * 1000, finishedAt: r.finished === null ? null : r.finished * 1000, tookMs: r.took_ms,
+  };
 }
 
 const COLLECTION_SELECT = `
@@ -2048,9 +2835,10 @@ function toFlow(r: any): Flow {
   };
 }
 
-function toAnalysis(r: any): AnalysisRow {
+/** `id` apart: a collection's row carries its own `id`, and its latest analysis's as `analysis_id`. */
+function toAnalysis(r: any, id: unknown): AnalysisRow {
   return {
-    ranAt: r.ran * 1000, tookMs: r.took_ms, throughBlock: r.through_block === null ? null : Number(r.through_block),
+    id: Number(id), ranAt: r.ran * 1000, tookMs: r.took_ms, throughBlock: r.through_block === null ? null : Number(r.through_block),
     totals: r.totals, missingData: r.missing_data, fundedWallets: r.funded_wallets, wallets: r.wallets, truncatedSearches: r.truncated_searches,
     loops: r.loops ?? null,
   };
@@ -2066,7 +2854,7 @@ function toCollection(r: any): CollectionRow {
     transfers: r.transfer_count,
     wallets: r.wallets ?? 0, fundedWallets: r.funded_wallets ?? 0,
     stale: Number(r.version) > Number(r.analyzed_version),
-    latest: r.analysis_id === null ? null : toAnalysis(r),
+    latest: r.analysis_id === null ? null : toAnalysis(r, r.analysis_id),
     servedAt: r.served === null ? null : r.served * 1000, readRate: num(r.read_rate), priority: r.priority,
     pausedAt: r.paused === null ? null : r.paused * 1000,
     restoreProgress: num(r.restore_progress), restoreNote: r.restore_note, restoreNoteKey: r.restore_note_key,

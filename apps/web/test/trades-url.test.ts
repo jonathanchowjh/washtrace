@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
 import { bandLabel, chips, ethToWei, groupFilter, parseView, tradesHref } from '../lib/trades-url';
 
-const roundTrip = (href: string) => parseView(Object.fromEntries(new URL(href, 'http://x').searchParams));
+/** Your lenses that exist, as the page reads them from the store: L7, L9 and L12 here, so a link can carry them. */
+const OWN: ReadonlySet<string> = new Set(['L7', 'L9', 'L12']);
+const roundTrip = (href: string) => parseView(Object.fromEntries(new URL(href, 'http://x').searchParams), 'UTC', OWN);
 
 describe('Trades in the URL', () => {
   it('round-trips every filter and the view through the URL', () => {
@@ -31,8 +33,8 @@ describe('Trades in the URL', () => {
   });
 
   it('drops what it cannot read', () => {
-    expect(parseView({ caught: 'A,ZZ', pmin: 'abc', heldunder: '-3h', group: 'A.q.1', page: '-2', sort: 'nope', by: 'x' })).toEqual({ q: { ...NO_FILTER, caught: ['A'] }, view: { by: null, page: 1 } });
-    expect(parseView({ caught: 'constructor,toString', market: 'nowhere', from: 'yesterday', token: 'abc', wallet: '0x12', dir: 'up', page: 'many' }))
+    expect(parseView({ caught: 'A,ZZ', pmin: 'abc', heldunder: '-3h', group: 'A.q.1', page: '-2', sort: 'nope', by: 'x' }, 'UTC', OWN)).toEqual({ q: { ...NO_FILTER, caught: ['A'] }, view: { by: null, page: 1 } });
+    expect(parseView({ caught: 'constructor,toString', market: 'nowhere', from: 'yesterday', token: 'abc', wallet: '0x12', dir: 'up', page: 'many' }, 'UTC', OWN))
       .toEqual({ q: NO_FILTER, view: { by: null, page: 1 } });
   });
 
@@ -82,8 +84,8 @@ describe('Trades in the URL', () => {
   });
 
   it('drops an impossible date or month instead of rolling it over', () => {
-    for (const p of [{ from: '2023-02-30' }, { to: '2023-04-31' }, { from: '2023-03-01T24:00Z' }, { from: '2023-03-01T10:61Z' }]) expect(parseView(p).q).toEqual(NO_FILTER);
-    expect(parseView({ from: '2024-02-29', to: '2023-03-01T23:59Z' }).q).toMatchObject({ fromMs: Date.UTC(2024, 1, 29), toMs: Date.parse('2023-03-01T23:59Z') });
+    for (const p of [{ from: '2023-02-30' }, { to: '2023-04-31' }, { from: '2023-03-01T24:00Z' }, { from: '2023-03-01T10:61Z' }]) expect(parseView(p, 'UTC', OWN).q).toEqual(NO_FILTER);
+    expect(parseView({ from: '2024-02-29', to: '2023-03-01T23:59Z' }, 'UTC', OWN).q).toMatchObject({ fromMs: Date.UTC(2024, 1, 29), toMs: Date.parse('2023-03-01T23:59Z') });
     expect(groupFilter('month', '2023-13', 'UTC')).toBeNull();
     expect(groupFilter('month', '2023-00', 'UTC')).toBeNull();
     expect(groupFilter('held', '01', 'UTC')).toBeNull();
@@ -95,7 +97,7 @@ describe('Trades in the URL', () => {
     const a = tradesHref('/c', { caught: ['AC', 'A'], venues: ['blur', 'opensea'] });
     expect(a).toBe(tradesHref('/c', { caught: ['A', 'AC'], venues: ['opensea', 'blur'] }));
     expect(a).toContain('caught=A,AC&market=opensea,blur');
-    expect(parseView({ caught: ['AC', 'A'] }).q.caught).toEqual(['AC', 'A']);
+    expect(parseView({ caught: ['AC', 'A'] }, 'UTC', OWN).q.caught).toEqual(['AC', 'A']);
     const q: TradeQuery = { ...NO_FILTER, heldOverS: 86_400, heldUnderS: 30 * 86_400, buyerAgeOverS: 3600, buyerAgeUnderS: 86_400, floorMin: 0.9, floorMax: 1.1 };
     expect(chips('/c', q, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held 1–30 d', 'Bought by a wallet 1 h–1 d old', 'Price vs floor 0.9–1.1×']);
     expect(chips('/c', { ...NO_FILTER, floorMin: 2, heldOverS: 3600 }, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held over 1 h', 'Price vs floor at least 2×']);
@@ -123,13 +125,40 @@ describe('Trades in the URL', () => {
   });
 
   it('reads the form\'s plain number, unit and day fields when the combined parameter is absent', () => {
-    const q = parseView({ heldunder_n: '90', heldunder_u: 'm', ageover_n: '2', ageover_u: 'd', from_day: '2023-03-01', to_day: '2023-04-01' }, 'America/New_York').q;
+    const q = parseView({ heldunder_n: '90', heldunder_u: 'm', ageover_n: '2', ageover_u: 'd', from_day: '2023-03-01', to_day: '2023-04-01' }, 'America/New_York', OWN).q;
     expect(q).toMatchObject({ heldUnderS: 5400, buyerAgeOverS: 172_800, fromMs: Date.parse('2023-03-01T05:00:00Z'), toMs: Date.parse('2023-04-01T04:00:00Z') });
-    expect(parseView({ from_day: '2023-03-01' }).q.fromMs).toBe(Date.UTC(2023, 2, 1));
+    expect(parseView({ from_day: '2023-03-01' }, 'UTC', OWN).q.fromMs).toBe(Date.UTC(2023, 2, 1));
   });
 
   it('lets the combined parameter win, ignores an empty number, and drops junk', () => {
-    expect(parseView({ heldunder: '1h', heldunder_n: '5', heldunder_u: 'd', from: '2023-01-01', from_day: '2023-03-01' }).q).toMatchObject({ heldUnderS: 3600, fromMs: Date.UTC(2023, 0, 1) });
-    expect(parseView({ heldover_n: '', heldover_u: 'h', ageunder_n: 'x', ageunder_u: 'h', heldunder_n: '3', heldunder_u: 'y', from_day: '2023-02-30', to_day: 'soon' }).q).toEqual(NO_FILTER);
+    expect(parseView({ heldunder: '1h', heldunder_n: '5', heldunder_u: 'd', from: '2023-01-01', from_day: '2023-03-01' }, 'UTC', OWN).q).toMatchObject({ heldUnderS: 3600, fromMs: Date.UTC(2023, 0, 1) });
+    expect(parseView({ heldover_n: '', heldover_u: 'h', ageunder_n: 'x', ageunder_u: 'h', heldunder_n: '3', heldunder_u: 'y', from_day: '2023-02-30', to_day: 'soon' }, 'UTC', OWN).q).toEqual(NO_FILTER);
+  });
+});
+
+describe('your lenses in the URL', () => {
+  it('round-trips L keys in caught, not, group and sort, built-ins first and yours by id', () => {
+    const href = '/c/1/0xabc/flagged?kind=trades&caught=A,L7&not=L9&group=L7.t.5&sort=lens-L7';
+    const { q, view } = roundTrip(href);
+    expect(q).toMatchObject({ caught: ['A', 'L7'], notCaught: ['L9'], group: { method: 'L7', token: '5' }, sort: 'lens-L7' });
+    expect(tradesHref('/c/1/0xabc', q, view)).toBe(href);
+    expect(tradesHref('/c', { ...NO_FILTER, caught: ['L12', 'L7', 'AC', 'A'] })).toContain('caught=A,AC,L7,L12');
+  });
+
+  it('drops L0, L01, Lx and a key past int4, and a deleted lens: the lenses that exist are always given', () => {
+    expect(parseView({ caught: 'L0,L01,Lx,L2147483648,L2147483647' }, 'UTC', new Set(['L2147483647'])).q.caught).toEqual(['L2147483647']);
+    expect(parseView({ group: 'L0.t.5', sort: 'lens-Lx' }, 'UTC', OWN).q).toMatchObject({ group: null, sort: 'date' });
+    const own = new Set(['L7']);
+    expect(parseView({ caught: 'A,L7,L99', not: 'L99', group: 'L99.t.5', sort: 'lens-L99' }, 'UTC', own).q).toMatchObject({ caught: ['A', 'L7'], notCaught: [], group: null, sort: 'date' });
+    // `own` is required, so no caller can forget to drop a deleted lens's key.
+    // @ts-expect-error parseView has no default for the lenses that exist
+    const forgot = () => parseView({ caught: 'L99' }, 'UTC');
+    expect(forgot).toBeTypeOf('function');
+  });
+
+  it('names a lens of yours in a chip, and drops a key it has no name for', () => {
+    const q = { ...NO_FILTER, caught: ['L7', 'L99'], group: { method: 'L99', token: '5' } } as TradeQuery;
+    const c = chips('/c', q, { by: null, page: 1 }, 'UTC', { L7: 'Blur 3-hop' });
+    expect(c.map((x) => x.label)).toEqual(['Flagged by Blur 3-hop']);
   });
 });

@@ -44,9 +44,25 @@ const FAILED: Record<Job, [string, string?]> = {
   fund: ['Check the Etherscan key in Settings, and Test it there.', '/settings#etherscan.key'],
   // One collection's failed analysis is said on it (analysisError); this is a pass that failed outside one.
   analyze: ["Check the worker's log: docker compose logs worker"],
+  // One lens run's failure is said on its tab; this is a pass that failed outside one.
+  lens: ["Check the worker's log: docker compose logs worker"],
 };
 
-const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
+const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze', 'lens'];
+
+/** Each job by the step the worker page names it, so a notice says which step stopped, never the job's code. */
+export const JOB_STEP: Readonly<Record<Job, string>> = {
+  ingest: 'Read transfers', fund: 'Check wallets for money', analyze: 'Run the built-in lenses', lens: 'Run your lenses',
+};
+
+/** Analyze and lens take the same lock (R8), so while one runs the other's passes are skipped, and a skipped pass records nothing. */
+const PARTNER: Partial<Record<Job, Job>> = { analyze: 'lens', lens: 'analyze' };
+
+/** `job`'s partner on the shared lock and its row, for `jobState`. */
+export function partnerOf(passes: readonly PassRow[], job: Job): { job: Job; pass: PassRow | undefined } | undefined {
+  const partner = PARTNER[job];
+  return partner === undefined ? undefined : { job: partner, pass: passes.find((r) => r.job === partner) };
+}
 
 /**
  * One job's state from its last pass, and when it is stalled, why. A running
@@ -54,16 +70,45 @@ const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze'];
  * ceiling (stuck); a finished one is stalled when it is long overdue (from
  * when it finished, so a long pass is not overdue the moment it ends), else
  * failed or ok.
+ *
+ * `partner` (see partnerOf) is the job sharing this one's lock. While it runs
+ * and is not stalled, this job's passes are skipped for the lock, not missed,
+ * so a finished job is not overdue; and its wait counts from the later of
+ * its own and the partner's finish, so a long partner pass that just ended
+ * does not make it overdue at once. A stalled partner gives no cover. The
+ * later finish is capped at one partner ceiling (STUCK_MS) past its own
+ * (Ruling O): short partner passes would otherwise chain, each one renewing
+ * the cover, and a job that stopped would read on time for ever.
  */
-export function jobState(p: PassRow | undefined, job: Job, now: number): { state: JobState; why: 'silent' | 'stuck' | 'overdue' | null } {
+export function jobState(p: PassRow | undefined, job: Job, now: number, partner?: { job: Job; pass: PassRow | undefined }): { state: JobState; why: 'silent' | 'stuck' | 'overdue' | null } {
   if (!p) return { state: 'never', why: null };
   if (isRunning(p)) {
     if (now - (p.heartbeatAt ?? p.startedAt) > SILENT_MS) return { state: 'stalled', why: 'silent' };
     if (now - p.startedAt > STUCK_MS[job]) return { state: 'stalled', why: 'stuck' };
     return { state: 'running', why: null };
   }
-  if (now - p.finishedAt! > 3 * EVERY[job] + BUDGET_MS) return { state: 'stalled', why: 'overdue' };
+  const lastSign = partner === undefined ? p.finishedAt! : Math.min(Math.max(p.finishedAt!, partner.pass?.finishedAt ?? 0), p.finishedAt! + STUCK_MS[partner.job]);
+  if (!partnerHolds(partner, now) && now - lastSign > 3 * EVERY[job] + BUDGET_MS) return { state: 'stalled', why: 'overdue' };
   return { state: p.outcome === 'failed' ? 'failed' : 'ok', why: null };
+}
+
+/** Ruling M: the partner is running and not stalled, so it holds the shared lock, and this job's passes are skipped, not missed. */
+function partnerHolds(partner: { job: Job; pass: PassRow | undefined } | undefined, now: number): boolean {
+  return partner?.pass !== undefined && jobState(partner.pass, partner.job, now).state === 'running';
+}
+
+/**
+ * Ruling QQ: whether `job`, which has never run, is waiting on its partner
+ * rather than on a worker that is down. Covered while the partner holds the
+ * lock (a stalled one covers nothing) or once it finished, for the wait a
+ * pass of `job`'s own would be allowed: the cover jobState gives a finished
+ * job, from the partner's finish. With no finish of its own there is nothing
+ * to cap it from (Ruling O), so a dead job reads covered while its partner's
+ * passes go on.
+ */
+function neverCovered(job: Job, now: number, partner: { job: Job; pass: PassRow | undefined } | undefined): boolean {
+  const done = partner?.pass?.finishedAt ?? null;
+  return partnerHolds(partner, now) || (done !== null && now - done <= 3 * EVERY[job] + BUDGET_MS);
 }
 
 /**
@@ -75,7 +120,7 @@ export function jobState(p: PassRow | undefined, job: Job, now: number): { state
  */
 export function workerSilent(passes: readonly PassRow[], now: number): { since: number | null } | null {
   for (const job of JOBS) {
-    const { state } = jobState(passes.find((r) => r.job === job), job, now);
+    const { state } = jobState(passes.find((r) => r.job === job), job, now, partnerOf(passes, job));
     if (state !== 'stalled' && state !== 'never') return null;
   }
   const signs = passes.flatMap((p) => [p.heartbeatAt, p.finishedAt, p.startedAt]).filter((t): t is number => t !== null);
@@ -96,21 +141,23 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
 
   const jobs = JOBS.map((job) => {
     const p = s.passes.find((r) => r.job === job);
-    const { state, why } = jobState(p, job, now);
+    const partner = partnerOf(s.passes, job);
+    const { state, why } = jobState(p, job, now, partner);
     if (!p) {
-      needsYou(`${job} has never run.`, WORKER_DOWN);
+      // The job's line still reads never run; only the notice waits on a partner that holds the lock (Ruling QQ).
+      if (!neverCovered(job, now, partner)) needsYou(`${JOB_STEP[job]} has never run.`, WORKER_DOWN);
     } else if (isRunning(p)) {
       // Silent: the worker stopped beating. Stuck: past its ceiling with a fresh beat, so the worker is up and this pass is not.
-      if (why === 'silent') needsYou(`${job} has been silent for ${minutes(now - (p.heartbeatAt ?? p.startedAt))}.`, WORKER_DOWN);
-      else if (why === 'stuck') needsYou(`${job} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
+      if (why === 'silent') needsYou(`${JOB_STEP[job]} has been silent for ${minutes(now - (p.heartbeatAt ?? p.startedAt))}.`, WORKER_DOWN);
+      else if (why === 'stuck') needsYou(`${JOB_STEP[job]} has been running for ${minutes(now - p.startedAt)}.`, RESTART);
     } else {
       if (p.outcome === 'failed') {
         // An analysis that failed on a collection is said on it, below, until one succeeds. Said here only when it is not:
         // the pass failed before it took one, the collection is gone, or the failure could not be written to it.
         const on = job === 'analyze' && p.subjectId !== null ? s.collections.find((c) => c.id === p.subjectId) : undefined;
-        if (!on?.analysisError) needsYou(`${job} failed: ${p.detail}`, ...FAILED[job]);
+        if (!on?.analysisError) needsYou(`${JOB_STEP[job]} failed: ${p.detail}`, ...FAILED[job]);
       }
-      if (why === 'overdue') needsYou(`${job} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
+      if (why === 'overdue') needsYou(`${JOB_STEP[job]} has not run for ${minutes(now - p.finishedAt!)}.`, WORKER_DOWN);
     }
     return { job, state, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null, tookMs: p?.tookMs ?? null, outcome: p?.outcome ?? null, detail: p?.detail ?? null };
   });

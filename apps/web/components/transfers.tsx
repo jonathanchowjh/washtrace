@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { METHODS, ZERO, type FlaggedTransfer, type Method, type Witness } from '@washtrace/detect';
-import { LENSES, eth, num, short, tokenLabel } from '@/lib/format';
+import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
+import type { LensKey } from '@washtrace/detect/trades';
+import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { explorerTx } from '@/lib/links';
 import { Empty, Ext } from '@/components/head';
 import { toneOf } from '@/lib/metrics';
@@ -30,6 +31,19 @@ export function because(w: Witness, chainId: number): React.ReactNode {
   );
 }
 
+/**
+ * Why a lens of yours flagged one transfer: the way back it found, in one
+ * line. The wallets counted are those past the seller and the buyer; the
+ * money count leaves out a funding, which is said on its own.
+ */
+export function ownBecause(f: Pick<LensFlag, 'path' | 'wallets'>): string {
+  const trade = f.path[0];
+  const through = new Set(f.wallets.filter((w) => w !== trade?.from && w !== trade?.to)).size;
+  const money = f.path.slice(1).filter((e) => e.kind === 'eth' || e.kind === 'internal' || e.kind === 'weth').length;
+  const funder = f.path.length > 1 && f.path[f.path.length - 1]!.kind === 'funds';
+  return `Back to the seller through ${through === 0 ? 'no wallet' : plural(through, 'wallet')}${money > 0 ? `, ${money} by money` : ''}${funder ? ', closed at a funder' : ''}`;
+}
+
 /** "2–5", "2, 4, 7". */
 export function rowList(rows: readonly number[]): string {
   const sorted = [...rows].sort((a, b) => a - b);
@@ -39,7 +53,7 @@ export function rowList(rows: readonly number[]): string {
 
 const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
 // A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
-const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground' } as const;
+const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
 
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
@@ -47,9 +61,12 @@ const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground
  * a filter shows only some of a token's rows, so `numbers` gives each shown
  * row its place in the whole chain order. A lens chip opens that lens's tab of
  * the row's collection, or of `base` when the rows carry none (one token's page).
+ * `own` gives the lenses of yours that flag a row, by `txHash:logIndex`, chipped
+ * after the built-ins' and named from `names`.
  */
-export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base }: {
+export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, own, names = {} }: {
   chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string;
+  own?: ReadonlyMap<string, readonly LensKey[]>; names?: Lenses;
 }) {
   if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
   return (
@@ -72,6 +89,8 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
             const tx = explorerTx(chainId, t.txHash);
+            const keys: LensKey[] = [...METHODS.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
+            const chipBase = t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base;
             return (
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
                 {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
@@ -95,11 +114,9 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  {METHODS.some((m) => t.flags[m]) ? (
+                  {keys.length > 0 ? (
                     <span className="flex flex-wrap gap-1">
-                      {METHODS.filter((m) => t.flags[m]).map((m) => (
-                        <Chip key={m} m={m} base={t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base} />
-                      ))}
+                      {keys.map((m) => <Chip key={m} m={m} names={names} base={chipBase} />)}
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
                 </td>
@@ -113,9 +130,11 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
   );
 }
 
-/** A lens's name on a coloured chip in its own tone; a link to that lens's tab where the collection is known. */
-function Chip({ m, base }: { m: Method; base?: string }) {
-  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[LENSES[m].tone]);
-  return base === undefined ? <span className={cls}>{LENSES[m].name}</span>
-    : <Link href={`${base}?method=${m}#evidence`} title={`Open the evidence for ${LENSES[m].name}`} className={cn(cls, 'hover:underline')}>{LENSES[m].name}</Link>;
+/** A lens's name on a coloured chip in its own tone; a link to that lens's tab where the collection is known. A lens no longer saved has no chip. */
+function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) {
+  const info = lensInfo(m, names);
+  if (info === null) return null;
+  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[info.tone]);
+  return base === undefined ? <span className={cls}>{info.name}</span>
+    : <Link href={`${base}?method=${m}#evidence`} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
 }

@@ -19,6 +19,9 @@ const fake = {
   collection: vi.fn(async (_c: number, a: string) => (a in fake.latest ? { id: 1, latest: fake.latest[a] } : null)),
   token: vi.fn(async () => fake.transfers),
   flowsAmong: vi.fn(async () => []),
+  lensRuns: vi.fn(async () => []),
+  lensFlagsOfToken: vi.fn(async () => []),
+  lensFlagsOfTx: vi.fn(async () => []),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
@@ -36,6 +39,18 @@ describe('what a transaction answers', () => {
     fake.latest = { [A1]: analysis(10) };
     const res = await transfersRoute(new Request('http://x'), { params: Promise.resolve({ chain: '1', tx: TX }) });
     expect(await res.json()).toMatchObject({ washTrade: null, judged: false, methods: [] });
+  });
+
+  it('the route answers its verdict and transfers, and reads nothing the page draws: no token, money, or lens of yours', async () => {
+    fake.transfers = [tr(A1, 5, { A: flag, AU: flag })];
+    fake.latest = { [A1]: analysis(10, ['A']) };
+    for (const f of [fake.token, fake.flowsAmong, fake.lensRuns, fake.lensFlagsOfToken, fake.lensFlagsOfTx]) f.mockClear();
+    const res = await transfersRoute(new Request('http://x'), { params: Promise.resolve({ chain: '1', tx: TX }) });
+    expect(await res.json()).toEqual({
+      chainId: 1, tx: TX, washTrade: true, judged: true, methods: ['A'], apartOnly: false, notRun: ['AU', 'AC'],
+      transfers: [{ txHash: TX, logIndex: 0, blockNumber: 5, tokenId: '1', from: '0x1', to: '0x2', flags: { A: { kind: 'pair' } }, collection: { chainId: 1, address: A1, name: null } }],
+    });
+    for (const f of [fake.token, fake.flowsAmong, fake.lensRuns, fake.lensFlagsOfToken, fake.lensFlagsOfTx]) expect(f).not.toHaveBeenCalled();
   });
 
   it('a transaction across two collections, flagged by Round trips in the analysed one, answers washTrade true and judged false', async () => {

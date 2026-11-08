@@ -5,18 +5,19 @@ import { useRouter } from 'next/navigation';
 import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 // Types only: the package's values (the store, the chain client) must stay out of the browser bundle.
 import type { Bucket, Method } from '@washtrace/detect';
-import { LENSES as LENS_INFO, localTime, pct, num } from '@/lib/format';
+import type { LensKey } from '@washtrace/detect/trades';
+import { LENSES as LENS_INFO, NOT_RUN, localTime, pct, num } from '@/lib/format';
 import { dateIn, midnight, offsetAt } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 
-type Lens = Method;
+type Lens = LensKey;
 type Frac = { part: number; whole: number };
 
 /** One x position, reduced to what the chart draws. Plain data: it crosses from the server. */
 export interface TimePoint {
   at: number;
   /** Per lens: flagged sales of all sales. Null when the lens did not run or there was no sale. */
-  lens: Record<Lens, Frac | null>;
+  lens: Partial<Record<Lens, Frac | null>>;
   sales: number;
   transfers: number;
   /** Analyses only: wallets checked for money at that analysis, and the block read through. */
@@ -32,25 +33,45 @@ export interface TimePoint {
  * market. `analyses`: the answer at each run of the worker.
  */
 export type TimeChartProps =
-  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Lens[]; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[] }
+  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Method[]; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[];
+      /** Up to three of your lenses that ran, drawn beside the built-ins; `atLeast`: its share is a floor, and `floorWhy` says what makes it one (floorCauses). */
+      own: { key: `L${number}`; name: string; atLeast: boolean; floorWhy?: string }[];
+      /** Those of yours that ran but did not fit: named under the chart, each opening its tab. */
+      ownLeft: { key: string; name: string }[];
+      /** Those of yours with no finished run here, each with runStateWords' words: named beside `ownLeft`, never dropped. */
+      ownNotRun: { key: string; name: string; why: string }[] }
   | { kind: 'analyses'; points: TimePoint[]; zone: string };
 
-const LENSES = Object.keys(LENS_INFO) as Lens[];
-const NAME = (m: Lens) => LENS_INFO[m].name;
+const BUILT_INS = Object.keys(LENS_INFO) as Method[];
 // Literal class names for Tailwind. Money loops back is grey, as everywhere
 // it is shown apart (its lens's tone), never the money hue. It is also dashed
 // and every series has its own marker shape, so identity never rests on hue
 // alone, which deutan readers could not tell apart.
-const STROKE: Record<Lens, string> = { A: 'stroke-cycle', AU: 'stroke-muted-foreground', AC: 'stroke-foreground' };
-const FILL: Record<Lens, string> = { A: 'fill-cycle', AU: 'fill-muted-foreground', AC: 'fill-foreground' };
-const DASH: Record<Lens, string | undefined> = { A: undefined, AU: '5 3', AC: undefined };
+const STROKE: Record<Method, string> = { A: 'stroke-cycle', AU: 'stroke-muted-foreground', AC: 'stroke-foreground' };
+const FILL: Record<Method, string> = { A: 'fill-cycle', AU: 'fill-muted-foreground', AC: 'fill-foreground' };
+const DASH: Record<Method, string | undefined> = { A: undefined, AU: '5 3', AC: undefined };
+// A round cap adds half the width to each end of a dash and closes small gaps, so yours are butt-capped: the gaps below are what they draw.
+// Yours share the flow colour, so each is told apart by its own dash and marker (never by hue): up to three, as the page picks.
+const OWN_DASH = ['2 2', '6 2', '1 3'];
+const OWN_SHAPE = ['triangle', 'cross', 'hexagon'] as const;
+const BUILT_IN_SHAPE = ['circle', 'square', 'diamond'] as const;
+
+/** One line of the chart: how it is named, stroked and marked. Built-ins and yours alike, so the drawing code below has one path. */
+interface Series { key: Lens; name: string; stroke: string; fill: string; dash: string | undefined; cap: 'round' | 'butt'; shape: (typeof BUILT_IN_SHAPE | typeof OWN_SHAPE)[number]; atLeast: boolean; floorWhy?: string }
+
+function seriesOf(own: { key: Lens; name: string; atLeast: boolean; floorWhy?: string }[]): Series[] {
+  return [
+    ...BUILT_INS.map((m, i): Series => ({ key: m, name: LENS_INFO[m].name, stroke: STROKE[m], fill: FILL[m], dash: DASH[m], cap: 'round', shape: BUILT_IN_SHAPE[i]!, atLeast: false })),
+    ...own.map((o, i): Series => ({ key: o.key, name: o.name, stroke: 'stroke-flow', fill: 'fill-flow', dash: OWN_DASH[i % 3], cap: 'butt', shape: OWN_SHAPE[i % 3]!, atLeast: o.atLeast, floorWhy: o.floorWhy })),
+  ];
+}
 
 const W = 720, H = 230, L = 48, R = 16, T = 12, B = 30;
 const SH = 64, ST = 8, SB = 22;
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const SPAN: Record<Bucket, number> = { hour: HOUR, day: DAY, week: 7 * DAY, month: 30.44 * DAY };
 
-const share = (v: Frac | null) => (v === null || v.whole === 0 ? null : v.part / v.whole);
+const share = (v: Frac | null | undefined) => (v == null || v.whole === 0 ? null : v.part / v.whole);
 const never = () => () => {};
 
 const pctText = (s: number) => pct(s, 1);
@@ -106,18 +127,23 @@ function periodText(at: number, bucket: Bucket, zone: string): string {
   return localTime(at, 'datetime', zone);
 }
 
-function Marker({ m, x, y, r = 4 }: { m: Lens; x: number; y: number; r?: number }) {
-  const cls = cn(FILL[m], 'stroke-card');
-  if (m === 'A') return <circle cx={x} cy={y} r={r} className={cls} strokeWidth={2} />;
-  if (m === 'AU') return <rect x={x - r} y={y - r} width={r * 2} height={r * 2} className={cls} strokeWidth={2} />;
-  return <path d={`M ${x} ${y - r - 1} L ${x + r + 1} ${y} L ${x} ${y + r + 1} L ${x - r - 1} ${y} Z`} className={cls} strokeWidth={2} />;
+function Marker({ s, x, y, r = 4 }: { s: Series; x: number; y: number; r?: number }) {
+  const cls = cn(s.fill, 'stroke-card');
+  const q = r + 1, a = r / 2 + 0.5;
+  const poly = (pts: [number, number][]) => <path d={`M ${pts.map(([dx, dy]) => `${x + dx} ${y + dy}`).join(' L ')} Z`} className={cls} strokeWidth={2} />;
+  if (s.shape === 'circle') return <circle cx={x} cy={y} r={r} className={cls} strokeWidth={2} />;
+  if (s.shape === 'square') return <rect x={x - r} y={y - r} width={r * 2} height={r * 2} className={cls} strokeWidth={2} />;
+  if (s.shape === 'diamond') return poly([[0, -q], [q, 0], [0, q], [-q, 0]]);
+  if (s.shape === 'triangle') return poly([[0, -q], [q, r], [-q, r]]);
+  if (s.shape === 'cross') return poly([[-a, -q], [a, -q], [a, -a], [q, -a], [q, a], [a, a], [a, q], [-a, q], [-a, a], [-q, a], [-q, -a], [-a, -a]]);
+  return poly([[-q, 0], [-r / 2, -q], [r / 2, -q], [q, 0], [r / 2, q], [-r / 2, q]]);
 }
 
-function Key({ m }: { m: Lens }) {
+function Key({ s }: { s: Series }) {
   return (
     <svg width="22" height="10" aria-hidden className="shrink-0">
-      <line x1="1" x2="21" y1="5" y2="5" strokeWidth={2} strokeLinecap="round" strokeDasharray={DASH[m]} className={STROKE[m]} />
-      <Marker m={m} x={11} y={5} r={2.5} />
+      <line x1="1" x2="21" y1="5" y2="5" strokeWidth={2} strokeLinecap={s.cap} strokeDasharray={s.dash} className={s.stroke} />
+      <Marker s={s} x={11} y={5} r={2.5} />
     </svg>
   );
 }
@@ -130,6 +156,13 @@ function runs(pts: ({ x: number; y: number } | null)[]): string[] {
     out[out.length - 1]!.push(`${p.x},${p.y}`);
   }
   return out.filter((r) => r.length > 0).map((r) => r.join(' '));
+}
+
+/** Lenses of yours by name, each opening its own tab on this page. */
+function TabLinks({ lenses }: { lenses: { key: string; name: string }[] }) {
+  return lenses.map((o, i) => (
+    <span key={o.key}>{i > 0 ? ', ' : ''}<Link href={`?method=${o.key}`} title={`Open ${o.name}'s tab, for its own figures`} className="text-foreground hover:underline">{o.name}</Link></span>
+  ));
 }
 
 /**
@@ -148,6 +181,12 @@ export function TimeChart(props: TimeChartProps) {
   const { zone } = props;
   const hrefs = props.kind === 'history' ? props.periodHrefs : undefined;
   const lensHrefs = props.kind === 'history' ? props.lensHrefs : undefined;
+  const lenses = seriesOf(props.kind === 'history' ? props.own : []);
+  const ownLeft = props.kind === 'history' ? props.ownLeft : [];
+  const ownNotRun = props.kind === 'history' ? props.ownNotRun : [];
+  const isOwn = (k: Lens) => lenses.some((m) => m.key === k && m.stroke === 'stroke-flow');
+  // A lens of yours has a share only of the sales its run has judged; none judged in a period that has sales is "not judged yet", not "no sale".
+  const noShare = (q: TimePoint, k: Lens) => (isOwn(k) && q.sales > 0 ? 'not judged yet' : 'no sale');
   if (!browser) return <figure className="aspect-[720/330] rounded-lg border bg-card" />;
 
   const history = props.kind === 'history';
@@ -157,7 +196,7 @@ export function TimeChart(props: TimeChartProps) {
   const to = history ? Math.max(lastAt, props.now) : lastAt;
   const span = Math.max(1, to - from);
   const unread = history && props.readThrough !== null && props.now - props.readThrough > 2 * SPAN[props.bucket] ? props.readThrough : null;
-  const max = Math.max(0.01, ...points.flatMap((p) => LENSES.map((m) => share(p.lens[m]) ?? 0)));
+  const max = Math.max(0.01, ...points.flatMap((p) => lenses.map((m) => share(p.lens[m.key]) ?? 0)));
   const ys = yTicks(max);
   const top = ys[ys.length - 1]!;
   const x = (t: number) => L + ((t - from) / span) * (W - L - R);
@@ -192,6 +231,7 @@ export function TimeChart(props: TimeChartProps) {
 
   return (
     <figure className="rounded-lg border bg-card p-4">
+      {history ? null : <p className="mb-3 text-xs text-muted-foreground">This shows the built-in lenses only: a lens of yours keeps only its latest run, so it has no earlier analyses to draw.</p>}
       <div
         className="relative rounded outline-none focus-visible:ring-2 focus-visible:ring-focus"
         tabIndex={0} role="group"
@@ -217,15 +257,15 @@ export function TimeChart(props: TimeChartProps) {
               <text x={x(t.at)} y={H - B + 17} textAnchor="middle" className="fill-muted-foreground text-[11px] tabular-nums">{t.label}</text>
             </g>
           ))}
-          {LENSES.map((m) => runs(points.map((q) => { const s = share(q.lens[m]); return s === null ? null : { x: px(q), y: y(s) }; })).map((pts, i) => (
+          {lenses.map((m) => runs(points.map((q) => { const s = share(q.lens[m.key] ?? null); return s === null ? null : { x: px(q), y: y(s) }; })).map((pts, i) => (
             pts.includes(' ')
-              ? <polyline key={`${m}${i}`} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" strokeDasharray={DASH[m]} className={STROKE[m]} points={pts} />
-              : <Marker key={`${m}${i}`} m={m} x={Number(pts.split(',')[0])} y={Number(pts.split(',')[1])} r={2} />
+              ? <polyline key={`${m.key}${i}`} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap={m.cap} strokeDasharray={m.dash} className={m.stroke} points={pts} />
+              : <Marker key={`${m.key}${i}`} s={m} x={Number(pts.split(',')[0])} y={Number(pts.split(',')[1])} r={2} />
           )))}
           {p ? (
             <g>
               <line x1={px(p)} x2={px(p)} y1={T} y2={H - B} className="stroke-muted-foreground" strokeWidth={1} />
-              {LENSES.map((m) => { const s = share(p.lens[m]); return s === null ? null : <Marker key={m} m={m} x={px(p)} y={y(s)} />; })}
+              {lenses.map((m) => { const s = share(p.lens[m.key] ?? null); return s === null ? null : <Marker key={m.key} s={m} x={px(p)} y={y(s)} />; })}
             </g>
           ) : null}
           <rect x={L} y={0} width={W - L - R} height={H} fill="transparent" onPointerMove={onMove} onPointerLeave={() => setAt(null)} onClick={onOpen} className={hrefs ? 'cursor-pointer' : undefined} />
@@ -261,17 +301,19 @@ export function TimeChart(props: TimeChartProps) {
           >
             <p className="mb-2 font-medium text-foreground tabular-nums">{title(p)}</p>
             <ul className="space-y-1.5">
-              {LENSES.map((m) => {
-                const v = p.lens[m];
+              {lenses.map((m) => {
+                const v = p.lens[m.key] ?? null;
                 const s = share(v);
                 return (
-                  <li key={m} className="flex items-start gap-2">
-                    <span className="pt-1"><Key m={m} /></span>
+                  <li key={m.key} className="flex items-start gap-2">
+                    <span className="pt-1"><Key s={m} /></span>
                     <span className="min-w-0">
-                      <span className="font-semibold text-foreground tabular-nums">{v === null ? 'not run' : s === null ? 'no sale' : pctText(s)}</span>{' '}
-                      {s !== null && notFinal.includes(m) ? <span className="text-muted-foreground">so far </span> : null}
-                      <span className="text-muted-foreground">{NAME(m)}</span>
+                      {s !== null && m.atLeast ? <span className="text-muted-foreground">at least </span> : null}
+                      <span className="font-semibold text-foreground tabular-nums">{v === null ? NOT_RUN : s === null ? noShare(p, m.key) : pctText(s)}</span>{' '}
+                      {s !== null && (notFinal as Lens[]).includes(m.key) ? <span className="text-muted-foreground">so far </span> : null}
+                      <span className="text-muted-foreground">{m.name}</span>
                       {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{num(v.part)} of {num(v.whole)} sales</span> : null}
+                      {s === null && v !== null && noShare(p, m.key) === 'not judged yet' ? <span className="block text-muted-foreground">its run has not read this far yet</span> : null}
                     </span>
                   </li>
                 );
@@ -293,9 +335,20 @@ export function TimeChart(props: TimeChartProps) {
       </div>
 
       <figcaption className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {LENSES.map((m) => <span key={m} className="flex items-center gap-1.5"><Key m={m} />{NAME(m)}</span>)}
+        {lenses.map((m) => (
+          <span key={m.key} className="flex items-center gap-1.5">
+            <Key s={m} />{m.name}
+            {m.atLeast ? <span title={`${m.name}'s share is a floor${m.floorWhy ? `: ${m.floorWhy}` : ''}`}>(at least)</span> : null}
+          </span>
+        ))}
         <span>{points.length} {history ? `${props.bucket}s with trades` : 'analyses'} · times in {zone.replaceAll('_', ' ')} · hover or use ← → for each</span>
       </figcaption>
+      {ownLeft.length > 0 || ownNotRun.length > 0 ? (
+        <p data-own-left className="mt-2 space-y-1 text-xs text-muted-foreground">
+          {ownLeft.length > 0 ? <span className="block">Lenses of yours not drawn, to keep the chart readable (it draws three at most): <TabLinks lenses={ownLeft} />.</span> : null}
+          {ownNotRun.length > 0 ? <span className="block">No line for these lenses of yours:{ownNotRun.map((o) => <span key={o.key}> <TabLinks lenses={[o]} /> {o.why}</span>)}</span> : null}
+        </p>
+      ) : null}
 
       <details className="mt-3 text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Show as a table</summary>
@@ -304,7 +357,7 @@ export function TimeChart(props: TimeChartProps) {
             <thead className="sticky top-0 bg-card text-muted-foreground">
               <tr className="border-b">
                 <th className="px-2 py-1.5 font-medium">{history ? 'Period' : 'Analysis'}</th>
-                {LENSES.map((m) => <th key={m} className="px-2 py-1.5 text-right font-medium">{NAME(m)}</th>)}
+                {lenses.map((m) => <th key={m.key} className="px-2 py-1.5 text-right font-medium">{m.name}{m.atLeast ? ' (at least)' : ''}</th>)}
                 <th className="px-2 py-1.5 text-right font-medium">{history ? 'Sales' : 'Wallets checked'}</th>
               </tr>
             </thead>
@@ -314,7 +367,7 @@ export function TimeChart(props: TimeChartProps) {
                   <td className="px-2 py-1" data-time={history ? undefined : ''}>
                     {history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{periodText(q.at, props.bucket, zone)}</Link> : periodText(q.at, props.bucket, zone)) : localTime(q.at, 'datetime', zone)}
                   </td>
-                  {LENSES.map((m) => { const s = share(q.lens[m]); const h = lensHrefs?.[i]?.[m]; return <td key={m} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? '—' : h ? <Link href={h} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
+                  {lenses.map((m) => { const s = share(q.lens[m.key] ?? null); const h = lensHrefs?.[i]?.[m.key]; return <td key={m.key} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? (q.lens[m.key] != null && isOwn(m.key) && q.sales > 0 ? <span className="text-muted-foreground">not judged yet<span className="block text-[11px]">its run has not read this far yet</span></span> : '—') : h ? <Link href={h} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
                   <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{num(q.sales)}</Link> : num(q.sales)) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
                 </tr>
               ))}

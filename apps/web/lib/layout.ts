@@ -1,6 +1,8 @@
-import { METHODS, ZERO, type FlaggedTransfer, type Flow, type Method, type Witness } from '@washtrace/detect';
-import { LENSES } from './format';
+import { METHODS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
+import type { LensKey } from '@washtrace/detect/trades';
+import { LENSES, andList, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
+import { weiToEth } from './trades-url';
 
 /** Two witnesses that would read as the same sentence share a key. */
 function witnessKey(w: Witness): string {
@@ -42,15 +44,34 @@ const FAN_MAX = 6;
 export interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
 /**
  * `tx` and `row` are the transfer an asset arrow opens and numbers (a bundle's
- * first), and null for money. `from` and `to` are the wallets it joins.
+ * first), and null for money. `from` and `to` are the wallets it joins. Tone
+ * `own` is an arrow only a lens of yours drew: `token` is then the other token
+ * of the collection it moved, for its label to open. It is also a trade of
+ * this token no built-in flagged that a loop of yours lights: `yours` then
+ * names those lenses, so the arrow is never drawn or called "not flagged".
  */
-export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string }
-/** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. */
-export interface DrawnLoop { key: string; methods: Method[]; edges: string[]; nodes: string[] }
+export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[] }
+/** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. A lens of yours's loop is one reason, of its one lens. */
+export interface DrawnLoop { key: string; methods: LensKey[]; edges: string[]; nodes: string[] }
 export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
 /** What an edge's title says of its flags: nothing for a clean one, and that an apart lens alone does not count. */
 const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ` · flagged only by ${LENSES.AU.name}, not counted` : ' · flagged');
+
+/** An amount on a money arrow: ETH to 4 places, never 0 for a payment above it; "?" when the amount was not read. */
+function amount(wei: string | null): string {
+  if (wei === null) return '?';
+  const [whole, frac = ''] = weiToEth(wei).split('.');
+  const cut = frac.slice(0, 4).replace(/0+$/, '');
+  return cut ? `${whole}.${cut}` : frac ? '<0.0001' : whole!;
+}
+
+/** What an arrow only a lens of yours drew says on hover. */
+function ownTitle(e: LoopEdge): string {
+  if (e.kind === 'nft-collection' || e.kind === 'nft-token') return `${e.tokenId === null ? 'A token' : `#${e.tokenId}`} of this collection changing hands, on a loop of a lens of yours`;
+  const paid = e.amountWei === null ? 'An amount not read' : `${amount(e.amountWei)} ${e.kind === 'weth' ? 'WETH' : 'ETH'}`;
+  return e.kind === 'funds' ? `${paid} funding the seller before the trade, on a loop of a lens of yours` : `${paid} paid, on a loop of a lens of yours`;
+}
 
 /**
  * One token's graph, as the paper draws it in Figure 8: wallets as nodes,
@@ -62,11 +83,21 @@ const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? 
  * Parallel edges between one pair bow apart by their index so each stays
  * visible; that is the whole of the layout's cleverness, and a token traded
  * a few hundred times is still legible because only the pairs fan out.
+ *
+ * `own` are your lenses' flags of the token, each the concrete path its lens
+ * found, drawn after everything above so a built-in drawing is the same with
+ * or without them. A transfer of this token on a path lights its arrow; every
+ * other step is a new arrow of tone `own`, and a wallet on a path that never
+ * held the token (a money middle, a funder, the far end of another token's
+ * transfer) joins the middles inside the ring.
  */
-export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Flow[], middles: readonly string[], size = 560): Drawing {
+export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Flow[], middles: readonly string[], own: readonly OwnFlag[] = [], names: Lenses = {}, size = 560): Drawing {
   const holders: string[] = [];
   for (const t of transfers) for (const a of [t.from, t.to]) if (a !== ZERO && !holders.includes(a)) holders.push(a);
   const inner = middles.filter((m) => !holders.includes(m));
+  for (const f of own) {
+    for (const a of [...f.wallets, ...f.path.flatMap((e) => [e.from, e.to])]) if (a !== ZERO && !holders.includes(a) && !inner.includes(a)) inner.push(a);
+  }
   const c = size / 2;
   // Two holders sit left and right rather than top and bottom: a middle
   // starts at the top of its own ring, and would otherwise sit on the line
@@ -168,6 +199,44 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const money = edges.filter((e) => e.kind === 'money' && own.has(e.from) && own.has(e.to)).map((e) => e.key);
     return { key: `r${i}`, methods: r.methods, edges: [...new Set([...assets, ...money])], nodes: wallets };
   });
+
+  /** The row of a transfer of this token on a path: the flag's own trade exactly, any other by its hash and its two wallets, else its hash alone (custody folds A → escrow → B into one step). */
+  const rowOf = (e: LoopEdge, f: OwnFlag, j: number): number => {
+    if (j === 0) return transfers.findIndex((t) => t.txHash === f.txHash && t.logIndex === f.logIndex);
+    if (e.tx === null) return -1;
+    const exact = transfers.findIndex((t) => t.txHash === e.tx && t.from === e.from && t.to === e.to);
+    return exact >= 0 ? exact : transfers.findIndex((t) => t.txHash === e.tx);
+  };
+  own.forEach((f, i) => {
+    const keys: string[] = [];
+    f.path.forEach((e, j) => {
+      const row = e.kind === 'nft-token' ? rowOf(e, f, j) : -1;
+      const drawn = row < 0 ? undefined : edgeOf.get(row);
+      if (drawn !== undefined) { keys.push(drawn); return; }
+      // A mint or a burn is no wallet to draw an arrow to.
+      if (!at.has(e.from) || !at.has(e.to)) return;
+      const asset = e.kind === 'nft-token' || e.kind === 'nft-collection';
+      const key = `o${i}e${j}`;
+      edges.push({
+        key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null,
+        label: asset ? (e.kind === 'nft-collection' && e.tokenId !== null ? `#${e.tokenId}` : '') : amount(e.amountWei),
+        title: ownTitle(e), ...(e.kind === 'nft-collection' && e.tokenId !== null ? { token: e.tokenId } : {}),
+        ...curve(at.get(e.from)!, at.get(e.to)!, nextIn(e.from, e.to), c),
+      });
+      keys.push(key);
+    });
+    const wallets = [...new Set([...f.wallets, ...f.path.flatMap((e) => [e.from, e.to])])].filter((a) => a !== ZERO);
+    loops.push({ key: `o${i}`, methods: [`L${f.lensId}`], edges: [...new Set(keys)], nodes: wallets });
+  });
+  // A trade the built-ins left clean that a loop of yours lights takes your lenses' hue and names them (`names`, else "a lens of yours"):
+  // drawn in the clean hue, the legend would call a caught trade "not flagged".
+  const ownLoops = loops.slice(loops.length - own.length);
+  for (const e of edges) {
+    if (e.kind !== 'asset' || e.tone !== 'clean') continue;
+    const by = [...new Set(ownLoops.filter((l) => l.edges.includes(e.key)).flatMap((l) => l.methods.map((k) => names[k]?.name ?? 'a lens of yours')))];
+    if (by.length === 0) continue;
+    Object.assign(e, { tone: 'own', yours: by, title: `${e.title} · not flagged by a built-in lens; on a loop of ${andList(by)}` });
+  }
   return { size, nodes, edges, loops };
 }
 

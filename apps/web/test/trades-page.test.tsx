@@ -1,5 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 import { parseView } from '@/lib/trades-url';
 
 const ADDR = '0x' + 'b'.repeat(40);
@@ -12,8 +13,15 @@ const row = (hash: string, over: Record<string, unknown> = {}) => ({
   priceWei: '1500000000000000000', currency: '', flags: {}, lenses: ['A'], judged: true, heldS: 7200, buyerAgeS: 86_400 * 3, floorRatio: 1.25, ...over,
 });
 
+
+/** A saved lens of yours and its run on this collection (null: it has none here). */
+const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', over: Record<string, unknown> = {}) => ({
+  lens: { id, key: `L${id}`, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 },
+  run: { lensId: id, collectionId: 1, status, progress: null, lensVersion: 1, analysisId: 1, throughBlock: 10, totals: status === 'done' ? { available: true } : null, error: null, retryAt: null, finishedAt: null, tookMs: 1, ...over },
+});
+
 const fresh = () => ({
-  moneyRan: true, analysed: true, loops: undefined as object | null | undefined, rows: [row('0xs1'), row('0xs2', { lenses: ['A', 'AU'] })] as ReturnType<typeof row>[], count: { total: 2, unjudged: 0 },
+  runs: [] as ReturnType<typeof ownRun>[], moneyRan: true, analysed: true, loops: undefined as object | null | undefined, rows: [row('0xs1'), row('0xs2', { lenses: ['A', 'AU'] })] as ReturnType<typeof row>[], count: { total: 2, unjudged: 0 },
   groups: [{ key: 'blur', trades: 3, caught: { A: 2, AU: 1 } }, { key: '-', trades: 1, caught: {} }],
   calls: { trades: [] as unknown[][], count: [] as unknown[][], groups: [] as unknown[][] },
 });
@@ -21,7 +29,10 @@ const state = fresh();
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', latest: !state.analysed ? null : { throughBlock: 10, loops: state.loops, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: m === 'A' || state.moneyRan, tokens: 0, wallets: 0 }])) } }),
+    collection: async () => ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', latest: !state.analysed ? null : { id: 1, throughBlock: 10, loops: state.loops, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: m === 'A' || state.moneyRan, tokens: 0, wallets: 0 }])) } }),
+    lensRuns: async () => state.runs,
+    lensTokens: async () => ({ rows: [], total: 0 }),
+    lensWallets: async () => ({ rows: [], total: 0 }),
     trades: async (...a: unknown[]) => { state.calls.trades.push(a); return state.rows; },
     tradeCount: async (...a: unknown[]) => { state.calls.count.push(a); return state.count; },
     tradeGroups: async (...a: unknown[]) => { state.calls.groups.push(a); return state.groups; },
@@ -39,6 +50,8 @@ async function dom(sp: Record<string, string | string[]> = {}): Promise<HTMLElem
 }
 async function page(sp: Record<string, string | string[]> = {}): Promise<string> { return (await dom(sp)).textContent ?? ''; }
 // The DOM's selector engine reads `?` and `&` in an attribute value badly, so links are found by comparing the attribute.
+/** Every text, aria-label and title in `c`: a lens key may show in none of them. */
+const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-label],[title]')].flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')])].join('\n');
 const linkTo = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
 const hrefs = (c: HTMLElement, sel: string) => [...c.querySelectorAll(sel)].map((a) => a.getAttribute('href'));
 
@@ -75,8 +88,17 @@ describe('the flagged page, Trades view', () => {
 
   it('a caught filter on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', caught: 'AU' })).toContain('Money loops back did not run on this collection, so it flags nothing yet.');
+    expect(await page({ kind: 'trades', caught: 'AU' })).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
     expect(state.calls.trades).toHaveLength(0);
+  });
+
+  it('before any analysis a built-in is never said to have missed the latest one: it has not run here at all', async () => {
+    state.analysed = false;
+    const text = await page({ kind: 'trades', caught: 'AU' });
+    expect(text).toContain('Money loops back has not run on this collection, so it flags nothing yet.');
+    expect(text).not.toContain('latest analysis');
+    cleanup();
+    expect(await page({ method: 'A', kind: 'tokens' })).toContain('Round trips has not run on this collection, so it flags nothing yet.');
   });
 
   it('says how many matching trades are newer than the latest analysis, and shows them as not judged', async () => {
@@ -90,7 +112,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a not-caught lens that did not run is left out and said', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', not: 'AC' })).toContain('Linked wallets did not run, so "not flagged by" it is left out.');
+    expect(await page({ kind: 'trades', not: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
   });
 
   it('each chip removes its own filter and keeps the grouping; each group row and share cell adds its group', async () => {
@@ -113,10 +135,10 @@ describe('the flagged page, Trades view', () => {
     expect([...el.querySelectorAll('th')].filter((t) => t.textContent === 'Money loops back (not counted)').length).toBe(2);
   });
 
-  it('a lens that did not run shows did not run in a group row', async () => {
+  it('a lens that did not run shows not run in a group row', async () => {
     state.moneyRan = false;
     const el = await dom({ kind: 'trades', by: 'marketplace' });
-    const blur = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Blur') && r.textContent.includes('did not run'));
+    const blur = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Blur') && r.textContent.includes('not run'));
     expect(blur).toBeDefined();
   });
 
@@ -169,7 +191,7 @@ describe('the flagged page, Trades view', () => {
     Object.assign(state, { moneyRan: false, count: { total: 0, unjudged: 0 }, rows: [] });
     const text = await page({ kind: 'trades', not: 'AC' });
     expect(text).toContain('No trade matches these filters.');
-    expect(text).toContain('Linked wallets did not run, so "not flagged by" it is left out.');
+    expect(text).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
   });
 
   it('every header sorts and toggles the direction; a lens column sorts by the lens', async () => {
@@ -263,7 +285,7 @@ describe('the flagged page, Trades view', () => {
     }
     expect(sent.from).toEqual([from]);
     expect(sent.to).toEqual([to]);
-    const { q } = parseView(sent, 'UTC');
+    const { q } = parseView(sent, 'UTC', new Set());
     expect([q.fromMs, q.toMs]).toEqual([Date.parse(from), Date.parse(to)]);
     expect(q.venues).toEqual(['blur']);
   });
@@ -295,7 +317,7 @@ describe('the flagged page, Trades view', () => {
   it('a group on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
     const text = await page({ kind: 'trades', group: `AU.t.7` });
-    expect(text).toContain('Money loops back did not run on this collection, so it flags nothing yet.');
+    expect(text).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
     expect(text).not.toContain('No trade matches');
     expect(state.calls.trades).toHaveLength(0);
   });
@@ -327,5 +349,103 @@ describe('the flagged page, Trades view', () => {
     const text = await page({ kind: 'trades' });
     expect(text).toContain('2 trades match · everything is in the address bar, so this view can be shared. Not judged yet.');
     expect(text).not.toContain('newer than the latest analysis');
+  });
+
+  describe('with a lens of yours', () => {
+    const mine = () => { state.runs = [ownRun(7, 'Blur 3-hop')]; state.rows = [row('0xs1', { lenses: ['A', 'L7'] })]; state.groups = [{ key: 'blur', trades: 3, caught: { L7: 2 } } as never]; };
+
+    it('names it in the lens nav, the Flagged-by boxes, the dot column and the Group by column, and never by its key', async () => {
+      mine();
+      const el = await dom({ kind: 'trades', caught: 'L7', by: 'marketplace' });
+      expect(el.querySelector('nav[aria-label=Lens]')?.textContent).toContain('Blur 3-hop');
+      const boxes = [...el.querySelectorAll('fieldset')].find((f) => f.querySelector('legend')?.textContent === 'Flagged by')!;
+      expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Blur 3-hop']);
+      expect([...el.querySelectorAll('thead th')].map((t) => t.textContent).filter((t) => t === 'Blur 3-hop')).toHaveLength(2);
+      expect(el.querySelector('i[aria-label="Flagged by Blur 3-hop"]')?.className).toContain('bg-flow');
+      expect(el.textContent).toContain('Flagged by Blur 3-hop');
+      expect(reads(el)).not.toMatch(/\bL7\b/);
+      expect(state.calls.trades[0]![2]).toMatchObject({ ran: ['A', 'AU', 'AC', 'L7'] });
+    });
+
+    it('a filter on a run that is queued says it has not run, in the one sentence every page uses, and reads nothing', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
+      expect(await page({ kind: 'trades', caught: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet.');
+      expect(state.calls.trades).toHaveLength(0);
+      // A built-in's is about the latest analysis (Ruling S16).
+      state.moneyRan = false;
+      expect(await page({ kind: 'trades', caught: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
+    });
+
+    it('reads every trade list through the block your lens\'s run read, so a newer trade is never judged clean by it (Ruling FF)', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+      await dom({ kind: 'trades', not: 'L7', by: 'marketplace' });
+      expect(state.calls.trades[0]![2]).toMatchObject({ through: { L7: 8 } });
+      expect(state.calls.count[0]![2]).toMatchObject({ through: { L7: 8 } });
+      expect(state.calls.groups[0]![3]).toMatchObject({ through: { L7: 8 } });
+    });
+
+    it('marks a trade past that block not judged yet in your lens\'s column, as a trade no analysis covered is', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+      state.rows = [row('0xs1', { blockNumber: 8, lenses: ['A', 'L7'] }), row('0xs2', { blockNumber: 9, lenses: ['A'] })];
+      const el = await dom({ kind: 'trades' });
+      const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.lastElementChild!);
+      expect(cells[0]!.querySelector('i[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
+      expect(cells[1]!.textContent).toBe('Not judged yet');
+      expect(cells[1]!.querySelector('[aria-label="Not flagged"]')).toBeNull();
+      // The built-ins judged it: their cells read as before.
+      expect(el.querySelectorAll('tbody tr')[1]!.querySelector('i[aria-label="Flagged by Round trips"]')).not.toBeNull();
+    });
+
+    it('takes a group\'s share of your lens over the trades it judged there, not every trade in the group', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+      state.groups = [{ key: 'blur', trades: 4, caught: { A: 2, L7: 1 }, judged: { L7: 2 } } as never];
+      const el = await dom({ kind: 'trades', by: 'marketplace' });
+      const cells = [...el.querySelector('section[aria-label="Group by"] tbody tr')!.querySelectorAll('td')].map((td) => td.textContent);
+      expect(cells).toEqual(['Blur', '4', '50%', '0%', '0%', '50%']);
+    });
+
+    it('says above Trades which lens of yours is behind, and why (Ruling FF)', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
+      expect(await page({ kind: 'trades' })).toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
+      state.runs = [{ ...ownRun(7, 'Blur 3-hop', 'queued', { totals: { available: true } }), lens: { ...ownRun(7, 'Blur 3-hop').lens, version: 2 } }];
+      expect(await page({ kind: 'trades' })).toContain("Blur 3-hop shows figures from before its latest edit, so its flags are the old rule's until the new run saves.");
+      state.runs = [ownRun(7, 'Blur 3-hop')];
+      expect(await page({ kind: 'trades' })).not.toContain('shows figures from');
+    });
+
+    it('a not-flagged-by on a queued lens is left out and said by name', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
+      state.count = { total: 0, unjudged: 0 };
+      expect(await page({ kind: 'trades', not: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet. It is left out of "not flagged by".');
+    });
+
+    it('a deleted lens in the URL is dropped: no chip, no failure, every trade listed', async () => {
+      mine();
+      const el = await dom({ kind: 'trades', caught: 'L99', not: 'L99', group: 'L99.t.5', sort: 'lens-L99' });
+      expect(el.textContent).toContain('2 trades match');
+      expect(el.querySelector('a[title="Remove this filter"]')).toBeNull();
+      expect(state.calls.trades[0]![1]).toMatchObject({ caught: [], notCaught: [], group: null, sort: 'date' });
+    });
+
+    it('a sort on a lens of yours that did not run falls back to newest first', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
+      await dom({ kind: 'trades', sort: 'lens-L7' });
+      expect(state.calls.trades[0]![1]).toMatchObject({ sort: 'date', dir: 'desc' });
+    });
+
+    it('the Tokens tab for a filter on your lens carries its key in the link', async () => {
+      mine();
+      const el = await dom({ kind: 'trades', caught: 'L7' });
+      const tab = [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === 'Tokens');
+      expect(tab?.getAttribute('href')).toBe(`${BASE}/flagged?method=L7&kind=tokens`);
+    });
+
+    it('the tokens list of your lens names it in the heading and the tab title', async () => {
+      mine();
+      const el = await dom({ kind: 'tokens', method: 'L7' });
+      expect(el.textContent).toContain('Tokens flagged by Blur 3-hop');
+      const { generateMetadata } = await import('@/app/c/[chain]/[address]/flagged/page');
+      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ kind: 'tokens', method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });
+    });
   });
 });

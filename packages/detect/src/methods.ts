@@ -1,4 +1,4 @@
-import { AddressGraph, tokenGraph, type Hop } from './graph.js';
+import { AddressGraph, chainOrder, compare, tokenGraph, type Hop } from './graph.js';
 import type { Payments } from './payments.js';
 import type { Analysis, Flag, Method, MethodTotals, Transfer, Witness } from './types.js';
 
@@ -57,13 +57,7 @@ export function analyze(input: Input): Analysis {
   const rules: Rules = { ...RULES, ...input.rules };
   const { transfers } = input;
 
-  // Chain order, and a total one: the store keys a transfer by its tx and
-  // log, so no two tie. The store returns rows in no set order, and the
-  // tokens, their hops and so the flags must come out the same whatever it was.
-  const order = transfers.map((_, i) => i).sort((i, j) => {
-    const x = transfers[i]!, y = transfers[j]!;
-    return x.blockNumber - y.blockNumber || x.logIndex - y.logIndex || compare(x.txHash, y.txHash);
-  });
+  const order = chainOrder(transfers);
   const byToken = new Map<string, number[]>();
   for (const i of order) {
     const list = byToken.get(transfers[i]!.tokenId);
@@ -383,15 +377,11 @@ function runs(ends: Int32Array, rank: Int32Array): { start: Int32Array; run: Int
   return { start, run };
 }
 
-/** Code-unit order: a total order on addresses and hashes, and unlike localeCompare, fast. */
-function compare(x: string, y: string): number {
-  return x < y ? -1 : x > y ? 1 : 0;
-}
-
-function sum(
+/** One method's totals from the trades it flagged; a lens run sums its own the same way, so its share reads like a built-in's. */
+export function sum(
   transfers: readonly Transfer[],
   moved: readonly number[],
-  flagged: ReadonlyMap<number, Witness>,
+  flagged: ReadonlyMap<number, unknown>,
   money: ReadonlySet<string>,
   available: boolean,
 ): MethodTotals {

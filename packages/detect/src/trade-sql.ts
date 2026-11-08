@@ -1,15 +1,20 @@
 import { HEADLINE, METHODS, type Method, type Transfer, type Witness } from './types.js';
-import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
+import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
 
 /**
  * One row of a Trades list: the transfer, the lenses that ran and flag it, and
  * its facts. One no analysis has covered yet is not judged: it has no facts and
  * no lenses, which is not the same as clean.
  */
-export interface TradeRow extends Transfer { lenses: Method[]; judged: boolean; heldS: number | null; buyerAgeS: number | null; floorRatio: number | null }
+export interface TradeRow extends Transfer { lenses: LensKey[]; judged: boolean; heldS: number | null; buyerAgeS: number | null; floorRatio: number | null }
 
-/** One Group by row: its key ('-' for unknown), its trades, and how many each lens that ran caught. */
-export interface TradeGroup { key: string; trades: number; caught: Partial<Record<Method, number>> }
+/**
+ * One Group by row: its key ('-' for unknown), its trades, and how many each
+ * lens that ran caught. `judged` is, for each lens of yours that ran, how many
+ * of `trades` it judged, its share's denominator: those through its run's block
+ * (Ruling FF). Absent when none of yours ran; a built-in's denominator is `trades`.
+ */
+export interface TradeGroup { key: string; trades: number; caught: Partial<Record<LensKey, number>>; judged?: Partial<Record<LensKey, number>> }
 
 export type TokenSort = 'caught' | 'share' | 'volume' | 'newest';
 export type WalletSort = 'caught' | 'share' | 'volume' | 'first';
@@ -20,14 +25,15 @@ export type WalletSort = 'caught' | 'share' | 'volume' | 'first';
  * (`closedByMoney` of them closed by a payment, `laps` their cycles summed),
  * `pairs` the linked pairs (`middles` of them through a third wallet), and
  * `wallets` every wallet in any of them. `volumeWei` is its caught sales priced
- * in money; `lastAt` its newest counted trade.
+ * in money; `lastAt` its newest counted trade. A saved lens has no loops, so
+ * those fields are null on its rows.
  */
-export interface TokenLine { tokenId: string; caught: number; trades: number; volumeWei: string; lastAt: number | null; loops: number; pairs: number; wallets: number; closedByMoney: number; laps: number; middles: number }
+export interface TokenLine { tokenId: string; caught: number; trades: number; volumeWei: string; lastAt: number | null; loops: number | null; pairs: number | null; wallets: number | null; closedByMoney: number | null; laps: number | null; middles: number | null }
 /**
  * One row of a lens's wallet list, counted as a token's are; `partners` are the other wallets in its loops.
  * `firstAt` is its first *counted* trade, of the trades `trades` counts: a mint into it is not one.
  */
-export interface WalletLine { address: string; caught: number; trades: number; volumeWei: string; firstAt: number | null; loops: number; pairs: number; partners: number }
+export interface WalletLine { address: string; caught: number; trades: number; volumeWei: string; firstAt: number | null; loops: number | null; pairs: number | null; partners: number | null }
 /** A lens list's order, its Find box's text (read by findOf), and its page. */
 export interface ListOpts<S> { sort: S; find: string | null; limit: number; offset: number }
 /**
@@ -77,7 +83,11 @@ export function toFlagged(r: any): FlaggedTransfer {
 export function toTrade(r: any): TradeRow {
   const num = (v: unknown) => (v === null ? null : Number(v));
   return {
-    ...toTransfer(r), lenses: METHODS.filter((m) => r.lenses.includes(m)), judged: r.judged,
+    // The built-ins in their order, then your lenses by id.
+    ...toTransfer(r), lenses: [
+      ...METHODS.filter((m) => r.lenses.includes(m)),
+      ...(r.lenses as string[]).filter(isOwnKey).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))),
+    ] as LensKey[], judged: r.judged,
     heldS: num(r.held_s), buyerAgeS: num(r.buyer_age_s), floorRatio: r.floor_ratio,
   };
 }
@@ -145,18 +155,53 @@ export const binder = (params: unknown[]) => (v: unknown): string => {
   return `$${params.length}`;
 };
 
+/**
+ * Where a lens's flags are read from, as the table (aliased `as`) and the
+ * condition that picks the lens, its value bound into `params`. A built-in's
+ * are in `flags` by method; a saved lens's in `lens_flags` by its id, which
+ * reaches SQL as a bound number like every other value.
+ */
+export function flagSource(key: LensKey, params: unknown[], as = 'f'): { from: string; where: string } {
+  const id = lensIdOf(key);
+  params.push(id ?? key);
+  const at = `$${params.length}`;
+  return id === null
+    ? { from: `washtrace.flags ${as}`, where: `${as}.method = ${at}` }
+    : { from: `washtrace.lens_flags ${as}`, where: `${as}.lens_id = ${at}` };
+}
+
 /** Whether lens `m` flags transfer `t`. Only ever asked of a lens in `ctx.ran`. */
-const flaggedBy = (m: Method, p: (v: unknown) => string) =>
-  `EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = ${p(m)} AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)`;
+const flaggedBy = (m: LensKey, params: unknown[]) => {
+  const { from, where } = flagSource(m, params);
+  return `EXISTS (SELECT 1 FROM ${from} WHERE f.collection_id = t.collection_id AND ${where} AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)`;
+};
+
+/**
+ * Ruling FF: the condition on transfer `t` that keeps lens `m` to the trades
+ * its run judged, its block bound into `params`, or null for a built-in or a
+ * lens that read them all (see TradeContext.through).
+ */
+export function judgedThrough(m: LensKey, ctx: TradeContext, params: unknown[]): string | null {
+  const through = isOwnKey(m) ? ctx.through?.[m] : undefined;
+  return through === undefined || through === null ? null : `t.block_number <= ${binder(params)(through)}::bigint`;
+}
 
 /** A whole number as Postgres numeric takes it: a wei amount or a token id. */
 const WHOLE = /^\d{1,78}$/;
 
-/** A lens's caught trades: its flags `f` (lens `$2`) on the counted transfers `t` of collection `$1`, with their facts `x`. */
-export const CAUGHT_FROM = `FROM washtrace.flags f
+/**
+ * A lens's caught trades: its flags `f` (the lens is `$2`, bound by flagSource
+ * after collection `$1`) on the counted transfers `t`, with their facts `x`.
+ */
+export function caughtOf(key: LensKey, params: unknown[]): { from: string; where: string } {
+  const src = flagSource(key, params);
+  return {
+    from: `FROM ${src.from}
   JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
-  JOIN washtrace.trade_facts x ON x.collection_id = f.collection_id AND x.tx_hash = f.tx_hash AND x.log_index = f.log_index`;
-export const CAUGHT_WHERE = 'f.collection_id = $1 AND f.method = $2 AND x.counted';
+  JOIN washtrace.trade_facts x ON x.collection_id = f.collection_id AND x.tx_hash = f.tx_hash AND x.log_index = f.log_index`,
+    where: `f.collection_id = $1 AND ${src.where} AND x.counted`,
+  };
+}
 /** Transfer `t`'s facts, when the analysis counted it. */
 export const COUNTED_JOIN = 'JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted';
 /** Transfer `t` once for each wallet in it, as `s.address`: a wallet that sold to itself is in it once. */
@@ -166,9 +211,9 @@ export const SIDES = 'CROSS JOIN LATERAL unnest(CASE WHEN t.to_address = t.from_
  * priced in money, `$3`), and the loops they point at, repeats and all; a read
  * by `= ANY` takes each loop once.
  */
-export const CAUGHT_COLUMNS = `count(*)::int AS caught,
+export const caughtColumns = (key: LensKey) => `count(*)::int AS caught,
   COALESCE(sum(CASE WHEN t.marketplace IS NOT NULL AND t.currency = ANY($3::text[]) THEN t.price_wei END), 0) AS volume,
-  array_agg(f.witness_id) AS ids`;
+  ${isOwnKey(key) ? 'NULL::int[]' : 'array_agg(f.witness_id)'} AS ids`;
 /** A lens list's orders, over its rows `c`; each caller adds its own key last, so ties keep one order. */
 export const LIST_ORDER = {
   caught: 'c.caught DESC',
@@ -195,6 +240,31 @@ export function loopsOf(self: string | null): string {
 }
 
 /**
+ * Your lens's list row `c`, counted from its stored paths as loopsOf counts
+ * witnesses, so a reader meets one form for every lens: `loops` its flags,
+ * `closed` those whose path has a money edge (or `funds`), `middles` those
+ * with a wallet that is neither seller nor buyer (a flag's wallets always hold
+ * both), `laps` as many as loops, `pairs` none, and `wallets` the distinct
+ * wallets in them, other than `self`. A token row reads the flags on its token;
+ * a wallet row (`self` set) those holding the wallet, through the GIN index.
+ * The lens is `$2`, as caughtOf bound it; only counted trades, as `caught` is.
+ */
+export function ownLoopsOf(key: string, self: string | null): string {
+  const from = `FROM washtrace.lens_flags v
+      JOIN washtrace.transfers vt ON vt.collection_id = v.collection_id AND vt.tx_hash = v.tx_hash AND vt.log_index = v.log_index
+      JOIN washtrace.trade_facts vx ON vx.collection_id = v.collection_id AND vx.tx_hash = v.tx_hash AND vx.log_index = v.log_index AND vx.counted`;
+  const where = `WHERE v.collection_id = $1 AND v.lens_id = $2 AND ${self === null ? `vt.token_id = c.${key}` : `v.wallets @> ARRAY[${self}]::text[]`}`;
+  return `CROSS JOIN LATERAL (SELECT
+      count(*)::int AS loops,
+      count(*) FILTER (WHERE jsonb_path_exists(v.path, '$[*] ? (@.kind == "eth" || @.kind == "internal" || @.kind == "weth" || @.kind == "funds")'))::int AS closed,
+      count(*)::int AS laps,
+      0 AS pairs,
+      count(*) FILTER (WHERE cardinality(v.wallets) > 2)::int AS middles,
+      (SELECT count(DISTINCT a)::int ${from} CROSS JOIN LATERAL unnest(v.wallets) a ${where}${self === null ? '' : ` AND a <> ${self}`}) AS wallets
+    ${from} ${where}) s`;
+}
+
+/**
  * The one place a Trades list's filters become SQL. The page, its count, its
  * groups and its stream all read through it, so they always hold the same
  * trades. Every value is bound into `params`. Flags are read only for lenses
@@ -203,17 +273,23 @@ export function loopsOf(self: string | null): string {
  */
 export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params: unknown[]): string {
   const p = binder(params);
-  const ran = (m: Method) => ctx.ran.includes(m);
+  const ran = (m: LensKey) => ctx.ran.includes(m);
   const c = p(id);
   // Counted, or not judged yet. A transfer the analysis did not count (a mint, a custody move) is no trade.
   const where = [`t.collection_id = ${c}`, '(x.counted OR x.tx_hash IS NULL)'];
   const none = () => where.push('false');
   if (q.kind === 'sales') where.push('t.marketplace IS NOT NULL');
   if (q.caught.some((m) => !ran(m))) none();
-  for (const m of q.caught.filter(ran)) where.push(flaggedBy(m, p));
-  // Not caught is judged and clean. A lens that did not run is ignored here, and the page says so.
+  for (const m of q.caught.filter(ran)) where.push(flaggedBy(m, params));
+  // Not caught is judged and clean. A lens that did not run is ignored here, and the page says so. A lens of yours
+  // judged only through its run's block: a trade past it is not judged yet, so not clean (Ruling FF).
   const clean = q.notCaught.filter(ran);
-  if (clean.length) where.push('x.tx_hash IS NOT NULL', ...clean.map((m) => `NOT ${flaggedBy(m, p)}`));
+  if (clean.length) where.push('x.tx_hash IS NOT NULL');
+  for (const m of clean) {
+    where.push(`NOT ${flaggedBy(m, params)}`);
+    const judged = judgedThrough(m, ctx, params);
+    if (judged !== null) where.push(judged);
+  }
   if (q.venues.length) where.push(`t.marketplace = ANY(${p(q.venues.flatMap((v) => VENUES[v]?.raw ?? [v]))}::text[])`);
   if (q.priceMinWei !== null || q.priceMaxWei !== null) {
     // A price in anything but money says nothing of a bound in ETH, and an unpriced sale none at all.
@@ -245,7 +321,17 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
   if (q.group !== null) {
     const g = q.group;
     if (!ran(g.method)) none();
-    else {
+    else if (isOwnKey(g.method)) {
+      // A saved lens has no witnesses: the wallets in the flags it holds on the token, or in those holding the wallet.
+      const m = p(lensIdOf(g.method));
+      const flags = 'token' in g
+        ? WHOLE.test(g.token)
+          ? `(f.tx_hash, f.log_index) IN (SELECT ft.tx_hash, ft.log_index FROM washtrace.transfers ft WHERE ft.collection_id = ${c} AND ft.token_id = ${p(g.token)}::numeric)`
+          : 'false'
+        : `f.wallets @> ARRAY[${p(g.wallet.toLowerCase())}]::text[]`;
+      const set = `ARRAY(SELECT DISTINCT unnest(f.wallets) FROM washtrace.lens_flags f WHERE f.collection_id = ${c} AND f.lens_id = ${m} AND ${flags})`;
+      where.push(`t.from_address = ANY(${set}) AND t.to_address = ANY(${set})`);
+    } else {
       const m = p(g.method);
       // The loops: those the lens flags on the token, or those holding the wallet, found through the GIN index.
       const loops = 'token' in g
@@ -285,8 +371,9 @@ export function tradeOrder(q: TradeQuery, ctx: TradeContext, params: unknown[]):
   const p = binder(params);
   const newest = 't.block_time DESC NULLS LAST, t.block_number DESC, t.log_index DESC, t.tx_hash DESC';
   if (q.sort === 'date') return q.dir === 'asc' ? 't.block_time ASC NULLS LAST, t.block_number, t.log_index, t.tx_hash' : newest;
-  const lens = q.sort.startsWith('lens-') ? (q.sort.slice(5) as Method) : null;
-  const key = lens !== null ? (ctx.ran.includes(lens) ? flaggedBy(lens, p) : null)
+  const named = q.sort.startsWith('lens-') ? q.sort.slice(5) : null;
+  const lens = named !== null && isLensKey(named) && ctx.ran.includes(named) ? named : null;
+  const key = named !== null ? (lens !== null ? flaggedBy(lens, params) : null)
     // A price in anything but money is not comparable, so it sorts with the unpriced.
     : q.sort === 'price' ? `CASE WHEN t.currency = ANY(${p([...ctx.money])}::text[]) THEN t.price_wei END`
     : q.sort === 'held' ? 'x.held_s'
@@ -299,12 +386,39 @@ export function tradeOrder(q: TradeQuery, ctx: TradeContext, params: unknown[]):
   return key === null ? newest : `${key} ${q.dir === 'asc' ? 'ASC' : 'DESC'} NULLS LAST, ${newest}`;
 }
 
+/**
+ * The keys that caught trade `t`, as a column: the built-ins that ran in order
+ * of flag, then your lenses' ids. Your lenses' flags join the built-ins' as
+ * their keys, from their own table; with none ran the text is the built-ins' alone.
+ */
+export function lensesColumn(ctx: TradeContext, params: unknown[]): string {
+  const p = binder(params);
+  const ids = ctx.ran.map(lensIdOf).filter((i): i is number => i !== null);
+  const ran = p(ctx.ran.filter((k) => !isOwnKey(k)));
+  const own = ids.length === 0 ? '' : ` || ARRAY(SELECT 'L' || f.lens_id FROM washtrace.lens_flags f
+          WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.lens_id = ANY(${p(ids)}::int[]))`;
+  return `ARRAY(SELECT f.method FROM washtrace.flags f
+          WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${ran}::text[]))${own}`;
+}
+
+/**
+ * The keys that judged trade `t`, as a column: the lenses of `ctx.ran` that a
+ * `notCaught` clause would count it clean for. Built from the same pieces as
+ * that clause (the analysis has facts for it, and a lens of yours' bound,
+ * Ruling FF), so Compare's "not" counts cannot drift from the link's.
+ */
+export function judgedColumn(ctx: TradeContext, params: unknown[]): string {
+  const cases = ctx.ran.map((k) => {
+    const bound = judgedThrough(k, ctx, params);
+    return `CASE WHEN x.tx_hash IS NOT NULL${bound === null ? '' : ` AND ${bound}`} THEN '${k}' END`;
+  });
+  return cases.length === 0 ? 'ARRAY[]::text[]' : `ARRAY[${cases.join(', ')}]`;
+}
+
 /** The rows of a Trades list, sorted, for a page to cut or a cursor to stream. */
 export function tradeSelect(id: number, q: TradeQuery, ctx: TradeContext, params: unknown[]): string {
-  const ran = binder(params)([...ctx.ran]);
   return `${SELECT_TRANSFER}, x.tx_hash IS NOT NULL AS judged, x.held_s, x.buyer_age_s, x.floor_ratio,
-    ARRAY(SELECT f.method FROM washtrace.flags f
-          WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${ran}::text[])) AS lenses
+    ${lensesColumn(ctx, params)} AS lenses
     ${TRADES_FROM} WHERE ${tradeWhere(id, q, ctx, params)} ORDER BY ${tradeOrder(q, ctx, params)}`;
 }
 

@@ -1,6 +1,6 @@
 import { bad, chainOf, handle, json, txOf } from '@/lib/api';
 import { verdictFields } from '@/lib/metrics';
-import { txView } from '@/lib/views';
+import { txVerdict } from '@/lib/views';
 
 /**
  * GET: "is this sale a wash trade?" Every watched transfer in the
@@ -18,7 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chain: 
     const chainId = chainOf(p.chain);
     const tx = txOf(p.tx);
     if (chainId === null || tx === null) return bad('Not a chain id and transaction hash.', 404);
-    const view = await txView(chainId, tx);
+    const view = await txVerdict(chainId, tx);
     if (view.transfers.length === 0) return bad('No watched collection has a transfer in this transaction.', 404);
     return json({ chainId, tx, ...verdictFields(view), transfers: view.transfers });
   });

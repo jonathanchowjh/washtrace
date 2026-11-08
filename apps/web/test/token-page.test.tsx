@@ -1,10 +1,20 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LoopEdge, OwnFlag } from '@washtrace/detect';
+import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const ran = (m: string) => ({ available: m === 'A' || state.moneyRan });
 // `each`, when set, gives each transfer its own flags in place of `flagged`.
-const state = { moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[] };
+const state = { moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[] };
+
+/** A lens of yours and its run here: a done run has figures, so it is in `ctx.ran`; a queued one has none yet. */
+function lensRun(id: number, name: string, done = true) {
+  return {
+    lens: { id, key: `L${id}` as const, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 },
+    run: { lensId: id, collectionId: 1, status: done ? 'done' as const : 'queued' as const, progress: null, lensVersion: 1, analysisId: 1, throughBlock: 10, totals: done ? { transfers: 1, flagged: 1, sales: 1, flaggedSales: 1, volumeWei: '0', flaggedVolumeWei: '0', wallets: 2, tokens: 1, available: true, truncated: 0, untimed: 0 } : null, error: null, retryAt: null, finishedAt: 1, tookMs: 1 },
+  };
+}
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
@@ -14,12 +24,14 @@ vi.mock('@/lib/store', () => ({
       flags: Object.fromEntries((state.each?.[i] ?? state.flagged).map((m) => [m, { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 }])),
     })),
     flowsAmong: async () => [],
+    lensRuns: async () => state.runs,
+    lensFlagsOfToken: async (_id: number, _token: string, ids: readonly number[]) => state.own.filter((f) => ids.includes(f.lensId)),
   }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
-afterEach(() => { cleanup(); Object.assign(state, { moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [] }); });
+afterEach(() => { cleanup(); Object.assign(state, { moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [] }); });
 
 async function dom(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
@@ -238,5 +250,100 @@ describe('the token page paging and filter', () => {
     expect(lit(await dom({ method: 'AC' }))).toBe(0);
     cleanup();
     expect(lit(await dom({ method: 'zzz', loop: 'r9' }))).toBe(0);
+  });
+});
+
+describe('the token page with lenses of yours', () => {
+  const W = '0x' + '9'.repeat(40), F = '0x' + 'f'.repeat(40);
+  const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
+    ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, ...more });
+  /** Row i's transfer (0x1 → 0x2, tx 0x<i>), caught by lens `id` back through a money middle, or through a funder. */
+  const caught = (id: number, i: number, funder = false): OwnFlag => ({
+    lensId: id, collectionId: 1, txHash: '0x' + i, logIndex: 0, wallets: ['0x1', '0x2', funder ? F : W],
+    path: funder
+      ? [edge('nft-token', '0x1', '0x2', { tx: '0x' + i, tokenId: '7' }), edge('eth', '0x2', F, { amountWei: '1000000000000000000' }), edge('funds', F, '0x1', { amountWei: '2000000000000000000' })]
+      : [edge('nft-token', '0x1', '0x2', { tx: '0x' + i, tokenId: '7' }), edge('eth', '0x2', W, { amountWei: '500000000000000000' }), edge('weth', W, '0x1')],
+  });
+  const setUp = () => Object.assign(state, {
+    blocks: [5, 6], each: [['A'], ['A']],
+    runs: [lensRun(7, 'Fast flips'), lensRun(8, 'Slow loops'), lensRun(9, 'Not yet', false)],
+    own: [caught(7, 0), caught(7, 1, true), caught(8, 1), caught(9, 0)],
+  });
+  const whyItems = (c: HTMLElement) => [...c.querySelectorAll('#why li')];
+
+  it('Why it was flagged lists one line per loop of a lens of yours, named, with Show in graph', async () => {
+    setUp();
+    const c = await dom();
+    const items = whyItems(c);
+    // One built-in pattern (both rows), then the three loops of the lenses that ran; the queued lens's flag is not read.
+    expect(items).toHaveLength(4);
+    const own = items.slice(1).map((li) => li.textContent);
+    expect(own[0]).toContain('Back to the seller through 1 wallet, 2 by money');
+    expect(own[0]).toContain('Fast flips');
+    expect(own[1]).toContain('Back to the seller through 1 wallet, 1 by money, closed at a funder');
+    expect(own[2]).toContain('Slow loops');
+    expect(c.textContent).not.toContain('Not yet');
+    for (const li of items.slice(1)) expect(li.querySelector('button')?.textContent).toBe('Show in graph');
+    const lens = [...items[1]!.querySelectorAll('a')].find((a) => a.textContent === 'Fast flips');
+    expect(lens?.getAttribute('href')).toBe(`/c/1/${ADDR}?method=L7#evidence`);
+    expect([...items[1]!.querySelectorAll('a')].find((a) => a.textContent === '1')?.getAttribute('href')).toBe('#t1');
+  });
+
+  it('says a loop that closes at the buyer goes back through no wallet', async () => {
+    Object.assign(state, {
+      runs: [lensRun(7, 'Fast flips')],
+      own: [{ lensId: 7, collectionId: 1, txHash: '0x0', logIndex: 0, wallets: ['0x1', '0x2'], path: [edge('nft-token', '0x1', '0x2', { tx: '0x0', tokenId: '7' }), edge('eth', '0x2', '0x1')] }],
+    });
+    expect(whyItems(await dom())[0]?.textContent).toContain('Back to the seller through no wallet, 1 by money');
+  });
+
+  it('?method=L7 lights that lens’s loops', async () => {
+    setUp();
+    const lit = (c: HTMLElement) => [...c.querySelectorAll('[data-lit]')].map((e) => e.getAttribute('data-edge')).sort();
+    const c = await dom({ method: 'L7' });
+    // Its two loops, each its trade's arrow and its own way back; Slow loops' (o2) and the built-in's stay dark.
+    expect(lit(c)).toEqual(['o0e1', 'o0e2', 'o1e1', 'o1e2', 't0', 't1']);
+    expect(whyItems(c).filter((li) => li.querySelector('button[aria-pressed="true"]')).length).toBe(2);
+    cleanup();
+    // A lens that has not run here has no loops to light.
+    expect((await dom({ method: 'L9' })).querySelectorAll('[data-lit]')).toHaveLength(0);
+  });
+
+  it('the verdict stays built-ins only and adds the trades your lenses also catch', async () => {
+    setUp();
+    const answer = (await dom()).querySelector('p.text-lg')!.parentElement!.textContent ?? '';
+    expect(answer).toContain('2 of 2 transfers flagged, by Round trips.');
+    expect(answer).toContain('Your lenses also catch 2 of its trades: Fast flips and Slow loops.');
+  });
+
+  it('says only your lenses catch a token the built-ins do not flag', async () => {
+    Object.assign(state, { runs: [lensRun(7, 'Fast flips')], own: [caught(7, 0)] });
+    const title = (await dom()).querySelector('p.text-lg')!;
+    // The title is the built-ins' verdict, and says whose, so it does not read as no lens at all.
+    expect(title.textContent).toBe('Not flagged by the built-in lenses');
+    const answer = title.parentElement!.textContent ?? '';
+    expect(answer).toContain('None of its 1 transfers is flagged by the built-in lenses.');
+    expect(answer).toContain('Your lenses also catch 1 of its trades: Fast flips.');
+  });
+
+  it('a transfer row’s chips include a lens of yours', async () => {
+    setUp();
+    const c = await dom();
+    // The fifth column, "Lenses that flag it".
+    const chips = (id: string) => [...c.querySelectorAll(`#${id} td:nth-child(5) a`)].map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(chips('t1')).toEqual([['Round trips', `/c/1/${ADDR}?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}?method=L7#evidence`]]);
+    expect(chips('t2')).toEqual([['Round trips', `/c/1/${ADDR}?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}?method=L7#evidence`], ['Slow loops', `/c/1/${ADDR}?method=L8#evidence`]]);
+  });
+
+  it('no lens code in text, aria-label or title', async () => {
+    setUp();
+    const c = await dom({ method: 'L7' });
+    const said = [
+      c.textContent ?? '',
+      ...[...c.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label')!),
+      ...[...c.querySelectorAll('[title]')].map((e) => e.getAttribute('title')!),
+      ...[...c.querySelectorAll('title')].map((e) => e.textContent ?? ''),
+    ];
+    for (const s of said) expect(s).not.toMatch(/\bL[789]\b/);
   });
 });

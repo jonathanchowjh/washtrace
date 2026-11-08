@@ -1,5 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const WAL = '0x' + 'c'.repeat(40);
@@ -18,8 +19,15 @@ const wallet = (address: string, over: Record<string, unknown> = {}) => ({
 });
 const tokens = (n: number) => Array.from({ length: n }, (_, i) => token(String(7 + i)));
 
+
+/** A saved lens of yours and its run on this collection (null: it has none here). */
+const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', over: Record<string, unknown> = {}) => ({
+  lens: { id, key: `L${id}`, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 },
+  run: { lensId: id, collectionId: 1, status, progress: null, lensVersion: 1, analysisId: 1, throughBlock: 10, totals: status === 'done' ? { available: true } : null, error: null, retryAt: null, finishedAt: null, tookMs: 1, ...over },
+});
+
 const fresh = () => ({
-  moneyRan: true,
+  runs: [] as ReturnType<typeof ownRun>[], moneyRan: true,
   tokens: { rows: [token('7')], total: 1 } as { rows: ReturnType<typeof token>[]; total: number },
   wallets: { rows: [wallet(WAL)], total: 1 } as { rows: ReturnType<typeof wallet>[]; total: number },
   // What a count alone (a limit of 0) finds: each list without its Find.
@@ -44,7 +52,7 @@ const collection = () => ({
   downloadFile: null, downloadProgress: null, downloadNote: null, restoreProgress: null, restoreNote: null, trailNote: null, trailImportedSha: null,
   rules: {}, contract: null, addedAt: 0, ingestedAt: 0, servedAt: 0, readRate: null,
   latest: {
-    ranAt: 1_700_000_000_000, tookMs: 5, throughBlock: 10, missingData: 0, fundedWallets: 37, wallets: 37, truncatedSearches: 0, loops: null,
+    id: 1, ranAt: 1_700_000_000_000, tookMs: 5, throughBlock: 10, missingData: 0, fundedWallets: 37, wallets: 37, truncatedSearches: 0, loops: null,
     totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, totals(m)])),
   },
 });
@@ -52,6 +60,7 @@ const collection = () => ({
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => collection(),
+    lensRuns: async () => state.runs,
     history: async () => [],
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
     profile: async () => ({ supply: 644, holders: 300, firstMint: null, firstSale: null, lastSale: null, marketplaces: [] }),
@@ -80,6 +89,8 @@ async function flaggedPage(sp: Record<string, string> = {}): Promise<HTMLElement
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 const links = (c: Element) => [...c.querySelectorAll('a')];
+/** Every text, aria-label and title in `c`: a lens key may show in none of them. */
+const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-label],[title]')].flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')])].join('\n');
 const linkTo = (c: Element, href: string) => links(c).find((a) => a.getAttribute('href') === href);
 const named = (c: Element, text: string) => links(c).filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
 const list = (c: Element, kind: 'tokens' | 'wallets') => c.querySelector(`[aria-label="${kind === 'tokens' ? 'Tokens' : 'Wallets'} Round trips flagged"]`)!;
@@ -200,7 +211,7 @@ describe('the lens lists on the collection page', () => {
     state.moneyRan = false;
     state.calls.tokens.length = 0;
     const el = await collectionPage({ method: 'AU' });
-    expect(el.textContent).toContain('Money loops back did not run, so it flags nothing.');
+    expect(el.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing. Choose another lens above.');
     expect(el.querySelector('[aria-label^="Tokens"]')).toBeNull();
     expect(state.calls.tokens).toHaveLength(0);
   });
@@ -241,7 +252,7 @@ describe('the lens lists on the flagged page', () => {
   it('a lens that did not run says so and reads nothing', async () => {
     state.moneyRan = false;
     const el = await flaggedPage({ method: 'AC', kind: 'wallets' });
-    expect(el.textContent).toContain('Linked wallets has not run on this collection, so it flags nothing yet.');
+    expect(el.textContent).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     expect(state.calls.wallets).toHaveLength(0);
   });
 
@@ -258,5 +269,81 @@ describe('the lens lists on the flagged page', () => {
     expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens flagged by Round trips');
     expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets flagged by Linked wallets');
     expect(await title({ kind: 'trades' })).toBe('Trades in Coll');
+  });
+});
+
+describe('the list of a lens of yours', () => {
+  const NONE = { loops: null, pairs: null, wallets: null, partners: null, closedByMoney: null, laps: null, middles: null };
+
+  it('draws its name and the bg-flow dot, links by its key, and says nothing of loops it has none of', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop')];
+    state.tokens = { rows: [token('7', NONE)], total: 1 };
+    const el = await flaggedPage({ method: 'L7', kind: 'tokens' });
+    const section = el.querySelector('section[aria-label="Tokens Blur 3-hop flagged"]')!;
+    expect(section.textContent).toContain('Which tokens did Blur 3-hop flag?');
+    expect(section.querySelector('.bg-flow')).not.toBeNull();
+    expect(named(section, '11')).toEqual([`${BASE}/flagged?kind=trades&caught=L7&token=7&all=1`]);
+    expect(section.textContent).toContain('11 of 14 trades');
+    expect(section.textContent).not.toMatch(/loop|0 /);
+    expect(reads(el)).not.toMatch(/\bL7\b/);
+    expect(state.calls.tokens[0]![1]).toBe('L7');
+  });
+
+  it('opens a token as its page with the lens\'s loops lit, says why in the built-ins\' words, and promises what a built-in does (P7)', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
+    state.tokens = { rows: [token('7', { loops: 3, wallets: 4, closedByMoney: 2, middles: 1, laps: 3, pairs: 0 })], total: 1 };
+    const page7 = `${BASE}/t/7?method=L7#why`;
+    for (const page of [() => collectionPage({ method: 'L7' }), () => flaggedPage({ method: 'L7', kind: 'tokens' })]) {
+      const el = await page();
+      const section = el.querySelector('section[aria-label="Tokens Blur 3-hop flagged"]')!;
+      expect(named(section, '#7')).toEqual([page7]);
+      expect(named(section, '3 loops')).toEqual([page7]);
+      expect(section.textContent).toContain('3 loops among 4 wallets, 2 closed by money, 1 through a middle wallet');
+      expect(reads(el)).not.toMatch(/\bL7\b/);
+      cleanup();
+    }
+    const sentence = 'Open a token to see why each trade was flagged.';
+    expect((await flaggedPage({ method: 'L7', kind: 'tokens' })).textContent).toContain(sentence);
+    cleanup();
+    expect((await flaggedPage({ method: 'A', kind: 'tokens' })).textContent).toContain(sentence);
+  });
+
+  it('its wallets list links by key and has no loop line', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop')];
+    state.wallets = { rows: [wallet(WAL, NONE)], total: 1 };
+    const el = await flaggedPage({ method: 'L7', kind: 'wallets' });
+    expect(named(el, '5')).toEqual([`${BASE}/flagged?kind=trades&caught=L7&wallet=${WAL}&all=1`]);
+    expect(el.querySelector('section[aria-label="Wallets Blur 3-hop flagged"]')?.textContent).not.toMatch(/loop/);
+  });
+
+  it('reads your lens\'s lists through the block its run read, on the collection page and the flagged page (Ruling FF)', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8, totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
+    await collectionPage({ method: 'L7' });
+    expect(state.calls.tokens[0]![3]).toMatchObject({ through: { L7: 8 } });
+    expect(state.calls.wallets[0]![3]).toMatchObject({ through: { L7: 8 } });
+    cleanup();
+    state.calls.tokens.length = 0;
+    await flaggedPage({ method: 'L7', kind: 'tokens' });
+    expect(state.calls.tokens[0]![3]).toMatchObject({ through: { L7: 8 } });
+  });
+
+  it('says above the flagged list when your lens is behind, and why, and says nothing when it is not (Ruling FF)', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
+    expect((await flaggedPage({ method: 'L7', kind: 'wallets' })).textContent)
+      .toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
+    cleanup();
+    state.runs = [ownRun(7, 'Blur 3-hop')];
+    expect((await flaggedPage({ method: 'L7', kind: 'wallets' })).textContent).not.toContain('shows figures from');
+    cleanup();
+    // Only the lens in view: a built-in's list says nothing of yours.
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
+    expect((await flaggedPage({ method: 'A', kind: 'tokens' })).textContent).not.toContain('shows figures from');
+  });
+
+  it('a lens of yours that has not run says so by name and reads no list', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
+    const el = await flaggedPage({ method: 'L7', kind: 'tokens' });
+    expect(el.textContent).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet.');
+    expect(state.calls.tokens).toEqual([]);
   });
 });
