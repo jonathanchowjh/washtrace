@@ -23,6 +23,8 @@ export interface AnalysisRequest {
   storeUrl: string;
   id: number;
   chainId: number;
+  /** follow.hops: which followed wallets the analysis reads (Store.followedFor). */
+  followHops: number;
   rules: Input['rules'];
   fundingAvailable: boolean;
   custodians: ReadonlySet<string>;
@@ -41,8 +43,8 @@ export interface Analysed {
  * thread's whole body; tests and the profiler call it in-process.
  */
 export async function analyzeStored(store: Store, request: AnalysisRequest): Promise<Analysed> {
-  const { storeUrl: _, id, chainId, ...settings } = request;
-  const input = await store.analysisInput(id, chainId);
+  const { storeUrl: _, id, chainId, followHops, ...settings } = request;
+  const input = await store.analysisInput(id, chainId, followHops);
   return { analysis: analyze({ ...input, ...settings }), through: input.through };
 }
 

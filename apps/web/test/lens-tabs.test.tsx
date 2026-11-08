@@ -6,6 +6,13 @@ import { atLeastOf } from '@/lib/format';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
+
+/** DEFAULT_RULE follows two money edges either way, which is a floor of its own (Ruling S19): these tests' lens follows money as it was sent, so only the cause under test makes a floor. */
+const ALONG = structuredClone(DEFAULT_RULE);
+for (const k of ['eth', 'internal', 'weth'] as const) ALONG.edges[k].direction = 'along';
+/** ALONG, needing money read this many hops out from the traders (depthNeeded). */
+const needing = (depth: number) => { const r = structuredClone(ALONG); r.hops = { min: 1, max: depth + 1 }; return r; };
+
 const refresh = vi.fn();
 
 const FLAGGED = { A: 41, AU: 98, AC: 172 } as const;
@@ -17,14 +24,16 @@ const totals = (flaggedSales: number, over: Record<string, unknown> = {}) => ({
 type Status = 'queued' | 'running' | 'done' | 'failed';
 /** A saved lens of yours (Blur 3-hop, L7, version 2) and its run on this collection, from that version on the latest analysis (1); null: it has none here. */
 const run = (status: Status | null, over: Record<string, unknown> = {}, lens: Record<string, unknown> = {}) => ({
-  lens: { id: 7, key: 'L7', name: 'Blur 3-hop', rule: DEFAULT_RULE, version: 2, createdAt: 0, updatedAt: 0, ...lens },
+  lens: { id: 7, key: 'L7', name: 'Blur 3-hop', rule: ALONG, version: 2, createdAt: 0, updatedAt: 0, ...lens },
   run: status === null ? null : {
     lensId: 7, collectionId: 1, status, progress: null, lensVersion: 2, analysisId: 1, throughBlock: 10,
     totals: status === 'done' ? totals(126) : null, error: null, retryAt: null, finishedAt: 1, tookMs: 1, ...over,
   },
 });
 
-const state = { runs: [] as ReturnType<typeof run>[], analysed: true, remote: false, notFunded: false, paused: false, points: [] as object[], off: [] as string[] };
+/** What is read of the collection's money (Store.moneyRead): the global limit is 3, the default follow.hops. */
+const READ = { traders: { checked: 37, of: 37 }, limit: 3, ownLimit: null as number | null, pendingByDepth: {} as Record<number, number>, estimate: null, seeding: false };
+const state = { money: { ...READ }, runs: [] as ReturnType<typeof run>[], analysed: true, remote: false, notFunded: false, paused: false, points: [] as object[], off: [] as string[] };
 
 const TX = '0x' + 'e'.repeat(64);
 const WHO = '0x' + '1'.repeat(40);
@@ -49,6 +58,7 @@ vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => collection(),
     lensRuns: async () => state.runs,
+    moneyRead: async () => state.money,
     history: async () => [],
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: state.points }),
     compare: async () => ({ both: {}, not: {} }),
@@ -77,7 +87,7 @@ vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found
 
 afterEach(() => {
   cleanup(); refresh.mockClear(); vi.unstubAllGlobals();
-  Object.assign(state, { runs: [], analysed: true, remote: false, notFunded: false, paused: false, points: [], off: [] });
+  Object.assign(state, { money: { ...READ }, runs: [], analysed: true, remote: false, notFunded: false, paused: false, points: [], off: [] });
 });
 
 async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
@@ -567,16 +577,73 @@ describe('atLeastOf', () => {
   for (const k of ['eth', 'internal', 'weth'] as const) nftOnly.edges[k].use = false;
 
   it('is a floor for a money lens with no funding source, even when the money data is otherwise final (the !funded branch alone)', () => {
-    expect(atLeastOf(DEFAULT_RULE, T, [], false)).toBe(true);
-    expect(atLeastOf(DEFAULT_RULE, T, [], true)).toBe(false);
-    expect(atLeastOf(nftOnly, T, [], false)).toBe(false);
+    expect(atLeastOf(ALONG, T, [], false, false)).toBe(true);
+    expect(atLeastOf(ALONG, T, [], true, false)).toBe(false);
+    expect(atLeastOf(nftOnly, T, [], false, false)).toBe(false);
   });
 
   it('is a floor when money is not final, a search was cut short, or a trade had no block time (Ruling GG)', () => {
-    expect(atLeastOf(DEFAULT_RULE, T, ['AC'], true)).toBe(true);
-    expect(atLeastOf(nftOnly, T, ['AC'], true)).toBe(false);
-    expect(atLeastOf(nftOnly, { ...T, truncated: 1 }, [], true)).toBe(true);
-    expect(atLeastOf(nftOnly, { ...T, untimed: 1 }, [], true)).toBe(true);
+    expect(atLeastOf(ALONG, T, ['AC'], true, false)).toBe(true);
+    expect(atLeastOf(nftOnly, T, ['AC'], true, false)).toBe(false);
+    expect(atLeastOf(nftOnly, { ...T, truncated: 1 }, [], true, false)).toBe(true);
+    expect(atLeastOf(nftOnly, { ...T, untimed: 1 }, [], true, false)).toBe(true);
+  });
+});
+
+describe('a lens\'s share is at least while the money it needs is not read that far (Rulings S18, S25, S31)', () => {
+  const MORE = 'money is not read as far as this lens needs';
+  const POINT = { at: 1_700_000_000_000, sales: 10, transfers: 10, flaggedSales: { A: 1, AU: 2, AC: 3 }, lens: { L7: { sales: 10, flaggedSales: 2, untimed: 0 } } };
+  const mine = (depth: number) => run('done', {}, { rule: needing(depth) });
+
+  it('shows at least on its tab, panel and chart for a lens needing depth 4 on a collection read to 3', async () => {
+    state.runs = [mine(4)];
+    state.points = [POINT];
+    const c = await draw({ method: 'L7' });
+    expect(tabs(c)[3]).toBe('Blur 3-hop at least 12.6%');
+    expect(panel(c).textContent).toContain(`Its share is at least this, because ${MORE}.`);
+    expect(c.querySelector('[aria-label="Blur 3-hop in numbers"]')!.textContent).toContain('at least 12.6% of sales');
+    expect(c.querySelector(`span[title*="${MORE}"]`)?.textContent).toBe('(at least)');
+  });
+
+  it('reads exact when the collection is read as far as the lens needs', async () => {
+    state.runs = [mine(3)];
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
+  });
+
+  it('after the money is followed further, stays at least while reach wallets at depth 4 or nearer are pending, and not once they are read', async () => {
+    state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 4: 2, 5: 1 } };
+    state.runs = [mine(4)];
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop at least 12.6%');
+    cleanup();
+    // Wallets pending only past the depth it needs do not hold it back.
+    state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 5: 1 } };
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
+    cleanup();
+    state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: {} };
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
+  });
+
+  it('stays at least while seeding finds the wallets past the global limit, only for a lens that reaches past it', async () => {
+    state.money = { ...READ, limit: 5, ownLimit: 5, seeding: true };
+    state.runs = [mine(4)];
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop at least 12.6%');
+    cleanup();
+    state.runs = [mine(3)];
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
+  });
+
+  it('never reads at least for money on a lens with no money edge, and leaves the built-ins\' shares as they were', async () => {
+    const nft = needing(4);
+    for (const k of ['eth', 'internal', 'weth'] as const) nft.edges[k].use = false;
+    state.runs = [run('done', {}, { rule: nft })];
+    expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back 9.8%', 'Linked wallets 17.2%', 'Blur 3-hop 12.6%']);
+  });
+
+  it('says a lens that follows money either way is a floor, in its own words', async () => {
+    state.runs = [run('done', {}, { rule: DEFAULT_RULE })];
+    const c = await draw({ method: 'L7' });
+    expect(tabs(c)[3]).toBe('Blur 3-hop at least 12.6%');
+    expect(panel(c).textContent).toContain('Its share is at least this, because money is followed only the way it was sent, so a loop against it can be missed.');
   });
 });
 

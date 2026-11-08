@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COPIES, DEFAULT_RULE, EDGE_TYPES, INT4_MAX, NAME_MAX, checkRule, nameError, ruleLine, type LensRule } from '../src/lens-rule.js';
+import { COPIES, DEFAULT_RULE, EDGE_TYPES, INT4_MAX, NAME_MAX, checkRule, estimateTo, nameError, ruleLine, type FollowEstimate, type LensRule } from '../src/lens-rule.js';
 
 const clone = (): LensRule => structuredClone(DEFAULT_RULE);
 const errorOf = (raw: unknown) => {
@@ -241,5 +241,28 @@ describe('COPIES', () => {
     expect(COPIES.AC.rule.never).toEqual({ marketplaces: true, over: 20, addresses: [] });
     expect(COPIES.AU.differs).toBe('Money loops back also needs two laps when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.');
     expect(COPIES.AC.differs).toBe('Linked wallets also counts every round trip; this copy finds only the money link.');
+  });
+});
+
+describe('estimateTo', () => {
+  const counted: FollowEstimate = { depth: 4, wallets: 10, growth: 2, cut: false, at: '2026-11-09T00:00:00.000Z' };
+
+  it('is null with nothing counted, or for a depth short of the one counted', () => {
+    expect(estimateTo(null, 5)).toBeNull();
+    expect(estimateTo(counted, 3)).toBeNull();
+  });
+
+  it('is exact to the counted depth, and each level past it is the one before times the growth, rounded', () => {
+    expect(estimateTo(counted, 4)).toEqual({ wallets: 10, exactTo: 4 });
+    expect(estimateTo(counted, 6)).toEqual({ wallets: 70, exactTo: 4 }); // 10 + 20 + 40
+    expect(estimateTo({ ...counted, growth: 0.25 }, 6)).toEqual({ wallets: 13, exactTo: 4 }); // 10 + 2.5 + 0.625
+  });
+
+  it('a count the walk cut is exact only to the depth before it', () => {
+    expect(estimateTo({ ...counted, cut: true }, 5)).toEqual({ wallets: 30, exactTo: 3 });
+  });
+
+  it('with no growth to go by, adds no levels past the counted one', () => {
+    expect(estimateTo({ ...counted, growth: null }, 6)).toEqual({ wallets: 10, exactTo: 4 });
   });
 });

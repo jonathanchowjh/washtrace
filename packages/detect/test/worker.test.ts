@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import pg from 'pg';
-import { BUDGET_MS, EVERY, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, Worker } from '../src/worker.js';
+import { BUDGET_MS, COUNT_MS, EVERY, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, SEED_MS, Worker } from '../src/worker.js';
 import { needsRestore, needsTrail, StoredSync, TRAIL_NOTES } from '../src/stored-sync.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
@@ -1864,6 +1864,7 @@ describe('Worker.fund', () => {
     const funded: string[] = [];
     const store: any = {
       collections: async () => [row({ id: 1, name: 'BAYC' }), row({ id: 2, name: 'Doodles', priority: true })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }, { collectionId: 2, wallets: ['c'] }, { collectionId: null, wallets: ['f'] }] }),
       heartbeat: async (_job: string, doing: string | null) => { beats.push(doing); },
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
@@ -1880,6 +1881,7 @@ describe('Worker.fund', () => {
     const asked: number[] = [];
     const store: any = {
       collections: async () => [row({ id: 1 })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async (_chain: number, _perLane: number, hops: number) => { asked.push(hops); return { lanes: [] }; },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 1, storedRepo: 'u/d', sources: {} }), '');
@@ -1892,6 +1894,7 @@ describe('Worker.fund', () => {
     const budgets: (number | undefined)[] = [];
     const store: any = {
       collections: async () => [row({ id: 1 })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['0xa'] }] }),
       fund: async () => {},
     };
@@ -1899,6 +1902,109 @@ describe('Worker.fund', () => {
     (w as any).etherscanClient = () => ({ flows: async (_c: number, _w: string, budgetMs?: number) => { budgets.push(budgetMs); return { flows: [], truncated: false }; } });
     await w.fund();
     expect(budgets).toEqual([WALLET_MS]);
+  });
+});
+
+describe('Worker.fund following a collection further, and counting its next hop', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const config = (): WorkerConfig => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 3, sources: {}, storedRepo: 'u/d' });
+  /** A clock only the test moves. */
+  const clock = () => {
+    const t = { now: 1_000_000 };
+    vi.spyOn(Date, 'now').mockImplementation(() => t.now);
+    return t;
+  };
+
+  it('fund seeds in chunks within its budget, then funds', async () => {
+    const t = clock();
+    const calls: string[] = [];
+    const beats: (string | null)[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1, name: 'BAYC' })],
+      nextCount: async () => null,
+      // Each chunk takes four seconds, and there is always more.
+      seedReach: async (chainId: number, hops: number, limit: number) => { calls.push(`seed ${chainId} ${hops} ${limit}`); t.now += 4_000; return 2_000; },
+      fundingLanes: async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; },
+      heartbeat: async (_job: string, doing: string | null) => { beats.push(doing); },
+      fund: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); },
+      fundingFailed: async () => {},
+    };
+    const w = new Worker(store, config, '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    expect(await w.fund()).toBe('1 wallets read, 0 failed');
+    // Chunks at 0, 4 and 8 seconds in: the third ends past SEED_MS, so the rest waits for the next pass.
+    expect(SEED_MS).toBe(10_000);
+    expect(calls).toEqual(['seed 1 3 2000', 'seed 1 3 2000', 'seed 1 3 2000', 'lanes', 'fund a']);
+    expect(beats).toEqual([...Array(3).fill('Finding the wallets past the hop limit from the money already read'), 'Checking wallets for BAYC']);
+
+    // Each chain has its own SEED_MS: a long walk on the first leaves the second its turn.
+    calls.length = 0;
+    store.collections = async () => [row({ id: 1, name: 'BAYC' }), row({ id: 2, chainId: 8453, name: 'Base one' })];
+    store.fundingLanes = async (chainId: number) => { calls.push(`lanes ${chainId}`); return { lanes: [] }; };
+    await w.fund();
+    expect(calls).toEqual([...Array(3).fill('seed 1 3 2000'), 'lanes 1', ...Array(3).fill('seed 8453 3 2000'), 'lanes 8453']);
+
+    // Nothing left to walk: one call says so, and the checking starts.
+    store.collections = async () => [row({ id: 1, name: 'BAYC' })];
+    store.fundingLanes = async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; };
+    calls.length = 0;
+    store.seedReach = async () => { calls.push('seed'); return 0; };
+    await w.fund();
+    expect(calls).toEqual(['seed', 'lanes', 'fund a']);
+  });
+
+  it('counts the stalest estimate after its funding, in the time kept for it', async () => {
+    const t = clock();
+    const calls: string[] = [];
+    const beats: [string | null, number | null][] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1, name: 'BAYC' }), row({ id: 7, name: 'Doodles' })],
+      nextCount: async (hops: number) => { calls.push(`next ${hops}`); return 7; },
+      seedReach: async () => 0,
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b', 'c', 'd', 'e', 'f'] }] }),
+      heartbeat: async (_job: string, doing: string | null, id: number | null) => { beats.push([doing, id]); },
+      // Each wallet takes ten seconds.
+      fund: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); t.now += 10_000; },
+      fundingFailed: async () => {},
+      countNext: async (id: number, hops: number, timeoutMs: number) => { calls.push(`count ${id} ${hops} ${timeoutMs}`); return 'counted'; },
+    };
+    const w = new Worker(store, config, '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    expect(await w.fund()).toBe('4 wallets read, 0 failed');
+    // The checking stops COUNT_MS short of the budget: d starts at 30 seconds in, e would at 40, and the count has the rest.
+    expect(BUDGET_MS - COUNT_MS).toBe(30_000);
+    // At 40 seconds in, 5 are left: less than COUNT_MS, so the count is given those.
+    expect(calls).toEqual(['next 3', 'fund a', 'fund b', 'fund c', 'fund d', 'count 7 3 5000']);
+    expect(beats.at(-1)).toEqual(['Counting the wallets one hop further out for Doodles', 7]);
+
+    // None due: the checking has the whole budget.
+    calls.length = 0;
+    store.nextCount = async () => null;
+    expect(await w.fund()).toBe('5 wallets read, 0 failed');
+    expect(calls).toEqual(['fund a', 'fund b', 'fund c', 'fund d', 'fund e']);
+  });
+
+  it('a count that fails fails no checking, and says why without a secret', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const funded: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1 })],
+      nextCount: async () => 1,
+      seedReach: async () => 0,
+      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a'] }] }),
+      heartbeat: async () => {}, fundingFailed: async () => {},
+      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      countNext: async () => { throw new Error('canceling statement due to statement timeout (key k-SECRET)'); },
+    };
+    const w = new Worker(store, () => ({ ...config(), etherscanKey: 'k-SECRET' }), '');
+    (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
+    expect(await w.fund()).toBe('1 wallets read, 0 failed');
+    expect(funded).toEqual(['a']);
+    expect(error).toHaveBeenCalledTimes(1);
+    const said = error.mock.calls[0]!.map(String).join(' ');
+    expect(said).toContain('statement timeout');
+    expect(said).not.toContain('k-SECRET');
   });
 });
 
@@ -1912,6 +2018,7 @@ describe('Worker.fund priority', () => {
     const store: any = {
       // The earliest prioritised is on Base: Doodles, on Ethereum, still gets its priority turns there.
       collections: async () => [row({ id: 1, chainId: 8453, name: 'Base one', priority: true }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async (chainId: number) => ({ lanes: lanes[chainId] }),
       heartbeat: async () => {}, fundingFailed: async () => {},
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
@@ -1927,6 +2034,7 @@ describe('Worker.fund priority', () => {
     const store: any = {
       // Two prioritised, the first paused: its lane is not served (the store leaves it out), so its priority must not hide the other's.
       collections: async () => [row({ id: 1, name: 'BAYC', priority: true, pausedAt: 5 }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 3, wallets: ['x1', 'x2'] }, { collectionId: 2, wallets: ['c1', 'c2'] }] }),
       heartbeat: async () => {}, fundingFailed: async () => {},
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
@@ -1948,6 +2056,7 @@ describe('Worker heartbeat', () => {
     const funded: string[] = [];
     const store: any = {
       collections: async () => [row({ id: 1, name: 'BAYC' })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => { throw new Error('db down'); },
       fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
@@ -2202,7 +2311,7 @@ describe('Worker.analyze', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).not.toHaveProperty('flows');
     expect(sent[0]).not.toHaveProperty('transfers');
-    expect(Object.keys(sent[0]!).sort()).toEqual(['chainId', 'contracts', 'custodians', 'fundingAvailable', 'id', 'money', 'rules', 'storeUrl']);
+    expect(Object.keys(sent[0]!).sort()).toEqual(['chainId', 'contracts', 'custodians', 'followHops', 'fundingAvailable', 'id', 'money', 'rules', 'storeUrl']);
     expect(sent[0]).toMatchObject({ storeUrl: url, id: 2, chainId: 1, rules: { minCycles: 3 }, fundingAvailable: true });
     // The block the analysis ran through comes back from the thread, which read it with the input.
     expect(saved).toEqual([[2, 7]]);
@@ -2356,7 +2465,7 @@ describe('Worker.analyze when an analysis fails', () => {
 describe('an analysis that never ends', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  const request = { storeUrl: '', id: 1, chainId: 1, rules: {}, fundingAvailable: false, custodians: new Set(), contracts: new Set(), money: new Set() } as AnalysisRequest;
+  const request = { storeUrl: '', id: 1, chainId: 1, followHops: 3, rules: {}, fundingAvailable: false, custodians: new Set(), contracts: new Set(), money: new Set() } as AnalysisRequest;
   const STOPPED = 'Analysis took longer than 60 min and was stopped.';
 
   it('is stopped after an hour: its thread is ended, and it rejects in words', async () => {
@@ -2532,6 +2641,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     const failed: string[] = [];
     const store: any = {
       collections: async () => [row({ id: 1 })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => {},
       fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
@@ -2555,6 +2665,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     const failed: string[] = [];
     const store: any = {
       collections: async () => [row({ id: 1 })],
+      nextCount: async () => null, seedReach: async () => 0,
       fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => {},
       fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
@@ -2686,7 +2797,7 @@ describe('Worker.lens', () => {
     w.lensOff = async (request) => { sent.push(request); calls.push(['off']); return { totals: totals as any, flags: [] }; };
     expect(await w.lens()).toBe('Ran Blur 3-hop on Terraforms');
     expect(names(calls)).toEqual(['next', 'started', 'beat', 'off', 'saved']);
-    expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', lensId: 7, collectionId: 4, chainId: 1, rule: { marker: 'rule' }, through: 99 }]);
+    expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', lensId: 7, collectionId: 4, chainId: 1, rule: { marker: 'rule' }, through: 99, followHops: 0 }]);
     expect(calls.find((c) => c[0] === 'started')).toEqual(['started', 7, 4]);
     // Saved at the version it read, on the analysis it read.
     expect(calls.find((c) => c[0] === 'saved')!.slice(1, 6)).toEqual([7, 4, 2, 11, 99]);
@@ -2773,7 +2884,7 @@ describe('Worker.lens', () => {
         // Swept, then taken, run and saved: no lens run is asked for, and no analysis is asked after.
         expect(names(calls).filter((n) => n !== 'beat')).toEqual(['sweep', 'nextPreview', 'previewOff', 'savePreview']);
         expect(off).not.toHaveBeenCalled();
-        expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', previewId: 31, collectionId: 4, chainId: 1, rule: { marker: 'preview' }, through: 99 }]);
+        expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', previewId: 31, collectionId: 4, chainId: 1, rule: { marker: 'preview' }, through: 99, followHops: 0 }]);
         expect(calls.find((c) => c[0] === 'savePreview')).toEqual(['savePreview', 31, result]);
         expect((w as any).lensRanLast).toBe(ranLast);
         // The next pass takes neither the next preview nor a lens run: the analysis goes first, once, and lensRanLast stays the lens runs' own.

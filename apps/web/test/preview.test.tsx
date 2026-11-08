@@ -4,12 +4,15 @@ import type { PreviewResult } from '@washtrace/detect';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
 import { Preview } from '@/components/preview';
 
+/** DEFAULT_RULE follows money either way, a floor of its own (Ruling S19); ALONG follows it as sent. */
+const ALONG = structuredClone(DEFAULT_RULE);
+for (const k of ['eth', 'internal', 'weth'] as const) ALONG.edges[k].direction = 'along';
 const ADDR = '0x' + 'b'.repeat(40);
 const RESULT: PreviewResult = {
   sampled: 2000, judged: 2000, hops: 2000, ofSales: 9000, caught: 300, atLeast: false, roundTrips: { caught: 100 }, topMarket: { name: 'Blur', caught: 120 },
   truncated: 0, untimed: 0, tookMs: 4000,
 };
-const row = (over: object) => ({ id: 41, collectionId: 3, rule: DEFAULT_RULE, status: 'queued', progress: null, result: null, error: null, ...over });
+const row = (over: object) => ({ id: 41, collectionId: 3, rule: ALONG, status: 'queued', progress: null, result: null, error: null, ...over });
 
 /** POST answers `post`; each GET answers the next of `gets`, the last one for ever after. */
 function routes(post: { status: number; body: object }, gets: { status: number; body: object }[]) {
@@ -21,9 +24,9 @@ function routes(post: { status: number; body: object }, gets: { status: number; 
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
-const done = (result: Partial<PreviewResult> = {}, rule: LensRule = DEFAULT_RULE) =>
+const done = (result: Partial<PreviewResult> = {}, rule: LensRule = ALONG) =>
   ({ status: 200, body: row({ status: 'done', rule, result: { ...RESULT, ...result } }) });
-const props = { chainId: 1, address: ADDR, rule: DEFAULT_RULE, roundTripsName: 'Round trips', notFinal: [], funded: true };
+const props = { chainId: 1, address: ADDR, rule: ALONG, roundTripsName: 'Round trips', notFinal: [], funded: true, moneyShort: false };
 const view = (over: Partial<Parameters<typeof Preview>[0]> = {}) => render(<Preview {...props} {...over} />);
 /** Click Preview and let the POST and the first poll settle. */
 async function run(c: ReturnType<typeof view>) {
@@ -39,6 +42,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Preview', () => {
+  it('is section 4, after Data this lens needs', () => {
+    expect(view().getByRole('heading', { name: '4 · Try it before you save' })).toBeTruthy();
+  });
+});
+
 describe('Preview polling', () => {
   it('sends the rule, then shows waiting, then N%, then the result line, polling every second', async () => {
     const fetchMock = routes({ status: 202, body: { id: 41 } }, [
@@ -49,7 +58,7 @@ describe('Preview polling', () => {
     const c = view();
     await run(c);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect([url, init.method, JSON.parse(init.body as string)]).toEqual(['/api/lenses/previews', 'POST', { chainId: 1, address: ADDR, rule: DEFAULT_RULE }]);
+    expect([url, init.method, JSON.parse(init.body as string)]).toEqual(['/api/lenses/previews', 'POST', { chainId: 1, address: ADDR, rule: ALONG }]);
     expect(c.container.textContent).toContain('Waiting for the worker (an analysis or lens run may be going)');
     expect(fetchMock.mock.calls[1]![0]).toBe('/api/lenses/previews/41');
     await tick();
@@ -78,7 +87,7 @@ describe('Preview polling', () => {
   });
 
   it('says at least for a money lens whose funding is not final, though the result says atLeast: false', async () => {
-    const money: LensRule = structuredClone(DEFAULT_RULE);
+    const money: LensRule = structuredClone(ALONG);
     money.edges.eth.use = true;
     routes({ status: 202, body: { id: 41 } }, [done({ atLeast: false, truncated: 0, untimed: 0 }, money)]);
     const c = view({ rule: money, funded: false });
@@ -86,8 +95,15 @@ describe('Preview polling', () => {
     expect(c.container.textContent).toContain('Caught at least 15.0% of');
   });
 
+  it('says at least for a lens whose money is not read as far as it needs, though the result says atLeast: false', async () => {
+    routes({ status: 202, body: { id: 41 } }, [done({ atLeast: false, truncated: 0, untimed: 0 }, ALONG)]);
+    const c = view({ rule: ALONG, moneyShort: true });
+    await run(c);
+    expect(c.container.textContent).toContain('Caught at least 15.0% of');
+  });
+
   it('does not say at least for a money lens when funding is final', async () => {
-    const money: LensRule = structuredClone(DEFAULT_RULE);
+    const money: LensRule = structuredClone(ALONG);
     money.edges.eth.use = true;
     routes({ status: 202, body: { id: 41 } }, [done({}, money)]);
     const c = view({ rule: money, funded: true });
@@ -97,10 +113,10 @@ describe('Preview polling', () => {
   });
 
   it('judges at least by the rule that was previewed, not the one in the form now', async () => {
-    const money: LensRule = structuredClone(DEFAULT_RULE);
+    const money: LensRule = structuredClone(ALONG);
     money.edges.eth.use = true;
     routes({ status: 202, body: { id: 41 } }, [done({}, money)]);
-    const c = view({ rule: DEFAULT_RULE, funded: false });
+    const c = view({ rule: ALONG, funded: false });
     await run(c);
     expect(c.container.textContent).toContain('Caught at least 15.0% of');
   });
@@ -284,7 +300,7 @@ describe('Preview failures', () => {
   });
 
   it('does not send a rule the checker refuses, and says why', async () => {
-    const bad: any = structuredClone(DEFAULT_RULE);
+    const bad: any = structuredClone(ALONG);
     bad.hops = { min: 3, max: 1 };
     const fetchMock = routes({ status: 202, body: { id: 41 } }, []);
     const c = view({ rule: bad });
@@ -300,12 +316,12 @@ describe('Preview after an edit', () => {
     const c = view();
     await run(c);
     expect(c.container.textContent).not.toContain('Previewed before your last change');
-    const changed: LensRule = structuredClone(DEFAULT_RULE);
+    const changed: LensRule = structuredClone(ALONG);
     changed.hops = { min: 1, max: 2 };
     c.rerender(<Preview {...props} rule={changed} />);
     expect(c.container.textContent).toContain('Previewed before your last change');
     expect(c.container.textContent).toContain('Caught 15.0% of');
-    c.rerender(<Preview {...props} rule={DEFAULT_RULE} />);
+    c.rerender(<Preview {...props} rule={ALONG} />);
     expect(c.container.textContent).not.toContain('Previewed before your last change');
   });
 });

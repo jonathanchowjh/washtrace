@@ -38,12 +38,15 @@ const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'borde
  * the latest analysis's, null before the first, and `latestId` its id, which
  * a run of yours is behind when it is not from it.
  */
-export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, coverage, writable, editor = null, children }: {
+export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyShort, coverage, writable, editor = null, children }: {
   base: string; chainId: number; address: string; selected: LensKey | 'compare';
   totals: Record<Method, MethodTotals> | null; latestId: number | null;
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
   paused: boolean;
-  runs: Runs; notFinal: readonly Method[]; coverage: Funding; writable: boolean;
+  runs: Runs; notFinal: readonly Method[];
+  /** By lens key: whether the collection's money is read as far as that lens needs (moneyShort of lens-rule). */
+  moneyShort: Readonly<Record<string, boolean>>;
+  coverage: Funding; writable: boolean;
   /** The lens editor, when `?lens=` asks for one: it takes the panel's place, under the same tab. */
   editor?: ReactNode;
   /** The chosen lens's stat line and lists; the panel shows them for a built-in, and for a lens of yours once it has figures. On the Compare tab, the comparison. */
@@ -73,7 +76,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           return (
             <Tab key={lens.key} href={href(lens.key)} on={lens.key === selected} tone="own" title={`Show what ${lens.name} flags`}>
               <LensName m={lens.key} own={own} />
-              {t ? <>{' '}<Share t={t} atLeast={atLeastOf(lens.rule, t, notFinal, coverage.funded)} /></> : null}
+              {t ? <>{' '}<Share t={t} atLeast={atLeastOf(lens.rule, t, notFinal, coverage.funded, moneyShort[lens.key] ?? false)} /></> : null}
               {word ? <>{' '}<span className="text-xs text-muted-foreground">{word}</span></> : null}
             </Tab>
           );
@@ -89,7 +92,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
       >
         {editor ?? (selected === 'compare' ? children : chosen
           ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analysed={totals !== null}
-            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded}>{children}</YourLens>
+            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} moneyShort={moneyShort[chosen.lens.key] ?? false}>{children}</YourLens>
           : <BuiltIn base={base} m={selected as Method} t={totals?.[selected as Method] ?? null} coverage={coverage} writable={writable}>{children}</BuiltIn>)}
       </section>
     </div>
@@ -160,13 +163,13 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
   );
 }
 
-function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, children }: {
+function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, moneyShort, children }: {
   base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analysed: boolean;
-  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; children: ReactNode;
+  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; moneyShort: boolean; children: ReactNode;
 }) {
   const t = run?.totals ?? null;
   // Why its share is a floor, in the words the tab, the stat line and the chart's (at least) title go by, with the counts the panel has room for.
-  const floor = t === null ? [] : floorCauses(lens.rule, t, notFinal, funded, true);
+  const floor = t === null ? [] : floorCauses(lens.rule, t, notFinal, funded, moneyShort, true);
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

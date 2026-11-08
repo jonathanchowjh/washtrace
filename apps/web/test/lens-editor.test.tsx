@@ -17,9 +17,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const NEEDS = {
+  transfers: 1200, transfersRead: true, funding: true, perSecond: 4, watched: 2, followHops: 3, fanout: 25, callsPerWallet: 4, behind: false, paused: false,
+  money: { traders: { checked: 5, of: 5 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false },
+};
 const editor = (over: Partial<Parameters<typeof LensEditor>[0]> = {}) =>
   render(
-    <LensEditor base={BASE} chainId={1} address={ADDR} selected="AC" title="New lens" name="" rule={DEFAULT_RULE} differs={null} writable notFinal={[]} funded {...over} />,
+    <LensEditor base={BASE} chainId={1} address={ADDR} selected="AC" title="New lens" name="" rule={DEFAULT_RULE} differs={null} writable notFinal={[]} funded needs={NEEDS} {...over} />,
   ).container;
 const sent = (fetchMock: ReturnType<typeof vi.fn>) => {
   const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -35,8 +39,12 @@ describe('the layout', () => {
     const text = c.textContent!;
     expect(text).toContain('yours · editing');
     expect(text).toContain('Every loop starts with the trade: the NFT goes from seller → buyer. A lens says which edges may carry the way back to the seller, in which direction, and how much of each.');
-    for (const s of ['1 · Edges that may close the loop', '2 · The loop as a whole']) expect(within(c).getByRole('heading', { name: s })).toBeTruthy();
-    expect(within(c).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+    for (const s of ['1 · Edges that may close the loop', '2 · The loop as a whole', '3 · Data this lens needs']) expect(within(c).getByRole('heading', { name: s })).toBeTruthy();
+    // The data section comes after the rule and before Preview, as in the mockup.
+    const order = (s: string) => text.indexOf(s);
+    expect(order('2 · The loop as a whole')).toBeLessThan(order('3 · Data this lens needs'));
+    expect(order('3 · Data this lens needs')).toBeLessThan(order('Preview'));
+    expect(within(c.querySelector('[aria-labelledby="rule-edges"]') as HTMLElement).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Use', 'Edge type', 'Direction in the loop', 'At most in a loop', 'Smallest that counts', 'Repeats between the same 2 wallets',
     ]);
     for (const row of ['Hops back to the seller', 'Loop closes at', 'Every edge happens within', 'Order in time', 'Never a middle wallet', 'Which trades it judges', 'At least N loops among the wallets involved']) {
@@ -286,7 +294,7 @@ describe('in the collection page\'s panel', () => {
   it('takes the selected tab\'s place, and the tab stays', async () => {
     const { LensTabs } = await import('@/components/lens-tabs');
     const c = render(
-      <LensTabs base={BASE} chainId={1} address={ADDR} selected="AU" totals={null} latestId={null} paused={false} runs={[]} notFinal={[]}
+      <LensTabs base={BASE} chainId={1} address={ADDR} selected="AU" totals={null} latestId={null} paused={false} runs={[]} notFinal={[]} moneyShort={{}}
         coverage={{ trail: false, funded: true, coming: false, silent: false }} writable editor={<p>the form</p>}>
         <p>the lists</p>
       </LensTabs>,

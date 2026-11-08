@@ -13,6 +13,9 @@ const fake = {
   lens: vi.fn(async (): Promise<typeof lens | null> => lens),
   requestPreview: vi.fn(async (): Promise<{ id: number } | 'no-sales' | 'not-analysed'> => ({ id: 41 })),
   preview: vi.fn(async (): Promise<object | null> => ({ id: 41, status: 'queued' })),
+  sources: vi.fn(async (): Promise<Record<string, object>> => ({})),
+  settings: vi.fn(async () => new Map<string, string>()),
+  followFurther: vi.fn(async (): Promise<'set' | 'already' | 'gone'> => 'set'),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 // handle() opts into dynamic rendering with connection(), which only works inside a Next request.
@@ -23,6 +26,7 @@ const { PATCH: edit, DELETE: remove } = await import('@/app/api/lenses/[id]/rout
 const { POST: runHere } = await import('@/app/api/lenses/[id]/runs/route');
 const { POST: previewIt } = await import('@/app/api/lenses/previews/route');
 const { GET: previewOf } = await import('@/app/api/lenses/previews/[id]/route');
+const { POST: follow } = await import('@/app/api/collections/[chain]/[address]/follow/route');
 const { LOCAL_ONLY } = await import('@/lib/auth');
 
 const idCtx = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -428,5 +432,50 @@ describe('GET /api/lenses/previews/[id]', () => {
     const none = await previewOf(new Request('http://x/api'), idCtx('abc'));
     expect(none.status).toBe(404);
     expect(fake.preview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/collections/[chain]/[address]/follow', () => {
+  const ctx = { params: Promise.resolve({ chain: '1', address: ADDR }) };
+
+  it('is refused where writes are, before anything is read', async () => {
+    const res = await follow(req('POST', { hops: 5 }, { host: 'evil.example' }), ctx);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe(LOCAL_ONLY);
+    expect(fake.followFurther).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 11, 2.5, '5', null])('refuses hops %j', async (hops) => {
+    const res = await follow(req('POST', { hops }), ctx);
+    expect(res.status).toBe(400);
+    expect(fake.followFurther).not.toHaveBeenCalled();
+  });
+
+  it('refuses hops at or below the global limit, which frees no quota', async () => {
+    const res = await follow(req('POST', { hops: 3 }), ctx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('3 hops');
+    fake.sources.mockResolvedValueOnce({ 'follow.hops': { value: '6' } });
+    expect((await follow(req('POST', { hops: 6 }), ctx)).status).toBe(400);
+    expect(fake.followFurther).not.toHaveBeenCalled();
+  });
+
+  it('answers 202 { set: true } when the limit is set, 200 { set: false } when it already was', async () => {
+    const first = await follow(req('POST', { hops: 5 }), ctx);
+    expect(first.status).toBe(202);
+    expect(await first.json()).toEqual({ set: true });
+    expect(fake.followFurther).toHaveBeenCalledWith(3, 5);
+    fake.followFurther.mockResolvedValueOnce('already');
+    const again = await follow(req('POST', { hops: 5 }), ctx);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ set: false });
+  });
+
+  it('answers 404 for a collection that is not watched, or that went between the two reads', async () => {
+    fake.collection.mockResolvedValueOnce(null);
+    expect((await follow(req('POST', { hops: 5 }), ctx)).status).toBe(404);
+    fake.followFurther.mockResolvedValueOnce('gone');
+    expect((await follow(req('POST', { hops: 5 }), ctx)).status).toBe(404);
+    expect((await follow(req('POST', { hops: 5 }), { params: Promise.resolve({ chain: 'x', address: 'y' }) })).status).toBe(404);
   });
 });

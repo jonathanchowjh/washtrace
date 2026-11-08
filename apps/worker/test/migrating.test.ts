@@ -40,7 +40,7 @@ describe('Migrating: the start-up migration and what /health answers meanwhile (
     await settle();
     expect(m.health()).toEqual({ status: 503, body: { ok: false, migrating: true, error: 'the database system is starting up' } });
 
-    attempts[2]!.resolve(30);
+    attempts[2]!.resolve(31);
     await done;
     expect(m.health()).toEqual({ status: 200, body: { ok: true, migrating: true } });
 
@@ -48,14 +48,14 @@ describe('Migrating: the start-up migration and what /health answers meanwhile (
     const again = m.run();
     await settle();
     expect(m.health()).toEqual({ status: 200, body: { ok: true, migrating: true } });
-    attempts[3]!.resolve(30);
+    attempts[3]!.resolve(31);
     await again;
   });
 
   it('waits longer between attempts, up to 30 s', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let fails = 4;
-    const store = { migrate: async () => { if (fails-- > 0) throw new Error('not yet'); return 30; } } as unknown as Store;
+    const store = { migrate: async () => { if (fails-- > 0) throw new Error('not yet'); return 31; } } as unknown as Store;
     const m = new Migrating(store, URL);
     const waits: number[] = [];
     m.pause = async (ms) => { waits.push(ms); };

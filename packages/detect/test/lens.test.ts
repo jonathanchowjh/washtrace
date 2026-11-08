@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ZERO } from '../src/graph.js';
 import { SEARCH_CAP, runLens } from '../src/lens.js';
-import { COPIES, DEFAULT_RULE, type EdgeKind, type LensRule } from '../src/lens-rule.js';
+import { COPIES, DEFAULT_RULE, depthNeeded, moneyReason, moneyShort, readThrough, type EdgeKind, type LensRule } from '../src/lens-rule.js';
 import { contractsFor } from '../src/marketplaces.js';
 import { analyze } from '../src/methods.js';
 import { MOVE_KIND, Moves } from '../src/moves.js';
@@ -690,7 +690,7 @@ describe('judged, the sampled sales the lens actually judged', () => {
       lensInput: async () => lensInputOf(all, [], { custodians: new Set([k]) }),
       roundTripsCaught: async () => 0,
     } as unknown as Store;
-    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly(), through: null });
+    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly(), through: null, followHops: 3 });
     expect(result).toMatchObject({ sampled: 3, judged: 2, hops: 2 });
   });
 
@@ -701,7 +701,132 @@ describe('judged, the sampled sales the lens actually judged', () => {
       lensInput: async () => lensInputOf([transfer('1', ZERO, a), untimed]),
       roundTripsCaught: async () => 0,
     } as unknown as Store;
-    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly((r) => { r.window = { days: 3, side: 'either' }; }), through: null });
+    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly((r) => { r.window = { days: 3, side: 'either' }; }), through: null, followHops: 3 });
     expect(result).toMatchObject({ judged: 0, hops: 1, untimed: 1, truncated: 0, atLeast: false });
+  });
+});
+
+describe('depthNeeded, how far out a rule needs money read', () => {
+  const rule = (closes: LensRule['closes'], max: number | null, change: (r: LensRule) => void = () => {}) =>
+    ethOnly((r) => { r.closes = closes; r.hops = { min: 0, max }; change(r); });
+
+  it('is 0 with no money edge on, and max(0, k - 1) for hops.max k, under either closes', () => {
+    expect(depthNeeded(DEFAULT_RULE)).toBe(2);
+    expect(depthNeeded(structuredClone(COPIES.A.rule))).toBe(0);
+    expect(depthNeeded(ethOnly((r) => { r.edges.eth.use = false; r.edges['nft-token'].use = true; }))).toBe(0);
+    for (const closes of ['seller', 'seller-or-funder'] as const) {
+      expect([0, 1, 2, 3, 6].map((k) => depthNeeded(rule(closes, k)))).toEqual([0, 0, 1, 2, 5]);
+      // "Any" length is the token's own hops: no money is read for it.
+      expect(depthNeeded(rule(closes, null))).toBe(0);
+    }
+    for (const kind of ['eth', 'internal', 'weth'] as const) {
+      expect(depthNeeded(ethOnly((r) => { r.edges.eth.use = false; r.edges[kind].use = true; r.hops.max = 4; }))).toBe(3);
+    }
+  });
+
+  /**
+   * The flows the money check would hold for the path b → p1 → … → pk → a (the
+   * buyer to the seller, k middles), when wallets down to `depth` are checked.
+   * Traders a and b are depth 0, and the check follows only what a checked
+   * wallet sent: pi is depth i. Fund stores every flow touching a checked
+   * wallet, so an edge between two unchecked wallets is not there.
+   */
+  function stored(k: number, depth: number): Flow[] {
+    const p = [b, ...Array.from({ length: k }, (_, i) => w(`p${i + 1}`)), a];
+    const checked = new Set([a, b, ...p.slice(1, k + 1).filter((_, i) => i + 1 <= depth)]);
+    const edges: Flow[] = [];
+    for (let i = 0; i <= k; i++) if (checked.has(p[i]!) || checked.has(p[i + 1]!)) edges.push(flow(p[i]!, p[i + 1]!, { blockTime: T0 - DAY }));
+    return edges;
+  }
+
+  for (const closes of ['seller', 'seller-or-funder'] as const) {
+    for (const k of [1, 2, 3]) {
+      // Under the funder, the funder is the k-th wallet and the walk is one edge shorter than the seller's, so a max of k edges holds only that search.
+      const r = rule(closes, k, (x) => { if (closes === 'seller-or-funder') x.edges.eth.max = k; });
+      it(`${closes}, ${k} middle wallet${k > 1 ? 's' : ''}: found with the flows of depthNeeded, not with one depth less`, () => {
+        const need = depthNeeded(r);
+        expect(caught(r, sale(), stored(k, need))).toBe(1);
+        if (need > 0) expect(caught(r, sale(), stored(k, need - 1))).toBe(0);
+      });
+    }
+  }
+
+  it("either direction: the worst path still reads depthNeeded deep, along the follow; a path against the money is found only where a checked end stores it", () => {
+    const either = (k: number) => rule('seller', k, (x) => { x.edges.eth.direction = 'either'; });
+    expect(depthNeeded(either(3))).toBe(2);
+    expect(caught(either(3), sale(), stored(3, 2))).toBe(1);
+    expect(caught(either(3), sale(), stored(3, 1))).toBe(0);
+    // b ← p1 ← p2 → a: nobody checked sent to p1 or p2, so no depth stores p1 – p2.
+    const [p1, p2] = [w('p1'), w('p2')] as [string, string];
+    const against = [flow(p1, b), flow(p2, a)];
+    expect(caught(either(2), sale(), against)).toBe(0);
+    expect(caught(either(2), sale(), [...against, flow(p2, p1)])).toBe(1);
+  });
+});
+
+describe('moneyShort, whether the money is read as far as a rule needs (Rulings S25, S31)', () => {
+  const needs = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
+  const read = (over: Partial<{ limit: number; pendingByDepth: Record<number, number>; seeding: boolean }> = {}) => ({ limit: 3, pendingByDepth: {}, seeding: false, ...over });
+
+  it('is short when the rule needs more hops than the money is followed to', () => {
+    expect(moneyShort(needs(4), read(), 3, false)).toBe(true);
+    expect(moneyShort(needs(3), read(), 3, false)).toBe(false);
+  });
+
+  it('is short while wallets at a depth the rule needs, or nearer, are pending', () => {
+    expect(moneyShort(needs(4), read({ limit: 5, pendingByDepth: { 4: 1, 5: 2 } }), 3, false)).toBe(true);
+    expect(moneyShort(needs(4), read({ limit: 5, pendingByDepth: { 5: 2 } }), 3, false)).toBe(false);
+  });
+
+  it('is short while seeding only for a rule that needs more than the global limit', () => {
+    expect(moneyShort(needs(4), read({ limit: 5, seeding: true }), 3, false)).toBe(true);
+    expect(moneyShort(needs(3), read({ limit: 5, seeding: true }), 3, false)).toBe(false);
+  });
+
+  it('is never short for a rule with no money edge', () => {
+    const nft = ethOnly((r) => { r.edges.eth.use = false; r.hops.max = 9; });
+    expect(moneyShort(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, false)).toBe(false);
+    expect(moneyShort(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, true)).toBe(false);
+  });
+});
+
+describe('moneyReason, the one decision the editor row and the share both read', () => {
+  it('agrees with moneyShort over a grid of limit, pending, seeding, behind and need, and orders its reasons seeding, pending, limit, behind', () => {
+    const rule = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
+    for (const needed of [0, 2, 3, 4, 6]) for (const limit of [3, 5]) for (const seeding of [false, true]) for (const behind of [false, true]) for (const pendingByDepth of [{}, { 4: 1 }, { 6: 1 }] as Record<number, number>[]) {
+      const money = { limit, pendingByDepth, seeding };
+      const why = moneyReason(rule(needed), money, 3, behind);
+      expect(moneyShort(rule(needed), money, 3, behind)).toBe(why !== null);
+      const expected = seeding && needed > 3 ? 'seeding' : Object.keys(pendingByDepth).some((d) => Number(d) <= needed) ? 'pending' : needed > limit ? 'limit'
+        : behind && needed > 3 ? 'behind' : null;
+      expect(why).toBe(expected);
+    }
+  });
+
+  it('a run behind the collection holds back only a lens that needs more than the global limit (Ruling S36)', () => {
+    const rule = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
+    const read = { limit: 5, pendingByDepth: {}, seeding: false };
+    expect(moneyReason(rule(4), read, 3, true)).toBe('behind');
+    expect(moneyReason(rule(4), read, 3, false)).toBeNull();
+    // Within the global limit the run reads what it always read: no reach of this collection's own.
+    expect(moneyReason(rule(3), read, 3, true)).toBeNull();
+  });
+});
+
+describe('readThrough, the depth the money is read through (Ruling S37)', () => {
+  const read = (over: Partial<{ limit: number; pendingByDepth: Record<number, number>; seeding: boolean }> = {}) => ({ limit: 3, pendingByDepth: {}, seeding: false, ...over });
+
+  it('is the limit once nothing is pending or being found', () => {
+    expect(readThrough(read(), 3)).toBe(3);
+    expect(readThrough(read({ limit: 5 }), 3)).toBe(5);
+  });
+
+  it('is the global limit while the wallets past it are still being found, not the new limit', () => {
+    expect(readThrough(read({ limit: 5, seeding: true, pendingByDepth: { 5: 2 } }), 3)).toBe(3);
+  });
+
+  it('is one short of the shallowest depth still to read', () => {
+    expect(readThrough(read({ limit: 6, pendingByDepth: { 6: 1, 5: 9 } }), 3)).toBe(4);
+    expect(readThrough(read({ limit: 5, pendingByDepth: { 4: 1 } }), 3)).toBe(3);
   });
 });

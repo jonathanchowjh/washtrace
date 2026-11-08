@@ -98,6 +98,7 @@ vi.mock('@/lib/store', () => ({
     profile: async () => ({ supply: 1, holders: 1, firstMint: null, firstSale: null, lastSale: null, marketplaces: [] }),
     passes: async () => [], collections: async () => [], sources: async () => ({}), settings: async () => new Map(),
     importedFunding: async () => false,
+    moneyRead: async () => ({ traders: { checked: 0, of: 0 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false }),
     lensTokens: async () => ({ rows: [], total: 0 }), lensWallets: async () => ({ rows: [], total: 0 }),
   }),
   storedEntry: async () => null,

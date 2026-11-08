@@ -165,6 +165,18 @@ export function behindOf(run: LensRun | null, lens: Pick<Lens, 'version'>, lates
   return run.analysisId !== (latest?.id ?? null) ? 'analysis' : null;
 }
 
+/**
+ * Whether a lens of yours's figures are from before the collection's latest
+ * write (Ruling S36): written to since its latest analysis (`stale`, which a
+ * reach wallet's check makes it), or from a run on an analysis older than
+ * `latest`. Then it has not read what Fetch them fetched since, so its share
+ * of a lens reaching past the global limit is a floor (moneyReason's
+ * 'behind'). False with no figures to show.
+ */
+export function behindVersion(run: LensRun | null, latest: Pick<AnalysisRow, 'id'> | null, stale: boolean): boolean {
+  return run !== null && run.totals !== null && (stale || run.analysisId !== (latest?.id ?? null));
+}
+
 /** The line above Trades and the flagged lists: each lens in view that is behind, by name, and what that means for what is shown. Null when none is. */
 export function behindLine(lenses: readonly { name: string; behind: Behind }[]): string | null {
   if (lenses.length === 0) return null;

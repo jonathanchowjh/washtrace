@@ -61,6 +61,7 @@ vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => collection(),
     lensRuns: async () => state.runs,
+    moneyRead: async () => ({ traders: { checked: 0, of: 0 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false }),
     history: async () => [],
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
     profile: async () => ({ supply: 644, holders: 300, firstMint: null, firstSale: null, lastSale: null, marketplaces: [] }),

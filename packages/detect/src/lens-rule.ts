@@ -155,6 +155,119 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
   };
 }
 
+// ---- the data a rule needs ----------------------------------------------------
+
+/**
+ * How many hops out from a trader the money check must have read for every
+ * money path the rule can find to be in the flows: 0 is the traders alone.
+ *
+ * `Store.fund` stores every flow of a checked wallet and queues only the
+ * wallets it sent to, one hop further out, so an edge is stored when one end is
+ * checked. Take buyer → w1 → … → wk → seller. The buyer's and the seller's own
+ * lists hold the first and last edge, and wi → wi+1 needs wi checked, which
+ * wallet w(k-1) at hop k - 1 settles: `hops.max` k needs max(0, k - 1).
+ *
+ * Both `closes` give that. A funder is the k-th wallet, one of the k middles,
+ * and the edge it paid the seller is in the seller's own list. Counting the
+ * funder one hop further (k) would ask for a depth the engine never needs: it
+ * closes at a funder after k edges grown, and the funding edge, in the
+ * seller's own list, is not one of them.
+ *
+ * `direction: 'either'` does not raise it. A path walked against the money
+ * (w sent to the wallet before it) is stored only when one end is checked, and
+ * the follow reaches wallets only along sent money, so a path whose middle
+ * edge runs against it, between two wallets nobody checked sent to, is in no
+ * depth's flows. No depth completes it; the number is the worst the follow can
+ * reach. Money reached by an NFT hop restarts at a trader (hop 0), so it needs
+ * less. With `hops.max` null only the token's own hops are read: no money.
+ */
+export function depthNeeded(rule: LensRule): number {
+  const money = EDGE_TYPES.some((e) => e.money && rule.edges[e.kind].use);
+  return money && rule.hops.max !== null ? Math.max(0, rule.hops.max - 1) : 0;
+}
+
+/**
+ * How many of a collection's wallets are still to be read at a depth no
+ * deeper than `depth` (MoneyRead.pendingByDepth). The editor's money row and
+ * moneyShort both ask it, so they cannot disagree on what is pending.
+ */
+export function pendingUpTo(pendingByDepth: Readonly<Record<number, number>>, depth: number): number {
+  return Object.entries(pendingByDepth).reduce((sum, [d, n]) => sum + (Number(d) <= depth ? n : 0), 0);
+}
+
+/**
+ * Why a collection's money is not yet read as far as `rule` needs (Rulings
+ * S25, S31, S36), or null when it is. 'seeding': the walk that finds the
+ * wallets past `globalHops` is still running and the rule reaches past them
+ * (seeding finds only those, so a lens within the global limit is not held
+ * back). 'pending': wallets at a depth the rule needs, or nearer, are still to
+ * read. 'limit': the rule needs more hops than the collection is followed to.
+ * 'behind': all of it is read, but the lens's run is behind the collection's
+ * version (`behind`), so its share is from before the wallets past
+ * `globalHops` were; only those are this collection's own, so a lens within
+ * the global limit is not held back. The order is the one the editor's row
+ * reports them in. `money` is the part of MoneyRead this reads. A rule with
+ * no money edge needs depth 0, so it is never short. The money check still
+ * running on the traders themselves is not read here: floorCauses' "money is
+ * not fully read yet" says it.
+ */
+export function moneyReason(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): 'seeding' | 'pending' | 'limit' | 'behind' | null {
+  const needed = depthNeeded(rule);
+  if (money.seeding && needed > globalHops) return 'seeding';
+  if (pendingUpTo(money.pendingByDepth, needed) > 0) return 'pending';
+  if (needed > money.limit) return 'limit';
+  return behind && needed > globalHops ? 'behind' : null;
+}
+
+/** The part of MoneyRead that says how far out its money is read, which moneyReason and readThrough read. */
+export type MoneyDepths = { limit: number; pendingByDepth: Readonly<Record<number, number>>; seeding: boolean };
+
+/**
+ * How many hops out a collection's money is read through, for "Wallets up to
+ * L hops out" (Ruling S37): never a depth not read yet. While the walk past
+ * `globalHops` is finding wallets, only the global limit is; while wallets
+ * are pending, one short of the shallowest of them (all are past the global
+ * limit: MoneyRead.pendingByDepth); else its limit.
+ */
+export function readThrough(money: MoneyDepths, globalHops: number): number {
+  if (money.seeding) return globalHops;
+  const pending = Object.keys(money.pendingByDepth).map(Number);
+  return pending.length > 0 ? Math.min(...pending) - 1 : money.limit;
+}
+
+/** Whether a share is a floor for want of money read: any reason of moneyReason. */
+export function moneyShort(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): boolean {
+  return moneyReason(rule, money, globalHops, behind) !== null;
+}
+
+/**
+ * How many more wallets following a collection's money one hop past its
+ * limit would read, as the worker last counted it (Store.countNext), for
+ * the lens editor's Fetch them. `depth` is the hop counted; `wallets` are
+ * the ones there still to read. `growth` is how many wallets the chain
+ * holds at a depth for each at the one before, null with nothing to go by.
+ * `cut`: the walk stopped short of every wallet and scaled what it found,
+ * so even `depth` is about. `at` is when it was counted.
+ */
+export interface FollowEstimate { depth: number; wallets: number; growth: number | null; cut: boolean; at: string }
+
+/**
+ * About how many wallets following out to `toDepth` would read, from what
+ * was counted: the counted depth, then each level past it the one before
+ * times `growth` (none past it when there is no growth to go by), since the
+ * deeper ones would need the very reads being priced. `exactTo` is the
+ * deepest depth counted exactly, one short of `depth` when the walk was cut.
+ * Null with nothing counted, or asked for less than was counted.
+ */
+export function estimateTo(estimate: FollowEstimate | null, toDepth: number): { wallets: number; exactTo: number } | null {
+  if (estimate === null || toDepth < estimate.depth) return null;
+  let wallets = estimate.wallets;
+  if (estimate.growth !== null) {
+    for (let d = estimate.depth + 1, level = estimate.wallets; d <= toDepth; d++) wallets += (level *= estimate.growth);
+  }
+  return { wallets: Math.round(wallets), exactTo: estimate.cut ? estimate.depth - 1 : estimate.depth };
+}
+
 // ---- names and ids -----------------------------------------------------------
 
 /** The most characters a lens's name has, trimmed: it heads a tab, a chip and a CSV column. */

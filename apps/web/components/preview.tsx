@@ -10,11 +10,11 @@ import { send } from './lens-actions';
 const POLL_MS = 1000;
 
 /** The finished preview's one line: the lens's share of the sample, Round trips' of the same sales, and where most were caught. */
-function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Method[], funded: boolean): string {
+function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Method[], funded: boolean, moneyShort: boolean): string {
   const r = p.result!;
   // Not r.atLeast: that covers cut searches and untimed trades only, and a money lens is a floor too while its funding is not final.
   // Untimed trades are out of the judged base already, so they are not a cause of a floor here.
-  const floor = atLeastOf(p.rule, { truncated: r.truncated, untimed: 0 }, notFinal, funded);
+  const floor = atLeastOf(p.rule, { truncated: r.truncated, untimed: 0 }, notFinal, funded, moneyShort);
   // A sampled sale the token graph folds away or the rule skips is never judged, so the share is of those judged; a row from before `judged` was kept counts them all.
   const judged = r.judged ?? r.sampled;
   const all = judged === r.sampled;
@@ -32,16 +32,18 @@ function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Me
  * this collection's sales, so a lens can be judged before it is saved. The
  * worker does the work (a queued row), so this asks for it and polls the row
  * every second while it is queued or running; a failed poll (including a 200
- * whose body is no preview row) is asked again, and only a 404 (the row is gone) ends it. `notFinal` and `funded` are the
+ * whose body is no preview row) is asked again, and only a 404 (the row is gone) ends it. `notFinal`, `funded` and `moneyShort` are the
  * collection page's, so the share reads "at least" exactly where a saved
  * lens's does. A result stays after the rule changes, marked as from before.
  */
-export function Preview({ chainId, address, rule, roundTripsName, notFinal, funded, writable = true }: {
+export function Preview({ chainId, address, rule, roundTripsName, notFinal, funded, moneyShort, writable = true }: {
   chainId: number; address: string; rule: LensRule; roundTripsName: string;
   /** This console may write: a preview queues a row, so it is refused as a save is. */
   writable?: boolean;
   /** The built-ins whose money is not final yet, as the collection page has them. */
   notFinal: readonly Method[];
+  /** moneyShort of this rule against what is read of the collection's money. */
+  moneyShort: boolean;
   /** The collection has funding for the money lenses to run on. */
   funded: boolean;
 }) {
@@ -104,7 +106,7 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
   const stale = row?.status === 'done' && sent !== JSON.stringify(rule);
   return (
     <section aria-labelledby="rule-preview" className="space-y-2">
-      <h3 id="rule-preview" className="font-medium">3 · Try it before you save</h3>
+      <h3 id="rule-preview" className="font-medium">4 · Try it before you save</h3>
       <p className="text-sm text-muted-foreground">
         Judges this rule, as it stands, on a random sample of this collection&apos;s sales and says how many it catches. Nothing is saved.
       </p>
@@ -114,7 +116,7 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
         <span aria-live="polite" className="text-sm">
           {row?.status === 'queued' ? 'Waiting for the worker (an analysis or lens run may be going)' : null}
           {row?.status === 'running' ? (row.progress && Math.floor(row.progress * 100) > 0 ? `Previewing… ${Math.floor(row.progress * 100)}%` : 'Loading the collection…') : null}
-          {row?.status === 'done' && row.result ? resultLine(row, roundTripsName, notFinal, funded) : null}
+          {row?.status === 'done' && row.result ? resultLine(row, roundTripsName, notFinal, funded, moneyShort) : null}
         </span>
       </div>
       {lost ? <p className="text-xs text-muted-foreground">Lost touch with the service; trying again every second.</p> : null}

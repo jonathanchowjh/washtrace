@@ -255,6 +255,11 @@ export function configFromSources(sources: Record<string, SettingSource>, settin
   };
 }
 
+/** Etherscan calls a second the worker makes: what it reported, or its default. What reading more wallets is priced at. */
+export function callsPerSecond(config: SourcesConfig): number {
+  return config.perSecond ?? Number(FIELDS.find((f) => f.key === 'etherscan.rps')!.fallback);
+}
+
 /** How many hops out the worker follows money: what it reported, or its default. What its funding lanes serve, so the backlog counts with it. */
 export function hopsFollowed(config: SourcesConfig): number {
   return config.followHops ?? Number(FIELDS.find((f) => f.key === 'follow.hops')!.fallback);

@@ -20,6 +20,8 @@ export interface LensRequest {
   chainId: number;
   rule: LensRule;
   through: number | null;
+  /** follow.hops: which followed wallets the run reads (Store.followedFor). */
+  followHops: number;
 }
 
 /** What a preview is given, as a run is: the preview's id is its sample's seed (P4). */
@@ -31,6 +33,8 @@ export interface PreviewRequest {
   chainId: number;
   rule: LensRule;
   through: number | null;
+  /** follow.hops: which followed wallets the run reads (Store.followedFor). */
+  followHops: number;
 }
 
 /** What a lens run gives: its totals, and its flags with every money edge's hash and amount filled in. */
@@ -54,7 +58,7 @@ export const LENS_TIMEOUT_MS = 60 * 60_000;
  */
 export async function lensStored(store: Store, request: LensRequest, onProgress: (share: number) => void = () => {}): Promise<Lensed> {
   // Passed straight in, so nothing here holds the transfers and Moves once the search is done: they can be freed during the fill below.
-  const { totals, flags, moneyEdges } = runLens(request.rule, await store.lensInput(request.collectionId, request.chainId, request.rule, request.through), onProgress);
+  const { totals, flags, moneyEdges } = runLens(request.rule, await store.lensInput(request.collectionId, request.chainId, request.rule, request.through, request.followHops), onProgress);
   const found = await store.moveTxs(request, moneyEdges);
   moneyEdges.forEach((m, i) => {
     const edge = flags[m.flag]!.path[m.edge]!;
@@ -80,9 +84,9 @@ export async function lensStored(store: Store, request: LensRequest, onProgress:
  */
 export async function previewStored(store: Store, request: PreviewRequest, onProgress: (share: number) => void = () => {}): Promise<PreviewResult> {
   const started = Date.now();
-  const { collectionId, chainId, rule, through } = request;
+  const { collectionId, chainId, rule, through, followHops } = request;
   const sample = new Set(await store.previewSample(collectionId, request.previewId, through));
-  const input = await store.lensInput(collectionId, chainId, rule, through);
+  const input = await store.lensInput(collectionId, chainId, rule, through, followHops);
   // The sales there are to sample from, and each sampled sale's market, read before the search so no key is held per transfer.
   let ofSales = 0;
   const marketOf = new Map<string, string>();

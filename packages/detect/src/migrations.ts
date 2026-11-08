@@ -502,4 +502,39 @@ CREATE INDEX IF NOT EXISTS lens_flags_tx_idx ON washtrace.lens_flags (tx_hash);
     // install that never had it; the runner records the version either way.
     outside: ['DROP INDEX CONCURRENTLY IF EXISTS washtrace.flows_from_idx'],
   },
+  `
+-- Data this lens needs (3c): one collection follows its money further out
+-- than follow.hops. follow_hops is its own hop limit, null for the global
+-- one; the larger of the two wins, as a lower one would free nothing, the
+-- wallets being the chain's. 10 is the most follow.hops itself may be.
+-- Followed wallets belong to no collection, so reach lists the wallets a
+-- collection's money has been walked to, each at its shallowest depth out
+-- from that collection's own traders, which is not wallets.depth: that is
+-- the shallowest from any collection's. The ones past the global limit are
+-- what it follows further. It goes with its collection, and is read by
+-- wallet too, when the wallet is checked. The walk goes over the flows
+-- stored, a chunk a fund pass (Store.seedReach), and its rows are how far
+-- it has got, so a pass goes on where the last stopped. stepped: what the
+-- wallet sent is in the reach; a wallet still to check waits, unstepped,
+-- in reach_unstepped_idx. reach_seeded_at: when the walk last found
+-- nothing left to step, null until it has. follow_estimate is how
+-- many wallets following one hop further would read, as the worker last
+-- counted it (Store.countNext): a page only reads it, as counting is a walk.
+-- count_tried_at: when a count was last tried, counted or not, so one that
+-- runs out of time waits its turn behind the rest.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS follow_hops smallint CHECK (follow_hops BETWEEN 1 AND 10);
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS follow_estimate jsonb;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS reach_seeded_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS count_tried_at timestamptz;
+CREATE TABLE IF NOT EXISTS washtrace.reach (
+  collection_id int NOT NULL REFERENCES washtrace.collections(id) ON DELETE CASCADE,
+  chain_id      int NOT NULL,
+  address       text NOT NULL,
+  depth         smallint NOT NULL,
+  stepped       bool NOT NULL DEFAULT false,
+  PRIMARY KEY (collection_id, address)
+);
+CREATE INDEX IF NOT EXISTS reach_wallet_idx ON washtrace.reach (chain_id, address);
+CREATE INDEX IF NOT EXISTS reach_unstepped_idx ON washtrace.reach (collection_id, depth) WHERE NOT stepped;
+`,
 ];

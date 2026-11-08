@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, waiting } from '@/lib/coverage';
 import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
-import { APART_WHY, behindLine, behindOf, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
+import { APART_WHY, behindLine, behindOf, behindVersion, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -554,6 +554,17 @@ describe('a lens of yours that is behind (Ruling FF)', () => {
     expect(behindOf(run('queued', { totals: null, lensVersion: 1, analysisId: null }), lens, latest)).toBeNull();
     // Figures with no analysis now to match are from one that is gone: behind, by the rule as written.
     expect(behindOf(run('done'), lens, null)).toBe('analysis');
+  });
+
+  it('is behind the collection\'s version when written to since the latest analysis, or run on an older one (Ruling S36)', () => {
+    expect(behindVersion(run('done'), latest, false)).toBe(false);
+    // A reach wallet checked since: the version moved, and no analysis has read it yet.
+    expect(behindVersion(run('done'), latest, true)).toBe(true);
+    // A newer analysis read it, and this run is from the one before.
+    expect(behindVersion(run('done', { analysisId: 4 }), latest, false)).toBe(true);
+    // No figures, no share to floor.
+    expect(behindVersion(null, latest, true)).toBe(false);
+    expect(behindVersion(run('queued', { totals: null }), latest, true)).toBe(false);
   });
 
   it('says each lens behind by name, and why, in one line', () => {

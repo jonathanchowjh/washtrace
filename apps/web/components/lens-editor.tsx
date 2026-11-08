@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { checkRule, nameError, type LensRule } from '@washtrace/detect/lens-rule';
+import { checkRule, depthNeeded, estimateTo, moneyShort, nameError, type LensRule } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
 import type { Method } from '@washtrace/detect';
 import { LENSES } from '@/lib/format';
+import { DataNeeds } from './data-needs';
 import { send } from './lens-actions';
 import { Preview } from './preview';
 import { RuleTable } from './rule-table';
@@ -20,8 +21,10 @@ const BUTTON = 'rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted
  * checks it again. `selected` is the tab Cancel goes back to; `lensId` is set
  * when an existing lens is being edited.
  */
-export function LensEditor({ base, chainId, address, selected, title, name: startName, rule: startRule, differs, lensId, writable, notFinal, funded }: {
+export function LensEditor({ base, chainId, address, selected, title, name: startName, rule: startRule, differs, lensId, writable, notFinal, funded, needs }: {
   base: string; chainId: number; address: string; selected: string;
+  /** What "Data this lens needs" compares the rule with: what is read of this collection, and the numbers it is priced by. */
+  needs: Omit<Parameters<typeof DataNeeds>[0], 'rule' | 'estimate' | 'writable' | 'chainId' | 'address'>;
   /** Which built-ins' money is not final, and whether the next analysis has funding: Preview reads "at least" by them, as the page does. */
   notFinal: readonly Method[]; funded: boolean;
   /** What is being made, in words: "New lens", "Copy of Round trips", or the name of the lens being edited. */
@@ -81,7 +84,11 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
 
       <RuleTable rule={rule} onChange={writable ? change : undefined} />
 
-      <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} writable={writable} />
+      {/* The estimate is cut to the unsaved rule here, so it follows each edit to the hops. */}
+      <DataNeeds rule={rule} estimate={estimateTo(needs.money.estimate, depthNeeded(rule))} writable={writable} chainId={chainId} address={address} {...needs} />
+
+      {/* A preview reads the money as it is now, so no run of it is behind what was fetched: no 'behind' (Ruling S36). */}
+      <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} moneyShort={moneyShort(rule, needs.money, needs.followHops, false)} writable={writable} />
 
       <label className="block text-sm">
         <span className="font-medium">Name</span>
