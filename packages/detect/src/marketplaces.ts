@@ -43,6 +43,26 @@ export const WRAPPED: Readonly<Record<number, readonly string[]>> = {
   8453: ['0x4200000000000000000000000000000000000006'], // WETH on Base
 };
 
+/**
+ * A short list of major tokens per chain, read as "other tokens" money. A list,
+ * not every ERC-20, so a fake, spam or address-poisoning token cannot enter and
+ * disk stays small. The symbol and decimals are ours: no untrusted symbol is
+ * ever shown. Addresses are lowercase and none is in WRAPPED, which is read as
+ * money already.
+ */
+export const TOKENS: Readonly<Record<number, readonly { address: string; symbol: string; decimals: number }[]>> = {
+  1: [
+    { address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', symbol: 'USDC', decimals: 6 },
+    { address: '0xdac17f958d2ee523a2206206994597c13d831ec7', symbol: 'USDT', decimals: 6 },
+    { address: '0x6b175474e89094c44da98b954eedeac495271d0f', symbol: 'DAI', decimals: 18 },
+    { address: '0x4d224452801aced8b2f0aebe155379bb5d594381', symbol: 'APE', decimals: 18 },
+  ],
+  8453: [
+    { address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', decimals: 6 },
+    { address: '0x50c5725949a6f0c72e6c4a641f24049a917db0cb', symbol: 'DAI', decimals: 18 },
+  ],
+};
+
 /** Contracts never treated as the middle of a money path, beyond the marketplaces themselves. */
 const INFRASTRUCTURE: readonly string[] = [
   '0x1e0049783f008a0085193e00003d00cd54003c71', // OpenSea conduit

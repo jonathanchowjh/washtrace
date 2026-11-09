@@ -217,7 +217,7 @@ describe('layout', () => {
   describe('a lens of yours', () => {
     const y = '0x' + 'e'.repeat(40);
     const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
-      ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, ...more });
+      ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, token: null, ...more });
     const own = (path: LoopEdge[], wallets: string[], lensId = 7): OwnFlag => ({ lensId, collectionId: 1, txHash: '0xs1', logIndex: 0, path, wallets });
     const ts = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b), txHash: '0xs1' }];
 
@@ -243,6 +243,22 @@ describe('layout', () => {
       expect(d.nodes.find((n) => n.id === y)).toMatchObject({ middle: true });
       expect(d.edges.find((e) => e.key === 'o0e1')).toMatchObject({ kind: 'asset', tone: 'own', label: '#9', tx: '0xc9', row: null, token: '9' });
       expect(d.edges.find((e) => e.key === 'o0e2')).toMatchObject({ kind: 'money', tone: 'own', label: '1.2345' });
+    });
+
+    it('reads a token edge in its own symbol, scaled by its decimals, on the arrow and on hover; an old path without a token still reads ETH (T10)', () => {
+      const USDC = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', APE = '0x4d224452801aced8b2f0aebe155379bb5d594381';
+      const path = [
+        edge('nft-token', a, b, { tx: '0xs1', tokenId: '1' }),
+        edge('other-tokens', b, x, { amountWei: '1250500000', token: USDC }),
+        edge('funds', x, y, { amountWei: '3000000000000000000', token: APE }),
+        // Stored before LoopEdge had a token: no key at all.
+        { from: y, to: a, kind: 'eth', tx: null, time: null, amountWei: '500000000000000000', tokenId: null } as unknown as LoopEdge,
+      ];
+      const d = layout(ts, [], [], [own(path, [a, b, x, y])]);
+      const at = (key: string) => d.edges.find((e) => e.key === key)!;
+      expect(at('o0e1')).toMatchObject({ kind: 'money', label: '1,250.5 USDC', title: '1,250.5 USDC paid, on a loop of a lens of yours' });
+      expect(at('o0e2')).toMatchObject({ kind: 'money', label: '3 APE', title: '3 APE funding the seller before the trade, on a loop of a lens of yours' });
+      expect(at('o0e3')).toMatchObject({ kind: 'money', label: '0.5', title: '0.5 ETH paid, on a loop of a lens of yours' });
     });
 
     it('lights an arrow of the token for every transfer of it on the path, and keeps the built-in loops first', () => {

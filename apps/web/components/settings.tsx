@@ -7,6 +7,7 @@ import { Section, Warn } from '@/components/head';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { LENSES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
+import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
 
 const INPUT = 'field font-mono text-xs disabled:opacity-60';
 
@@ -23,6 +24,9 @@ const HINTS: Record<string, string> = {
   'etherscan.rps': 'How many Etherscan calls the worker makes a second. Higher checks wallets sooner; above your plan\'s limit, Etherscan refuses calls.',
   'etherscan.url': 'Where the worker sends its Etherscan calls. Change it only for a proxy or an Etherscan-compatible API.',
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls.`,
+  // What it buys, what it costs, and what it never reads, with the fan-out the worker follows by (T15).
+  'tokens.payees': `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
+    + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`,
 };
 
 /**

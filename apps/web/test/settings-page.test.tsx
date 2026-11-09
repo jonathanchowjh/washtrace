@@ -4,6 +4,7 @@ import { Settings } from '@/components/settings';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { OPEN, type FieldView } from '@/lib/settings';
 import { withoutKey } from '@/lib/format';
+import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
 
 const refresh = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
@@ -70,6 +71,14 @@ describe('Settings, each field', () => {
     expect(box('etherscan.key').textContent).toMatch(/Money loops back.*Linked wallets/);
     expect(box('etherscan.key').textContent).not.toMatch(/\bSCC\b|\bAU\b|\bAC\b/);
     for (const key of ['etherscan.rps', 'etherscan.url', 'follow.hops']) expect(box(key).querySelector('[data-hint]')?.textContent?.length).toBeGreaterThan(20);
+  });
+
+  it('says what tokens.payees is for, what it costs and when a payee is not read, with the fan-out the worker follows by', () => {
+    const payees: FieldView = { key: 'tokens.payees', label: 'Read tokens of wallets paid in tokens', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
+    render(<Settings writable fields={[...fields(), payees]} />);
+    expect(box('tokens.payees').querySelector('[data-hint]')?.textContent).toBe(
+      `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
+      + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`);
   });
 
   it('gives each field an anchor by its key', () => {

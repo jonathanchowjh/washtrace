@@ -1,4 +1,4 @@
-import { METHODS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
+import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { LENSES, andList, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
@@ -66,10 +66,35 @@ function amount(wei: string | null): string {
   return cut ? `${whole}.${cut}` : frac ? '<0.0001' : whole!;
 }
 
+/** The listed tokens by address, every chain's: no two chains share one. The symbol and decimals are ours, never a token's own (TOKENS). */
+const LISTED = new Map(Object.values(TOKENS).flat().map((t) => [t.address, t]));
+
+/** A raw token amount scaled by its decimals: to 4 places with thousands marked, never 0 for an amount above it. */
+function tokenAmount(raw: string, decimals: number): string {
+  const v = BigInt(raw), unit = 10n ** BigInt(decimals);
+  const whole = v / unit, rest = v % unit;
+  const cut = rest.toString().padStart(decimals, '0').slice(0, 4).replace(/0+$/, '');
+  if (cut) return `${whole.toLocaleString('en-US')}.${cut}`;
+  return whole === 0n && rest > 0n ? '<0.0001' : whole.toLocaleString('en-US');
+}
+
+/**
+ * What an other-token edge paid, with its symbol, or null for any other
+ * edge: its token is on the edge (T10), since its kind ('funds' too) does
+ * not say. A path stored before edges carried a token has none, so it reads
+ * as it always did.
+ */
+function tokenPaid(e: LoopEdge): string | null {
+  if (e.token == null) return null;
+  const t = LISTED.get(e.token);
+  if (t === undefined) return '? of a token no longer listed';
+  return `${e.amountWei === null ? '?' : tokenAmount(e.amountWei, t.decimals)} ${t.symbol}`;
+}
+
 /** What an arrow only a lens of yours drew says on hover. */
 function ownTitle(e: LoopEdge): string {
   if (e.kind === 'nft-collection' || e.kind === 'nft-token') return `${e.tokenId === null ? 'A token' : `#${e.tokenId}`} of this collection changing hands, on a loop of a lens of yours`;
-  const paid = e.amountWei === null ? 'An amount not read' : `${amount(e.amountWei)} ${e.kind === 'weth' ? 'WETH' : 'ETH'}`;
+  const paid = tokenPaid(e) ?? (e.amountWei === null ? 'An amount not read' : `${amount(e.amountWei)} ${e.kind === 'weth' ? 'WETH' : 'ETH'}`);
   return e.kind === 'funds' ? `${paid} funding the seller before the trade, on a loop of a lens of yours` : `${paid} paid, on a loop of a lens of yours`;
 }
 
@@ -219,7 +244,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
       const key = `o${i}e${j}`;
       edges.push({
         key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null,
-        label: asset ? (e.kind === 'nft-collection' && e.tokenId !== null ? `#${e.tokenId}` : '') : amount(e.amountWei),
+        label: asset ? (e.kind === 'nft-collection' && e.tokenId !== null ? `#${e.tokenId}` : '') : tokenPaid(e) ?? amount(e.amountWei),
         title: ownTitle(e), ...(e.kind === 'nft-collection' && e.tokenId !== null ? { token: e.tokenId } : {}),
         ...curve(at.get(e.from)!, at.get(e.to)!, nextIn(e.from, e.to), c),
       });

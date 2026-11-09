@@ -5,7 +5,7 @@ import { Etherscan, WALLET_MS } from './etherscan.js';
 import { LENS_TIMEOUT_MS, runLensInThread, runPreviewInThread, type LensRequest, type Lensed, type PreviewRequest } from './lens-thread.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
-import { ANALYZE_GAP_MS, CHECKS_CHANNEL, COUNT_TIMEOUT_MS, followOf, LOCKS, PREVIEWS_CHANNEL, retryMs, type CheckKind, type CollectionRow, type FundingLane, type PreviewResult, type StaleRow, type Store } from './store.js';
+import { ANALYZE_GAP_MS, CHECKS_CHANNEL, COUNT_TIMEOUT_MS, TOKEN_COUNT_MS, followOf, LOCKS, PREVIEWS_CHANNEL, retryMs, type CheckKind, type CollectionRow, type FundingLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -44,6 +44,14 @@ export const BUDGET_MS = 45_000;
  */
 export const SEED_MS = 10_000;
 const SEED_CHUNK = 2_000;
+
+/**
+ * What of a fund pass reading other tokens may take on each chain before the
+ * money check, so an explicit Start reading makes progress within one pass.
+ * The money check is not starved by it: what checking leaves unused of the
+ * pass is read on afterwards, and the two share the one Etherscan quota.
+ */
+export const TOKENS_MS = 10_000;
 
 /**
  * What of a fund pass is kept, at its end, for counting one collection's
@@ -502,10 +510,16 @@ export class Worker {
 
   /**
    * Read the funding of wallets not yet read, collections taking turns, within
-   * the budget. Each chain's reaches are walked first, within SEED_MS of it,
-   * so the wallets they find are checked this pass; a stale estimate is
-   * counted last, in the COUNT_MS kept for it or what is left of the pass,
-   * whichever is less.
+   * the budget (Ruling P9). The reserves come off the end first: COUNT_MS for
+   * a stale estimate's count, and, with any collection reading tokens,
+   * TOKEN_COUNT_MS for their counts. Each chain then walks its reaches (within
+   * SEED_MS), reads its started collections' tokens (within TOKENS_MS) and
+   * checks its wallets, up to what the reserves leave. After every chain has
+   * had its turn, what checking left unused reads more tokens, chain by chain,
+   * and the chains' token counts follow, each chain with a started
+   * collection, the ones checking never reached too, each in an equal share
+   * of the time left (Ruling P14). The estimate is counted last, in what is
+   * left of the pass.
    */
   async fund(): Promise<string> {
     const { followHops } = this.resolved();
@@ -515,17 +529,21 @@ export class Worker {
     const deadline = started + BUDGET_MS;
     const collections = await this.store.collections();
     const counting = await this.store.nextCount(followHops);
-    const checkUntil = counting === null ? deadline : deadline - COUNT_MS;
+    const countUntil = deadline - (counting === null ? 0 : COUNT_MS);
+    const tokenChains = new Set(collections.filter((c) => c.readTokens).map((c) => c.chainId));
+    const checkUntil = tokenChains.size > 0 ? countUntil - TOKEN_COUNT_MS : countUntil;
+    // Every collection flagged on a chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
+    const priorityOn = (chainId: number) => new Set(collections.filter((c) => c.chainId === chainId && c.priority && c.pausedAt === null).map((c) => c.id));
     let done = 0;
     let failed = 0;
     chains: for (const chainId of new Set(collections.map((c) => c.chainId))) {
       const seedUntil = Math.min(Date.now() + SEED_MS, checkUntil);
       while (Date.now() < seedUntil && await this.store.seedReach(chainId, followHops, SEED_CHUNK) > 0) {
-        await this.beat('fund', 'Finding the wallets past the hop limit from the money already read', null);
+        await this.beat('fund', "Finding watched collections' wallets from the money already read", null);
       }
+      const priority = priorityOn(chainId);
+      if (tokenChains.has(chainId)) await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil));
       const { lanes } = await this.store.fundingLanes(chainId, 20, followHops);
-      // Every collection flagged on this chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
-      const priority = new Set(collections.filter((c) => c.chainId === chainId && c.priority && c.pausedAt === null).map((c) => c.id));
       const whose = (wallet: string) => {
         const lane = lanes.find((l) => l.wallets.includes(wallet))!;
         const c = collections.find((c) => c.id === lane.collectionId);
@@ -545,6 +563,14 @@ export class Worker {
         }
       }
     }
+    // After every chain has been checked: the time checking left reads more tokens, then every chain's counts, shared within countUntil.
+    for (const chainId of tokenChains) await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil);
+    // Each chain an equal share of what is left, worked out again after each, so a chain whose count always runs out cannot
+    // starve the chains after it, and one that finishes early leaves its time to them (Ruling P14).
+    const toCount = [...tokenChains];
+    for (const [i, chainId] of toCount.entries()) {
+      await this.countTokens(chainId, Date.now() + Math.floor((countUntil - Date.now()) / (toCount.length - i)));
+    }
     if (counting !== null && Date.now() < deadline) {
       const c = collections.find((c) => c.id === counting);
       await this.beat('fund', `Counting the wallets one hop further out for ${c?.name ?? c?.address ?? `collection ${counting}`}`, counting);
@@ -553,6 +579,49 @@ export class Worker {
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
     return `${done} wallets read, ${failed} failed`;
+  }
+
+  /**
+   * Read the other tokens of the wallets the started collections on a chain
+   * still need read, collections taking turns, until `until`, and return how
+   * many were tried. The lanes are asked for again each time they run dry,
+   * and every wallet tried leaves them (read, or failed for an hour), so the
+   * loop ends. A read that fails is noted and fails nothing else. A lane
+   * query that throws ends this slice for the pass, logged; the money check
+   * goes on without tokens.
+   */
+  private async readTokens(etherscan: Etherscan, chainId: number, collections: readonly CollectionRow[], priority: ReadonlySet<number>, until: number): Promise<number> {
+    const { followHops, tokensPayees } = this.resolved();
+    let tried = 0;
+    try {
+      while (Date.now() < until) {
+        const { lanes } = await this.store.tokenLanes(chainId, 20, followHops, tokensPayees, until);
+        const order = interleave(lanes, priority);
+        if (order.length === 0) break;
+        for (const wallet of order) {
+          if (Date.now() >= until) return tried;
+          const owner = collections.find((c) => c.id === lanes.find((l) => l.wallets.includes(wallet))?.collectionId);
+          await this.beat('fund', `Reading other tokens for ${owner?.name ?? owner?.address ?? 'followed wallets'}`, null);
+          tried += 1;
+          try {
+            const { flows, truncated } = await etherscan.tokenFlows(chainId, wallet, WALLET_MS);
+            await this.store.saveTokens(chainId, wallet, flows, truncated);
+          } catch (err) {
+            await this.store.tokensFailed(chainId, wallet, this.scrubbed(err));
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[washtrace] chain %d: other tokens not read: %s', chainId, this.scrubbed(err));
+    }
+    return tried;
+  }
+
+  /** Store how far the chain's started collections have their tokens read (Ruling S21). A count that fails fails no checking. */
+  private async countTokens(chainId: number, until: number): Promise<void> {
+    const { followHops, tokensPayees } = this.resolved();
+    await this.store.countTokens(chainId, followHops, tokensPayees, until)
+      .catch((err) => console.error('[washtrace] chain %d: tokens not counted: %s', chainId, this.scrubbed(err)));
   }
 
   /**
@@ -687,9 +756,10 @@ export class Worker {
     await this.beat('lens', `Running ${where}`, collectionId);
     const { progress, written } = this.progressWriter(`Running ${where}`, collectionId, (share) => this.store.lensRunProgress(lens.id, collectionId, share));
     try {
-      const { totals, flags } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops: this.resolved().followHops }, progress);
+      const { followHops, tokensPayees } = this.resolved();
+      const { totals, flags, tokensRead } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops, payees: tokensPayees }, progress);
       await written();
-      const saved = await this.store.saveLensRun(lens.id, collectionId, lens.version, analysisId, through, totals, flags, Date.now() - started);
+      const saved = await this.store.saveLensRun(lens.id, collectionId, lens.version, analysisId, through, totals, flags, Date.now() - started, tokensRead);
       if (saved === 'stale') return `${lens.name} changed while it ran: queued again`;
       if (saved === 'gone') return `${lens.name} or ${name} was removed while it ran: nothing saved`;
       return `Ran ${where}`;
@@ -707,7 +777,8 @@ export class Worker {
     try {
       // Inside the try: a throw here fails this preview with its own error, not as a swept "worker stopped".
       await this.beat('lens', `Previewing ${where}`, p.collectionId);
-      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops: this.resolved().followHops }, progress);
+      const { followHops, tokensPayees } = this.resolved();
+      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops, payees: tokensPayees }, progress);
       await written();
       await this.store.savePreview(p.id, result);
       return `Previewed ${where}`;

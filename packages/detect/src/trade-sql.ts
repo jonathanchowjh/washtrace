@@ -242,7 +242,8 @@ export function loopsOf(self: string | null): string {
 /**
  * Your lens's list row `c`, counted from its stored paths as loopsOf counts
  * witnesses, so a reader meets one form for every lens: `loops` its flags,
- * `closed` those whose path has a money edge (or `funds`), `middles` those
+ * `closed` those whose path has a money edge, other tokens included (Ruling
+ * P11), or `funds`, `middles` those
  * with a wallet that is neither seller nor buyer (a flag's wallets always hold
  * both), `laps` as many as loops, `pairs` none, and `wallets` the distinct
  * wallets in them, other than `self`. A token row reads the flags on its token;
@@ -256,7 +257,7 @@ export function ownLoopsOf(key: string, self: string | null): string {
   const where = `WHERE v.collection_id = $1 AND v.lens_id = $2 AND ${self === null ? `vt.token_id = c.${key}` : `v.wallets @> ARRAY[${self}]::text[]`}`;
   return `CROSS JOIN LATERAL (SELECT
       count(*)::int AS loops,
-      count(*) FILTER (WHERE jsonb_path_exists(v.path, '$[*] ? (@.kind == "eth" || @.kind == "internal" || @.kind == "weth" || @.kind == "funds")'))::int AS closed,
+      count(*) FILTER (WHERE jsonb_path_exists(v.path, '$[*] ? (@.kind == "eth" || @.kind == "internal" || @.kind == "weth" || @.kind == "other-tokens" || @.kind == "funds")'))::int AS closed,
       count(*)::int AS laps,
       0 AS pairs,
       count(*) FILTER (WHERE cardinality(v.wallets) > 2)::int AS middles,

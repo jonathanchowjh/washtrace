@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
+import { DEFAULT_RULE, tokensReason, type LensRule } from '@washtrace/detect/lens-rule';
+import type { MoneyRead } from '@washtrace/detect';
 import { DataNeeds } from '@/components/data-needs';
 import { LOCAL_ONLY } from '@/lib/auth';
 
@@ -23,12 +24,14 @@ function along(max: number | null, edit: (r: LensRule) => void = () => {}): Lens
   return r;
 }
 const MONEY = { traders: { checked: 10_000, of: 10_000 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false };
+/** Start reading them never pressed, the worker running tokens.payees off (its default), Ethereum's listed symbols. */
+const TOKENS_OFF: Parameters<typeof DataNeeds>[0]['tokens'] = { started: false, counts: null, payees: false, runTokensRead: null, symbols: 'USDC, USDT, DAI, APE' };
 const FOLLOW_LINE = 'washtrace does not follow past a wallet that sent to more than 25 others, or whose history was too long to read.';
 
 const view = (over: Partial<Parameters<typeof DataNeeds>[0]> = {}) =>
   render(
     <DataNeeds rule={along(4)} transfers={1_200_000} transfersRead money={MONEY} estimate={null} funding perSecond={4} watched={6} writable
-      chainId={1} address={ADDR} followHops={3} fanout={25} callsPerWallet={4} behind={false} paused={false} {...over} />,
+      chainId={1} address={ADDR} followHops={3} fanout={25} callsPerWallet={4} behind={false} paused={false} tokens={TOKENS_OFF} {...over} />,
   ).container;
 const row = (c: Element, name: string) => within(c as HTMLElement).getByText(name).closest('tr') as HTMLElement;
 const reply = (status: number, body: object) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
@@ -240,11 +243,180 @@ describe('the other two rows', () => {
     expect(r.textContent).toContain('Off in this lens');
     expect(within(r).getByRole('link', { name: 'Watch another collection' }).getAttribute('href')).toBe('/');
   });
+});
 
-  it('Other tokens reads not read and off in this lens, with no button in this slice', () => {
-    const r = row(view(), 'Other tokens');
-    expect(r.textContent).toContain('Not read: washtrace has never fetched them');
-    expect(r.textContent).toContain('Off in this lens');
+describe('the Other tokens row', () => {
+  const SYMBOLS = 'USDC, USDT, DAI, APE';
+  /** The line every state carries: the tokens read, then what is never read past (Ruling P15). */
+  const LIMITS = `Reads ${SYMBOLS}. washtrace does not read past a wallet whose token list was too long to read, and a wallet that sent these tokens to more than 25 others is no way back.`;
+  /** A rule that uses Other tokens and no ETH or WETH, with hops.max k. */
+  const tokenRule = (max: number | null = 3) => along(max, (r) => { for (const k of ['eth', 'internal', 'weth'] as const) r.edges[k].use = false; r.edges['other-tokens'].use = true; });
+  const counted = { wallets: 300_000, read: 300_000, truncated: 0, failed: 0, moneyFailed: 0, settled: true, payees: false, at: '2026-11-09T00:00:00.000Z' };
+  const started = (counts: Partial<typeof counted> | null, over: Partial<typeof TOKENS_OFF> = {}) =>
+    ({ ...TOKENS_OFF, started: true, counts: counts === null ? null : { ...counted, ...counts }, runTokensRead: counted.read, ...over });
+  const tokenRow = (over: Partial<Parameters<typeof DataNeeds>[0]> = {}) => row(view({ rule: tokenRule(), ...over }), 'Other tokens');
+  const cells = (r: HTMLElement) => [...r.querySelectorAll('td')].map((td) => td.textContent);
+
+  it('names the tokens it reads, from the list, and says a lens not using them does not', () => {
+    const r = tokenRow({ rule: along(4) });
+    expect(cells(r).slice(1, 3)).toEqual([`Reads ${SYMBOLS}`, `Not used by this lens${LIMITS}`]);
     expect(within(r).queryByRole('button')).toBeNull();
   });
+
+  it('names the tokens in every state, the ones that spend reads included, and says when none are listed', () => {
+    for (const t of [TOKENS_OFF, started(null), started({ read: 5 }), started({})]) expect(cells(tokenRow({ tokens: t }))[2]!.endsWith(LIMITS)).toBe(true);
+    expect(cells(tokenRow({ tokens: { ...TOKENS_OFF, symbols: '' } }))[2]).toContain('Reads no tokens: none are listed for this chain. washtrace does not read past');
+  });
+
+  it('with no key reads "Needs an Etherscan key → Settings", linked, with no button', () => {
+    const r = tokenRow({ funding: false });
+    expect(r.textContent).toContain(`Reads ${SYMBOLS}`);
+    expect(within(r).getByRole('link', { name: 'Needs an Etherscan key → Settings' }).getAttribute('href')).toBe('/settings#etherscan.key');
+    expect(within(r).queryByRole('button')).toBeNull();
+  });
+
+  it('before Start reading, not counted: says so, with the button', () => {
+    const r = tokenRow();
+    expect(cells(r).slice(1, 3)).toEqual(['Not read: washtrace has never fetched them', `Not counted yet: washtrace counts how many wallets this means in a coming money check.${LIMITS}`]);
+    expect(within(r).getByRole('button', { name: 'Start reading them' })).toBeTruthy();
+  });
+
+  it('an estimate stored before `within` was counted reads as not counted', () => {
+    const old = { depth: 4, wallets: 9, growth: null, cut: false, at: 'x' } as unknown as MoneyRead['estimate'];
+    expect(tokenRow({ money: { ...MONEY, estimate: old } }).textContent).toContain('Not counted yet');
+  });
+
+  const COUNTED = { ...MONEY, estimate: { depth: 4, wallets: 9, growth: null, cut: false, within: 300_000, at: 'x' } };
+  it('before Start reading, counted: about W wallets, at least T at R calls a second', () => {
+    const r = tokenRow({ money: COUNTED });
+    expect(cells(r)[2]).toBe(`Not read: about 300,000 wallets, at least 20 h at 4 Etherscan calls a second${LIMITS}`);
+    expect(within(r).getByRole('button', { name: 'Start reading them' })).toBeTruthy();
+  });
+
+  it("with tokens.payees on, adds the traders' payees to the estimate", () => {
+    const r = tokenRow({ money: COUNTED, tokens: { ...TOKENS_OFF, payees: true } });
+    expect(cells(r)[2]).toContain('at 4 Etherscan calls a second; plus up to 25 for each trader paid in these tokens');
+  });
+
+  it('Start reading them posts {} to the tokens route and refreshes; disabled with the reason where writes are refused', async () => {
+    const fetchMock = reply(202, { started: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const r = tokenRow();
+    fireEvent.click(within(r).getByRole('button', { name: 'Start reading them' }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/collections/1/${ADDR}/tokens`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({});
+    cleanup();
+    const locked = within(tokenRow({ writable: false })).getByRole('button', { name: 'Start reading them' }) as HTMLButtonElement;
+    expect(locked.disabled).toBe(true);
+    expect(locked.title).toBe(LOCAL_ONLY);
+  });
+
+  it('shows a refusal in an alert and does not refresh', async () => {
+    vi.stubGlobal('fetch', reply(404, { error: 'This collection is not watched.' }));
+    const r = tokenRow();
+    fireEvent.click(within(r).getByRole('button', { name: 'Start reading them' }));
+    await waitFor(() => expect(within(r).getByRole('alert').textContent).toBe('This collection is not watched.'));
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('started, no count yet: Started, the next money check counts the wallets, no button', () => {
+    const r = tokenRow({ tokens: started(null) });
+    expect(cells(r).slice(1, 3)).toEqual(['Started', `Reading: the next money check counts the wallets${LIMITS}`]);
+    expect(within(r).queryByRole('button')).toBeNull();
+  });
+
+  it('seeding: the walk is not settled, with the limit it walks to and any failed money checks', () => {
+    const r = tokenRow({ tokens: started({ settled: false, read: 1_200, wallets: 5_000 }), money: { ...MONEY, ownLimit: 5 } });
+    expect(cells(r).slice(1, 3)).toEqual(['1,200 of 5,000 wallets read so far', `Finding this collection's wallets up to 5 hops out${LIMITS}`]);
+    const failed = tokenRow({ tokens: started({ settled: false, moneyFailed: 3 }) });
+    expect(cells(failed)[2]).toContain("Finding this collection's wallets up to 3 hops out; 3 wallets' money checks failed, tried again hourly");
+    expect(tokenRow({ tokens: started({ settled: false, moneyFailed: 1 }) }).textContent).toContain("1 wallet's money check failed, tried again hourly");
+  });
+
+  it('paused and not done: continues once resumed, whether still seeding or reading', () => {
+    for (const counts of [{ settled: false, read: 10, wallets: 50 }, { read: 10, wallets: 50 }, null]) {
+      const r = tokenRow({ tokens: started(counts), paused: true });
+      expect(cells(r)[2]).toBe(`Paused: reading continues once this collection is resumed${LIMITS}`);
+      expect(cells(r)[1]).toBe(counts === null ? 'Started' : '10 of 50 wallets read so far');
+    }
+    // A finished read is not paused work.
+    expect(tokenRow({ tokens: started({}), paused: true }).textContent).not.toContain('Paused');
+  });
+
+  it('pending: N wallets still to read, and any failed reads', () => {
+    expect(cells(tokenRow({ tokens: started({ read: 299_000 }) })).slice(1, 3)).toEqual(['299,000 of 300,000 wallets read', `Reading: 1,000 wallets still to read${LIMITS}`]);
+    expect(cells(tokenRow({ tokens: started({ read: 299_000, failed: 40 }) }))[2]).toBe(`Reading: 1,000 wallets still to read; 40 failed, tried again hourly${LIMITS}`);
+  });
+
+  it('behind: all read, the next lens run takes it in', () => {
+    const r = tokenRow({ tokens: started({}, { runTokensRead: 12 }) });
+    expect(cells(r).slice(1, 3)).toEqual(['All 300,000 wallets read', `Read: the next lens run takes it in${LIMITS}`]);
+    expect(within(r).queryByRole('button')).toBeNull();
+  });
+
+  it('read, with no middle wallet: Enough', () => {
+    expect(cells(tokenRow({ rule: tokenRule(0), tokens: started({}) })).slice(1, 3)).toEqual(['All 300,000 wallets read', `Enough${LIMITS}`]);
+  });
+
+  it('read, with more middles than the read reaches: Enough only for wallets reached by ETH or WETH', () => {
+    const r = tokenRow({ tokens: started({}) });
+    expect(cells(r)[2]).toBe(`Enough for wallets reached by ETH or WETH: a loop through tokens can be missed${LIMITS}`);
+    expect(within(r).queryByRole('button')).toBeNull();
+    // With tokens.payees on, one token payment more is reached, so one middle is enough and two are not.
+    expect(cells(tokenRow({ rule: tokenRule(1), tokens: started({ payees: true }) }))[2]).toBe(`Enough${LIMITS}`);
+    expect(cells(tokenRow({ rule: tokenRule(2), tokens: started({ payees: true }) }))[2]).toBe(
+      `Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed${LIMITS}`);
+    // Followed either way, a middle that paid both traders is in no set: one middle is already more than is read, in the setting's words (Ruling P13).
+    const either = tokenRule(1);
+    either.edges['other-tokens'].direction = 'either';
+    expect(cells(tokenRow({ rule: either, tokens: started({ payees: true }) }))[2]).toBe(
+      `Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed${LIMITS}`);
+  });
+
+  it('takes the 25 from the fan-out it is handed', () => {
+    expect(tokenRow({ fanout: 40 }).textContent).toContain('sent these tokens to more than 40 others');
+  });
+
+  it('uses lens names, never the codes', () => {
+    for (const t of [TOKENS_OFF, started(null), started({}), started({ settled: false })]) {
+      expect(tokenRow({ tokens: t }).textContent).not.toMatch(/\b(A|AU|AC)\b/);
+    }
+  });
+
+  it('agrees with tokensReason over a grid of its inputs', () => {
+    /** The exact words of the row for one decision, before the line every state carries. */
+    const expected = (why: ReturnType<typeof tokensReason>, t: Parameters<typeof DataNeeds>[0]['tokens'], paused: boolean, estimated: boolean) => {
+      const c = t.counts;
+      if (why === 'off') {
+        return estimated
+          ? `Not read: about 300,000 wallets, at least 20 h at 4 Etherscan calls a second${t.payees ? '; plus up to 25 for each trader paid in these tokens' : ''}`
+          : 'Not counted yet: washtrace counts how many wallets this means in a coming money check.';
+      }
+      if ((why === 'seeding' || why === 'pending') && paused) return 'Paused: reading continues once this collection is resumed';
+      if (why === 'seeding') return c === null ? 'Reading: the next money check counts the wallets' : "Finding this collection's wallets up to 3 hops out";
+      if (why === 'pending') return `Reading: ${(c!.wallets - c!.read).toLocaleString('en-US')} wallets still to read`;
+      if (why === 'behind') return 'Read: the next lens run takes it in';
+      if (why === null) return 'Enough';
+      return c!.payees
+        ? 'Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed'
+        : 'Enough for wallets reached by ETH or WETH: a loop through tokens can be missed';
+    };
+    // Before Start reading the counts do not matter and the estimate does; after it, the other way round. With no key, nothing else matters.
+    for (const isStarted of [false, true]) for (const counts of isStarted ? [null, {}, { read: 5 }, { settled: false }, { payees: true }] : [null, {}]) for (const run of [4, 300_000]) for (const max of [0, 1, 2, null])
+      for (const payees of [false, true]) for (const paused of [false, true]) for (const [funding, estimated] of (isStarted ? [[true, false], [false, false]] : [[true, false], [true, true], [false, false]]) as [boolean, boolean][]) {
+        const rule = tokenRule(max);
+        const t = { started: isStarted, counts: counts === null ? null : { ...counted, ...counts }, payees, runTokensRead: run, symbols: SYMBOLS };
+        const why = tokensReason(rule, t.started, t.counts, t.runTokensRead);
+        const r = tokenRow({ rule, tokens: t, paused, funding, money: estimated ? COUNTED : MONEY });
+        // With no key nothing is read, whatever was started: the row says so, and offers nothing to press.
+        expect(cells(r)[2]).toBe(`${funding ? expected(why, t, paused, estimated) : 'Needs an Etherscan key → Settings'}${LIMITS}`);
+        // The button shows exactly when nothing has been started and a key is set.
+        expect(within(r).queryByRole('button') !== null).toBe(funding && why === 'off');
+        cleanup();
+      }
+  // Some 500 renders: about 1 s alone, over 3 s beside the whole web suite, so past the default 5 s it would flake.
+  }, 20_000);
 });

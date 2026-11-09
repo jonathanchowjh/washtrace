@@ -1,7 +1,7 @@
 import { AddressGraph, chainOrder, tokenGraph } from './graph.js';
 import { EDGE_TYPES, type EdgeKind, type LensRule } from './lens-rule.js';
 import { sum } from './methods.js';
-import { adjacency, type Moves } from './moves.js';
+import { MOVE_KIND, adjacency, type Moves } from './moves.js';
 import type { LensFlag, LensInput, LensTotals, LoopEdge } from './store.js';
 
 /**
@@ -20,8 +20,8 @@ const DAY = 86_400;
 const KINDS: readonly EdgeKind[] = EDGE_TYPES.map((e) => e.kind);
 const TOKEN = KINDS.indexOf('nft-token');
 const COLLECTION = KINDS.indexOf('nft-collection');
-/** The money kinds by their `MOVE_KIND` byte. */
-const MONEY: readonly EdgeKind[] = ['eth', 'internal', 'weth'];
+/** The money kinds by their `MOVE_KIND` byte: both other-token bytes are the one row. */
+const MONEY: readonly EdgeKind[] = ['eth', 'internal', 'weth', 'other-tokens', 'other-tokens'];
 const MONEY_AT = MONEY.map((k) => KINDS.indexOf(k));
 const NONE: readonly number[] = [];
 
@@ -65,7 +65,8 @@ function firstAt(edges: Int32Array, time: Uint32Array, t: number): number {
 /** The rule's money rows by `MOVE_KIND` byte, and whether one edge passes them. */
 function moneyRows(rule: LensRule) {
   const on = MONEY.map((k) => rule.edges[k].use);
-  const either = MONEY.map((k) => rule.edges[k].direction === 'either');
+  // Ruling P10: a token edge whose receiver washtrace cannot judge is walked along its arrow only.
+  const either = MONEY.map((k, b) => b !== MOVE_KIND.otherOneWay && rule.edges[k].direction === 'either');
   // SQL already dropped what is under each floor, exactly; this float check is
   // the engine's own, so the tolerance only keeps it from dropping an edge at the
   // floor, which Moves holds as a 32-bit float (within 6e-8 of it).
@@ -210,6 +211,8 @@ class LensSearch {
     this.barred = new Uint8Array(N);
     // By the few addresses named, not by every wallet's name: Moves keeps no string per wallet. A
     // wallet whose funding history was cut short is a go-between to a money lens, as to the built-ins.
+    // One whose token list was is not (T6): its own token edges are never loaded, which is all it
+    // could not be judged on, and barring it would lose an ETH loop through it.
     const named = [...(never.marketplaces ? input.contracts : []), ...never.addresses, ...(this.money.any ? input.truncated : [])];
     for (const address of named) {
       const v = moves.id(address) ?? extra.get(address);
@@ -648,19 +651,20 @@ class LensSearch {
     const t = r < 0 ? null : this.transfers[r]!;
     return {
       from: this.name(this.hopFrom[h]!), to: this.name(this.hopTo[h]!), kind,
-      tx: t?.txHash ?? null, time: t?.blockTime ?? null, amountWei: t?.priceWei ?? null, tokenId: this.tokens[this.hopToken[h]!]!.tokenId,
+      tx: t?.txHash ?? null, time: t?.blockTime ?? null, amountWei: t?.priceWei ?? null, tokenId: this.tokens[this.hopToken[h]!]!.tokenId, token: null,
     };
   }
 
   /**
-   * A money edge of the loop, its hash and amount left null: the engine holds
-   * neither per edge (the amount only as a float), and `Store.moveTxs` finds
-   * the hash from the `moneyEdges` entry this adds.
+   * A money edge of the loop, its hash, amount and token left null: the
+   * engine holds none of them per edge (the amount only as a float, and an
+   * other token's not at all), and `Store.moveTxs` finds them from the
+   * `moneyEdges` entry this adds.
    */
   private moneyEdge(e: number, kind: EdgeKind | 'funds', flag: number, edge: number): LoopEdge {
     const { moves } = this;
     const from = moves.name(moves.from[e]!), to = moves.name(moves.to[e]!);
     this.moneyEdges.push({ flag, edge, from, to, kind: MONEY[moves.kind[e]!]!, block: moves.block[e]! });
-    return { from, to, kind, tx: null, time: moves.time[e]!, amountWei: null, tokenId: null };
+    return { from, to, kind, tx: null, time: moves.time[e]!, amountWei: null, tokenId: null, token: null };
   }
 }

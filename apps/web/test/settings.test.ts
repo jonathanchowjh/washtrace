@@ -175,11 +175,11 @@ describe('view, the Etherscan URL', () => {
 describe('configFromSources', () => {
   it('reads chains, funding and the numbers the worker reported', () => {
     const sources = { 'rpc.1': src('env', null), 'rpc.8453': src('env', null), 'etherscan.key': src('console', null), 'etherscan.rps': src('env', '2.5'), 'follow.hops': src('console', '5') };
-    expect(configFromSources(sources)).toEqual({ chains: [1, 8453], funding: true, perSecond: 2.5, followHops: 5 });
+    expect(configFromSources(sources)).toEqual({ chains: [1, 8453], funding: true, perSecond: 2.5, followHops: 5, tokensPayees: false });
   });
 
   it('says nothing is set when the worker reported nothing', () => {
-    expect(configFromSources({})).toEqual({ chains: [], funding: false, perSecond: null, followHops: null });
+    expect(configFromSources({})).toEqual({ chains: [], funding: false, perSecond: null, followHops: null, tokensPayees: false });
   });
 
   it('counts a console RPC and key saved before the worker reports them', () => {
@@ -195,6 +195,13 @@ describe('configFromSources', () => {
     expect(configFromSources({ 'etherscan.rps': src('env', '0'), 'follow.hops': src('env', '99') })).toMatchObject({ perSecond: null, followHops: null });
   });
 
+  it('reads tokens.payees as on only when the worker reported on, never from a console save', () => {
+    expect(configFromSources({ 'tokens.payees': src('console', 'on') }).tokensPayees).toBe(true);
+    expect(configFromSources({ 'tokens.payees': src('env', 'off') }).tokensPayees).toBe(false);
+    expect(configFromSources({ 'tokens.payees': src('env', 'yes') }).tokensPayees).toBe(false);
+    expect(configFromSources({}, new Map([['tokens.payees', 'on']])).tokensPayees).toBe(false);
+  });
+
   it('reads the numbers from the report only, as the worker uses what it reported', () => {
     expect(configFromSources({}, new Map([['follow.hops', '5']]))).toMatchObject({ followHops: null });
   });
@@ -202,7 +209,27 @@ describe('configFromSources', () => {
 
 describe('variableOf', () => {
   it('names the environment variable that pins each setting', () => {
-    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS', 'WASHTRACE_STORED_REPO']);
+    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS', 'WASHTRACE_TOKENS_PAYEES', 'WASHTRACE_STORED_REPO']);
+  });
+});
+
+describe('tokens.payees', () => {
+  const payees = FIELDS.find((f) => f.key === 'tokens.payees')!;
+
+  it('is a field next to follow.hops, off by default, that takes on or off only', () => {
+    const keys = FIELDS.map((f) => f.key);
+    expect(keys.indexOf('tokens.payees')).toBe(keys.indexOf('follow.hops') + 1);
+    expect(payees).toMatchObject({ label: 'Read tokens of wallets paid in tokens', secret: false, fallback: 'off' });
+    expect(payees.validate('on')).toBeNull();
+    expect(payees.validate('off')).toBeNull();
+    for (const v of ['ON', 'true', '1', 'yes', '']) expect(payees.validate(v)).toBe('Read tokens of wallets paid in tokens is on or off.');
+  });
+
+  it('calls a value the worker reads as off, but is not off, invalid', () => {
+    expect(payees.used('on')).toBe(true);
+    expect(payees.used('off')).toBe(true);
+    expect(payees.used('ON')).toBe(false);
+    expect(field(fieldViews(new Map(), { 'tokens.payees': src('env', 'yes', 'yes') }, true), 'tokens.payees').invalid).toBe('Read tokens of wallets paid in tokens is on or off.');
   });
 });
 

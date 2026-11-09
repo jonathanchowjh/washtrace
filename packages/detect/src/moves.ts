@@ -1,7 +1,15 @@
 import { Wallets } from './wallets.js';
 
-/** Which money kind an edge is, as a byte: ETH payments, ETH sent by a contract, and WETH-like tokens. */
-export const MOVE_KIND = { eth: 0, internal: 1, weth: 2 } as const;
+/**
+ * Which money kind an edge is, as a byte: ETH payments, ETH sent by a
+ * contract, WETH-like tokens, and other tokens (TOKENS, read into
+ * token_flows). An other-token edge's `eth` is 0: tokens differ in value and
+ * washtrace has no prices, so no floor reads it (T9). `otherOneWay` is an
+ * other-token edge whose receiver's own read does not pass T6 (Ruling P10):
+ * it is never walked against its arrow, else two traders who paid one DEX
+ * pool, or a wallet never read, would read as a way back through it.
+ */
+export const MOVE_KIND = { eth: 0, internal: 1, weth: 2, other: 3, otherOneWay: 4 } as const;
 
 const EMPTY = new Int32Array(0);
 

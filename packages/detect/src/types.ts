@@ -43,6 +43,19 @@ export interface Flow {
   blockTime: number;
 }
 
+/** One transfer of a listed token (TOKENS) between two wallets. Kept apart from Flow: it is never ETH-denominated money. */
+export interface TokenFlow {
+  txHash: string;
+  from: string;
+  to: string;
+  /** The ERC-20 address, lowercase; always one of TOKENS for the chain. */
+  token: string;
+  /** Raw units, as Etherscan gives them: decimals come from TOKENS. */
+  valueRaw: string;
+  blockNumber: number;
+  blockTime: number;
+}
+
 /**
  * The three detection methods from the paper, by its own acronyms.
  *

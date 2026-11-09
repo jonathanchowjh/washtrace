@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 const NEEDS = {
-  transfers: 1200, transfersRead: true, funding: true, perSecond: 4, watched: 2, followHops: 3, fanout: 25, callsPerWallet: 4, behind: false, paused: false,
+  transfers: 1200, transfersRead: true, funding: true, perSecond: 4, watched: 2, followHops: 3, fanout: 25, callsPerWallet: 4, behind: false, paused: false, tokens: { started: false, counts: null, payees: false, runTokensRead: null, symbols: 'USDC, USDT, DAI, APE' },
   money: { traders: { checked: 5, of: 5 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false },
 };
 const editor = (over: Partial<Parameters<typeof LensEditor>[0]> = {}) =>
@@ -69,12 +69,19 @@ describe('the layout', () => {
     expect(sent(fetchMock).body.rule.never.over).toBe(50);
   });
 
-  it('disables the two unavailable rows and says why', () => {
+  it('disables the unavailable row and says why; Other tokens can be switched on', () => {
     const c = editor();
-    for (const [label, why] of [['NFT: other watched collections', "Not in this version: a lens reads this collection's transfers."], ['Other tokens', 'Not read: washtrace has never fetched them.']] as const) {
-      expect((within(c).getByLabelText(`Follow ${label}`) as HTMLInputElement).disabled).toBe(true);
-      expect(c.textContent).toContain(why);
-    }
+    expect((within(c).getByLabelText('Follow NFT: other watched collections') as HTMLInputElement).disabled).toBe(true);
+    expect(c.textContent).toContain("Not in this version: a lens reads this collection's transfers.");
+    expect((within(c).getByLabelText('Follow Other tokens') as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('the Other tokens row reads "Any amount: tokens differ in value" and takes no amount, while ETH keeps its field', () => {
+    const c = editor();
+    const row = within(c).getByLabelText('Follow Other tokens').closest('tr') as HTMLElement;
+    expect(row.textContent).toContain('Any amount: tokens differ in value');
+    expect(within(row).queryByLabelText(/smallest payment counted/)).toBeNull();
+    expect(within(c).getByLabelText('ETH payment: smallest payment counted, in ETH')).toBeTruthy();
   });
 
   it('says that closing at a funder acts as the seller when the window is on the after side, and not otherwise', () => {
@@ -294,7 +301,7 @@ describe('in the collection page\'s panel', () => {
   it('takes the selected tab\'s place, and the tab stays', async () => {
     const { LensTabs } = await import('@/components/lens-tabs');
     const c = render(
-      <LensTabs base={BASE} chainId={1} address={ADDR} selected="AU" totals={null} latestId={null} paused={false} runs={[]} notFinal={[]} moneyShort={{}}
+      <LensTabs base={BASE} chainId={1} address={ADDR} selected="AU" totals={null} latestId={null} paused={false} runs={[]} notFinal={[]} moneyShort={{}} tokens={{}}
         coverage={{ trail: false, funded: true, coming: false, silent: false }} writable editor={<p>the form</p>}>
         <p>the lists</p>
       </LensTabs>,

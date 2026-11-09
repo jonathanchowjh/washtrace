@@ -1,22 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { ZERO } from '../src/graph.js';
 import { SEARCH_CAP, runLens } from '../src/lens.js';
-import { COPIES, DEFAULT_RULE, depthNeeded, moneyReason, moneyShort, readThrough, type EdgeKind, type LensRule } from '../src/lens-rule.js';
+import { COPIES, DEFAULT_RULE, depthNeeded, moneyReason, moneyShort, readThrough, tokensReason, type EdgeKind, type LensRule } from '../src/lens-rule.js';
 import { contractsFor } from '../src/marketplaces.js';
 import { analyze } from '../src/methods.js';
 import { MOVE_KIND, Moves } from '../src/moves.js';
 import { previewStored } from '../src/lens-thread.js';
 import type { LensInput, Store } from '../src/store.js';
-import type { Flow, Transfer } from '../src/types.js';
-import { LAB, LAB_MIXED, MONEY, WETH, chain, flow, input, transfer, w } from './fixtures.js';
+import type { Flow, TokenFlow, Transfer } from '../src/types.js';
+import { LAB, LAB_MIXED, MONEY, USDC, WETH, chain, flow, input, transfer, w } from './fixtures.js';
 
 /**
  * A lens input built the way `Store.lensInput` builds one, less its SQL
  * filters by kind and floor: every flow is loaded, so these tests see the
- * engine drop what a rule leaves out on its own.
+ * engine drop what a rule leaves out on its own. `tokens` are other-token
+ * edges, loaded as though every sender passed T6, which only SQL judges.
  */
 function lensInputOf(
-  transfers: Transfer[], flows: Flow[] = [], more: Partial<Pick<LensInput, 'contracts' | 'custodians' | 'money' | 'truncated'>> = {},
+  transfers: Transfer[], flows: Flow[] = [], more: Partial<Pick<LensInput, 'contracts' | 'custodians' | 'money' | 'truncated'>> = {}, tokens: TokenFlow[] = [],
+  oneWay: ReadonlySet<string> = new Set(),
 ): LensInput {
   const tradeTxs: string[] = [];
   const tradeAt = new Map<string, number>();
@@ -30,8 +32,10 @@ function lensInputOf(
     if (kind < 0) continue;
     moves.add(f.from, f.to, kind, f.blockTime, f.blockNumber, Number(f.valueWei) / 1e18, tradeAt.has(f.txHash));
   }
+  // A receiver named in `oneWay` failed T6 (Ruling P10), which SQL judges too.
+  for (const t of tokens) moves.add(t.from, t.to, oneWay.has(t.to) ? MOVE_KIND.otherOneWay : MOVE_KIND.other, t.blockTime, t.blockNumber, 0, tradeAt.has(t.txHash));
   moves.seal();
-  return { transfers, through: null, moves, contracts: new Set(), custodians: new Set(), money, truncated: new Set(), tradeTxs, ...more };
+  return { transfers, through: null, moves, contracts: new Set(), custodians: new Set(), money, truncated: new Set(), tradeTxs, tokensRead: null, ...more };
 }
 
 const a = w('a'), b = w('b'), c = w('c'), d = w('d'), x = w('x'), y = w('y'), m = w('m'), f = w('f');
@@ -59,8 +63,8 @@ function ethOnly(change: (r: LensRule) => void = () => {}): LensRule {
   return r;
 }
 
-const run = (rule: LensRule, ts: Transfer[], flows: Flow[] = [], more: Parameters<typeof lensInputOf>[2] = {}) =>
-  runLens(rule, lensInputOf(ts, flows, more));
+const run = (rule: LensRule, ts: Transfer[], flows: Flow[] = [], more: Parameters<typeof lensInputOf>[2] = {}, tokens: TokenFlow[] = []) =>
+  runLens(rule, lensInputOf(ts, flows, more, tokens));
 const caught = (...args: Parameters<typeof run>) => run(...args).flags.length;
 const legs = (path: { from: string; to: string; kind: string }[]) => path.map((e) => [e.from, e.to, e.kind]);
 
@@ -480,6 +484,83 @@ describe('each rule field', () => {
   });
 });
 
+describe('other tokens (T8)', () => {
+  let n = 0;
+  /** A USDC payment, 1,250.5 by default, a day after the sale unless told. */
+  const usdc = (from: string, to: string, more: Partial<TokenFlow> = {}): TokenFlow =>
+    ({ txHash: `0xusdc${++n}`, from, to, token: USDC, valueRaw: '1250500000', blockNumber: 900_000 + n, blockTime: T0 + DAY + n, ...more });
+  /** Other tokens alone, along, no floor: each test changes one field. */
+  const tokensOnly = (change: (r: LensRule) => void = () => {}) => ethOnly((r) => {
+    r.edges.eth.use = false;
+    r.edges['other-tokens'] = { use: true, direction: 'along', max: null, minWei: null, repeats: 'each' };
+    change(r);
+  });
+
+  it('a USDC payment back from buyer to seller closes the loop under other tokens, and not with the edge off', () => {
+    const back = usdc(b, a);
+    const found = runLens(tokensOnly(), lensInputOf(sale(), [], {}, [back]));
+    expect(found.flags).toHaveLength(1);
+    expect(legs(found.flags[0]!.path)).toEqual([[a, b, 'nft-token'], [b, a, 'other-tokens']]);
+    // Its hash, amount and token are filled by Store.moveTxs, from the entry it leaves.
+    expect(found.flags[0]!.path[1]).toMatchObject({ tx: null, amountWei: null, token: null, time: back.blockTime });
+    expect(found.moneyEdges).toEqual([{ flag: 0, edge: 1, from: b, to: a, kind: 'other-tokens', block: back.blockNumber }]);
+    expect(caught(ethOnly(), sale(), [], {}, [back])).toBe(0);
+    expect(caught(structuredClone(DEFAULT_RULE), sale(), [], {}, [back])).toBe(0);
+  });
+
+  it("a USDC-priced sale's own payment is no way back (Ruling K, R4); the same payment in another transaction is", () => {
+    const ts = sale();
+    expect(caught(tokensOnly(), ts, [], {}, [usdc(b, a, { txHash: ts[1]!.txHash, blockTime: T0, blockNumber: ts[1]!.blockNumber })])).toBe(0);
+    expect(caught(tokensOnly(), ts, [], {}, [usdc(b, a, { blockTime: T0 })])).toBe(1);
+  });
+
+  it('closes with ETH and tokens in one loop, each row counted against its own max', () => {
+    const mixed = tokensOnly((r) => { r.edges.eth.use = true; r.edges['other-tokens'].max = 1; r.hops = { min: 1, max: 2 }; });
+    expect(caught(mixed, sale(), [flow(b, m, { blockTime: T0 + DAY })], {}, [usdc(m, a)])).toBe(1);
+    expect(caught(mixed, sale(), [], {}, [usdc(b, m), usdc(m, a)])).toBe(0);
+  });
+
+  it('the never contracts and addresses apply to token edges, and never.over counts them (T6)', () => {
+    const through = [usdc(b, m), usdc(m, a)];
+    const rule = tokensOnly((r) => { r.hops = { min: 1, max: 1 }; });
+    expect(caught(rule, sale(), [], {}, through)).toBe(1);
+    expect(caught(tokensOnly((r) => { r.hops = { min: 1, max: 1 }; r.never.addresses = [m]; }), sale(), [], {}, through)).toBe(0);
+    const market = tokensOnly((r) => { r.hops = { min: 1, max: 1 }; r.never.marketplaces = true; });
+    expect(caught(market, sale(), [], { contracts: new Set([m]) }, through)).toBe(0);
+    expect(caught(market, sale(), [], {}, through)).toBe(1);
+    // m is linked by tokens alone to a, b and c, three of this collection's wallets: over 2 bars it, over 3 does not.
+    const ts = [...sale(), ...chain('2', c, d)];
+    const hub = (over: number) => tokensOnly((r) => { r.hops = { min: 1, max: 1 }; r.never.over = over; });
+    expect(caught(hub(2), ts, [], {}, [...through, usdc(c, m)])).toBe(0);
+    expect(caught(hub(3), ts, [], {}, [...through, usdc(c, m)])).toBe(1);
+  });
+
+  it('under either, a token edge is walked against its arrow only when its receiver passed T6 (Ruling P10); along, nothing changes', () => {
+    // Buyer and seller both paid one pool: buyer -> p, then p <- seller walked backwards.
+    const paid = [usdc(b, m), usdc(a, m)];
+    const back = tokensOnly((r) => { r.edges['other-tokens'].direction = 'either'; r.hops = { min: 1, max: 1 }; });
+    const along = tokensOnly((r) => { r.hops = { min: 1, max: 1 }; });
+    const found = runLens(back, lensInputOf(sale(), [], {}, paid));
+    expect(found.flags).toHaveLength(1);
+    expect(found.moneyEdges.map((e) => e.kind)).toEqual(['other-tokens', 'other-tokens']);
+    expect(runLens(back, lensInputOf(sale(), [], {}, paid, new Set([m]))).flags).toEqual([]);
+    expect(runLens(along, lensInputOf(sale(), [], {}, paid)).flags).toEqual([]);
+    // Along its arrow a one-way edge counts as any other: buyer -> m -> seller, m's receivers failing T6 or not.
+    const through = [usdc(b, m), usdc(m, a)];
+    expect(runLens(along, lensInputOf(sale(), [], {}, through, new Set([m, a]))).flags).toHaveLength(1);
+    expect(runLens(back, lensInputOf(sale(), [], {}, through, new Set([m, a]))).flags).toHaveLength(1);
+  });
+
+  it('a seller funded in tokens closes at the funder, its funding edge an other-tokens one to look up', () => {
+    const rule = tokensOnly((r) => { r.closes = 'seller-or-funder'; r.hops = { min: 1, max: 1 }; });
+    const funded = usdc(f, a, { blockTime: T0 - DAY });
+    const found = runLens(rule, lensInputOf(sale(), [], {}, [usdc(b, f), funded]));
+    expect(found.flags).toHaveLength(1);
+    expect(found.flags[0]!.path.at(-1)).toMatchObject({ from: f, to: a, kind: 'funds', token: null });
+    expect(found.moneyEdges.at(-1)).toMatchObject({ from: f, to: a, kind: 'other-tokens', block: funded.blockNumber });
+  });
+});
+
 describe('who funded the seller (D12), read through runLens', () => {
   // A third transfer: another sale of this collection, by another seller, in a transaction of its own.
   const ts = [...sale(), transfer('7', c, d, { marketplace: 'blur', blockTime: T0 - 2 * DAY })];
@@ -690,7 +771,7 @@ describe('judged, the sampled sales the lens actually judged', () => {
       lensInput: async () => lensInputOf(all, [], { custodians: new Set([k]) }),
       roundTripsCaught: async () => 0,
     } as unknown as Store;
-    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly(), through: null, followHops: 3 });
+    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly(), through: null, followHops: 3, payees: false });
     expect(result).toMatchObject({ sampled: 3, judged: 2, hops: 2 });
   });
 
@@ -701,7 +782,7 @@ describe('judged, the sampled sales the lens actually judged', () => {
       lensInput: async () => lensInputOf([transfer('1', ZERO, a), untimed]),
       roundTripsCaught: async () => 0,
     } as unknown as Store;
-    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly((r) => { r.window = { days: 3, side: 'either' }; }), through: null, followHops: 3 });
+    const result = await previewStored(store, { storeUrl: '', previewId: 1, collectionId: 1, chainId: 1, rule: ethOnly((r) => { r.window = { days: 3, side: 'either' }; }), through: null, followHops: 3, payees: false });
     expect(result).toMatchObject({ judged: 0, hops: 1, untimed: 1, truncated: 0, atLeast: false });
   });
 });
@@ -722,6 +803,14 @@ describe('depthNeeded, how far out a rule needs money read', () => {
     for (const kind of ['eth', 'internal', 'weth'] as const) {
       expect(depthNeeded(ethOnly((r) => { r.edges.eth.use = false; r.edges[kind].use = true; r.hops.max = 4; }))).toBe(3);
     }
+  });
+
+  it("ignores other tokens (T12): their read is the tokens row's, not the money walk's", () => {
+    const tokens = ethOnly((r) => { r.edges.eth.use = false; r.edges['other-tokens'].use = true; r.hops.max = 4; });
+    expect(depthNeeded(tokens)).toBe(0);
+    expect(moneyReason(tokens, { limit: 0, pendingByDepth: {}, seeding: true }, 0, true)).toBeNull();
+    tokens.edges.eth.use = true;
+    expect(depthNeeded(tokens)).toBe(3);
   });
 
   /**
@@ -828,5 +917,73 @@ describe('readThrough, the depth the money is read through (Ruling S37)', () => 
   it('is one short of the shallowest depth still to read', () => {
     expect(readThrough(read({ limit: 6, pendingByDepth: { 6: 1, 5: 9 } }), 3)).toBe(4);
     expect(readThrough(read({ limit: 5, pendingByDepth: { 4: 1 } }), 3)).toBe(3);
+  });
+});
+
+describe('tokensReason, the one decision the Other tokens row and the share both read (T11)', () => {
+  /** Other tokens only, along, never through a marketplace or known contract: the one case where payees reach a one-middle loop (Ruling P13). */
+  const rule = (max: number | null, use = true, edit: (r: LensRule) => void = () => {}) => ethOnly((r) => {
+    r.edges.eth.use = false;
+    r.edges['other-tokens'].use = use;
+    r.hops = { min: 0, max };
+    r.never.marketplaces = true;
+    edit(r);
+  });
+  const counts = (over: Partial<{ wallets: number; read: number; settled: boolean; payees: boolean }> = {}) => ({ wallets: 10, read: 10, settled: true, payees: false, ...over });
+
+  it('is null for a rule that does not use other tokens, whatever else is true', () => {
+    for (const started of [false, true]) for (const c of [null, counts(), counts({ read: 3 })]) for (const run of [null, 10, 4]) {
+      expect(tokensReason(rule(6, false), started, c, run)).toBeNull();
+    }
+  });
+
+  it('orders its reasons off, seeding, pending, behind, unreached', () => {
+    const r = rule(3);
+    expect(tokensReason(r, false, counts(), 10)).toBe('off');
+    expect(tokensReason(r, true, null, 10)).toBe('seeding');
+    expect(tokensReason(r, true, counts({ settled: false, read: 2 }), 10)).toBe('seeding');
+    expect(tokensReason(r, true, counts({ read: 9 }), 10)).toBe('pending');
+    expect(tokensReason(r, true, counts(), 9)).toBe('behind');
+    expect(tokensReason(r, true, counts(), null)).toBe('behind');
+    expect(tokensReason(r, true, counts(), 10)).toBe('unreached');
+  });
+
+  it('puts the floor at one middle wallet with tokens.payees off and two with it on, and at any length', () => {
+    const at = (max: number | null, payees: boolean) => tokensReason(rule(max), true, counts({ payees }), 10);
+    expect([0, 1, 2, 3, null].map((m) => at(m, false))).toEqual([null, 'unreached', 'unreached', 'unreached', 'unreached']);
+    expect([0, 1, 2, 3, null].map((m) => at(m, true))).toEqual([null, null, 'unreached', 'unreached', 'unreached']);
+  });
+
+  // Ruling P13: payees close a one-middle loop only when every one of these holds; each that fails opens one they can't see.
+  it.each<[string, (r: LensRule) => void]>([
+    // A middle that paid both traders is a payer, in no set, never read.
+    ["other tokens followed 'either' way", (r) => { r.edges['other-tokens'].direction = 'either'; }],
+    // buyer -(ETH)-> M -(USDC)-> seller: M may be out of reach, so not read.
+    ['an ETH payment on', (r) => { r.edges.eth.use = true; }],
+    ['ETH sent by a contract on', (r) => { r.edges.internal.use = true; }],
+    ['WETH on', (r) => { r.edges.weth.use = true; }],
+    // A known contract as the middle: contracts are left out of token_payees.
+    ['marketplaces and known contracts allowed as middles', (r) => { r.never.marketplaces = false; }],
+  ])('with tokens.payees on, keeps the floor at one middle wallet with %s', (_, edit) => {
+    expect(tokensReason(rule(1, true, edit), true, counts({ payees: true }), 10)).toBe('unreached');
+    expect(tokensReason(rule(0, true, edit), true, counts({ payees: true }), 10)).toBeNull();
+  });
+
+  it('with tokens.payees on and all four held, one middle wallet is read', () => {
+    expect(tokensReason(rule(1), true, counts({ payees: true }), 10)).toBeNull();
+  });
+
+  it('takes the setting from the count', () => {
+    expect(tokensReason(rule(1), true, counts({ payees: true }), 10)).toBeNull();
+    expect(tokensReason(rule(1), true, counts({ payees: false }), 10)).toBe('unreached');
+  });
+
+  it('grid over started, counts, run, length and setting', () => {
+    for (const started of [false, true]) for (const c of [null, counts(), counts({ read: 4 }), counts({ settled: false }), counts({ payees: true })]) for (const run of [null, 4, 10]) for (const max of [0, 1, 2, null]) for (const either of [false, true]) {
+      const why = tokensReason(rule(max, true, (r) => { if (either) r.edges['other-tokens'].direction = 'either'; }), started, c, run);
+      const expected = !started ? 'off' : c === null || !c.settled ? 'seeding' : c.read < c.wallets ? 'pending' : c.read !== run ? 'behind'
+        : max === null || max >= (c.payees && !either ? 2 : 1) ? 'unreached' : null;
+      expect(why).toBe(expected);
+    }
   });
 });

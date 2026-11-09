@@ -1,5 +1,5 @@
-import { WRAPPED } from './marketplaces.js';
-import type { Flow, FlowKind } from './types.js';
+import { TOKENS, WRAPPED } from './marketplaces.js';
+import type { Flow, FlowKind, TokenFlow } from './types.js';
 
 export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
 /** Etherscan's own ceiling: page × offset may not exceed 10,000. */
@@ -65,27 +65,67 @@ export class Etherscan {
     const flows: Flow[] = [];
     let truncated = false;
     for (const [kind, params] of lists) {
-      for (let page = 1; page <= PAGES; page++) {
-        if (Date.now() > deadline) throw new Error(`Etherscan took over ${Math.round(budgetMs / 60_000)} minutes to page through this wallet`);
-        const rows = await this.call(chainId, { module: 'account', address: wallet, page: String(page), offset: String(PAGE), sort: 'asc', ...params });
-        for (const r of rows) {
-          if (r.isError === '1' || r.value === '0' || !r.to) continue;
-          flows.push({
-            txHash: r.hash.toLowerCase(),
-            kind,
-            from: r.from.toLowerCase(),
-            to: r.to.toLowerCase(),
-            valueWei: r.value,
-            token: kind === 'token' ? (r.contractAddress ?? '').toLowerCase() : '',
-            blockNumber: Number(r.blockNumber),
-            blockTime: Number(r.timeStamp),
-          });
-        }
-        if (rows.length < PAGE) break;
-        if (page === PAGES) truncated = true;
+      const read = await this.pages(chainId, wallet, params, deadline, budgetMs);
+      if (read.truncated) truncated = true;
+      for (const r of read.rows) {
+        if (r.isError === '1' || r.value === '0' || !r.to) continue;
+        flows.push({
+          txHash: r.hash.toLowerCase(),
+          kind,
+          from: r.from.toLowerCase(),
+          to: r.to.toLowerCase(),
+          valueWei: r.value,
+          token: kind === 'token' ? (r.contractAddress ?? '').toLowerCase() : '',
+          blockNumber: Number(r.blockNumber),
+          blockTime: Number(r.timeStamp),
+        });
       }
     }
     return { flows, truncated };
+  }
+
+  /**
+   * The transfers of the chain's listed tokens (TOKENS) in or out of `wallet`.
+   * One tokentx list with no contract filter, since a call per token would
+   * cost several times as much; rows of any other token are dropped here, so a
+   * spam or poisoning token never reaches the database. A wallet whose list
+   * pages past 10,000 rows is `truncated`. The budget works as `flows`'s.
+   */
+  async tokenFlows(chainId: number, wallet: string, budgetMs = Infinity): Promise<{ flows: TokenFlow[]; truncated: boolean }> {
+    const listed = new Set((TOKENS[chainId] ?? []).map((t) => t.address));
+    if (listed.size === 0) return { flows: [], truncated: false };
+    const { rows, truncated } = await this.pages(chainId, wallet, { action: 'tokentx' }, Date.now() + budgetMs, budgetMs);
+    const flows: TokenFlow[] = [];
+    for (const r of rows) {
+      const token = (r.contractAddress ?? '').toLowerCase();
+      if (!listed.has(token) || r.value === '0' || !r.to) continue;
+      flows.push({
+        txHash: r.hash.toLowerCase(),
+        from: r.from.toLowerCase(),
+        to: r.to.toLowerCase(),
+        token,
+        valueRaw: r.value,
+        blockNumber: Number(r.blockNumber),
+        blockTime: Number(r.timeStamp),
+      });
+    }
+    return { flows, truncated };
+  }
+
+  /**
+   * One account list, page by page, shared by every read of a wallet so they
+   * all stop alike: at the first short page, at Etherscan's ceiling (then
+   * `truncated`), or past the deadline, which fails rather than hold the pass.
+   */
+  private async pages(chainId: number, wallet: string, params: Record<string, string>, deadline: number, budgetMs: number): Promise<{ rows: Row[]; truncated: boolean }> {
+    const rows: Row[] = [];
+    for (let page = 1; page <= PAGES; page++) {
+      if (Date.now() > deadline) throw new Error(`Etherscan took over ${Math.round(budgetMs / 60_000)} minutes to page through this wallet`);
+      const got = await this.call(chainId, { module: 'account', address: wallet, page: String(page), offset: String(PAGE), sort: 'asc', ...params });
+      rows.push(...got);
+      if (got.length < PAGE) return { rows, truncated: false };
+    }
+    return { rows, truncated: true };
   }
 
   /** Who deployed `contract`, and in which transaction. Null where Etherscan does not know. */

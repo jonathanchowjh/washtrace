@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Etherscan, REQUEST_TIMEOUT_MS, WALLET_MS } from '../src/etherscan.js';
+import { TOKENS, WRAPPED } from '../src/marketplaces.js';
 import { BUDGET_MS, STUCK_MS } from '../src/worker.js';
 
 function row(i: number, more: Record<string, string> = {}) {
@@ -114,5 +115,69 @@ describe('Etherscan', () => {
     expect(REQUEST_TIMEOUT_MS).toBe(120_000);
     // The pass checks its budget between wallets; the last wallet's last page can start just before its deadline.
     expect(BUDGET_MS + WALLET_MS + REQUEST_TIMEOUT_MS).toBeLessThan(STUCK_MS.fund);
+  });
+});
+
+describe('Etherscan.tokenFlows', () => {
+  const USDC = TOKENS[1]![0]!.address;
+  const tokenRow = (i: number, more: Record<string, string> = {}) => row(i, { contractAddress: USDC.toUpperCase().replace('0X', '0x'), ...more });
+
+  it('asks tokentx with no contractaddress, paged as flows pages', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [tokenRow(1)] }));
+    await e.tokenFlows(1, '0xa');
+    expect(urls).toHaveLength(1);
+    const q = urls[0]!.searchParams;
+    expect(q.get('action')).toBe('tokentx');
+    expect(q.has('contractaddress')).toBe(false);
+    expect([q.get('address'), q.get('page'), q.get('offset'), q.get('sort'), q.get('chainid')]).toEqual(['0xa', '1', '1000', 'asc', '1']);
+  });
+
+  it("keeps only the chain's TOKENS, drops zero values, and lowercases addresses", async () => {
+    const { e } = fake(() => ({ status: '1', message: 'OK', result: [
+      tokenRow(1),
+      tokenRow(2, { contractAddress: '0xdeadbeef00000000000000000000000000000000' }),
+      tokenRow(3, { value: '0' }),
+    ] }));
+    expect(await e.tokenFlows(1, '0xa')).toEqual({
+      flows: [{ txHash: '0xh1', from: '0xa', to: '0xb', token: USDC, valueRaw: '5', blockNumber: 1, blockTime: 1 }],
+      truncated: false,
+    });
+  });
+
+  it('makes no call for a chain with no TOKENS', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [] }));
+    expect(await e.tokenFlows(999, '0xa')).toEqual({ flows: [], truncated: false });
+    expect(urls).toHaveLength(0);
+  });
+
+  it('marks ten full pages truncated', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: Array.from({ length: 1_000 }, (_, i) => tokenRow(i)) }));
+    const { flows, truncated } = await e.tokenFlows(1, '0xa');
+    expect(urls).toHaveLength(10);
+    expect(flows).toHaveLength(10_000);
+    expect(truncated).toBe(true);
+  });
+
+  it('asks no further page past budgetMs, and fails', async () => {
+    let now = 0;
+    const { e, urls } = fake(() => { now += 4 * 60_000; return { status: '1', message: 'OK', result: Array.from({ length: 1_000 }, (_, i) => tokenRow(i)) }; });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(e.tokenFlows(1, '0xa', WALLET_MS)).rejects.toThrow(/took over 6 minutes/);
+      expect(urls).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('TOKENS holds lowercase addresses with symbols and decimals, none in WRAPPED', () => {
+    expect(TOKENS[1]!.map((t) => [t.symbol, t.decimals])).toEqual([['USDC', 6], ['USDT', 6], ['DAI', 18], ['APE', 18]]);
+    expect(TOKENS[8453]!.map((t) => [t.symbol, t.decimals])).toEqual([['USDC', 6], ['DAI', 18]]);
+    for (const [chain, list] of Object.entries(TOKENS)) {
+      for (const t of list) {
+        expect(t.address).toMatch(/^0x[0-9a-f]{40}$/);
+        expect(WRAPPED[Number(chain)] ?? []).not.toContain(t.address);
+      }
+    }
   });
 });

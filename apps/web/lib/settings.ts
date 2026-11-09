@@ -129,6 +129,15 @@ export const FIELDS: readonly Field[] = [
     fallback: '3',
   },
   {
+    key: 'tokens.payees',
+    label: 'Read tokens of wallets paid in tokens',
+    secret: false,
+    validate: (v) => (v === 'on' || v === 'off' ? null : 'Read tokens of wallets paid in tokens is on or off.'),
+    // env.ts reads only 'on' as on; anything else as the default, off. 'off' is used as it is.
+    used: (v) => v === 'on' || v === 'off',
+    fallback: 'off',
+  },
+  {
     key: 'stored.repo',
     label: 'Stored data dataset',
     secret: false,
@@ -226,6 +235,8 @@ export interface SourcesConfig {
   funding: boolean;
   perSecond: number | null;
   followHops: number | null;
+  /** tokens.payees as the worker runs with it: on only when it reported 'on' (off is the default). The Other tokens words and estimate read it until a count says which setting it was made under; tokensReason reads only the count's. */
+  tokensPayees: boolean;
 }
 
 /**
@@ -252,6 +263,7 @@ export function configFromSources(sources: Record<string, SettingSource>, settin
     funding: sources['etherscan.key'] !== undefined || saved('etherscan.key'),
     perSecond: reported('etherscan.rps'),
     followHops: reported('follow.hops'),
+    tokensPayees: sources['tokens.payees']?.value === 'on',
   };
 }
 

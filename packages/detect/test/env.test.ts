@@ -97,4 +97,15 @@ describe('workerConfig', () => {
     expect(c.storedRepo).toBe('me/data');
     expect(c.sources['stored.repo']).toEqual({ source: 'console', value: 'me/data', env: 'env/data' });
   });
+
+  it('reads tokens.payees as off unless it is set to on, from the console first, then the environment', () => {
+    expect(workerConfig({}).tokensPayees).toBe(false);
+    expect(workerConfig({ WASHTRACE_TOKENS_PAYEES: 'on' }).tokensPayees).toBe(true);
+    expect(workerConfig({ WASHTRACE_TOKENS_PAYEES: ' on ' }).tokensPayees).toBe(true);
+    // Anything else is the default, which reads fewer wallets.
+    for (const v of ['off', 'ON', 'true', '1', 'yes', '']) expect(workerConfig({ WASHTRACE_TOKENS_PAYEES: v }).tokensPayees).toBe(false);
+    const c = workerConfig({ WASHTRACE_TOKENS_PAYEES: 'on' }, new Map([['tokens.payees', 'off']]));
+    expect(c.tokensPayees).toBe(false);
+    expect(c.sources['tokens.payees']).toEqual({ source: 'console', value: 'off', env: 'on' });
+  });
 });

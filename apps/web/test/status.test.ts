@@ -16,12 +16,12 @@ function collection(more: Partial<CollectionRow> = {}): CollectionRow {
     addedAt: NOW, ingestedAt: NOW, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
     stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
     restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
-    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, ...more,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, readTokens: false, ...more,
   };
 }
 
 // What the worker reported, as configFromSources reads it: chain ids and whether funding is on, never a URL or the key.
-const CONFIG: Snapshot['config'] = { chains: [1], funding: true, perSecond: 4, followHops: 3 };
+const CONFIG: Snapshot['config'] = { chains: [1], funding: true, perSecond: 4, followHops: 3, tokensPayees: false };
 
 // The lens job is not what most of these are about: a test that lists passes and leaves it out is given one that went through.
 function snapshot(more: Partial<Snapshot> = {}): Snapshot {

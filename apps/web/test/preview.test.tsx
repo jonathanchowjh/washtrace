@@ -26,7 +26,7 @@ function routes(post: { status: number; body: object }, gets: { status: number; 
 }
 const done = (result: Partial<PreviewResult> = {}, rule: LensRule = ALONG) =>
   ({ status: 200, body: row({ status: 'done', rule, result: { ...RESULT, ...result } }) });
-const props = { chainId: 1, address: ADDR, rule: ALONG, roundTripsName: 'Round trips', notFinal: [], funded: true, moneyShort: false };
+const props = { chainId: 1, address: ADDR, rule: ALONG, roundTripsName: 'Round trips', notFinal: [], funded: true, moneyShort: false, tokens: { reason: null, payees: false } };
 const view = (over: Partial<Parameters<typeof Preview>[0]> = {}) => render(<Preview {...props} {...over} />);
 /** Click Preview and let the POST and the first poll settle. */
 async function run(c: ReturnType<typeof view>) {
@@ -100,6 +100,20 @@ describe('Preview polling', () => {
     const c = view({ rule: ALONG, moneyShort: true });
     await run(c);
     expect(c.container.textContent).toContain('Caught at least 15.0% of');
+  });
+
+  it('says at least for a lens whose other tokens are not all read, though the result says atLeast: false, and not once they are (T11)', async () => {
+    const tokens: LensRule = structuredClone(ALONG);
+    tokens.edges['other-tokens'].use = true;
+    routes({ status: 202, body: { id: 41 } }, [done({ atLeast: false, truncated: 0, untimed: 0 }, tokens)]);
+    const c = view({ rule: tokens, tokens: { reason: 'pending', payees: false } });
+    await run(c);
+    expect(c.container.textContent).toContain('Caught at least 15.0% of');
+    c.unmount();
+    routes({ status: 202, body: { id: 41 } }, [done({ atLeast: false, truncated: 0, untimed: 0 }, tokens)]);
+    const read = view({ rule: tokens, tokens: { reason: null, payees: false } });
+    await run(read);
+    expect(read.container.textContent).toContain('Caught 15.0% of');
   });
 
   it('does not say at least for a money lens when funding is final', async () => {

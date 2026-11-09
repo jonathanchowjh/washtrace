@@ -1,7 +1,7 @@
 import { isMainThread, parentPort, Worker as Thread, workerData } from 'node:worker_threads';
 import { runLens } from './lens.js';
 import type { LensRule } from './lens-rule.js';
-import { Store, type LensFlag, type LensTotals, type PreviewResult } from './store.js';
+import { Store, type LensFlag, type LensInput, type LensTotals, type PreviewResult } from './store.js';
 import { VENUES, venueOf } from './trades.js';
 
 /** Where each request rides in `workerData`; see analysis-thread.ts for why a bare import must find no such key. */
@@ -22,6 +22,8 @@ export interface LensRequest {
   through: number | null;
   /** follow.hops: which followed wallets the run reads (Store.followedFor). */
   followHops: number;
+  /** tokens.payees (T15): whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
+  payees: boolean;
 }
 
 /** What a preview is given, as a run is: the preview's id is its sample's seed (P4). */
@@ -35,10 +37,16 @@ export interface PreviewRequest {
   through: number | null;
   /** follow.hops: which followed wallets the run reads (Store.followedFor). */
   followHops: number;
+  /** tokens.payees (T15): whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
+  payees: boolean;
 }
 
-/** What a lens run gives: its totals, and its flags with every money edge's hash and amount filled in. */
-export interface Lensed { totals: LensTotals; flags: LensFlag[] }
+/**
+ * What a lens run gives: its totals, its flags with every money edge's hash
+ * and amount (and an other token's token) filled in, and the token reads it
+ * took in (LensInput.tokensRead), which saveLensRun keeps.
+ */
+export interface Lensed { totals: LensTotals; flags: LensFlag[]; tokensRead: number | null }
 
 /** The thread's messages: any number of progress shares, then one result. */
 type Message = { progress: number } | { result: Lensed | PreviewResult };
@@ -57,15 +65,19 @@ export const LENS_TIMEOUT_MS = 60 * 60_000;
  * thread's whole body; tests call it in-process.
  */
 export async function lensStored(store: Store, request: LensRequest, onProgress: (share: number) => void = () => {}): Promise<Lensed> {
-  // Passed straight in, so nothing here holds the transfers and Moves once the search is done: they can be freed during the fill below.
-  const { totals, flags, moneyEdges } = runLens(request.rule, await store.lensInput(request.collectionId, request.chainId, request.rule, request.through, request.followHops), onProgress);
+  let input: LensInput | null = await store.lensInput(request.collectionId, request.chainId, request.rule, request.through, request.followHops, request.payees);
+  const { tokensRead } = input;
+  const { totals, flags, moneyEdges } = runLens(request.rule, input, onProgress);
+  // Let go, so nothing here holds the transfers and Moves once the search is done: they can be freed during the fill below.
+  input = null;
   const found = await store.moveTxs(request, moneyEdges);
   moneyEdges.forEach((m, i) => {
     const edge = flags[m.flag]!.path[m.edge]!;
     edge.tx = found[i]?.tx ?? null;
     edge.amountWei = found[i]?.amountWei ?? null;
+    edge.token = found[i]?.token ?? null;
   });
-  return { totals, flags };
+  return { totals, flags, tokensRead };
 }
 
 /**
@@ -84,9 +96,9 @@ export async function lensStored(store: Store, request: LensRequest, onProgress:
  */
 export async function previewStored(store: Store, request: PreviewRequest, onProgress: (share: number) => void = () => {}): Promise<PreviewResult> {
   const started = Date.now();
-  const { collectionId, chainId, rule, through, followHops } = request;
+  const { collectionId, chainId, rule, through, followHops, payees } = request;
   const sample = new Set(await store.previewSample(collectionId, request.previewId, through));
-  const input = await store.lensInput(collectionId, chainId, rule, through, followHops);
+  const input = await store.lensInput(collectionId, chainId, rule, through, followHops, payees);
   // The sales there are to sample from, and each sampled sale's market, read before the search so no key is held per transfer.
   let ofSales = 0;
   const marketOf = new Map<string, string>();

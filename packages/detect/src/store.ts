@@ -1,15 +1,15 @@
 import pg from 'pg';
 import { ZERO } from './graph.js';
-import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
+import { CUSTODIANS, TOKENS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { MOVE_KIND, Moves } from './moves.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
 import { findOf, isOwnKey, NO_FILTER, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
 import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED_JOIN, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
-import { checkRule, type EdgeKind, type FollowEstimate, type LensRule } from './lens-rule.js';
+import { FOLLOW_FANOUT, checkRule, type EdgeKind, type FollowEstimate, type LensRule } from './lens-rule.js';
 import type { Rules } from './methods.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
-import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type Transfer, type Witness } from './types.js';
+import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type TokenFlow, type Transfer, type Witness } from './types.js';
 
 export type { FlaggedTransfer, FlowDir, ListOpts, PartnerSort, TokenLine, TokenSort, TradeGroup, TradeRow, WalletFilter, WalletLine, WalletSort } from './trade-sql.js';
 
@@ -79,13 +79,19 @@ export const ANALYZE_GAP_MS = 5 * 60_000;
 const FOREIGN_KEY_VIOLATION = '23503';
 /** Postgres's code for a statement it ended to break a deadlock. */
 const DEADLOCK_DETECTED = '40P01';
+/** Postgres's code for a statement its statement_timeout stopped. */
+const QUERY_CANCELED = '57014';
 /** How long one of a trail import's statements waits for a lock before it fails: a stopped or stalled import is only seen between statements. */
 const TRAIL_LOCK_TIMEOUT = '5min';
 /** A batch of flags is cut at this many rows or this many characters of witness, whichever comes first. */
 const FLAG_BATCH_ROWS = 10_000;
 const FLAG_BATCH_CHARS = 16 * 2 ** 20;
 const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
-const toOwnFlag = (r: any): OwnFlag => ({ lensId: r.lens_id, collectionId: r.collection_id, txHash: r.tx_hash, logIndex: r.log_index, path: r.path, wallets: r.wallets });
+// A path stored before LoopEdge had a token has none: it was never an other-token edge.
+const toOwnFlag = (r: any): OwnFlag => ({
+  lensId: r.lens_id, collectionId: r.collection_id, txHash: r.tx_hash, logIndex: r.log_index,
+  path: (r.path as LoopEdge[]).map((e) => ({ ...e, token: e.token ?? null })), wallets: r.wallets,
+});
 /** Rows a cursor fetches at a time when stored data is cut. */
 const CURSOR_PAGE = 10_000;
 /** A load of stored data looks up from its work at most this often: Terraforms is a thousand batches. */
@@ -166,6 +172,8 @@ export interface CollectionRow {
   downloadRetryAt: number | null;
   /** The URL of the last download whose bytes did not match the manifest: not downloaded again while the Hub serves that URL. Null when none. */
   downloadMismatch: string | null;
+  /** Whether Start reading was pressed for it: the worker reads other tokens for its wallets, and counts how far it has got. */
+  readTokens: boolean;
   /** This collection's overrides of RULES. Keys absent here follow the defaults. */
   rules: Partial<Rules>;
   /** What the contract says of itself. Null until the worker has read it. */
@@ -250,12 +258,8 @@ export interface Follow {
   exclude: readonly string[];
 }
 
-/**
- * A wallet that sent money to more wallets than this is not followed. Mule
- * wallets in a wash ring pay a handful; a wallet paying dozens is a business,
- * a bot or a person with a life, and following it reads half the chain.
- */
-export const FOLLOW_FANOUT = 25;
+// Defined in lens-rule, which the client can import, so Settings can say it; the store follows by it.
+export { FOLLOW_FANOUT };
 
 /**
  * How money is followed on `chainId`, `hops` out: what the fund job hands
@@ -310,6 +314,40 @@ export const WALK_CAP = 50_000;
  * stopped cold leaves the pages it read warm for the next pass's.
  */
 export const COUNT_TIMEOUT_MS = 15_000;
+
+/**
+ * The fund pass's reserve for Store.countTokens, every chain's in all
+ * (Ruling P9): kept back from the checking, and spent after every chain has
+ * been checked, each chain in an equal share of what is left (Ruling P14),
+ * so a count of a big set is cut short there rather than eat the checking
+ * or the estimate's count; a stopped count keeps the counts it would have
+ * replaced.
+ */
+export const TOKEN_COUNT_MS = 5_000;
+
+/**
+ * The longest Store.tokenLanes runs: a scan of every started collection's
+ * set, each pass, which a cold cache can make slow at a big collection's
+ * scale. Past it the pass reads no tokens, and loses nothing else.
+ */
+const TOKEN_LANES_MS = 5_000;
+
+/**
+ * How far one collection's other tokens are read (Start reading), as the
+ * worker last counted it (Store.countTokens), so a page only reads it.
+ * `wallets`: its token set (tokenSetSql), with its traders' payees when
+ * `payees` (tokens.payees) was on for the count. `read`: those with a token
+ * read done, a truncated one too, as it is never read again; `truncated` and
+ * `failed` are of those. `moneyFailed`: its walk's wallets short of its limit
+ * whose money check failed, which keep the walk from settling. `settled`: the
+ * walk is out to its limit, every wallet short of it checked and stepped
+ * from, so no more wallets join the set. `at`: when it was counted.
+ */
+export interface TokenCounts {
+  wallets: number; read: number; truncated: number; failed: number; moneyFailed: number; settled: boolean; payees: boolean; at: string;
+  /** When a count of this collection last ran out of time (Ruling P8), so countTokens does not retry it first every pass. Absent until one did. */
+  tried?: string;
+}
 
 export interface PassRow {
   job: string;
@@ -384,8 +422,15 @@ export interface LensRun {
   lensId: number; collectionId: number; status: LensRunStatus; progress: number | null; lensVersion: number;
   analysisId: number | null; throughBlock: number | null; totals: LensTotals | null; error: string | null;
   retryAt: number | null; finishedAt: number | null; tookMs: number | null;
+  /** The collection's token_counts.read the run took in (Ruling P2), so a page can tell the run is behind its token reads; null when it read none. */
+  tokensRead: number | null;
 }
-export interface LoopEdge { from: string; to: string; kind: EdgeKind | 'funds'; tx: string | null; time: number | null; amountWei: string | null; tokenId: string | null }
+/**
+ * One edge of a found loop. `token` is an other-token edge's token address
+ * (TOKENS), and then `amountWei` is its raw amount, in the token's own units;
+ * null for every other edge, and for a path stored before edges had one.
+ */
+export interface LoopEdge { from: string; to: string; kind: EdgeKind | 'funds'; tx: string | null; time: number | null; amountWei: string | null; tokenId: string | null; token: string | null }
 export interface LensFlag { txHash: string; logIndex: number; path: LoopEdge[]; wallets: string[] }
 /** A stored flag of a lens of yours, with the lens and the collection it belongs to. */
 export type OwnFlag = LensFlag & { lensId: number; collectionId: number };
@@ -428,6 +473,13 @@ export interface LensInput {
   truncated: ReadonlySet<string>;
   /** The collection's transfer transaction hashes, each once: the engine tells a hop's transaction by its index here. */
   tradeTxs: string[];
+  /**
+   * The collection's token_counts.read as it stood when the run began
+   * loading, for a rule using other tokens; null for any other rule, or
+   * with no counts yet. The count, not a live one, so the run is behind
+   * exactly when the counts move on (T11).
+   */
+  tokensRead: number | null;
 }
 
 /**
@@ -456,6 +508,9 @@ export class Store {
 
   /** COUNT_TIMEOUT_MS; a field so a test can make it small. */
   countTimeoutMs = COUNT_TIMEOUT_MS;
+
+  /** TOKEN_LANES_MS; a field so a test can make it small. */
+  tokenLanesMs = TOKEN_LANES_MS;
 
   static connect(url: string): Store {
     // Keep-alive probes find a connection that died without a word (a NAT's idle timeout, a host gone), so a
@@ -681,7 +736,9 @@ export class Store {
   /**
    * Store one span's transfers and move the cursor past it, together: a crash
    * between the two would otherwise skip the span or read it twice. Wallets
-   * enter the funding queue here, weighted by how often they traded.
+   * enter the funding queue here, weighted by how often they traded. A span
+   * with transfers leaves a walked collection's reach unseeded (UNSEEDED), so
+   * its new traders join the walk, and the token set, at the next turn.
    */
   async ingest(id: number, chainId: number, transfers: readonly Transfer[], through: number, queue: readonly string[]): Promise<void> {
     const c = await this.pool.connect();
@@ -691,7 +748,7 @@ export class Store {
       await queueWallets(c, chainId, tally(queue));
       await c.query(
         `UPDATE washtrace.collections SET cursor_block = $2, ingested_at = now(), error = NULL, error_at = NULL,
-           version = version + CASE WHEN $3 THEN 1 ELSE 0 END WHERE id = $1`,
+           version = version + CASE WHEN $3 THEN 1 ELSE 0 END, ${UNSEEDED('$3')} WHERE id = $1`,
         [id, through, transfers.length > 0],
       );
       await c.query('COMMIT');
@@ -756,7 +813,8 @@ export class Store {
       await c.query(
         `UPDATE washtrace.collections SET start_block = LEAST(start_block, $2::bigint), cursor_block = GREATEST(cursor_block, $3::bigint),
            stored_through_time = to_timestamp($4::float8 / 1000), stored_through_block = $3::bigint, restore_progress = NULL,
-           restore_note = NULL, restore_note_key = NULL, restore_failures = 0, restore_retry_at = NULL, version = version + 1
+           restore_note = NULL, restore_note_key = NULL, restore_failures = 0, restore_retry_at = NULL, version = version + 1,
+           ${UNSEEDED('true')}
          WHERE id = $1`,
         [id, entry.startBlock, entry.throughBlock, entry.throughTime],
       );
@@ -1265,19 +1323,17 @@ export class Store {
    * Fetch them (Data this lens needs): follow this collection's money out to
    * `hops`, past follow.hops, from the next fund pass on. Only ever raised: a
    * second press, or one asking for less than is set, is 'already' and
-   * changes nothing. 'gone' when the collection is. The collection's row is
-   * locked first, then its reach, the order every write to what a collection
-   * owns takes. Its reach is not seeded out to the new limit until a walk
-   * finds nothing more to step (moneyRead's `seeding`), and the wallets read
-   * at the old limit, marked stepped without being followed (stepReach), are
-   * stepped from again.
+   * changes nothing. 'gone' when the collection is. Its reach is not seeded
+   * out to the new limit until a walk finds nothing more to step (moneyRead's
+   * `seeding`). The wallets read at the old limit, marked stepped without
+   * being followed (stepReach), are unmarked by the walk itself, not here
+   * (R1, raiseReach): it finds the limit past the reach_hops it last walked
+   * to, whichever limit rose, this one or follow.hops.
    *
    * The row is taken FOR UPDATE (Ruling S29), the one lock mode that waits
    * for a seedReach chunk's FOR KEY SHARE. So a press waits for a chunk to
-   * commit, and sees and unmarks what it marked at the old limit, which a
-   * press reading the chunk's rows uncommitted would leave stepped; and a
-   * chunk starting meanwhile waits, then reads the new limit. Nor can the
-   * two lock the old limit's reach rows in opposite orders.
+   * commit, and a chunk starting meanwhile waits, then reads the new limit:
+   * no chunk marks at a limit a press has already moved.
    *
    * It waits on more than a chunk: on every write that holds the row's KEY
    * SHARE for its foreign keys (an ingest span's transfers, saveAnalysis,
@@ -1296,9 +1352,6 @@ export class Store {
         return own === undefined ? 'gone' : 'already';
       }
       await c.query('UPDATE washtrace.collections SET follow_hops = $2, reach_seeded_at = NULL WHERE id = $1', [collectionId, hops]);
-      if (own.follow_hops !== null) {
-        await c.query('UPDATE washtrace.reach SET stepped = false WHERE collection_id = $1 AND depth >= $2 AND stepped', [collectionId, own.follow_hops]);
-      }
       await c.query('COMMIT');
       return 'set';
     } catch (err) {
@@ -1317,13 +1370,14 @@ export class Store {
   async moneyRead(collectionId: number, globalHops: number): Promise<MoneyRead> {
     // A truncated trader counts as checked, as coverage counts it (Ruling S35): it is never read again, so
     // counting it unchecked would keep the traders' check "still running" for good on any collection with a busy trader.
-    // Seeded, and no reach wallet left that is checked but not yet stepped from short of its limit: one is
-    // walk work left, as what it paid is not in the reach yet, so moneyRead reads it as seeding (M3).
+    // Seeded, walked to the limit itself (R1), and no reach wallet left that is checked but not yet stepped from
+    // short of its limit: one is walk work left, as what it paid is not in the reach yet, so moneyRead reads it
+    // as seeding (M3).
     const { rows } = await this.pool.query<{ follow_hops: number | null; follow_estimate: FollowEstimate | null; seeded: boolean; checked: number; of: number }>(
       `SELECT c.follow_hops, c.follow_estimate, t.checked, t.of,
-              c.reach_seeded_at IS NOT NULL AND NOT EXISTS (
+              c.reach_seeded_at IS NOT NULL AND coalesce(c.reach_hops, 0) = ${REACH_LIMIT('$2', 'c.')} AND NOT EXISTS (
                 SELECT 1 FROM washtrace.reach r JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
-                WHERE r.collection_id = c.id AND NOT r.stepped AND r.depth < c.follow_hops AND w.status = 'done' AND NOT w.truncated
+                WHERE r.collection_id = c.id AND NOT r.stepped AND r.depth < ${REACH_LIMIT('$2', 'c.')} AND w.status = 'done' AND NOT w.truncated
               ) AS seeded
        FROM washtrace.collections c
        CROSS JOIN LATERAL (
@@ -1333,7 +1387,7 @@ export class Store {
          JOIN washtrace.wallets w ON w.chain_id = c.chain_id AND w.address = t.address
        ) t
        WHERE c.id = $1`,
-      [collectionId],
+      [collectionId, globalHops],
     );
     // A stepped wallet was done when stepped from, so only the unstepped are read (reach_unstepped_idx).
     // Within the global limit, reach rows are the walk's own, their wallets the followed lane's work (Ruling S23).
@@ -1352,7 +1406,8 @@ export class Store {
       limit,
       ownLimit,
       pendingByDepth: Object.fromEntries(pending.rows.map((r) => [r.depth, r.n])),
-      estimate: estimate?.depth === limit + 1 ? estimate : null,
+      // One counted before `within` was has none: as not counted, so nextCount counts it again.
+      estimate: estimate?.depth === limit + 1 && typeof estimate.within === 'number' ? estimate : null,
       seeding: ownLimit !== null && ownLimit > globalHops && rows[0]?.seeded === false,
     };
   }
@@ -1366,7 +1421,9 @@ export class Store {
    * that hop not in its reach already nor checked on the chain, since only
    * those cost Etherscan calls. `growth` is the chain's own, from its
    * next-deepest depth to its deepest (wallets by depth), or on a chain that
-   * follows nothing yet this walk's last step's.
+   * follows nothing yet this walk's last step's. `within` is the walk's
+   * wallets at depths 0 to the limit, scaled as cut: what Start reading would
+   * read tokens for, from the same walk at no extra cost.
    *
    * The walk reads in a snapshot of its own and holds no lock. The estimate
    * is written after it, in a statement of its own that takes the
@@ -1417,7 +1474,8 @@ export class Store {
       const before = byDepth.find((r) => r.depth === (deepest?.depth ?? 0) - 1);
       const growth = deepest !== undefined && before !== undefined ? deepest.n / before.n
         : walk.counts[limit]! > 0 ? walk.counts[next]! / walk.counts[limit]! : null;
-      counted = { depth: next, wallets: Math.round(unread * walk.scale), growth, cut: walk.cut };
+      const within = walk.counts.slice(0, limit + 1).reduce((sum, n) => sum + n, 0);
+      counted = { depth: next, wallets: Math.round(unread * walk.scale), growth, cut: walk.cut, within: Math.round(within) };
     } catch (err) {
       await c.query('ROLLBACK').catch(() => {});
       throw err;
@@ -1438,19 +1496,20 @@ export class Store {
    * The watched collection whose follow_estimate the fund pass counts next
    * (Ruling S21), or null when every one is fresh: not paused, and its
    * estimate missing, counted for a hop other than the one past its limit
-   * now, or a day old. The one tried longest ago first (count_tried_at,
-   * Ruling S26), one never tried before any, so one whose count runs out of
-   * time waits its turn; then a missing estimate before any. One whose last
-   * try failed (tried after its estimate was written, or with none) under an
-   * hour ago waits out the hour: as the only one due, it would otherwise be
-   * tried every pass, each costing the pass COUNT_MS of its checking.
+   * now, or a day old, or counted before it carried `within`. The one tried
+   * longest ago first (count_tried_at, Ruling S26), one never tried before
+   * any, so one whose count runs out of time waits its turn; then a missing
+   * estimate before any. One whose last try failed (tried after its estimate
+   * was written, or with none) under an hour ago waits out the hour: as the
+   * only one due, it would otherwise be tried every pass, each costing the
+   * pass COUNT_MS of its checking.
    */
   async nextCount(globalHops: number): Promise<number | null> {
     // A count that succeeds writes its `at` after count_tried_at, truncated to the millisecond, hence the 1 ms.
     const { rows } = await this.pool.query<{ id: number }>(
       `SELECT id FROM washtrace.collections
-       WHERE paused_at IS NULL AND (follow_estimate IS NULL
-         OR (follow_estimate->>'depth')::int <> greatest($1, coalesce(follow_hops, 0)) + 1
+       WHERE paused_at IS NULL AND (follow_estimate IS NULL OR NOT follow_estimate ? 'within'
+         OR (follow_estimate->>'depth')::int <> ${REACH_LIMIT('$1')} + 1
          OR (follow_estimate->>'at')::timestamptz < now() - interval '24 hours')
          AND (count_tried_at IS NULL OR count_tried_at < now() - interval '1 hour'
               OR count_tried_at <= (follow_estimate->>'at')::timestamptz + interval '1 millisecond')
@@ -1464,10 +1523,11 @@ export class Store {
 
   /**
    * Walk the stored flows out from the traders of a collection following its
-   * money past `globalHops` (N4), into its reach, stepping from at most
-   * `limit` wallets a call (Ruling S28: wallets stepped from, not rows
-   * written, which may be up to FOLLOW_FANOUT times as many): what a fund
-   * pass can spend, as a walk of a big collection is minutes cold.
+   * money past `globalHops` (N4), or reading its other tokens (Start
+   * reading), into its reach, stepping from at most `limit` wallets a call
+   * (Ruling S28: wallets stepped from, not rows written, which may be up to
+   * FOLLOW_FANOUT times as many): what a fund pass can spend, as a walk of a
+   * big collection is minutes cold.
    *
    * Its rows are how far the walk has got, so the next call goes on from
    * them, and a wallet checked since, by any lane, is stepped from next: so
@@ -1478,39 +1538,92 @@ export class Store {
    * wallet sent as `fund` does (paidBy), into wallets as well, at the chain
    * depth it has by this walk if `fund` gave none nearer, for a lane to
    * check: the followed lane within `globalHops`, its reach lane past it.
-   * Out to follow_hops and no further.
+   * Out to its limit L (REACH_LIMIT) and no further. A collection that only
+   * reads tokens walks to the global limit: its whole set is within it, the
+   * followed lane's to check, so its walk adds no lane and no money of its own.
+   *
+   * Collections take turns, the one stepped from longest ago first
+   * (reach_stepped_at), so one big walk cannot take every call of a pass.
+   * Each turn first catches the walk up with its limit (raiseReach).
    *
    * Its traders are added first, and once a day after, for those who
    * traded since; reach_seeded_at says when a call last found nothing more
-   * to step or add, written only while follow_hops is still the limit the
-   * call read, so a press meanwhile leaves it seeding. A paused collection
-   * waits. Gives how many wallets it stepped from, or traders it added, 0
-   * when no collection on the chain has any left.
+   * to step or add, written only while L, and the reach_hops walked to, are
+   * still the limit the call read, so a press meanwhile leaves it seeding;
+   * and only while no write has added transfers since its traders were read
+   * (traders_at as tradersFrom read it, Rulings P6 and P7), so a trader
+   * addTraders could not see leaves it unseeded, whether that write moved
+   * the cursor or not.
+   * Unseeded (an ingest or a load, P5), or a day on, its traders are added
+   * again. A paused collection waits. Gives how many wallets it stepped
+   * from, or traders it added, 0 when no collection on the chain has any left.
    */
   async seedReach(chainId: number, globalHops: number, limit: number): Promise<number> {
-    const { rows } = await this.pool.query<{ id: number; follow_hops: number; seeded: boolean }>(
-      `SELECT id, follow_hops, coalesce(reach_seeded_at > now() - interval '24 hours', false) AS seeded FROM washtrace.collections
-       WHERE chain_id = $1 AND paused_at IS NULL AND follow_hops > $2 ORDER BY id`,
+    const { rows } = await this.pool.query<{ id: number; l: number; walked: number | null; seeded: boolean }>(
+      `SELECT id, ${REACH_LIMIT('$2')} AS l, reach_hops AS walked, coalesce(reach_seeded_at > now() - interval '24 hours', false) AS seeded
+       FROM washtrace.collections
+       WHERE chain_id = $1 AND paused_at IS NULL AND (follow_hops > $2 OR read_tokens_at IS NOT NULL)
+       ORDER BY reach_stepped_at NULLS FIRST, id`,
       [chainId, globalHops],
     );
     for (const own of rows) {
+      // Read again under the lock: only a limit that moved costs a transaction of its own.
+      const raised = own.l === own.walked ? false : await this.reachStatement(own.id, (c) => raiseReach(c, own.id, globalHops));
+      if (raised === null) continue;
       const step = await this.reachStatement(own.id, (c) => stepReach(c, own.id, chainId, limit, globalHops));
-      if (step !== null && step.doneFar > 0) {
-        // Ruling S39: its runs read every reach wallet past the global limit (followedFor), and one already
-        // checked, for another collection or before a follow.hops was lowered, is never checked again, so no
-        // fund call bumps the version for it. In its own statement after the chunk's commit, so the bump takes
-        // the row alone, as fund's does, and the chunk's lock order is unchanged.
-        await this.pool.query('UPDATE washtrace.collections SET version = version + 1 WHERE id = $1', [own.id]);
-      }
       const stepped = step?.stepped ?? null;
-      if (stepped !== null && stepped > 0) return stepped;
-      if (stepped === null || own.seeded) continue;
+      if (stepped !== null && stepped > 0) {
+        await this.tookTurn(own.id, step!.doneFar > 0);
+        return stepped;
+      }
+      if (stepped === null || (own.seeded && !raised)) continue;
+      const from = await this.tradersFrom(own.id);
       const added = await this.reachStatement(own.id, (c) => addTraders(c, own.id, chainId));
       if (added === null) continue;
-      if (added > 0) return added;
-      await this.pool.query('UPDATE washtrace.collections SET reach_seeded_at = now() WHERE id = $1 AND follow_hops = $2', [own.id, own.follow_hops]);
+      if (added > 0) {
+        await this.tookTurn(own.id, false);
+        return added;
+      }
+      await this.pool.query(
+        `UPDATE washtrace.collections SET reach_seeded_at = now()
+         WHERE id = $1 AND ${REACH_LIMIT('$2')} = $3 AND reach_hops = $3 AND traders_at::text IS NOT DISTINCT FROM $4::text`,
+        [own.id, globalHops, own.l, from],
+      );
     }
     return 0;
+  }
+
+  /**
+   * A collection's traders_at just before a turn reads its traders
+   * (addTraders), for its seeded write to hold against (Ruling P7): the
+   * walk is seeded only while traders_at is still this value. As text, so
+   * its microseconds survive (a JS Date keeps milliseconds). Compared by
+   * value, not by time: a write that adds transfers stamps a new traders_at
+   * (UNSEEDED), so one committed after this read always changes it, while
+   * a time comparison can lose to a stamp the write computed before it
+   * waited on a lock, and committed only after the traders were read. One
+   * committed before this read is seen by addTraders, which reads later.
+   */
+  private async tradersFrom(id: number): Promise<string | null> {
+    return (await this.pool.query<{ at: string | null }>(
+      'SELECT traders_at::text AS at FROM washtrace.collections WHERE id = $1', [id],
+    )).rows[0]?.at ?? null;
+  }
+
+  /**
+   * A seedReach turn that did something: stamped, so the next call starts
+   * with another collection. With `bump`, its version moves too (Ruling
+   * S39): its runs read every reach wallet past the global limit
+   * (followedFor), and one already checked, for another collection or before
+   * a follow.hops was lowered, is never checked again, so no fund call bumps
+   * the version for it. In its own statement after the chunk's commit, so
+   * the write takes the row alone, as fund's bump does, and the chunk's lock
+   * order is unchanged.
+   */
+  private async tookTurn(id: number, bump: boolean): Promise<void> {
+    await this.pool.query(
+      'UPDATE washtrace.collections SET reach_stepped_at = now(), version = version + $2::int WHERE id = $1', [id, bump ? 1 : 0],
+    );
   }
 
   /**
@@ -1535,6 +1648,257 @@ export class Store {
     } finally {
       c.release();
     }
+  }
+
+  // ---- other tokens --------------------------------------------------------
+
+  /**
+   * Start reading them (Data this lens needs): read the listed tokens
+   * (TOKENS) of this collection's token set (tokenSetSql) from the next fund
+   * pass on, and walk its money to its limit for it (seedReach), however far
+   * the set's wallets' money is checked already. 'already' on a second press,
+   * 'gone' when the collection is. Its walk reads as not seeded until a turn
+   * finds nothing more to do, as one pressed for is new to it. The row is
+   * taken FOR UPDATE first, as followFurther takes it (Ruling S29), so a
+   * press and a seedReach chunk wait for each other, never interleave.
+   */
+  async startTokens(collectionId: number): Promise<'set' | 'already' | 'gone'> {
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      const own = (await c.query<{ started: boolean }>(
+        'SELECT read_tokens_at IS NOT NULL AS started FROM washtrace.collections WHERE id = $1 FOR UPDATE', [collectionId])).rows[0];
+      if (own === undefined || own.started) {
+        await c.query('COMMIT');
+        return own === undefined ? 'gone' : 'already';
+      }
+      await c.query('UPDATE washtrace.collections SET read_tokens_at = now(), reach_seeded_at = NULL WHERE id = $1', [collectionId]);
+      await c.query('COMMIT');
+      return 'set';
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  /**
+   * How far a collection's other tokens are read, as the worker last counted
+   * it, for the page. Null when never counted: a first count that timed out
+   * stores only `tried` (countTokens), which reads as no count.
+   */
+  async tokenCounts(collectionId: number): Promise<TokenCounts | null> {
+    const { rows } = await this.pool.query<{ token_counts: Partial<TokenCounts> | null }>(
+      'SELECT token_counts FROM washtrace.collections WHERE id = $1', [collectionId]);
+    const t = rows[0]?.token_counts;
+    return t != null && typeof t.wallets === 'number' && typeof t.read === 'number' ? (t as TokenCounts) : null;
+  }
+
+  /**
+   * The wallets to read other tokens for next, a lane per collection on the
+   * chain that pressed Start reading and is not paused, so one big set
+   * cannot crowd out the rest: its token set's wallets with no token read
+   * yet, shallowest first, a trader's payees (with `payees`, tokens.payees)
+   * after the walk's, then one whose read failed over an hour ago. Each lane
+   * at most `perLane` long. A wallet in two sets is in both lanes, and read
+   * once (`interleave`); a read is chain-wide, so neither serves it again.
+   *
+   * Each call scans every set, so it stops by `tokenLanesMs`, or by `until`
+   * (the token slice's deadline) when that is sooner, so a call made just
+   * before the deadline does not run into the counts' reserve: a set too big
+   * to scan in time (a cold cache) gives no lanes this pass, never a failed
+   * pass, and the money check goes on.
+   */
+  async tokenLanes(chainId: number, perLane: number, globalHops: number, payees: boolean, until: number): Promise<{ lanes: { collectionId: number; wallets: string[] }[] }> {
+    const c = await this.pool.connect();
+    let rows: { id: number; address: string | null }[];
+    try {
+      await c.query('BEGIN');
+      await timeLeft(c, Math.min(until, Date.now() + this.tokenLanesMs));
+      rows = (await c.query<{ id: number; address: string | null }>(
+        `SELECT c.id, l.address FROM washtrace.collections c
+         LEFT JOIN LATERAL (
+           SELECT s.address, s.rank, tr.address IS NOT NULL AS retry FROM (${tokenSetSql('c.id', REACH_LIMIT('$3', 'c.'), payees)}) s
+           LEFT JOIN washtrace.token_reads tr ON tr.chain_id = c.chain_id AND tr.address = s.address
+           WHERE tr.address IS NULL OR (tr.status = 'failed' AND tr.read_at < now() - interval '1 hour')
+           ORDER BY retry, s.rank, s.address LIMIT $2
+         ) l ON true
+         WHERE c.chain_id = $1 AND c.paused_at IS NULL AND c.read_tokens_at IS NOT NULL
+         ORDER BY c.id, l.retry, l.rank, l.address`,
+        [chainId, perLane, globalHops],
+      )).rows;
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      if ((err as { code?: unknown } | null)?.code === QUERY_CANCELED) return { lanes: [] };
+      throw err;
+    } finally {
+      c.release();
+    }
+    const lanes: { collectionId: number; wallets: string[] }[] = [];
+    for (const r of rows) {
+      let lane = lanes.at(-1);
+      if (lane?.collectionId !== r.id) lanes.push((lane = { collectionId: r.id, wallets: [] }));
+      if (r.address !== null) lane.wallets.push(r.address);
+    }
+    return { lanes };
+  }
+
+  /**
+   * Store a wallet's token read: its listed-token transfers (the read keeps
+   * only TOKENS), but any it sent itself, and the read as done, `truncated`
+   * when its list paged past what the read takes. A done read is never
+   * served again, so neither is a truncated one. `fanout` is how many wallets
+   * it sent them to, kept to FOLLOW_FANOUT + 1, which is all that judging a
+   * mass sender needs (T6). Read to the end and within the fanout, its
+   * payees are kept too (token_payees), whatever tokens.payees says, so
+   * turning it on needs no read again; never the contracts and the zero
+   * address, which `fund` never follows into either.
+   *
+   * It moves no collection's version: a token read is data the built-in
+   * analyses never read, and a lens run that reads it is due by its counts
+   * instead. So it writes no collection's row, and takes no lock beside its
+   * own tables'.
+   */
+  async saveTokens(chainId: number, address: string, flows: readonly TokenFlow[], truncated: boolean): Promise<void> {
+    // As the read gives every address, so a caller's mixed case never reads as a fanout of 0 (T6).
+    const wallet = address.toLowerCase();
+    const sent = [...new Set(flows.filter((f) => f.from === wallet && f.to !== wallet).map((f) => f.to))];
+    const exclude = new Set(followOf(chainId, 0).exclude);
+    const payees = !truncated && sent.length <= FOLLOW_FANOUT ? sent.filter((a) => !exclude.has(a)).sort() : [];
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      if (flows.length > 0) {
+        await c.query(
+          `INSERT INTO washtrace.token_flows (chain_id, tx_hash, from_address, to_address, token, value_raw, block_number, block_time)
+           SELECT $1, tx, fr, too, tok, v, bn, to_timestamp(bt)
+           FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::bigint[], $8::float8[]) AS u(tx, fr, too, tok, v, bn, bt)
+           WHERE fr <> too
+           ON CONFLICT DO NOTHING`,
+          [
+            chainId, flows.map((f) => f.txHash), flows.map((f) => f.from), flows.map((f) => f.to), flows.map((f) => f.token),
+            flows.map((f) => f.valueRaw), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
+          ],
+        );
+      }
+      await c.query(
+        `INSERT INTO washtrace.token_reads (chain_id, address, status, truncated, fanout, error, read_at) VALUES ($1, $2, 'done', $3, $4, NULL, now())
+         ON CONFLICT (chain_id, address) DO UPDATE SET status = 'done', truncated = EXCLUDED.truncated, fanout = EXCLUDED.fanout, error = NULL, read_at = now()`,
+        [chainId, wallet, truncated, Math.min(sent.length, FOLLOW_FANOUT + 1)],
+      );
+      if (payees.length > 0) {
+        await c.query(
+          'INSERT INTO washtrace.token_payees (chain_id, payer, payee) SELECT $1, $2, unnest($3::text[]) ON CONFLICT DO NOTHING',
+          [chainId, wallet, payees],
+        );
+      }
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
+  /** A token read that failed: served again after an hour (tokenLanes). One done already stays done. */
+  async tokensFailed(chainId: number, wallet: string, error: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO washtrace.token_reads (chain_id, address, status, error, read_at) VALUES ($1, $2, 'failed', $3, now())
+       ON CONFLICT (chain_id, address) DO UPDATE SET error = EXCLUDED.error, read_at = now() WHERE washtrace.token_reads.status = 'failed'`,
+      [chainId, wallet, error],
+    );
+  }
+
+  /**
+   * Count how far each collection on the chain that pressed Start reading
+   * has its other tokens read, and store it as its token_counts (TokenCounts;
+   * Ruling S21): the worker counts, and a page only reads it, as a set's
+   * count is a scan of its reach. `payees` is tokens.payees, which the counts
+   * record, so the page knows which set they are of.
+   *
+   * Each collection is counted in a transaction of its own, the one counted
+   * longest ago first (by `at` or `tried`, whichever is later), all of them
+   * before `until` (the worker's: this chain's share of the counting time,
+   * Ruling P14), so the pass keeps its budget: each statement gets what is
+   * left, and a chain that cannot start before it keeps its counts. A set too big to count in time
+   * keeps its last counts but is marked `tried` (Ruling P8), so it goes
+   * behind the ones not yet tried and a set that always times out cannot go
+   * first every pass and starve the chain's other counts; one not reached
+   * keeps its place, and goes first next time. Then
+   * one statement writes every count made, taking the rows in id order, as
+   * fund's bump takes them.
+   */
+  async countTokens(chainId: number, globalHops: number, payees: boolean, until: number): Promise<void> {
+    const started = (await this.pool.query<{ id: number }>(
+      `SELECT id FROM washtrace.collections WHERE chain_id = $1 AND read_tokens_at IS NOT NULL
+       ORDER BY greatest(token_counts->>'at', token_counts->>'tried') NULLS FIRST, id`,
+      [chainId],
+    )).rows.map((r) => r.id);
+    const limit = REACH_LIMIT('$2', 'c.');
+    const counted: { id: number; counts: Omit<TokenCounts, 'at'> }[] = [];
+    const timedOut: number[] = [];
+    for (const id of started) {
+      if (Date.now() >= until) break;
+      const c = await this.pool.connect();
+      try {
+        await c.query('BEGIN');
+        await timeLeft(c, until);
+        const r = (await c.query(
+          `SELECT k.wallets, k.read, k.truncated, k.failed, m.money_failed,
+                  c.reach_seeded_at IS NOT NULL AND coalesce(c.reach_hops, 0) = ${limit} AND m.walking = 0 AS settled
+           FROM washtrace.collections c
+           CROSS JOIN LATERAL (
+             SELECT count(*)::int AS wallets, count(*) FILTER (WHERE tr.status = 'done')::int AS read,
+                    count(*) FILTER (WHERE tr.status = 'done' AND tr.truncated)::int AS truncated,
+                    count(*) FILTER (WHERE tr.status = 'failed')::int AS failed
+             FROM (${tokenSetSql('c.id', limit, payees)}) s
+             LEFT JOIN washtrace.token_reads tr ON tr.chain_id = c.chain_id AND tr.address = s.address
+           ) k
+           -- Short of the limit, a wallet not stepped from, or not checked, may still add wallets to the set.
+           CROSS JOIN LATERAL (
+             SELECT count(*) FILTER (WHERE NOT r.stepped OR w.status IS DISTINCT FROM 'done')::int AS walking,
+                    count(*) FILTER (WHERE w.status = 'failed')::int AS money_failed
+             FROM washtrace.reach r LEFT JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
+             WHERE r.collection_id = c.id AND r.depth < ${limit}
+           ) m
+           WHERE c.id = $1`,
+          [id, globalHops],
+        )).rows[0];
+        await c.query('COMMIT');
+        // Deleted since the list was read: nothing to write.
+        if (r !== undefined) {
+          counted.push({ id, counts: { wallets: r.wallets, read: r.read, truncated: r.truncated, failed: r.failed, moneyFailed: r.money_failed, settled: r.settled, payees } });
+        }
+      } catch (err) {
+        await c.query('ROLLBACK').catch(() => {});
+        // Stopped: its last counts stay, and the next collection is counted.
+        if ((err as { code?: unknown } | null)?.code !== QUERY_CANCELED) throw err;
+        timedOut.push(id);
+      } finally {
+        c.release();
+      }
+    }
+    // The stop is noted in the same jsonb, its other fields kept, in id order as the write below takes the rows.
+    if (timedOut.length > 0) {
+      await this.pool.query(
+        `UPDATE washtrace.collections c
+         SET token_counts = coalesce(c.token_counts, '{}'::jsonb) || jsonb_build_object('tried', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+         WHERE c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE)`,
+        [timedOut],
+      );
+    }
+    if (counted.length === 0) return;
+    // `at` in toISOString's form, as follow_estimate's.
+    await this.pool.query(
+      `UPDATE washtrace.collections c
+       SET token_counts = u.counts || jsonb_build_object('at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+       FROM unnest($1::int[], $2::jsonb[]) AS u(id, counts)
+       WHERE c.id = u.id AND c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE)`,
+      [counted.map((x) => x.id), counted.map((x) => JSON.stringify(x.counts))],
+    );
   }
 
   // ---- analysis ------------------------------------------------------------
@@ -1665,8 +2029,20 @@ export class Store {
    * rule with a high floor never reads the dust, and one with no money row
    * reads no flows at all. Money past `moneyEdgeCeiling` edges throws, and the
    * run fails saying how many there are. `hops` is follow.hops, as there.
+   *
+   * Other tokens (T8) are read only for a rule that uses them, from
+   * token_flows, never flows: a rule that does not sends today's money query
+   * as it was, and names no token table. Their edges come in the same ordered
+   * stream as the flows, so Moves still never sorts; `payees` is
+   * tokens.payees, which says whether the token set holds the traders'
+   * payees (tokenSenders). The counts are read first (`tokensRead`), so a
+   * read stored while this loads leaves the run behind, never ahead.
    */
-  async lensInput(id: number, chainId: number, rule: LensRule, through: number | null, hops: number): Promise<LensInput> {
+  async lensInput(id: number, chainId: number, rule: LensRule, through: number | null, hops: number, payees = false): Promise<LensInput> {
+    const tokens = rule.edges['other-tokens'].use;
+    const tokensRead = tokens
+      ? (await this.pool.query<{ read: number | null }>(`SELECT (token_counts->>'read')::int AS read FROM washtrace.collections WHERE id = $1`, [id])).rows[0]?.read ?? null
+      : null;
     const transfers = (await this.pool.query(
       `${SELECT_TRANSFER} ${TRANSFERS} WHERE t.collection_id = $1 AND ($2::bigint IS NULL OR t.block_number <= $2::bigint)`, [id, through],
     )).rows.map(toTransfer);
@@ -1683,36 +2059,74 @@ export class Store {
     if (rule.edges.eth.use) kinds.push(`(f.kind = 'native' AND f.value_wei >= ${floor('eth')})`);
     if (rule.edges.internal.use) kinds.push(`(f.kind = 'internal' AND f.value_wei >= ${floor('internal')})`);
     if (rule.edges.weth.use) kinds.push(`(f.kind = 'token' AND f.token = ANY(${bind([...money].filter((m) => m !== ''))}::text[]) AND f.value_wei >= ${floor('weth')})`);
+    // Arrays, not subqueries, for the reason analysisInput gives.
+    const wallets = [...new Set(transfers.flatMap((t) => [t.from, t.to]))];
+    let far: string[] = [];
+    // The flows query: today's as it was, or, for a rule using other tokens, the flows part of the union below.
+    let sql: string | null = null;
     if (kinds.length > 0) {
-      // Arrays, not subqueries, for the reason analysisInput gives.
-      const wallets = [...new Set(transfers.flatMap((t) => [t.from, t.to]))];
-      const { near, far } = await this.followedFor(id, chainId, hops);
-      const w = bind(wallets), fw = bind([...near, ...far]), zero = bind(ZERO);
-      const rows = this.stream(
-        `SELECT f.from_address, f.to_address, f.tx_hash,
+      const followed = await this.followedFor(id, chainId, hops);
+      far = followed.far;
+      const w = bind(wallets), fw = bind([...followed.near, ...far]), zero = bind(ZERO);
+      // The ETH and WETH rows' flows, with `more` columns to order a union by.
+      const flowsOf = (more: string) => `SELECT f.from_address, f.to_address, f.tx_hash,
                 CASE f.kind WHEN 'native' THEN ${MOVE_KIND.eth} WHEN 'internal' THEN ${MOVE_KIND.internal} ELSE ${MOVE_KIND.weth} END AS k,
-                extract(epoch FROM f.block_time)::int AS t, f.block_number::int AS b, (f.value_wei / 1e18)::float8 AS eth
+                extract(epoch FROM f.block_time)::int AS t, f.block_number::int AS b, (f.value_wei / 1e18)::float8 AS eth${more}
          FROM washtrace.flows f
          WHERE f.chain_id = $1 AND (f.from_address = ANY(${w}::text[]) OR f.to_address = ANY(${w}::text[])
            -- Followed wallets' payments onward, as analysisInput reads them.
            OR f.from_address = ANY(${fw}::text[]))
            AND f.value_wei > 0 AND f.from_address <> f.to_address AND f.from_address <> ${zero} AND f.to_address <> ${zero}
-           AND (${kinds.join(' OR ')})
+           AND (${kinds.join(' OR ')})`;
+      sql = tokens ? flowsOf(', f.kind AS kind_text, f.token, f.value_wei AS value') : `${flowsOf('')}
          -- By time, as Moves holds them, so it need not sort them (a sort of Terraforms' 37M edges
          -- held them all twice over); then the flows key, whole: Moves keeps equal-time edges in the
          -- order read, and a capped search meets them in that order, so the same data must be read
          -- the same way every run.
-         ORDER BY t, f.kind, f.tx_hash, f.from_address, f.to_address, f.token, f.value_wei`,
-        params, (r) => r, this.paymentBatch,
-      );
+         ORDER BY t, f.kind, f.tx_hash, f.from_address, f.to_address, f.token, f.value_wei`;
+    }
+    if (tokens) {
+      const senders = await this.tokenSenders(id, chainId, wallets, hops, payees);
+      const listed = (TOKENS[chainId] ?? []).map((t) => t.address);
+      let ofTokens: string | null = null;
+      if (senders.length > 0 && listed.length > 0) {
+        const s = bind(senders), l = bind(listed), zero = bind(ZERO);
+        // By the sender, which leads token_flows' key: one probe per sender, and no index on recipients is needed.
+        // Ruling P10: an edge may be walked against its arrow only when its receiver passes T6 as well (its own
+        // read done, whole, and within FOLLOW_FANOUT), else two traders who paid one pool would close through it.
+        // The receiver's read is chain-wide, so it may be of a wallet outside this collection's set, read for
+        // another; such a middle is one the set's read does not reach, which T7's "at least" already says.
+        ofTokens = `SELECT tf.from_address, tf.to_address, tf.tx_hash,
+                CASE WHEN rr.status = 'done' AND NOT rr.truncated AND rr.fanout <= ${FOLLOW_FANOUT} THEN ${MOVE_KIND.other} ELSE ${MOVE_KIND.otherOneWay} END AS k,
+                extract(epoch FROM tf.block_time)::int AS t, tf.block_number::int AS b, 0::float8 AS eth,
+                '~token' AS kind_text, tf.token, tf.value_raw AS value
+         FROM washtrace.token_flows tf
+         LEFT JOIN washtrace.token_reads rr ON rr.chain_id = tf.chain_id AND rr.address = tf.to_address
+         WHERE tf.chain_id = $1 AND tf.from_address = ANY(${s}::text[]) AND tf.token = ANY(${l}::text[])
+           AND tf.value_raw > 0 AND tf.from_address <> tf.to_address AND tf.from_address <> ${zero} AND tf.to_address <> ${zero}`;
+      }
+      const parts = [sql, ofTokens].filter((q): q is string => q !== null);
+      // One stream in time order, as above, and in the same order at an equal time: a token row's label sorts
+      // after every flows kind (in "C", whatever the database's collation), so equal-time flows keep today's order.
+      sql = parts.length === 0 ? null : `SELECT from_address, to_address, tx_hash, k, t, b, eth FROM (
+         ${parts.join('\n         UNION ALL\n         ')}
+         ) m
+         ORDER BY t, kind_text COLLATE "C", tx_hash, from_address, to_address, token, value`;
+    }
+    if (sql !== null) {
+      const rows = this.stream(sql, params, (r) => r, this.paymentBatch);
       // The hash is looked up and dropped: no string per edge. Past the ceiling an edge is only counted, so the
       // run can say how big the money is without holding it.
       let n = 0;
       for await (const r of rows) {
+        // Ruling K holds for a token too: an APE- or USDC-priced sale's payment is the NFT's price, not a way back.
         if (++n <= this.moneyEdgeCeiling) moves.add(r.from_address, r.to_address, r.k, r.t, r.b, r.eth, tradeAt.has(r.tx_hash));
       }
       if (n > this.moneyEdgeCeiling) throw new Error(`This collection's money is too big for a lens run yet (${n.toLocaleString('en-US')} money edges).`);
-      // The same wallets analysisInput asks about: few, the busiest there are.
+    }
+    if (kinds.length > 0) {
+      // The same wallets analysisInput asks about: few, the busiest there are. A token read cut short is not
+      // one (T6): its own token edges are never loaded, which is all it could not be judged on.
       truncated = new Set((await this.pool.query<{ address: string }>(
         `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND truncated
            AND (address = ANY($2::text[]) OR ${FOLLOWED_NEAR('$3')}${far.length > 0 ? ' OR address = ANY($4::text[])' : ''})`,
@@ -1720,7 +2134,33 @@ export class Store {
       )).rows.map((r) => r.address));
     }
     moves.seal();
-    return { transfers, through, moves, contracts: contractsFor(chainId), custodians: new Set(CUSTODIANS), money, truncated, tradeTxs };
+    return { transfers, through, moves, contracts: contractsFor(chainId), custodians: new Set(CUSTODIANS), money, truncated, tradeTxs, tokensRead };
+  }
+
+  /**
+   * The wallets a lens run takes other-token edges from (T6): its traders
+   * and its token set (tokenSetSql, to its limit L, with the traders' payees
+   * when `payees`), each only once its own token read is done, not cut short
+   * (truncated), and sent listed tokens to no more than FOLLOW_FANOUT
+   * wallets. An airdrop, an exchange's hot wallet or a DEX pool pays
+   * thousands, and a sender never read could be one, so neither is a way
+   * back. The judgement rests on the sender's own complete list alone, so
+   * more reads never take an edge away.
+   */
+  private async tokenSenders(id: number, chainId: number, traders: readonly string[], hops: number, payees: boolean): Promise<string[]> {
+    const passes = `tr.status = 'done' AND NOT tr.truncated AND tr.fanout <= ${FOLLOW_FANOUT}`;
+    // Two lookups joined by UNION, not one OR: each then probes token_reads' key by address, where an OR of the
+    // array and the set would scan the chain's reads.
+    const { rows } = await this.pool.query<{ address: string }>(
+      `SELECT tr.address FROM washtrace.token_reads tr WHERE tr.chain_id = $1 AND tr.address = ANY($2::text[]) AND ${passes}
+       UNION
+       SELECT tr.address FROM washtrace.collections c
+       CROSS JOIN LATERAL (${tokenSetSql('c.id', REACH_LIMIT('$4', 'c.'), payees)}) s
+       JOIN washtrace.token_reads tr ON tr.chain_id = $1 AND tr.address = s.address
+       WHERE c.id = $3 AND ${passes}`,
+      [chainId, [...traders], id, hops],
+    );
+    return rows.map((r) => r.address);
   }
 
   /**
@@ -1735,15 +2175,25 @@ export class Store {
    * dust or a sale's own leg that shares the pair and block. Of those, the
    * smallest hash answers when several match, with its own amount.
    *
+   * An other-token edge is found the same way in token_flows (T10): a
+   * listed token, of some value (they take no floor, T9), and in no
+   * transaction of the collection's, so a USDC-priced sale's own leg is not
+   * its evidence either. It answers with its raw amount in `amountWei` and
+   * its `token`; no other edge carries a token. Either of its kinds (one way
+   * or both, Ruling P10) is one other-tokens edge here. Its sender passed T6 when
+   * the run loaded the edge, and a read done is never undone, so it is not
+   * judged again here.
+   *
    * Asked `moveTxBatch` edges at a time, each a probe of `flows_moves_idx`
-   * that reads only its own few rows: joined on its sender alone, one busy
-   * sender's whole history was read per edge, and 5,000 edges took 92 s.
+   * (or token_flows' key) that reads only its own few rows: joined on its
+   * sender alone, one busy sender's whole history was read per edge, and
+   * 5,000 edges took 92 s.
    */
   async moveTxs(
     run: { chainId: number; collectionId: number; rule: LensRule; through: number | null },
     edges: { from: string; to: string; kind: EdgeKind; block: number }[],
-  ): Promise<({ tx: string; amountWei: string } | null)[]> {
-    const out: ({ tx: string; amountWei: string } | null)[] = edges.map(() => null);
+  ): Promise<({ tx: string; amountWei: string; token?: string } | null)[]> {
+    const out: ({ tx: string; amountWei: string; token?: string } | null)[] = edges.map(() => null);
     const asked = edges.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'eth' || e.kind === 'internal' || e.kind === 'weth');
     const money = [...moneyFor(run.chainId)].filter((m) => m !== '');
     for (let at = 0; at < asked.length; at += this.moveTxBatch) {
@@ -1769,6 +2219,25 @@ export class Store {
         ],
       );
       for (const r of rows) out[batch[Number(r.i) - 1]!.i] = { tx: r.tx, amountWei: r.wei };
+    }
+    const tokenEdges = edges.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'other-tokens');
+    const listed = (TOKENS[run.chainId] ?? []).map((t) => t.address);
+    for (let at = 0; at < tokenEdges.length; at += this.moveTxBatch) {
+      const batch = tokenEdges.slice(at, at + this.moveTxBatch);
+      const { rows } = await this.pool.query<{ i: string; tx: string; raw: string; token: string }>(
+        `SELECT u.i, m.tx, m.raw, m.token
+         FROM unnest($2::text[], $3::text[], $4::bigint[]) WITH ORDINALITY AS u(src, dst, b, i)
+         CROSS JOIN LATERAL (
+           SELECT tf.tx_hash AS tx, tf.value_raw::text AS raw, tf.token FROM washtrace.token_flows tf
+           WHERE tf.chain_id = $1 AND tf.from_address = u.src AND tf.to_address = u.dst AND tf.block_number = u.b
+             AND tf.token = ANY($5::text[]) AND tf.value_raw > 0
+             AND tf.from_address <> tf.to_address AND tf.from_address <> $6 AND tf.to_address <> $6
+             AND NOT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $7 AND t.tx_hash = tf.tx_hash
+               AND ($8::bigint IS NULL OR t.block_number <= $8::bigint))
+           ORDER BY tf.tx_hash, tf.token, tf.value_raw LIMIT 1) m`,
+        [run.chainId, batch.map(({ e }) => e.from), batch.map(({ e }) => e.to), batch.map(({ e }) => e.block), listed, ZERO, run.collectionId, run.through],
+      );
+      for (const r of rows) out[batch[Number(r.i) - 1]!.i] = { tx: r.tx, amountWei: r.raw, token: r.token };
     }
     return out;
   }
@@ -2741,7 +3210,7 @@ export class Store {
     const { rows } = await this.pool.query(
       `SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
               r.lens_id AS run_lens, r.collection_id, r.status, r.progress, r.lens_version, r.analysis_id, r.through_block, r.totals, r.error,
-              extract(epoch FROM r.retry_at)::float8 AS retry, extract(epoch FROM r.finished_at)::float8 AS finished, r.took_ms
+              extract(epoch FROM r.retry_at)::float8 AS retry, extract(epoch FROM r.finished_at)::float8 AS finished, r.took_ms, r.tokens_read
        FROM washtrace.lenses l
        LEFT JOIN washtrace.lens_runs r ON r.lens_id = l.id AND r.collection_id = $1
        ORDER BY l.id`,
@@ -2758,13 +3227,21 @@ export class Store {
    * finished, a failed one past its back-off, or one still `running`. The gap
    * is Ruling AA's: a busy collection is analysed every five minutes, and
    * re-running each of K lenses on every one would hold the analysis lock
-   * most of the time. An edit, Run here or a first run queues the run, and a
+   * most of the time. A done run of a lens using other tokens is due the same
+   * way, and after the same gap, once the collection's token_counts.read is
+   * not what the run took in (tokens_read, T11): a token read moves no
+   * collection's version, so the built-in analyses never rerun for data they
+   * do not read, and only the runs that read it do. Counts holding only
+   * `tried` (a first count that timed out) are no counts, and make nothing
+   * due. An edit, Run here or a first run queues the run, and a
    * queued one never waits: queued runs go first, then the retries and the
    * re-runs, each oldest-requested first (Ruling OO), so one asked for is not
    * behind every re-run a newer analysis made due. `dueAt` is when the run
    * became due, for the lens pass's wait (Ruling KK): when it was asked for,
-   * its retry time, the edit, or the later of the newer analysis and the gap's
-   * end. `name` is the collection's name, or its short address.
+   * its retry time, the edit, the gap's end when its token reads moved (never
+   * the count's time, which every pass rewrites: a dueAt by it would never
+   * have waited LENS_WAIT_MS), or else the later of the gap's end and the
+   * newer analysis. `name` is the collection's name, or its short address.
    *
    * Two due runs are marked failed (with the usual back-off) instead of
    * returned, and the next due run is taken in the same call, so neither
@@ -2785,6 +3262,8 @@ export class Store {
 
   /** The next due run, as nextLensRun orders them, or the ids of one to fail instead, and why. */
   private async dueLensRun(now: number): Promise<{ lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number } | { lensId: number; collectionId: number; error: string } | null> {
+    const tokensMoved = `(coalesce((l.rule->'edges'->'other-tokens'->>'use')::boolean, false)
+      AND c.token_counts->>'read' IS NOT NULL AND (c.token_counts->>'read')::int IS DISTINCT FROM r.tokens_read)`;
     const { rows } = await this.pool.query(
       `SELECT l.id, l.name AS lens_name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
               c.id AS collection_id, c.chain_id, coalesce(c.name, left(c.address, 6) || '…' || right(c.address, 4)) AS name,
@@ -2793,6 +3272,9 @@ export class Store {
                 WHEN r.status IN ('queued', 'running') THEN r.requested_at
                 WHEN r.status = 'failed' THEN r.retry_at
                 WHEN r.lens_version < l.version THEN l.updated_at
+                -- Never the count's own time: countTokens writes it every pass, so a dueAt by it would keep moving
+                -- forward, and the run would give way to a due analysis for ever (Ruling KK).
+                WHEN ${tokensMoved} THEN r.finished_at + make_interval(secs => greatest($2::float8, 2 * coalesce(r.took_ms, 0)) / 1000)
                 ELSE greatest(a.ran_at, r.finished_at + make_interval(secs => greatest($2::float8, 2 * coalesce(r.took_ms, 0)) / 1000))
               END)::float8 * 1000 AS due_at
        FROM washtrace.lens_runs r
@@ -2801,7 +3283,7 @@ export class Store {
        JOIN LATERAL (SELECT id, through_block, ran_at FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC, x.id DESC LIMIT 1) a ON true
        WHERE r.status IN ('queued', 'running')
           OR (r.status = 'done' AND (r.lens_version < l.version
-            OR (r.analysis_id IS DISTINCT FROM a.id
+            OR ((r.analysis_id IS DISTINCT FROM a.id OR ${tokensMoved})
               AND r.finished_at <= to_timestamp($1::float8 / 1000) - make_interval(secs => greatest($2::float8, 2 * coalesce(r.took_ms, 0)) / 1000))))
           OR (r.status = 'failed' AND r.retry_at <= to_timestamp($1::float8 / 1000))
        -- A 'running' row goes with the queued: it is failed in this same call, never run, so it holds no one back.
@@ -2847,13 +3329,15 @@ export class Store {
 
   /**
    * Save a finished run: its flags replace the lens's here, in batches, and the
-   * run reads done. 'stale' when the lens was edited since the run began: the
-   * result is thrown away, the run is queued again at the new version and its
-   * old totals stay. 'gone' when the lens (or the collection) was removed.
+   * run reads done, with `tokensRead`, the token_counts.read its input took in
+   * (LensInput.tokensRead), which dueLensRun compares. 'stale' when the lens
+   * was edited since the run began: the result is thrown away, the run is
+   * queued again at the new version and its old totals stay. 'gone' when the
+   * lens (or the collection) was removed.
    */
   async saveLensRun(
     lensId: number, collectionId: number, lensVersion: number, analysisId: number, through: number | null,
-    totals: LensTotals, flags: readonly LensFlag[], tookMs: number,
+    totals: LensTotals, flags: readonly LensFlag[], tookMs: number, tokensRead: number | null = null,
   ): Promise<'saved' | 'stale' | 'gone'> {
     const c = await this.pool.connect();
     try {
@@ -2896,9 +3380,9 @@ export class Store {
       }
       await c.query(
         `UPDATE washtrace.lens_runs SET status = 'done', progress = NULL, lens_version = $3, analysis_id = $4, through_block = $5, totals = $6,
-           error = NULL, failures = 0, retry_at = NULL, finished_at = now(), took_ms = $7
+           error = NULL, failures = 0, retry_at = NULL, finished_at = now(), took_ms = $7, tokens_read = $8
          WHERE lens_id = $1 AND collection_id = $2`,
-        [lensId, collectionId, lensVersion, analysisId, through, JSON.stringify(totals), tookMs],
+        [lensId, collectionId, lensVersion, analysisId, through, JSON.stringify(totals), tookMs, tokensRead],
       );
       await c.query('COMMIT');
       return 'saved';
@@ -3092,6 +3576,7 @@ function toLensRun(r: any): LensRun {
     lensId: r.run_lens, collectionId: r.collection_id, status: r.status, progress: r.progress, lensVersion: r.lens_version,
     analysisId: num(r.analysis_id), throughBlock: num(r.through_block), totals: r.totals, error: r.error,
     retryAt: r.retry === null ? null : r.retry * 1000, finishedAt: r.finished === null ? null : r.finished * 1000, tookMs: r.took_ms,
+    tokensRead: r.tokens_read ?? null,
   };
 }
 
@@ -3113,6 +3598,62 @@ LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.
  * running on one with follow.hops 0 read them before reach decided this.
  */
 const FOLLOWED_NEAR = (hops: string) => `depth > 0 AND depth <= greatest(${hops}, 1)`;
+
+/**
+ * A collection's effective hop limit L (R1): the larger of follow.hops
+ * (`hops`, a query parameter) and its own follow_hops, null-safe, as a
+ * lower own limit frees nothing. Its walk (seedReach), the walk's marks, its
+ * reach_hops, its money read and its token set all go by this one limit, so
+ * no two of them read a different one. `c` is the collections row's alias.
+ */
+const REACH_LIMIT = (hops: string, c = '') => `greatest(${hops}, coalesce(${c}follow_hops, 0))`;
+
+/**
+ * The assignment that leaves a walked collection's reach unseeded when
+ * `added` (an SQL boolean) says transfers were added (Ruling P5), for the
+ * collections write an ingest or a load already makes: no statement or lock
+ * of its own. Its next seedReach turn then adds its new traders (addTraders)
+ * at once, not at the daily refresh, so its token set never reads settled
+ * with a trader missing. Walked: following its own limit, or reading tokens;
+ * the global limit is not known here, so a follow_hops within it counts too,
+ * and its reach_seeded_at is read by no one until it is walked again.
+ * traders_at is stamped with the clock as the write runs, so each write
+ * gives it a new value, and a turn under way sees that a write came after it
+ * read the traders (Store.tradersFrom, Rulings P6 and P7).
+ */
+const UNSEEDED = (added: string) =>
+  `reach_seeded_at = CASE WHEN ${added} AND (follow_hops IS NOT NULL OR read_tokens_at IS NOT NULL) THEN NULL ELSE reach_seeded_at END,
+   traders_at = CASE WHEN ${added} THEN clock_timestamp() ELSE traders_at END`;
+
+/**
+ * A collection's token set (Start reading), as a query of (address, rank):
+ * the wallets other tokens are read for, and the senders a lens run takes
+ * token edges from. One definition, so the lanes that read the set
+ * (tokenLanes), its counts (countTokens) and a run's senders (lensInput)
+ * cannot disagree. `collection` and `limit` are SQL expressions: a column or
+ * a bound parameter, the collection's id and its limit L (REACH_LIMIT).
+ *
+ * The set is the collection's walk (reach) out to L, ranked by depth: its
+ * own, as wallets.depth is the chain's from any collection. With `payees`
+ * (tokens.payees, T15) it also holds every wallet one of its traders (depth
+ * 0) paid in listed tokens, ranked after the walk's: from a trader whose own
+ * read was done to the end within FOLLOW_FANOUT (T6), as token_payees holds
+ * only those, checked against its read again here. Not their payees: one
+ * middle is all a one-middle loop needs. Each address once, at its least rank.
+ */
+function tokenSetSql(collection: string, limit: string, payees: boolean): string {
+  const walk = `SELECT r.address, r.depth::int AS rank FROM washtrace.reach r WHERE r.collection_id = ${collection} AND r.depth <= ${limit}`;
+  if (!payees) return walk;
+  return `SELECT address, min(rank) AS rank FROM (
+    ${walk}
+    UNION ALL
+    SELECT p.payee, (${limit})::int + 1 FROM washtrace.reach t
+    JOIN washtrace.token_reads tr ON tr.chain_id = t.chain_id AND tr.address = t.address
+      AND tr.status = 'done' AND NOT tr.truncated AND tr.fanout <= ${FOLLOW_FANOUT}
+    JOIN washtrace.token_payees p ON p.chain_id = t.chain_id AND p.payer = t.address
+    WHERE t.collection_id = ${collection} AND t.depth = 0
+  ) s GROUP BY address`;
+}
 
 /**
  * Which wallets funding serves, for fundingLanes and fundingBacklog alike, so
@@ -3236,14 +3777,45 @@ async function walkOut(
 }
 
 /**
+ * Catch collection `id`'s walk up with its limit L (REACH_LIMIT; R1,
+ * re-review C2), at the start of each seedReach turn: whichever limit
+ * rose, its own (Fetch them) or follow.hops. Past the reach_hops it was
+ * last walked to, the wallets marked stepped at the old limit without being
+ * followed (stepReach) are unmarked, so the walk goes on from them, and
+ * reach_hops is written L, both in this one transaction: the next turn finds
+ * the two equal and unmarks nothing, so no turn undoes the steps the one
+ * before took. reach_hops is written nowhere else. A lowered L is only
+ * recorded, so a later raise unmarks from where the walk last stopped. A
+ * raised walk is not seeded until a turn finds nothing more to do again.
+ *
+ * In reachStatement's transaction, under its KEY SHARE, so a press's FOR
+ * UPDATE (Ruling S29) waits for it, or it for the press. It writes the
+ * collection's row after its reach, and touches no wallet: fund takes the
+ * row after a wallet, and every other writer of reach takes the row first,
+ * so nothing it waits on waits on it. True when it raised.
+ */
+async function raiseReach(c: pg.PoolClient, id: number, globalHops: number): Promise<boolean> {
+  const own = (await c.query<{ l: number; walked: number | null }>(
+    `SELECT ${REACH_LIMIT('$2')} AS l, reach_hops AS walked FROM washtrace.collections WHERE id = $1`, [id, globalHops],
+  )).rows[0]!;
+  if (own.l === own.walked) return false;
+  const raised = own.l > (own.walked ?? 0);
+  if (raised) await c.query('UPDATE washtrace.reach SET stepped = false WHERE collection_id = $1 AND depth >= $2 AND stepped', [id, own.walked ?? 0]);
+  await c.query(
+    'UPDATE washtrace.collections SET reach_hops = $2, reach_seeded_at = CASE WHEN $3 THEN NULL ELSE reach_seeded_at END WHERE id = $1',
+    [id, own.l, raised],
+  );
+  return raised;
+}
+
+/**
  * Step from at most `limit` of collection `id`'s reach wallets checked since
- * they were added, shallowest first, out to its follow_hops (see
- * seedReach). One at the limit is marked stepped and not followed, so it
- * leaves reach_unstepped_idx; followFurther unmarks those when it raises
- * the limit, and a press while this step runs leaves them unmarked, as the
- * mark reads follow_hops afresh. Stepped is marked only where the depth is
- * still the one stepped from: one moved nearer in the same step is stepped
- * from again.
+ * they were added, shallowest first, out to its limit L (see seedReach). One
+ * at L is marked stepped and not followed, so it leaves reach_unstepped_idx;
+ * raiseReach unmarks those when L next rises past the reach_hops it records,
+ * and a press while this step runs leaves them unmarked, as the mark reads L
+ * afresh. Stepped is marked only where the depth is still the one stepped
+ * from: one moved nearer in the same step is stepped from again.
  *
  * A payee goes into wallets at the nearer of its sender's chain depth and
  * this walk's, plus one, and a wallet already there deeper is moved in to
@@ -3257,7 +3829,7 @@ async function walkOut(
  * for seedReach to bump the version by (Ruling S39).
  */
 async function stepReach(c: pg.PoolClient, id: number, chainId: number, limit: number, globalHops: number): Promise<{ stepped: number; doneFar: number }> {
-  const ownHops = (await c.query<{ follow_hops: number }>('SELECT follow_hops FROM washtrace.collections WHERE id = $1', [id])).rows[0]!.follow_hops;
+  const ownHops = (await c.query<{ l: number }>(`SELECT ${REACH_LIMIT('$2')} AS l FROM washtrace.collections WHERE id = $1`, [id, globalHops])).rows[0]!.l;
   // To Node, at most `limit` rows: a call with nothing to step makes no temporary table.
   const { rows: k } = await c.query<{ address: string; depth: number; chain_depth: number; truncated: boolean }>(
     `SELECT r.address, r.depth, w.depth AS chain_depth, w.truncated FROM washtrace.reach r
@@ -3306,8 +3878,8 @@ async function stepReach(c: pg.PoolClient, id: number, chainId: number, limit: n
   await c.query(
     `UPDATE washtrace.reach r SET stepped = true FROM unnest($2::text[], $3::int[]) AS k(address, depth)
      WHERE r.collection_id = $1 AND r.address = k.address AND r.depth = k.depth
-       AND (k.depth < $4 OR k.depth >= (SELECT follow_hops FROM washtrace.collections WHERE id = $1))`,
-    [id, k.map((x) => x.address), k.map((x) => x.depth), ownHops],
+       AND (k.depth < $4 OR k.depth >= (SELECT ${REACH_LIMIT('$5')} FROM washtrace.collections WHERE id = $1))`,
+    [id, k.map((x) => x.address), k.map((x) => x.depth), ownHops, globalHops],
   );
   return { stepped: k.length, doneFar };
 }
@@ -3478,6 +4050,7 @@ function toCollection(r: any): CollectionRow {
     trailImportedSha: r.trail_imported_sha, trailNote: r.trail_note, trailProgress: num(r.trail_progress),
     downloadFile: r.download_file, downloadProgress: num(r.download_progress), downloadNote: r.download_note,
     downloadRetryAt: r.download_retry === null ? null : r.download_retry * 1000, downloadMismatch: r.download_mismatch,
+    readTokens: r.read_tokens_at !== null,
     rules: r.rules ?? {},
     contract: r.described_at === null ? null : { name: r.contract_name, symbol: r.symbol, creator: r.creator, creationTx: r.creation_tx },
   };

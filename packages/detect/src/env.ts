@@ -17,6 +17,12 @@ export interface WorkerConfig {
   etherscanUrl: string;
   /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
   followHops: number;
+  /**
+   * Whether the token read (Start reading) also reads every wallet a trader
+   * paid in the listed tokens: one middle, all a one-middle loop needs, at up
+   * to FOLLOW_FANOUT more reads a trader. Off by default, the cheaper floor.
+   */
+  tokensPayees: boolean;
   /** The Hugging Face dataset (owner/name) stored data is downloaded from. */
   storedRepo: string;
   /** Where each set value came from, keyed by setting key. Never a secret's value: the store publishes this. */
@@ -80,6 +86,8 @@ export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = n
     etherscanPerSecond: Number.isFinite(perSecond) && perSecond > 0 ? perSecond : 4,
     etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL', sources['etherscan.key']?.source === 'env') ?? ETHERSCAN_V2,
     followHops: hops(pick('follow.hops', 'WASHTRACE_FOLLOW_HOPS')),
+    // Only 'on' turns it on: a typo reads as the default, which reads fewer wallets.
+    tokensPayees: pick('tokens.payees', 'WASHTRACE_TOKENS_PAYEES') === 'on',
     storedRepo: pick('stored.repo', 'WASHTRACE_STORED_REPO') ?? STORED_REPO,
     sources,
   };

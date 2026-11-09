@@ -127,8 +127,8 @@ describe('the token graph', () => {
 describe('the figure alone', () => {
   // A lens of yours's loop on row 2: back from B to A through another token of the collection.
   const own = { lensId: 7, collectionId: 1, txHash: '0xs1', logIndex: 0, wallets: [A, B], path: [
-    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1' },
-    { from: B, to: A, kind: 'nft-collection' as const, tx: '0xc9', time: null, amountWei: null, tokenId: '9' },
+    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1', token: null },
+    { from: B, to: A, kind: 'nft-collection' as const, tx: '0xc9', time: null, amountWei: null, tokenId: '9', token: null },
   ] };
   const drawn = layout(transfers, [], [], [own]);
   const loop = drawn.loops.find((l) => l.key === 'o0')!;
@@ -151,8 +151,8 @@ describe('a trade no built-in flagged, on a loop of a lens of yours', () => {
   // A and B pass the token back and forth once: too few cycles for Round trips, but Fast flips's loop on row 2 comes back through row 3.
   const clean = [t('0x0000000000000000000000000000000000000000', A, '0xs0'), t(A, B, '0xs1'), t(B, A, '0xs2'), t(A, C, '0xs3')];
   const own = { lensId: 7, collectionId: 1, txHash: '0xs1', logIndex: 0, wallets: [A, B], path: [
-    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1' },
-    { from: B, to: A, kind: 'nft-token' as const, tx: '0xs2', time: null, amountWei: null, tokenId: '1' },
+    { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1', token: null },
+    { from: B, to: A, kind: 'nft-token' as const, tx: '0xs2', time: null, amountWei: null, tokenId: '1', token: null },
   ] };
   const drawn = layout(clean, [], [], [own], { L7: { name: 'Fast flips', tone: 'own', says: '' } });
   const loop = drawn.loops.find((l) => l.key === 'o0')!;

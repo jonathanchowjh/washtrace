@@ -4,17 +4,17 @@ import { useEffect, useState } from 'react';
 import type { Method, Preview as PreviewRow } from '@washtrace/detect';
 import { checkRule, type LensRule } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { atLeastOf, num, pctTenth } from '@/lib/format';
+import { atLeastOf, num, pctTenth, type TokensFloor } from '@/lib/format';
 import { send } from './lens-actions';
 
 const POLL_MS = 1000;
 
 /** The finished preview's one line: the lens's share of the sample, Round trips' of the same sales, and where most were caught. */
-function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Method[], funded: boolean, moneyShort: boolean): string {
+function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor): string {
   const r = p.result!;
   // Not r.atLeast: that covers cut searches and untimed trades only, and a money lens is a floor too while its funding is not final.
   // Untimed trades are out of the judged base already, so they are not a cause of a floor here.
-  const floor = atLeastOf(p.rule, { truncated: r.truncated, untimed: 0 }, notFinal, funded, moneyShort);
+  const floor = atLeastOf(p.rule, { truncated: r.truncated, untimed: 0 }, notFinal, funded, moneyShort, tokens);
   // A sampled sale the token graph folds away or the rule skips is never judged, so the share is of those judged; a row from before `judged` was kept counts them all.
   const judged = r.judged ?? r.sampled;
   const all = judged === r.sampled;
@@ -36,7 +36,7 @@ function resultLine(p: PreviewRow, roundTripsName: string, notFinal: readonly Me
  * collection page's, so the share reads "at least" exactly where a saved
  * lens's does. A result stays after the rule changes, marked as from before.
  */
-export function Preview({ chainId, address, rule, roundTripsName, notFinal, funded, moneyShort, writable = true }: {
+export function Preview({ chainId, address, rule, roundTripsName, notFinal, funded, moneyShort, tokens, writable = true }: {
   chainId: number; address: string; rule: LensRule; roundTripsName: string;
   /** This console may write: a preview queues a row, so it is refused as a save is. */
   writable?: boolean;
@@ -44,6 +44,8 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
   notFinal: readonly Method[];
   /** moneyShort of this rule against what is read of the collection's money. */
   moneyShort: boolean;
+  /** tokensReason of this rule against what is read of the collection's other tokens (a preview is never behind a run). */
+  tokens: TokensFloor;
   /** The collection has funding for the money lenses to run on. */
   funded: boolean;
 }) {
@@ -116,7 +118,7 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
         <span aria-live="polite" className="text-sm">
           {row?.status === 'queued' ? 'Waiting for the worker (an analysis or lens run may be going)' : null}
           {row?.status === 'running' ? (row.progress && Math.floor(row.progress * 100) > 0 ? `Previewing… ${Math.floor(row.progress * 100)}%` : 'Loading the collection…') : null}
-          {row?.status === 'done' && row.result ? resultLine(row, roundTripsName, notFinal, funded, moneyShort) : null}
+          {row?.status === 'done' && row.result ? resultLine(row, roundTripsName, notFinal, funded, moneyShort, tokens) : null}
         </span>
       </div>
       {lost ? <p className="text-xs text-muted-foreground">Lost touch with the service; trying again every second.</p> : null}

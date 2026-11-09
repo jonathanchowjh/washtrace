@@ -21,11 +21,10 @@ describe('EDGE_TYPES', () => {
     ]);
   });
 
-  it('marks money rows and the two unavailable rows', () => {
+  it('marks money rows and the one unavailable row: other tokens are read now', () => {
     expect(EDGE_TYPES.filter((e) => e.money).map((e) => e.kind)).toEqual(['eth', 'internal', 'weth', 'other-tokens']);
     expect(EDGE_TYPES.filter((e) => e.unavailable).map((e) => [e.kind, e.unavailable])).toEqual([
       ['nft-watched', "Not in this version: a lens reads this collection's transfers."],
-      ['other-tokens', 'Not read: washtrace has never fetched them.'],
     ]);
   });
 });
@@ -94,13 +93,27 @@ describe('checkRule errors', () => {
     expect(errorOf(r)).toBe('At least 2 loops needs "NFT: same token" switched on.');
   });
 
-  it('refuses the unavailable rows switched on', () => {
+  it('refuses the unavailable row switched on, and takes other tokens', () => {
     const w = clone();
     w.edges['nft-watched'].use = true;
     expect(errorOf(w)).toBe("Not in this version: a lens reads this collection's transfers.");
     const o = clone();
     o.edges['other-tokens'].use = true;
-    expect(errorOf(o)).toBe('Not read: washtrace has never fetched them.');
+    expect(checkRule(o)).toEqual({ rule: o });
+  });
+
+  it("refuses a smallest amount on other tokens switched on, with T9's message; switched off, the value is ignored and the rule reads (Ruling P12)", () => {
+    const on = clone();
+    on.edges['other-tokens'] = { ...on.edges['other-tokens'], use: true, minWei: '1000000' };
+    expect(errorOf(on)).toBe('Other tokens take no smallest amount: tokens differ in value.');
+    // A rule saved with the row off and a value in it is no corrupt rule.
+    const off = clone();
+    off.edges['other-tokens'] = { ...off.edges['other-tokens'], use: false, minWei: '1000000' };
+    expect(checkRule(off)).toEqual({ rule: off });
+    // The other money rows keep theirs.
+    const e = clone();
+    e.edges.weth.minWei = '1000000';
+    expect('rule' in checkRule(e)).toBe(true);
   });
 
   it('refuses loop order with edges all before the trade', () => {
@@ -245,7 +258,7 @@ describe('COPIES', () => {
 });
 
 describe('estimateTo', () => {
-  const counted: FollowEstimate = { depth: 4, wallets: 10, growth: 2, cut: false, at: '2026-11-09T00:00:00.000Z' };
+  const counted: FollowEstimate = { depth: 4, wallets: 10, growth: 2, cut: false, within: 40, at: '2026-11-09T00:00:00.000Z' };
 
   it('is null with nothing counted, or for a depth short of the one counted', () => {
     expect(estimateTo(null, 5)).toBeNull();

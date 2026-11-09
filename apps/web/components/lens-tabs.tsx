@@ -4,7 +4,7 @@ import { METHODS, type Lens, type LensRun, type Method, type MethodTotals } from
 import type { LensKey } from '@washtrace/detect/trades';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { LENSES, atLeastOf, floorCauses, pctTenth, runStateWords, type Lenses } from '@/lib/format';
+import { LENSES, atLeastOf, floorCauses, pctTenth, runStateWords, type Lenses, type TokensFloor } from '@/lib/format';
 import { APART, APART_WHY, behindOf, ownLenses, part, type Behind } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
@@ -30,6 +30,9 @@ const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted
 const OFF = 'cursor-not-allowed opacity-60';
 const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground', own: 'border-t-flow' } as const;
 
+/** No token cause: a lens the page gave no tokens figure for. */
+const NO_TOKENS: TokensFloor = { reason: null, payees: false };
+
 /**
  * The collection page's lenses as tabs: the three built-ins, yours beside
  * them, and + New lens; under the strip, the panel of the chosen one. Each
@@ -38,7 +41,7 @@ const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'borde
  * the latest analysis's, null before the first, and `latestId` its id, which
  * a run of yours is behind when it is not from it.
  */
-export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyShort, coverage, writable, editor = null, children }: {
+export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyShort, tokens, coverage, writable, editor = null, children }: {
   base: string; chainId: number; address: string; selected: LensKey | 'compare';
   totals: Record<Method, MethodTotals> | null; latestId: number | null;
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
@@ -46,6 +49,8 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   runs: Runs; notFinal: readonly Method[];
   /** By lens key: whether the collection's money is read as far as that lens needs (moneyShort of lens-rule). */
   moneyShort: Readonly<Record<string, boolean>>;
+  /** By lens key: whether the collection's other tokens are read as far as that lens needs (tokensReason of lens-rule), and the setting the count was made under. */
+  tokens: Readonly<Record<string, TokensFloor>>;
   coverage: Funding; writable: boolean;
   /** The lens editor, when `?lens=` asks for one: it takes the panel's place, under the same tab. */
   editor?: ReactNode;
@@ -76,7 +81,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           return (
             <Tab key={lens.key} href={href(lens.key)} on={lens.key === selected} tone="own" title={`Show what ${lens.name} flags`}>
               <LensName m={lens.key} own={own} />
-              {t ? <>{' '}<Share t={t} atLeast={atLeastOf(lens.rule, t, notFinal, coverage.funded, moneyShort[lens.key] ?? false)} /></> : null}
+              {t ? <>{' '}<Share t={t} atLeast={atLeastOf(lens.rule, t, notFinal, coverage.funded, moneyShort[lens.key] ?? false, tokens[lens.key] ?? NO_TOKENS)} /></> : null}
               {word ? <>{' '}<span className="text-xs text-muted-foreground">{word}</span></> : null}
             </Tab>
           );
@@ -92,7 +97,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
       >
         {editor ?? (selected === 'compare' ? children : chosen
           ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analysed={totals !== null}
-            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} moneyShort={moneyShort[chosen.lens.key] ?? false}>{children}</YourLens>
+            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} moneyShort={moneyShort[chosen.lens.key] ?? false} tokens={tokens[chosen.lens.key] ?? NO_TOKENS}>{children}</YourLens>
           : <BuiltIn base={base} m={selected as Method} t={totals?.[selected as Method] ?? null} coverage={coverage} writable={writable}>{children}</BuiltIn>)}
       </section>
     </div>
@@ -163,13 +168,13 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
   );
 }
 
-function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, moneyShort, children }: {
+function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, moneyShort, tokens, children }: {
   base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analysed: boolean;
-  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; moneyShort: boolean; children: ReactNode;
+  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; moneyShort: boolean; tokens: TokensFloor; children: ReactNode;
 }) {
   const t = run?.totals ?? null;
   // Why its share is a floor, in the words the tab, the stat line and the chart's (at least) title go by, with the counts the panel has room for.
-  const floor = t === null ? [] : floorCauses(lens.rule, t, notFinal, funded, moneyShort, true);
+  const floor = t === null ? [] : floorCauses(lens.rule, t, notFinal, funded, moneyShort, tokens, true);
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

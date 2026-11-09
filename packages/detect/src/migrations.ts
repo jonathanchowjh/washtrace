@@ -537,4 +537,61 @@ CREATE TABLE IF NOT EXISTS washtrace.reach (
 CREATE INDEX IF NOT EXISTS reach_wallet_idx ON washtrace.reach (chain_id, address);
 CREATE INDEX IF NOT EXISTS reach_unstepped_idx ON washtrace.reach (collection_id, depth) WHERE NOT stepped;
 `,
+  `
+-- Other tokens (3c slice 2): a short list of major tokens per chain
+-- (TOKENS), read for one collection's wallets once it presses Start reading
+-- (read_tokens_at). Their transfers have a table of their own, never flows,
+-- so nothing that reads flows (the built-in lenses, the money follow, the
+-- wallet pages, the published trail) changes. Every token edge is read by its
+-- sender, so the key leads with it, then the ends and block a lens run reads
+-- an edge back by; no index on recipients.
+-- token_reads: each wallet's token read, chain-wide and apart from its money
+-- check (wallets.status). fanout: how many wallets it sent listed tokens to,
+-- capped at FOLLOW_FANOUT + 1, so a mass sender (an airdrop, a pool) is
+-- known from its own read alone. token_payees: who a wallet read to the end,
+-- with fanout within FOLLOW_FANOUT, paid in those tokens: kept whatever
+-- tokens.payees says, which only chooses whether a trader's payees are read.
+-- reach_hops: the limit a collection's walk was last walked to, so the walk
+-- itself unmarks what it marked at a lower one (Store.seedReach); backfilled
+-- for those that pressed Fetch them. reach_stepped_at: when the walk last
+-- took a step for it, so collections take turns. traders_at: when a write
+-- last added transfers, so a walk that read its traders before then is not
+-- taken as seeded (Store.seedReach). token_counts: the token read's
+-- progress, counted by the worker so a page only reads it.
+-- lens_runs.tokens_read: the token reads a run took in, for 'behind'.
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS read_tokens_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS reach_hops smallint;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS reach_stepped_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS traders_at timestamptz;
+ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS token_counts jsonb;
+ALTER TABLE washtrace.lens_runs ADD COLUMN IF NOT EXISTS tokens_read int;
+UPDATE washtrace.collections SET reach_hops = follow_hops WHERE reach_hops IS NULL AND follow_hops IS NOT NULL;
+CREATE TABLE IF NOT EXISTS washtrace.token_flows (
+  chain_id     int NOT NULL,
+  tx_hash      text NOT NULL,
+  from_address text NOT NULL,
+  to_address   text NOT NULL,
+  token        text NOT NULL,
+  value_raw    numeric(78, 0) NOT NULL,
+  block_number bigint NOT NULL,
+  block_time   timestamptz NOT NULL,
+  PRIMARY KEY (chain_id, from_address, to_address, block_number, tx_hash, token, value_raw)
+);
+CREATE TABLE IF NOT EXISTS washtrace.token_reads (
+  chain_id  int NOT NULL,
+  address   text NOT NULL,
+  status    text NOT NULL CHECK (status IN ('done', 'failed')),
+  truncated bool NOT NULL DEFAULT false,
+  fanout    smallint,
+  error     text,
+  read_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id, address)
+);
+CREATE TABLE IF NOT EXISTS washtrace.token_payees (
+  chain_id int NOT NULL,
+  payer    text NOT NULL,
+  payee    text NOT NULL,
+  PRIMARY KEY (chain_id, payer, payee)
+);
+`,
 ];

@@ -68,7 +68,10 @@ export function RuleTable({ rule, onChange }: { rule: LensRule; onChange?: (rule
                       onCommit={edge(kind, (row, v) => { row.max = v === '' ? null : Number(v); })} />
                   </td>
                   <td className="py-1.5 pr-3">
-                    {money ? (
+                    {kind === 'other-tokens' ? (
+                      // Tokens differ in value and washtrace has no prices, so a raw-unit floor means one thing at 6 decimals and another at 18 (T9): checkRule refuses one.
+                      <span className="text-muted-foreground">Any amount: tokens differ in value</span>
+                    ) : money ? (
                       <Field label={`${label}: smallest payment counted, in ETH`} text={e.minWei === null ? '' : weiToEth(e.minWei)} none="any" disabled={locked || dead}
                         onCommit={edge(kind, (row, v) => { const wei = v === '' ? null : ethToWei(v); if (v === '' || wei !== null) row.minWei = wei; })} />
                     ) :<span aria-hidden>&mdash;</span>}

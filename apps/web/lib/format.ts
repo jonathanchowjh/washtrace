@@ -9,7 +9,24 @@
 
 import type { LensRun, Manifest, Method } from '@washtrace/detect';
 import { formatBytes } from '@washtrace/detect/bytes';
-import { EDGE_TYPES, type LensRule } from '@washtrace/detect/lens-rule';
+import { WALKED, type LensRule, type TokensReason } from '@washtrace/detect/lens-rule';
+
+/**
+ * The Other tokens half of a share's floor: tokensReason of lens-rule for this
+ * rule (null when it uses none, or reads enough), and whether the count it
+ * came from took payees in (`tokens.payees`), which changes the words of
+ * 'unreached'.
+ */
+export type TokensFloor = { reason: TokensReason | null; payees: boolean };
+
+/** The words of a floor cause for other tokens (T7, T11); the Other tokens row says the same things in its own columns. */
+function tokensCause(reason: TokensReason, payees: boolean): string {
+  if (reason === 'off') return 'other tokens are not read for this collection';
+  if (reason !== 'unreached') return 'other tokens are not all read yet for this collection';
+  const through = payees ? 'ETH, WETH or one token payment' : 'ETH or WETH';
+  // The same words whichever floor the rule gets: with payees in it may still be one middle (Ruling P13), so not always a longer loop; and not "tokens alone", as it may mix ETH and tokens (Ruling P16).
+  return `other tokens are read only for wallets reached by ${through}, so a loop through tokens can be missed`;
+}
 
 /**
  * Why a share of yours is only a floor, one phrase per cause (Ruling GG): it
@@ -25,11 +42,12 @@ import { EDGE_TYPES, type LensRule } from '@washtrace/detect/lens-rule';
  * which has room for them; every "at least" says why in these words.
  * `moneyShort`: moneyShort() of lens-rule for this rule, the collection's MoneyRead and whether its run is behind (Ruling S36).
  */
-export function floorCauses(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, counts = false): string[] {
-  const money = EDGE_TYPES.some((e) => e.money && rule.edges[e.kind].use);
+export function floorCauses(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor, counts = false): string[] {
+  // The money walk's rows only (T12): other tokens have a read of their own, which `tokens` says.
+  const money = WALKED.some((k) => rule.edges[k].use);
   const n = (k: number, word: string, many?: string) => (counts ? ` (${plural(k, word, many)})` : '');
   // Money is followed along the way it was sent, whatever direction a money edge says (depthNeeded), so a loop against it can be missed (Ruling S19).
-  const blind = money && rule.hops.max !== null && EDGE_TYPES.some((e) => e.money && rule.edges[e.kind].use && rule.edges[e.kind].direction === 'either');
+  const blind = money && rule.hops.max !== null && WALKED.some((k) => rule.edges[k].use && rule.edges[k].direction === 'either');
   const checking = money && !funded ? 'no funding source is set, so money is not fully read' : money && notFinal.length > 0 ? 'money is not fully read yet' : null;
   return [
     t.truncated > 0 ? `some of its searches stopped at the cap before finding a loop${n(t.truncated, 'search', 'searches')}` : null,
@@ -38,12 +56,14 @@ export function floorCauses(rule: LensRule, t: { truncated: number; untimed: num
     // The traders' own check still running is `checking` above; this is money further out than the collection is read (Rulings S18, S25).
     checking === null && money && moneyShort ? 'money is not read as far as this lens needs' : null,
     blind ? 'money is followed only the way it was sent, so a loop against it can be missed' : null,
+    // A rule that uses no other tokens has reason null (tokensReason), so it never gets this cause.
+    tokens.reason === null ? null : tokensCause(tokens.reason, tokens.payees),
   ].filter((x) => x !== null);
 }
 
 /** Whether a share of yours is a floor (floorCauses names why). Lives here, not in lens-tabs, so a client component can import it without pulling `pg` into the browser bundle. */
-export function atLeastOf(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean): boolean {
-  return floorCauses(rule, t, notFinal, funded, moneyShort).length > 0;
+export function atLeastOf(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor): boolean {
+  return floorCauses(rule, t, notFinal, funded, moneyShort, tokens).length > 0;
 }
 
 /** A count with thousands separators, in the one locale the whole console pins (server and browser agree). */
@@ -90,6 +110,19 @@ export function eta(ms: number): string {
   if (min < 60) return `about ${min} min left`;
   const h = Math.round(min / 60);
   return h < 24 ? `about ${h} h left` : `about ${plural(Math.round(h / 24), 'day')} left`;
+}
+
+/**
+ * A duration for "at least T" (Ruling P17): rounded down at the unit it shows,
+ * never up, as eta rounds, so the floor it states is never more than the
+ * time. Seconds under a minute, minutes under an hour, hours under a day.
+ */
+export function floorTime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86_400) return `${Math.floor(s / 3600)} h`;
+  return plural(Math.floor(s / 86_400), 'day');
 }
 
 /**

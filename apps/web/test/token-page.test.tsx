@@ -256,7 +256,7 @@ describe('the token page paging and filter', () => {
 describe('the token page with lenses of yours', () => {
   const W = '0x' + '9'.repeat(40), F = '0x' + 'f'.repeat(40);
   const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
-    ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, ...more });
+    ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, token: null, ...more });
   /** Row i's transfer (0x1 → 0x2, tx 0x<i>), caught by lens `id` back through a money middle, or through a funder. */
   const caught = (id: number, i: number, funder = false): OwnFlag => ({
     lensId: id, collectionId: 1, txHash: '0x' + i, logIndex: 0, wallets: ['0x1', '0x2', funder ? F : W],

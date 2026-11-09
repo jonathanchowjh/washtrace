@@ -11,7 +11,7 @@ const ZERO_ADDRESS = '0x' + '0'.repeat(40);
 const ID: Record<string, number> = { [A1]: 1, [A2]: 2 };
 
 const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
-  ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, ...more });
+  ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, token: null, ...more });
 
 /** A transfer S → B of `tokenId` in `address`, in tx `hash`, flagged by `flags`: a sale on Seaport (`marketplace` null: not a sale), timed by its block. */
 function transfer(address: string, tokenId: string, hash: string, logIndex: number, block: number, flags: Method[] = [], from = S, to = B, marketplace: string | null = 'Seaport') {
@@ -482,7 +482,7 @@ describe('a transfer a lens does not judge says so, never that it was not caught
     const moves = new Moves();
     moves.seal();
     const runs = lenses.map(([id, rule]) => ({ id, ...runLens(rule, {
-      transfers: rows, through: null, moves, contracts: new Set(), custodians: new Set(custodians), money: new Set(['']), truncated: new Set(), tradeTxs: [...new Set(rows.map((t) => t.txHash))],
+      transfers: rows, through: null, moves, contracts: new Set(), custodians: new Set(custodians), money: new Set(['']), truncated: new Set(), tradeTxs: [...new Set(rows.map((t) => t.txHash))], tokensRead: null,
     }) }));
     state.own = runs.flatMap(({ id, flags }) => flags.map((f): OwnFlag => ({ ...f, lensId: id, collectionId: 1 })));
     state.tokens[`${A1}/7`] = rows;

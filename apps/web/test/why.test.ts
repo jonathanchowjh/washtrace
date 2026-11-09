@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { TokenLine, WalletLine } from '@washtrace/detect';
+import type { LoopEdge, TokenLine, WalletLine } from '@washtrace/detect';
+import { ownBecause } from '@/components/transfers';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 
 const T: TokenLine = { tokenId: '7', caught: 4, trades: 4, volumeWei: '0', lastAt: null, loops: 0, pairs: 0, wallets: 0, closedByMoney: 0, laps: 0, middles: 0 };
@@ -41,5 +42,15 @@ describe('why a row is in a lens list', () => {
     // A built-in's row is never silenced by one missing count.
     expect(text(tokenWhy('AC', { ...T, loops: null, pairs: 2, wallets: 3 }))).toBe('2 linked pairs among 3 wallets');
     expect(text(walletWhy('AC', { ...W, loops: null, pairs: 1, partners: 2 }))).toBe('in 1 linked pair with 2 wallets');
+  });
+});
+
+describe('why a lens of yours flagged one transfer (ownBecause)', () => {
+  it('counts an other-token step of the way back as money, as an ETH one (Ruling P11)', () => {
+    const [a, b, m] = ['a', 'b', 'd'].map((c) => '0x' + c.repeat(40)) as [string, string, string];
+    const step = (from: string, to: string, kind: LoopEdge['kind'], token: string | null = null): LoopEdge =>
+      ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, token });
+    const path = [step(a, b, 'nft-token'), step(b, m, 'other-tokens', '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'), step(m, a, 'eth')];
+    expect(ownBecause({ path, wallets: [a, b, m] })).toBe('Back to the seller through 1 wallet, 2 by money');
   });
 });

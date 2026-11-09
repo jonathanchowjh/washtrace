@@ -39,8 +39,19 @@ export const EDGE_TYPES: readonly { kind: EdgeKind; label: string; money: boolea
   { kind: 'eth', label: 'ETH payment', money: true, unavailable: null },
   { kind: 'internal', label: 'ETH sent by a contract (internal)', money: true, unavailable: null },
   { kind: 'weth', label: 'WETH (Blur Pool included)', money: true, unavailable: null },
-  { kind: 'other-tokens', label: 'Other tokens', money: true, unavailable: 'Not read: washtrace has never fetched them.' },
+  { kind: 'other-tokens', label: 'Other tokens', money: true, unavailable: null },
 ];
+
+/**
+ * A wallet that sent money to more wallets than this is not followed. Mule
+ * wallets in a wash ring pay a handful; a wallet paying dozens is a business,
+ * a bot or a person with a life, and following it reads half the chain. It
+ * lives here, not in the store that follows by it, so the client can say it.
+ */
+export const FOLLOW_FANOUT = 25;
+
+/** The money rows the money check reads (flows): the ETH and WETH walk. Other tokens have a read of their own (token_flows). */
+export const WALKED: readonly EdgeKind[] = ['eth', 'internal', 'weth'];
 
 const KINDS = EDGE_TYPES.map((e) => e.kind);
 const WEI_FLOOR = '10000000000000000'; // 0.01 ETH
@@ -102,6 +113,9 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
     edges[kind] = row(e.use, e.direction, e.max, e.minWei, e.repeats);
   }
   for (const { kind, unavailable } of EDGE_TYPES) if (unavailable && edges[kind].use) return { error: unavailable };
+  // T9: a floor in raw units means one thing at 6 decimals and another at 18, and washtrace has no prices.
+  // Only with the row on (Ruling P12): off, the value is read by nothing, and a rule saved so must not read as corrupt.
+  if (edges['other-tokens'].use && edges['other-tokens'].minWei !== null) return { error: 'Other tokens take no smallest amount: tokens differ in value.' };
   if (!KINDS.some((k) => edges[k].use)) return { error: 'Switch on at least one edge type.' };
 
   const { min, max } = raw.hops;
@@ -180,9 +194,13 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
  * depth's flows. No depth completes it; the number is the worst the follow can
  * reach. Money reached by an NFT hop restarts at a trader (hop 0), so it needs
  * less. With `hops.max` null only the token's own hops are read: no money.
+ *
+ * Only the ETH and WETH rows count (T12): other tokens are read by a read of
+ * their own, whose coverage the tokens row decides, so a lens using them
+ * alone needs no money read.
  */
 export function depthNeeded(rule: LensRule): number {
-  const money = EDGE_TYPES.some((e) => e.money && rule.edges[e.kind].use);
+  const money = WALKED.some((k) => rule.edges[k].use);
   return money && rule.hops.max !== null ? Math.max(0, rule.hops.max - 1) : 0;
 }
 
@@ -240,6 +258,45 @@ export function moneyShort(rule: LensRule, money: MoneyDepths, globalHops: numbe
   return moneyReason(rule, money, globalHops, behind) !== null;
 }
 
+/** The part of TokenCounts that tokensReason reads (Store.countTokens writes the rest). */
+type TokenProgress = { wallets: number; read: number; settled: boolean; payees: boolean };
+
+export type TokensReason = 'off' | 'seeding' | 'pending' | 'behind' | 'unreached';
+
+/**
+ * Why a collection's other tokens are not read as far as `rule` needs (T11),
+ * or null when they are, or when the rule does not use them. One decision for
+ * the editor's Other tokens row and for every share's "at least", as
+ * moneyReason is for the money row. Checked in this order: 'off' (Start
+ * reading was never pressed: `started`); 'seeding' (no count yet, or the walk
+ * that finds the set's wallets is not settled, so more may join); 'pending'
+ * (fewer wallets read than the set holds; a failed read is not read);
+ * 'behind' (all read, but the lens's run took in another count:
+ * `runTokensRead`); 'unreached' (all read, yet the rule allows more middle
+ * wallets than the read reaches, T7: any length, or one or more).
+ *
+ * The setting is the count's own `counts.payees`, the tokens.payees it was
+ * made under: a count is all 'unreached' is ever judged against, so the
+ * setting the worker runs with now is not read here. With payees in, the
+ * floor rises to two middles only when every one-middle loop has its middle
+ * read (Ruling P13): other tokens followed 'along' (under 'either', a middle
+ * that paid both traders is a payer, in no set), no ETH or WETH row on (a
+ * buyer -ETH-> M -token-> seller loop's M may be out of reach), and
+ * marketplaces and known contracts never middles (they are left out of
+ * token_payees). Otherwise one middle is already more than is read.
+ */
+export function tokensReason(rule: LensRule, started: boolean, counts: TokenProgress | null, runTokensRead: number | null): TokensReason | null {
+  const tokens = rule.edges['other-tokens'];
+  if (!tokens.use) return null;
+  if (!started) return 'off';
+  if (counts === null || !counts.settled) return 'seeding';
+  if (counts.read < counts.wallets) return 'pending';
+  if (counts.read !== runTokensRead) return 'behind';
+  const payeesClose = counts.payees && tokens.direction === 'along' && !WALKED.some((k) => rule.edges[k].use) && rule.never.marketplaces;
+  const max = rule.hops.max;
+  return max === null || max >= (payeesClose ? 2 : 1) ? 'unreached' : null;
+}
+
 /**
  * How many more wallets following a collection's money one hop past its
  * limit would read, as the worker last counted it (Store.countNext), for
@@ -247,9 +304,12 @@ export function moneyShort(rule: LensRule, money: MoneyDepths, globalHops: numbe
  * the ones there still to read. `growth` is how many wallets the chain
  * holds at a depth for each at the one before, null with nothing to go by.
  * `cut`: the walk stopped short of every wallet and scaled what it found,
- * so even `depth` is about. `at` is when it was counted.
+ * so even `depth` is about. `within`: the walk's wallets out to the limit
+ * itself (depths 0 to depth - 1), scaled as it was cut, which Start reading
+ * (other tokens) would read; an estimate stored before it was counted has
+ * none, and reads as not counted. `at` is when it was counted.
  */
-export interface FollowEstimate { depth: number; wallets: number; growth: number | null; cut: boolean; at: string }
+export interface FollowEstimate { depth: number; wallets: number; growth: number | null; cut: boolean; within: number; at: string }
 
 /**
  * About how many wallets following out to `toDepth` would read, from what

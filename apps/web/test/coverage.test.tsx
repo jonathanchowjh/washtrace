@@ -19,7 +19,7 @@ type Totals = NonNullable<CollectionRow['latest']>['totals'];
 /** The lens tabs of a collection with no lens of yours, the chosen built-in's panel under them. */
 const lensTabs = (totals: Totals, selected: 'A' | 'AU' | 'AC', more: { notFinal?: ('A' | 'AU' | 'AC')[]; trail?: boolean; funded?: boolean; coming?: boolean; silent?: boolean } = {}) =>
   render(
-    <LensTabs base="/c/1/0xabc" chainId={1} address="0xabc" selected={selected} totals={totals} latestId={1} paused={false} runs={[]} notFinal={more.notFinal ?? []} moneyShort={{}}
+    <LensTabs base="/c/1/0xabc" chainId={1} address="0xabc" selected={selected} totals={totals} latestId={1} paused={false} runs={[]} notFinal={more.notFinal ?? []} moneyShort={{}} tokens={{}}
       coverage={{ trail: more.trail ?? false, funded: more.funded ?? false, coming: more.coming ?? false, silent: more.silent ?? false }} writable>{null}</LensTabs>,
   ).container;
 

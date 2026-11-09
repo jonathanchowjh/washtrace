@@ -21,13 +21,13 @@ import { editorStart } from '@/lib/lens-api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
-import { NOT_RUN_LATEST, atLeastOf, floorCauses, lensInfo, pct, pctTenth, plural, runStateWords, short, num } from '@/lib/format';
-import { FOLLOW_FANOUT, WRAPPED, moneyFor, type CollectionProfile, type LensRun, type Method, type MethodTotals, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
+import { NOT_RUN_LATEST, atLeastOf, floorCauses, lensInfo, pct, pctTenth, plural, runStateWords, short, num, type TokensFloor } from '@/lib/format';
+import { FOLLOW_FANOUT, TOKENS, WRAPPED, moneyFor, type CollectionProfile, type LensRun, type Method, type MethodTotals, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { collectionLinks, explorerAddress, explorerTx, venues } from '@/lib/links';
 import { analyzingOn, coverage, unread, waiting } from '@/lib/coverage';
 import { behindVersion, chartLenses, evidenceLead, leftOut, lensContext, ownLenses, range, summary, type Range } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
-import { moneyShort, type LensRule } from '@washtrace/detect/lens-rule';
+import { moneyShort, tokensReason, type LensRule } from '@washtrace/detect/lens-rule';
 import { callsPerSecond, configFromSources, hopsFollowed } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
@@ -131,11 +131,20 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // A run behind the collection's version has not read what was fetched since (Ruling S36).
   const runBehind = (run: LensRun | null) => behindVersion(run, a, c.stale);
   const shortOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }) => money !== null && moneyShort(lens.rule, money, followHops, runBehind(run));
+  // The same for other tokens: one count, the worker's, serves the editor's row and every lens's "at least" (tokensReason). Each lens compares it with the count its own run took in.
+  const tokenCounts = c.readTokens && (editing || runs.length > 0) ? await s.tokenCounts(c.id) : null;
+  const tokensFloorOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }): TokensFloor =>
+    ({ reason: tokensReason(lens.rule, c.readTokens, tokenCounts, run?.tokensRead ?? null), payees: tokenCounts?.payees ?? config.tokensPayees });
   const needs = editing && money ? {
     transfers: c.transfers, transfersRead: !unread(cov), money, funding: config.funding, perSecond: callsPerSecond(config),
     watched: all.length, followHops, fanout: FOLLOW_FANOUT, callsPerWallet: 2 + (WRAPPED[chainId]?.length ?? 0),
     behind: runBehind(runs.find((r) => r.lens.id === editing.lensId)?.run ?? null),
     paused: c.pausedAt !== null,
+    tokens: {
+      started: c.readTokens, counts: tokenCounts, payees: config.tokensPayees,
+      runTokensRead: runs.find((r) => r.lens.id === editing.lensId)?.run?.tokensRead ?? null,
+      symbols: (TOKENS[chainId] ?? []).map((x) => x.symbol).join(', '),
+    },
   } : null;
   const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
   const name = c.name ?? short(address);
@@ -143,7 +152,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   // The chosen lens's figures: the latest analysis's for a built-in, its last finished run's for yours (a lens being run again keeps showing them).
   const t: MethodTotals | null | undefined = yours ? yours.run?.totals : a?.totals[method as Method];
   // A share of yours is a floor while what it needs is only partly read; its tab, its stat line and the lead below all say so alike.
-  const atLeast = yours !== null && yours.run?.totals != null && atLeastOf(yours.lens.rule, yours.run.totals, cov.notFinal, funded, shortOf(yours));
+  const atLeast = yours !== null && yours.run?.totals != null && atLeastOf(yours.lens.rule, yours.run.totals, cov.notFinal, funded, shortOf(yours), tokensFloorOf(yours));
 
   return (
     <>
@@ -188,7 +197,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           {/* These are the rules now set, which the latest analysis may not have run under yet. */}
           {rules ? <p className="mb-4 text-sm text-muted-foreground">{rules}</p> : null}
           <LensTabs
-            base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyShort={Object.fromEntries(runs.map((r) => [r.lens.key, shortOf(r)]))}
+            base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyShort={Object.fromEntries(runs.map((r) => [r.lens.key, shortOf(r)]))} tokens={Object.fromEntries(runs.map((r) => [r.lens.key, tokensFloorOf(r)]))}
             coverage={{ trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null }} writable={writable}
             editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing} /> : null}
           >
@@ -232,7 +241,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
           <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} base={base}
-            own={chart.drawn.map((o) => ({ key: o.lens.key, name: o.lens.name, atLeast: atLeastOf(o.lens.rule, o.run!.totals!, cov.notFinal, funded, shortOf(o)), floorWhy: floorCauses(o.lens.rule, o.run!.totals!, cov.notFinal, funded, shortOf(o)).join('; ') }))} ownLeft={chart.left.map((o) => ({ key: o.lens.key, name: o.lens.name }))}
+            own={chart.drawn.map((o) => ({ key: o.lens.key, name: o.lens.name, atLeast: atLeastOf(o.lens.rule, o.run!.totals!, cov.notFinal, funded, shortOf(o), tokensFloorOf(o)), floorWhy: floorCauses(o.lens.rule, o.run!.totals!, cov.notFinal, funded, shortOf(o), tokensFloorOf(o)).join('; ') }))} ownLeft={chart.left.map((o) => ({ key: o.lens.key, name: o.lens.name }))}
             ownNotRun={chart.notRun.map((o) => ({ key: o.lens.key, name: o.lens.name, why: runStateWords(o.run)!.full }))} />
         </Section>
       ) : null}

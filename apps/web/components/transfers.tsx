@@ -39,7 +39,8 @@ export function because(w: Witness, chainId: number): React.ReactNode {
 export function ownBecause(f: Pick<LensFlag, 'path' | 'wallets'>): string {
   const trade = f.path[0];
   const through = new Set(f.wallets.filter((w) => w !== trade?.from && w !== trade?.to)).size;
-  const money = f.path.slice(1).filter((e) => e.kind === 'eth' || e.kind === 'internal' || e.kind === 'weth').length;
+  // Ruling P11: other tokens are money too.
+  const money = f.path.slice(1).filter((e) => e.kind === 'eth' || e.kind === 'internal' || e.kind === 'weth' || e.kind === 'other-tokens').length;
   const funder = f.path.length > 1 && f.path[f.path.length - 1]!.kind === 'funds';
   return `Back to the seller through ${through === 0 ? 'no wallet' : plural(through, 'wallet')}${money > 0 ? `, ${money} by money` : ''}${funder ? ', closed at a funder' : ''}`;
 }
