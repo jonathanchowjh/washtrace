@@ -1,4 +1,4 @@
-import { BEHIND_BLOCKS, TRAIL_NOTES, reaches, type CollectionRow, type StoredEntry } from '@washtrace/detect';
+import { BEHIND_BLOCKS, NOT_DONE, TRAIL_NOTES, reaches, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { LENSES } from './format';
 
 export type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
@@ -98,7 +98,7 @@ export function pipeline({ c, entry, rpcChains, funding, analyzing, silent }: Pi
 
   let download: Part = { state: 'waiting' };
   if (nothingToLoad) download = { state: 'not-needed' };
-  else if (c.downloadFile !== null && c.downloadProgress !== null) download = { state: 'running', share: Math.min(c.downloadProgress, 0.99), file: c.downloadFile as 'transfers' | 'trail' };
+  else if (c.downloadFile !== null && c.downloadProgress !== null) download = { state: 'running', share: Math.min(c.downloadProgress, NOT_DONE), file: c.downloadFile as 'transfers' | 'trail' };
   // Held for a download that has not started: the pill says so, whatever else is loaded.
   else if (c.downloadFile !== null) download = { state: 'waiting' };
   else if (c.downloadNote !== null) download = { state: 'failed' };
@@ -106,8 +106,8 @@ export function pipeline({ c, entry, rpcChains, funding, analyzing, silent }: Pi
 
   let load: Part = { state: 'waiting' };
   if (nothingToLoad) load = { state: 'not-needed' };
-  else if (c.restoreProgress !== null) load = { state: 'running', share: Math.min(c.restoreProgress, 0.99), file: 'transfers' };
-  else if (c.trailProgress !== null) load = { state: 'running', share: Math.min(c.trailProgress, 0.99), file: 'trail' };
+  else if (c.restoreProgress !== null) load = { state: 'running', share: Math.min(c.restoreProgress, NOT_DONE), file: 'transfers' };
+  else if (c.trailProgress !== null) load = { state: 'running', share: Math.min(c.trailProgress, NOT_DONE), file: 'trail' };
   else if (c.restoreNote !== null || c.trailNote !== null) load = { state: 'failed' };
   else if ((transfers === 'loaded' || transfers === 'none' || transfers === 'read-past') && (trail === 'loaded' || trail === 'none')) load = { state: 'done' };
 

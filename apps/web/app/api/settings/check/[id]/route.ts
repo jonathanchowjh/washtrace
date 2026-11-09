@@ -1,4 +1,5 @@
-import { bad, handle, idOf, json, refuseWrite } from '@/lib/api';
+import { bad, handle, json, refuseWrite } from '@/lib/api';
+import { idOf } from '@/lib/params';
 import { store } from '@/lib/store';
 
 type Ctx = { params: Promise<{ id: string }> };

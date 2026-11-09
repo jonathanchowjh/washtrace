@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Notices, Silent } from '@/components/head';
+import { Notices, Silent } from '@/components/ui';
 import type { Notice } from '@/lib/status';
 
 afterEach(cleanup);

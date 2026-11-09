@@ -22,11 +22,11 @@ export interface LensRequest {
   through: number | null;
   /** follow.hops: which followed wallets the run reads (Store.followedFor). */
   followHops: number;
-  /** tokens.payees (T15): whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
+  /** tokens.payees: whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
   payees: boolean;
 }
 
-/** What a preview is given, as a run is: the preview's id is its sample's seed (P4). */
+/** What a preview is given, as a run is: the preview's id is its sample's seed. */
 export interface PreviewRequest {
   /** Carries the store's password: never logged. */
   storeUrl: string;
@@ -37,7 +37,7 @@ export interface PreviewRequest {
   through: number | null;
   /** follow.hops: which followed wallets the run reads (Store.followedFor). */
   followHops: number;
-  /** tokens.payees (T15): whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
+  /** tokens.payees: whether a rule using other tokens takes its traders' token payees as senders too (Store.lensInput). */
   payees: boolean;
 }
 
@@ -54,8 +54,8 @@ type Message = { progress: number } | { result: Lensed | PreviewResult };
 /**
  * A lens run still going after this long is stopped. The search is bounded per
  * trade (SEARCH_CAP), so one past an hour is stuck on a dead connection, and
- * would hold the analysis lock it runs under (R8) until the worker restarts.
- * A preview loads what a run loads (P3), so it is given as long.
+ * would hold the analysis lock it runs under until the worker restarts.
+ * A preview loads what a run loads, so it is given as long.
  */
 export const LENS_TIMEOUT_MS = 60 * 60_000;
 
@@ -81,24 +81,21 @@ export async function lensStored(store: Store, request: LensRequest, onProgress:
 }
 
 /**
- * A preview's body: the run's full input, as a lens run loads it (P3), then
+ * A preview's body: the run's full input, as a lens run loads it, then
  * the lens judged on the preview's seeded sample only, and Round trips'
  * catch of the same sample read from its flags. `judged` is how many sampled
  * sales the lens actually judged: a sale the token graph folds away (into a
  * custodian, a repaid loan) or the rule skips is sampled but never judged.
- * `hops` is the sampled sales that have a hop: Round trips, which has no
- * window, judges all of them, and only a sale with a hop can be flagged by
- * it. `atLeast` is only for a search cut short: an untimed sale is out of
- * `judged`, so it is no floor on a share of it, as the line Preview shows
- * reads. Its flags are counted, never kept, so no money edge's hash is looked
- * up (no `moveTxs`), and nothing is saved here: the worker saves the
- * result. Tests call it in-process.
+ * `hops` and `atLeast` are described on PreviewResult. Its flags are
+ * counted, never kept, so no money edge's hash is looked up (no `moveTxs`),
+ * and nothing is saved here: the worker saves the result. Tests call it
+ * in-process.
  */
 export async function previewStored(store: Store, request: PreviewRequest, onProgress: (share: number) => void = () => {}): Promise<PreviewResult> {
   const started = Date.now();
-  const { collectionId, chainId, rule, through, followHops, payees } = request;
+  const { collectionId, chainId, rule, through, followHops: globalHops, payees } = request;
   const sample = new Set(await store.previewSample(collectionId, request.previewId, through));
-  const input = await store.lensInput(collectionId, chainId, rule, through, followHops, payees);
+  const input = await store.lensInput(collectionId, chainId, rule, through, globalHops, payees);
   // The sales there are to sample from, and each sampled sale's market, read before the search so no key is held per transfer.
   let ofSales = 0;
   const marketOf = new Map<string, string>();

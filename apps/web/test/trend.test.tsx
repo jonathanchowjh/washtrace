@@ -68,7 +68,7 @@ describe('the time chart, with lenses of yours', () => {
     expect(el.querySelector('polyline.stroke-cycle')!.getAttribute('stroke-linecap')).toBe('round');
   });
 
-  it('a period past what the lens has judged says "not judged yet", never "no sale" (Ruling S6)', () => {
+  it('a period past what the lens has judged says "not judged yet", never "no sale"', () => {
     const el = render(
       <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} zone="UTC" own={[ONE]} ownLeft={[]} ownNotRun={[]}
         points={[point(0, { L7: frac(4, 10) }), point(DAY, { L7: frac(0, 0) })]} />,

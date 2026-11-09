@@ -47,7 +47,7 @@ describe('the console trade SQL', () => {
     expect(tradeWhere(3, { ...NO_FILTER, caught: ['L8'] }, ctx, params)).toContain('AND false');
     expect(params).toEqual([3]);
   });
-  it("a saved lens judged only through its run's block: \"not flagged by\" binds that block after its id, and a built-in binds none (Ruling FF)", () => {
+  it("a saved lens judged only through its run's block: \"not flagged by\" binds that block after its id, and a built-in binds none", () => {
     const own: TradeContext = { ...ctx, ran: ['A', 'L7'], through: { L7: 350, A: 5 } };
     const params: unknown[] = [];
     expect(tradeWhere(3, { ...NO_FILTER, notCaught: ['L7', 'A'] }, own, params)).toBe("t.collection_id = $1 AND (x.counted OR x.tx_hash IS NULL) AND t.marketplace IS NOT NULL AND x.tx_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.lens_flags f WHERE f.collection_id = t.collection_id AND f.lens_id = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND t.block_number <= $3::bigint AND NOT EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $4 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index)");
@@ -84,13 +84,13 @@ describe('the console trade SQL', () => {
     for (const own of ['L1', 'L7', 'L2147483647']) expect(isOwnKey(own)).toBe(true);
     for (const not of ['A', 'AU', 'AC', 'L0', 'L01', 'Lx', 'L2147483648', '']) expect(isOwnKey(not)).toBe(false);
   });
-  it("a lens of yours's list row counts a loop closed by other tokens as closed by money, and nothing else of it moved (Ruling P11); a built-in's row is as main wrote it", () => {
+  it("a lens of yours's list row counts a loop closed by other tokens as closed by money, and nothing else of it moved; a built-in's row is as main wrote it", () => {
     const closed = (kinds: string) => `count(*) FILTER (WHERE jsonb_path_exists(v.path, '$[*] ? (${kinds})'))::int AS closed`;
     const before = closed('@.kind == "eth" || @.kind == "internal" || @.kind == "weth" || @.kind == "funds"');
     const now = closed('@.kind == "eth" || @.kind == "internal" || @.kind == "weth" || @.kind == "other-tokens" || @.kind == "funds"');
     const own = ownLoopsOf('token_id', null);
     expect(own).toContain(now);
-    // The only change: put the old expression back and the text is the one before P11.
+    // The only change: put the old expression back and the text is the one before other tokens counted.
     expect(own.replace(now, before)).toBe("CROSS JOIN LATERAL (SELECT\n      count(*)::int AS loops,\n      count(*) FILTER (WHERE jsonb_path_exists(v.path, '$[*] ? (@.kind == \"eth\" || @.kind == \"internal\" || @.kind == \"weth\" || @.kind == \"funds\")'))::int AS closed,\n      count(*)::int AS laps,\n      0 AS pairs,\n      count(*) FILTER (WHERE cardinality(v.wallets) > 2)::int AS middles,\n      (SELECT count(DISTINCT a)::int FROM washtrace.lens_flags v\n      JOIN washtrace.transfers vt ON vt.collection_id = v.collection_id AND vt.tx_hash = v.tx_hash AND vt.log_index = v.log_index\n      JOIN washtrace.trade_facts vx ON vx.collection_id = v.collection_id AND vx.tx_hash = v.tx_hash AND vx.log_index = v.log_index AND vx.counted CROSS JOIN LATERAL unnest(v.wallets) a WHERE v.collection_id = $1 AND v.lens_id = $2 AND vt.token_id = c.token_id) AS wallets\n    FROM washtrace.lens_flags v\n      JOIN washtrace.transfers vt ON vt.collection_id = v.collection_id AND vt.tx_hash = v.tx_hash AND vt.log_index = v.log_index\n      JOIN washtrace.trade_facts vx ON vx.collection_id = v.collection_id AND vx.tx_hash = v.tx_hash AND vx.log_index = v.log_index AND vx.counted WHERE v.collection_id = $1 AND v.lens_id = $2 AND vt.token_id = c.token_id) s");
     expect(ownLoopsOf('address', '$3')).toContain(now);
     // A built-in's row counts its witnesses, never a path: it names no kind of edge.

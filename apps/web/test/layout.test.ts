@@ -8,7 +8,7 @@ function t(from: string, to: string, flags: FlaggedTransfer['flags'] = {}): Flag
   return { txHash: '0x1', logIndex: 0, blockNumber: 1, blockTime: null, tokenId: '1', from, to, marketplace: null, priceWei: null, currency: null, flags };
 }
 
-// The Cycle lab's token 1 (packages/detect/test/fixtures.ts LAB): minted to w1, then a ring w1 → w2 → w3 → w1 → w2, all Round trips.
+// The lab's token 1 (packages/detect/test/fixtures.ts LAB): minted to w1, then a ring w1 → w2 → w3 → w1 → w2, all Round trips.
 const w = (n: string) => `0x${n.padStart(40, '0')}`;
 const [W1, W2, W3] = [w('w1'), w('w2'), w('w3')];
 const labScc = { kind: 'scc' as const, wallets: [W1, W2, W3], cycles: 2 };
@@ -245,7 +245,7 @@ describe('layout', () => {
       expect(d.edges.find((e) => e.key === 'o0e2')).toMatchObject({ kind: 'money', tone: 'own', label: '1.2345' });
     });
 
-    it('reads a token edge in its own symbol, scaled by its decimals, on the arrow and on hover; an old path without a token still reads ETH (T10)', () => {
+    it('reads a token edge in its own symbol, scaled by its decimals, on the arrow and on hover; an old path without a token still reads ETH', () => {
       const USDC = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', APE = '0x4d224452801aced8b2f0aebe155379bb5d594381';
       const path = [
         edge('nft-token', a, b, { tx: '0xs1', tokenId: '1' }),

@@ -11,7 +11,8 @@
 // thread, which reads its own input. Reading and the methods are then one
 // stage, and the peak resident memory of the whole process is what to watch,
 // since that is what a container's memory limit is held to.
-import { Store, analyze, analyzeInThread, storeUrl, CUSTODIANS, contractsFor, moneyFor } from '../packages/detect/dist/index.js';
+import { Store, analyze, storeUrl, CUSTODIANS, contractsFor, moneyFor } from '../packages/detect/dist/index.js';
+import { analyzeInThread } from '../packages/detect/dist/analysis-thread.js';
 
 const id = Number(process.argv[2]);
 const thread = process.argv.includes('--thread');

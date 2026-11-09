@@ -1,10 +1,10 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { ReadingPill, ReadingSummary, trust } from '@/components/coverage';
+import { ReadingPill, ReadingSummary } from '@/components/coverage';
 import { Pipeline, PipelineErrors, PipelineTable } from '@/components/pipeline';
 import { localTime, short } from '@/lib/format';
-import { TRAIL_LOADING, coverage, progress } from '@/lib/coverage';
+import { TRAIL_LOADING, coverage, progress, trust } from '@/lib/coverage';
 import { APART_WHY } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensTabs } from '@/components/lens-tabs';

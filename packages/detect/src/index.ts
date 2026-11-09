@@ -1,23 +1,20 @@
 export * from './types.js';
-export { tokenGraph, chainOrder, parkedOf, tarjan, cycles, AddressGraph, ZERO, type Hop, type TokenGraph } from './graph.js';
-export { analyze, RULES, type Input, type Rules } from './methods.js';
+export { parkedOf, ZERO } from './graph.js';
+export { analyze, RULES, type Rules } from './methods.js';
 export { Payments } from './payments.js';
-export { Moves, MOVE_KIND } from './moves.js';
-export { runLens, SEARCH_CAP, type MoneyEdge } from './lens.js';
-export { MARKETPLACES, CUSTODIANS, WRAPPED, TOKENS, contractsFor, moneyFor, seaportPrice, tagSales } from './marketplaces.js';
-export { Chain, TRANSFER, topicAddress } from './chain.js';
-export { Etherscan, ETHERSCAN_V2 } from './etherscan.js';
-export { Store, BUILT_IN_NAMES, FOLLOW_FANOUT, type MoneyRead, type TokenCounts, type Lens, type LensRun, type Preview, type PreviewResult, PREVIEWS_CHANNEL, PREVIEW_SAMPLE, PREVIEW_KEEP_MS, type OwnFlag, type LensFlag, type LoopEdge, SECRET_KEYS, CHECKS_CHANNEL, type SettingSource, type CheckKind, type CollectionRow, type CollectionProfile, type Configure, type Follow, type AnalysisRow, type FlaggedTransfer, type PassRow, type Bucket, type TimelinePoint, type Parsed, type SearchKind, type SearchHits, type TradeRow, type TradeGroup, type TokenSort, type WalletSort, type TokenLine, type WalletLine, type ListOpts, type WalletFilter, type PartnerSort, type FlowDir } from './store.js';
-export { VENUES, venueOf, NO_FILTER, findOf, type TradeQuery, type TradeContext, type TradeSort, type TradeGroupBy, type GroupRef, type Find } from './trades.js';
+// Moves and runLens: apps/web/test/tx-page.test.tsx imports them through the package, so a trim keeps them.
+export { Moves } from './moves.js';
+export { runLens } from './lens.js';
+export { CUSTODIANS, TOKENS, WRAPPED, contractsFor, moneyFor } from './marketplaces.js';
+export { FOLLOW_FANOUT } from './lens-rule.js';
+export { Store, BUILT_IN_NAMES, type MoneyRead, type TokenCounts, type Lens, type LensRun, type Preview, type PreviewResult, type OwnFlag, type LensFlag, type LoopEdge, type SettingSource, type CollectionRow, type CollectionProfile, type Configure, type AnalysisRow, type PassRow, type Bucket, type TimelinePoint, type Parsed, type SearchKind, type SearchHits } from './store.js';
+export type { FlaggedTransfer, FlowDir, PartnerSort, TokenLine, TokenSort, TradeGroup, TradeRow, WalletFilter, WalletLine, WalletSort } from './trade-sql.js';
 export { MIGRATIONS } from './migrations.js';
-export { analyzeInThread, analyzeStored, type AnalysisRequest, type Analysed } from './analysis-thread.js';
-export { runLensInThread, runPreviewInThread, lensStored, previewStored, LENS_TIMEOUT_MS, type LensRequest, type PreviewRequest, type Lensed } from './lens-thread.js';
-export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, MIN_SLICE_MS, ingestTurns, type Job } from './worker.js';
-export { needsRestore, needsTrail, reaches, TRAIL_NOTES } from './stored-sync.js';
-export { ConfigError, storeUrl, workerConfig, shownSecret, maskedUrl, messageOf, briefOf, redact, urlSecrets, type WorkerConfig } from './env.js';
+export { Worker, EVERY, BUDGET_MS, STUCK_MS, BEHIND_BLOCKS, type Job } from './worker.js';
+export { reaches, NOT_DONE, TRAIL_NOTES } from './stored-sync.js';
+export { ConfigError, storeUrl, workerConfig, shownSecret, maskedUrl, messageOf, briefOf, redact, urlSecrets } from './env.js';
 export {
-  StoredDataError, type StoredDataFault, DOWNLOAD_NOTES, storedDir, storedFile, trailPaths, trailSha, entryFor, upsertEntry, mergeManifest, datasetCard, parseTarget, cutCollection, readManifest, parseManifest, writeManifest, sha256File,
-  writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest, type Written, type StoredPart, type StoredFileMeta, type TrailFiles,
+  StoredDataError, storedDir, storedFile, trailPaths, trailSha, entryFor, upsertEntry, mergeManifest, datasetCard, parseTarget, cutCollection, readManifest, parseManifest, writeManifest,
+  writeTransfers, readTransfers, writeTrail, readTrail, type StoredEntry, type Manifest,
 } from './stored.js';
-export { HUB, STORED_REPO, hubUrl, fetchManifest, partPath, download, LEGACY_TRAIL } from './hub.js';
-export * from './lens-rule.js';
+export { STORED_REPO, fetchManifest } from './hub.js';

@@ -1,8 +1,7 @@
 import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
-import { LENSES, andList, type Lenses } from './format';
+import { LENSES, andList, weiToEth, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
-import { weiToEth } from './trades-url';
 
 /** Two witnesses that would read as the same sentence share a key. */
 function witnessKey(w: Witness): string {
@@ -80,7 +79,7 @@ function tokenAmount(raw: string, decimals: number): string {
 
 /**
  * What an other-token edge paid, with its symbol, or null for any other
- * edge: its token is on the edge (T10), since its kind ('funds' too) does
+ * edge: its token is on the edge, since its kind ('funds' too) does
  * not say. A path stored before edges carried a token has none, so it reads
  * as it always did.
  */
@@ -216,13 +215,13 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     });
   }
 
-  const loops = reasons(transfers).map((r, i): DrawnLoop => {
-    const w = r.witness;
+  const loops = reasons(transfers).map((reason, i): DrawnLoop => {
+    const w = reason.witness;
     const wallets = w.kind === 'pair' ? [...w.pair, ...(w.middle === null ? [] : [w.middle])] : [...w.wallets];
-    const own = new Set(wallets);
-    const assets = r.rows.flatMap((n) => edgeOf.get(n - 1) ?? []);
-    const money = edges.filter((e) => e.kind === 'money' && own.has(e.from) && own.has(e.to)).map((e) => e.key);
-    return { key: `r${i}`, methods: r.methods, edges: [...new Set([...assets, ...money])], nodes: wallets };
+    const members = new Set(wallets);
+    const assets = reason.rows.flatMap((n) => edgeOf.get(n - 1) ?? []);
+    const money = edges.filter((e) => e.kind === 'money' && members.has(e.from) && members.has(e.to)).map((e) => e.key);
+    return { key: `r${i}`, methods: reason.methods, edges: [...new Set([...assets, ...money])], nodes: wallets };
   });
 
   /** The row of a transfer of this token on a path: the flag's own trade exactly, any other by its hash and its two wallets, else its hash alone (custody folds A → escrow → B into one step). */
@@ -266,9 +265,9 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
 }
 
 /** A quadratic arc from a to b, bowed by `k` steps; a self-loop is a teardrop pointing away from the centre. */
-function curve(a: DrawnNode, b: DrawnNode, k: number, c: number): { d: string; lx: number; ly: number } {
+function curve(a: DrawnNode, b: DrawnNode, k: number, centre: number): { d: string; lx: number; ly: number } {
   if (a.id === b.id) {
-    const ox = a.x - c, oy = a.y - c;
+    const ox = a.x - centre, oy = a.y - centre;
     const len = Math.hypot(ox, oy) || 1;
     const ux = ox / len, uy = oy / len;
     const reach = 34 + 10 * k;

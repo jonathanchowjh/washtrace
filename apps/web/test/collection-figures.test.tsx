@@ -40,7 +40,7 @@ vi.mock('@/lib/store', () => ({
     collections: async () => [],
     sources: async () => ({}),
     settings: async () => new Map(),
-    importedFunding: async () => false,
+    importedMoney: async () => false,
     lensTokens: async () => ({ rows: [], total: 0 }),
     lensWallets: async () => ({ rows: [], total: 0 }),
   }),
@@ -108,7 +108,7 @@ describe('the lens panel on the collection page', () => {
     expect(c.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
   });
 
-  it('a built-in that ran in an earlier analysis but not the latest says it did not run in the latest analysis, never that it has not run here (Ruling S16)', async () => {
+  it('a built-in that ran in an earlier analysis but not the latest says it did not run in the latest analysis, never that it has not run here', async () => {
     // The owner analysed with a key, then cleared it: the earlier analysis ran Money loops back, the latest did not.
     const earlier = { ...collection().latest, id: 1, ranAt: 1_690_000_000_000 };
     state.moneyRan = false;
@@ -131,7 +131,7 @@ describe('About', () => {
 });
 
 describe('links never sit inside links', () => {
-  it('on any lens', async () => {
+  it('no link is nested in another, whichever method is chosen', async () => {
     for (const method of ['A', 'AU', 'AC']) {
       const c = await draw({ method });
       expect(c.querySelectorAll('a a').length).toBe(0);

@@ -2,11 +2,11 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
 import type { SearchHits, SearchKind } from '@washtrace/detect';
-import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/head';
+import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/ui';
 import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
 import { explorerAddress, explorerTx } from '@/lib/links';
-import { addressOf, txOf } from '@/lib/api';
+import { addressOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, searchArgs, SEARCH_LIMIT } from '@/lib/search';
 import { store } from '@/lib/store';
 

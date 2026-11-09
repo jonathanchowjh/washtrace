@@ -1,5 +1,6 @@
 import type { CollectionRow } from '@washtrace/detect';
-import { addressOf, bad, chainOf, handle, json, writeBody } from '@/lib/api';
+import { addressOf, chainOf } from '@/lib/params';
+import { bad, collectionFrom, handle, json, writeBody } from '@/lib/api';
 import { configChange, effectiveRules } from '@/lib/collections';
 import { store } from '@/lib/store';
 
@@ -12,13 +13,9 @@ function body(c: CollectionRow) {
 /** GET: the collection's name, the rules it overrides, and the rules its analysis runs under. */
 export async function GET(_req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
-    const p = await params;
-    const chainId = chainOf(p.chain);
-    const address = addressOf(p.address);
-    if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
-    const collection = await store().collection(chainId, address);
-    if (!collection) return bad('This collection is not watched.', 404);
-    return json(body(collection));
+    const found = await collectionFrom(params);
+    if (found instanceof Response) return found;
+    return json(body(found.collection));
   });
 }
 

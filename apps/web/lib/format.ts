@@ -7,64 +7,9 @@
  * nothing here is summed or compared.
  */
 
-import type { LensRun, Manifest, Method } from '@washtrace/detect';
+import type { Manifest, Method } from '@washtrace/detect';
 import { formatBytes } from '@washtrace/detect/bytes';
-import { WALKED, type LensRule, type TokensReason } from '@washtrace/detect/lens-rule';
-
-/**
- * The Other tokens half of a share's floor: tokensReason of lens-rule for this
- * rule (null when it uses none, or reads enough), and whether the count it
- * came from took payees in (`tokens.payees`), which changes the words of
- * 'unreached'.
- */
-export type TokensFloor = { reason: TokensReason | null; payees: boolean };
-
-/** The words of a floor cause for other tokens (T7, T11); the Other tokens row says the same things in its own columns. */
-function tokensCause(reason: TokensReason, payees: boolean): string {
-  if (reason === 'off') return 'other tokens are not read for this collection';
-  if (reason !== 'unreached') return 'other tokens are not all read yet for this collection';
-  const through = payees ? 'ETH, WETH or one token payment' : 'ETH or WETH';
-  // The same words whichever floor the rule gets: with payees in it may still be one middle (Ruling P13), so not always a longer loop; and not "tokens alone", as it may mix ETH and tokens (Ruling P16).
-  return `other tokens are read only for wallets reached by ${through}, so a loop through tokens can be missed`;
-}
-
-/**
- * Why a share of yours is only a floor, one phrase per cause (Ruling GG): it
- * follows money and the money data is not final (wallets still unchecked, or
- * no funding source), some of its searches stopped at the cap, or some trades
- * had no block time for its window or order to judge them by. Two more apply
- * to a money lens: its money is not read as far as it needs (`moneyShort`,
- * named only when the money cause above is not), and a money edge followed
- * either way is a floor always, since money is walked only as it was sent
- * (Rulings S18, S19). A lens that
- * follows only NFTs is not held back by money. Empty when the share is exact.
- * `counts` puts how many after a search or trade cause, for the lens panel,
- * which has room for them; every "at least" says why in these words.
- * `moneyShort`: moneyShort() of lens-rule for this rule, the collection's MoneyRead and whether its run is behind (Ruling S36).
- */
-export function floorCauses(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor, counts = false): string[] {
-  // The money walk's rows only (T12): other tokens have a read of their own, which `tokens` says.
-  const money = WALKED.some((k) => rule.edges[k].use);
-  const n = (k: number, word: string, many?: string) => (counts ? ` (${plural(k, word, many)})` : '');
-  // Money is followed along the way it was sent, whatever direction a money edge says (depthNeeded), so a loop against it can be missed (Ruling S19).
-  const blind = money && rule.hops.max !== null && WALKED.some((k) => rule.edges[k].use && rule.edges[k].direction === 'either');
-  const checking = money && !funded ? 'no funding source is set, so money is not fully read' : money && notFinal.length > 0 ? 'money is not fully read yet' : null;
-  return [
-    t.truncated > 0 ? `some of its searches stopped at the cap before finding a loop${n(t.truncated, 'search', 'searches')}` : null,
-    t.untimed > 0 ? `some trades have no block time to judge them by${n(t.untimed, 'trade')}` : null,
-    checking,
-    // The traders' own check still running is `checking` above; this is money further out than the collection is read (Rulings S18, S25).
-    checking === null && money && moneyShort ? 'money is not read as far as this lens needs' : null,
-    blind ? 'money is followed only the way it was sent, so a loop against it can be missed' : null,
-    // A rule that uses no other tokens has reason null (tokensReason), so it never gets this cause.
-    tokens.reason === null ? null : tokensCause(tokens.reason, tokens.payees),
-  ].filter((x) => x !== null);
-}
-
-/** Whether a share of yours is a floor (floorCauses names why). Lives here, not in lens-tabs, so a client component can import it without pulling `pg` into the browser bundle. */
-export function atLeastOf(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor): boolean {
-  return floorCauses(rule, t, notFinal, funded, moneyShort, tokens).length > 0;
-}
+import type { LensRule } from '@washtrace/detect/lens-rule';
 
 /** A count with thousands separators, in the one locale the whole console pins (server and browser agree). */
 export function num(n: number | bigint): string {
@@ -84,6 +29,19 @@ export function eth(wei: string | null, unit = 'ETH'): string {
   return `${num(whole)}${frac ? `.${frac}` : ''} ${unit}`;
 }
 
+/** ETH as a decimal to wei, exactly, by splitting the string; null for anything else (no sign, no exponent, at most 18 decimals). */
+export function ethToWei(s: string): string | null {
+  const m = /^(\d*)(?:\.(\d{0,18}))?$/.exec(s.trim());
+  if (!m || (m[1] === '' && !m[2])) return null;
+  return BigInt((m[1] || '0') + (m[2] ?? '').padEnd(18, '0')).toString();
+}
+
+export function weiToEth(wei: string): string {
+  const s = wei.padStart(19, '0');
+  const frac = s.slice(-18).replace(/0+$/, '');
+  return `${s.slice(0, -18)}${frac ? `.${frac}` : ''}`;
+}
+
 /** A share as a percentage: never "0%" for a share above zero, which would read as clean. */
 export function pct(part: number, whole: number): string {
   if (whole === 0) return '—';
@@ -92,6 +50,9 @@ export function pct(part: number, whole: number): string {
   if (p > 0 && p < 0.1) return '<0.1%';
   return `${p.toFixed(p < 10 ? 1 : 0)}%`;
 }
+
+/** A share floored to a whole percent, so 99.96% reads 99% and never 100% while a check is still running (pct would round it up). A download's share is `floorPct(share, 1)`: 41.6% reads 41%, never a step ahead of the bytes. */
+export const floorPct = (part: number, whole: number) => `${whole === 0 ? 0 : Math.floor((part / whole) * 100)}%`;
 
 /** A share to a tenth, for a lens's tab and its stat line, where two lenses a point apart must not read alike: `pct`, but with its decimal kept at 10% and above. */
 export function pctTenth(part: number, whole: number): string {
@@ -113,7 +74,7 @@ export function eta(ms: number): string {
 }
 
 /**
- * A duration for "at least T" (Ruling P17): rounded down at the unit it shows,
+ * A duration for "at least T": rounded down at the unit it shows,
  * never up, as eta rounds, so the floor it states is never more than the
  * time. Seconds under a minute, minutes under an hour, hours under a day.
  */
@@ -157,52 +118,16 @@ export const NOT_JUDGED_YET = 'Not judged yet';
  * when it or the collection does. A built-in that missed the latest analysis
  * is said in NOT_RUN_LATEST.
  */
-const NOT_RUN_WORDS = { short: 'not run', full: 'has not run on this collection, so it flags nothing yet.' };
+export const NOT_RUN_WORDS = { short: 'not run', full: 'has not run on this collection, so it flags nothing yet.' };
 export const NOT_RUN = NOT_RUN_WORDS.short;
 
 /**
  * A built-in the latest analysis did not run, as the rest of a sentence that
- * starts with its name (Ruling S16). Its figures are per analysis, and it may
+ * starts with its name. Its figures are per analysis, and it may
  * have run in an earlier one, before a funding source was removed, so it is
  * never said to have not run on the collection.
  */
 export const NOT_RUN_LATEST = 'did not run in the latest analysis, so it flags nothing.';
-
-/** Where the figures a lens of yours shows come from when they are not its current rule's on the latest analysis (behindOf), as the rest of a sentence. */
-export const FIGURES_FROM = {
-  edit: 'figures from before its latest edit',
-  analysis: 'figures from the run before the latest analysis',
-} as const;
-
-/**
- * Where a lens of yours's run stands, in two forms of one state: `full`, the
- * rest of a sentence that starts with its lens name (Compare, the chart, the
- * trade page and the panels all say it so), and `short`, a label for its tab,
- * with the run's progress. Null for a finished run that is current. A failed
- * first run never reads as one that never ran. `behind` (from behindOf) says
- * where the figures shown are from when they are not the current rule's on
- * the latest analysis: 'edit', from before its latest edit, or 'analysis',
- * from the run before the latest analysis (FIGURES_FROM). Either is said
- * before a queued or running run, and with it; a failure is said first, and
- * names where its figures are from. In a tab, an edit and a newer run both
- * fit; after an analysis the newer run is the label.
- */
-export function runStateWords(run: LensRun | null, behind: 'edit' | 'analysis' | null = null): { short: string; full: string } | null {
-  if (run === null) return NOT_RUN_WORDS;
-  const pct = run.progress === null ? null : `${Math.floor(run.progress * 100)}%`;
-  if (run.totals === null) {
-    return run.status === 'failed' ? { short: 'last run failed', full: 'has no figures: its last run failed.' }
-      : { short: `first run ${pct ?? run.status}`, full: 'has no figures yet: its first run has not finished.' };
-  }
-  const from = behind === null ? 'figures from an earlier run' : FIGURES_FROM[behind];
-  if (run.status === 'failed') return { short: 'last run failed', full: `has ${from}: its last run failed.` };
-  const newer = run.status === 'queued' ? 'queued' : run.status === 'running' ? 'in progress' : null;
-  const now = pct ?? run.status;
-  if (behind === null) return newer === null ? null : { short: `newer run ${now}`, full: `has a newer run ${newer}.` };
-  if (newer === null) return { short: behind === 'edit' ? 'before edit' : 'before analysis', full: `shows ${from}.` };
-  // Both fit a tab after an edit; after an analysis the newer run is the news, as the label is short.
-  return { short: behind === 'edit' ? `before edit · ${now}` : `newer run ${now}`, full: `shows ${from}, and a newer run is ${newer}.` };
-}
 
 /** The sentence for a lens of yours that has not run on a collection, on its panel, Trades and the flagged lists alike. */
 export const notRunHere = (name: string): string => `${name} ${NOT_RUN_WORDS.full}`;
@@ -311,7 +236,7 @@ export function salesOnlyLine(name: string): string {
   return `Not judged: ${name} judges sales only, and this transfer is not a sale.`;
 }
 
-/** A lens of yours whose window or loop order is measured from the trade's time, on a transfer the RPC gave no time (lens.ts R5): skipped, and counted untimed. */
+/** A lens of yours whose window or loop order is measured from the trade's time, on a transfer the RPC gave no time (lens.ts): skipped, and counted untimed. */
 export function untimedLine(name: string, rule: Pick<LensRule, 'window' | 'order'>): string {
   const what = [rule.window !== null ? 'window' : null, rule.order === 'loop' ? 'loop order' : null].filter((x) => x !== null).join(' and ');
   return `Not judged: this transfer has no block time, and ${name} measures its ${what} from it.`;
@@ -319,14 +244,6 @@ export function untimedLine(name: string, rule: Pick<LensRule, 'window' | 'order
 
 /** A lens of yours that judged a trade and found no loop. */
 export const OWN_NOT_CAUGHT = 'No way back to the seller under its rule.';
-
-/**
- * A lens of yours whose run is from before its latest edit (behindOf 'edit'),
- * on a trade that run did not catch: it leads with the edit phrase every page
- * says (FIGURES_FROM). The run's rule is not kept, so whether it judged the
- * trade at all is not known, and nothing is said of "its rule".
- */
-export const OWN_BEFORE_EDIT = `Shows ${FIGURES_FROM.edit}: the run they came from did not catch this transfer, and the new rule’s run has not saved yet.`;
 
 /** Said after a miss when some money search stopped at its cap: a lens of yours's run, or Money loops back's analysis. */
 export const CAPPED = ' Some searches here stopped at the cap, so this is not proof it is clean.';
@@ -368,7 +285,7 @@ export function notRunAll(methods: readonly (keyof typeof LENSES)[], analysed = 
 }
 
 /**
- * notRunAll for a transaction across several collections (Ruling S17): the
+ * notRunAll for a transaction across several collections: the
  * built-ins and the collections (`where`, by name) whose latest analysis did
  * not run them. One may have run and flagged in another, so it flags nothing
  * only there.

@@ -9,7 +9,7 @@
  */
 
 import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
-import { LENSES, localTime, short } from './format';
+import { LENSES, ethToWei, localTime, short, weiToEth } from './format';
 import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
 
@@ -27,19 +27,6 @@ const DAY = 86_400;
 const keyIn = (own: ReadonlySet<string>) => (k: string): k is LensKey => isLensKey(k) && (!isOwnKey(k) || own.has(k));
 
 // ---- values -----------------------------------------------------------------
-
-/** ETH as a decimal to wei, exactly, by splitting the string; null for anything else (no sign, no exponent, at most 18 decimals). */
-export function ethToWei(s: string): string | null {
-  const m = /^(\d*)(?:\.(\d{0,18}))?$/.exec(s.trim());
-  if (!m || (m[1] === '' && !m[2])) return null;
-  return BigInt((m[1] || '0') + (m[2] ?? '').padEnd(18, '0')).toString();
-}
-
-export function weiToEth(wei: string): string {
-  const s = wei.padStart(19, '0');
-  const frac = s.slice(-18).replace(/0+$/, '');
-  return `${s.slice(0, -18)}${frac ? `.${frac}` : ''}`;
-}
 
 /** "90m", "1h", "30d": the coarsest unit that divides the seconds exactly. */
 export function duration(s: number): string {

@@ -1,4 +1,5 @@
-import { addressOf, bad, chainOf, handle, json, tokenIdOf } from '@/lib/api';
+import { bad, handle, json } from '@/lib/api';
+import { addressOf, chainOf, tokenIdOf } from '@/lib/params';
 import { verdictFields } from '@/lib/metrics';
 import { tokenView } from '@/lib/views';
 

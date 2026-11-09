@@ -1,9 +1,13 @@
 /**
  * Reading what a URL, a path or a JSON body says: ids, addresses, pages and
- * Find text. Import-free, so a client component, lib/trades-url.ts and
- * lib/search.ts read it as well as the pages and routes, and one rule is
- * written once. lib/api.ts re-exports the id readers for the routes.
+ * Find text. It imports only detect's lens-rule, which is client-safe, so a
+ * client component, lib/trades-url.ts and lib/search.ts read it as well as
+ * the pages and routes, and one rule is written once.
  */
+
+import { UINT256_DIGITS } from '@washtrace/detect/lens-rule';
+
+const TOKEN_ID = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
 
 export function chainOf(raw: string): number | null {
   return /^\d{1,10}$/.test(raw) ? Number(raw) : null;
@@ -31,7 +35,7 @@ export function txOf(raw: string): string | null {
 }
 
 export function tokenIdOf(raw: string): string | null {
-  return /^\d{1,78}$/.test(raw) ? BigInt(raw).toString() : null;
+  return TOKEN_ID.test(raw) ? BigInt(raw).toString() : null;
 }
 
 /** Longest Find text kept; a name is never longer, and a URL can carry anything. */

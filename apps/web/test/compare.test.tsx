@@ -26,7 +26,7 @@ const cell = (c: Element, r: string, col: string) => c.querySelector(`[data-cell
 const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-label],[title]')].flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')])].join('\n');
 
 describe('Compare', () => {
-  it('links every cell per P10: number to caught=r,c, "N not" to caught=r&not=c, diagonal to caught=r', () => {
+  it('links every cell: number to caught=r,c, "N not" to caught=r&not=c, diagonal to caught=r', () => {
     const { container: c } = render(<Compare {...props} />);
     const num = cell(c, 'A', 'L7').querySelectorAll('a');
     expect(num[0]!.textContent).toBe('25');
@@ -97,7 +97,7 @@ vi.mock('@/lib/store', () => ({
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
     profile: async () => ({ supply: 1, holders: 1, firstMint: null, firstSale: null, lastSale: null, marketplaces: [] }),
     passes: async () => [], collections: async () => [], sources: async () => ({}), settings: async () => new Map(),
-    importedFunding: async () => false,
+    importedMoney: async () => false,
     moneyRead: async () => ({ traders: { checked: 0, of: 0 }, limit: 3, ownLimit: null, pendingByDepth: {}, estimate: null, seeding: false }),
     lensTokens: async () => ({ rows: [], total: 0 }), lensWallets: async () => ({ rows: [], total: 0 }),
   }),
@@ -158,7 +158,7 @@ describe('the Compare tab on the collection page', () => {
   });
 });
 
-describe('Compare, fix round 1', () => {
+describe('Compare, further cases', () => {
   it('says what "N not" opens, by lens names', () => {
     const { container: c } = render(<Compare {...props} />);
     const a = cell(c, 'A', 'L7').querySelectorAll('a')[1]!;

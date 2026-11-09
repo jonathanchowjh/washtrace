@@ -54,13 +54,16 @@ export const FOLLOW_FANOUT = 25;
 export const WALKED: readonly EdgeKind[] = ['eth', 'internal', 'weth'];
 
 const KINDS = EDGE_TYPES.map((e) => e.kind);
+/** The digits of the largest uint256: the most a wei amount or a token id has. */
+export const UINT256_DIGITS = 78;
 const WEI_FLOOR = '10000000000000000'; // 0.01 ETH
 const MAX_HOPS = 6;
+/** The most hops the follow.hops setting allows (env.ts hops()): the console's Settings check, a collection's own limit (follow route) and a lens's need (data-needs) are all bounded by it. Here, not in env.ts, so the console's client components can import it. */
+export const MOST_HOPS = 10;
 // The routes take rules from anyone who may write, so every number and list is bounded.
 const MAX_DAYS = 3650;
 const MAX_PER_LOOP = 100;
 const MAX_OVER = 1_000_000_000;
-const MAX_WEI_DIGITS = 78;
 const MAX_ADDRESSES = 200;
 
 const row = (use: boolean, direction: EdgeRule['direction'], max: number | null, minWei: string | null, repeats: EdgeRule['repeats']): EdgeRule =>
@@ -80,7 +83,7 @@ export const DEFAULT_RULE: LensRule = {
   closes: 'seller',
   window: { days: 30, side: 'either' },
   order: 'any',
-  // Ruling BB: 20, the built-ins' hubDegree. `over` counts the collection's wallets a wallet is linked to by money.
+  // 20, the built-ins' hubDegree. `over` counts the collection's wallets a wallet is linked to by money.
   never: { marketplaces: true, over: 20, addresses: [] },
   judges: 'sales',
   minCycles: 1,
@@ -105,7 +108,7 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
     const e = raw.edges[kind];
     if (e === undefined) { edges[kind] = row(false, 'along', null, null, 'each'); continue; }
     if (isObject(e) && isCount(e.max) && e.max > MAX_PER_LOOP) return { error: `"${label}": at most ${MAX_PER_LOOP} in a loop.` };
-    if (isObject(e) && typeof e.minWei === 'string' && e.minWei.length > MAX_WEI_DIGITS) return { error: `"${label}": the smallest payment has at most ${MAX_WEI_DIGITS} digits in wei.` };
+    if (isObject(e) && typeof e.minWei === 'string' && e.minWei.length > UINT256_DIGITS) return { error: `"${label}": the smallest payment has at most ${UINT256_DIGITS} digits in wei.` };
     if (!isObject(e) || typeof e.use !== 'boolean' || !oneOf(e.direction, ['along', 'either']) || !oneOf(e.repeats, ['each', 'once'])
       || !(e.max === null || isCount(e.max)) || !(e.minWei === null || (typeof e.minWei === 'string' && /^\d+$/.test(e.minWei)))) {
       return { error: `"${label}" is not a valid edge rule.` };
@@ -113,8 +116,8 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
     edges[kind] = row(e.use, e.direction, e.max, e.minWei, e.repeats);
   }
   for (const { kind, unavailable } of EDGE_TYPES) if (unavailable && edges[kind].use) return { error: unavailable };
-  // T9: a floor in raw units means one thing at 6 decimals and another at 18, and washtrace has no prices.
-  // Only with the row on (Ruling P12): off, the value is read by nothing, and a rule saved so must not read as corrupt.
+  // No smallest amount on other tokens: a floor in raw units means one thing at 6 decimals and another at 18, and washtrace has no prices.
+  // Only with the row on: off, the value is read by nothing, and a rule saved so must not read as corrupt.
   if (edges['other-tokens'].use && edges['other-tokens'].minWei !== null) return { error: 'Other tokens take no smallest amount: tokens differ in value.' };
   if (!KINDS.some((k) => edges[k].use)) return { error: 'Switch on at least one edge type.' };
 
@@ -175,7 +178,7 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
  * How many hops out from a trader the money check must have read for every
  * money path the rule can find to be in the flows: 0 is the traders alone.
  *
- * `Store.fund` stores every flow of a checked wallet and queues only the
+ * `Store.saveMoney` stores every flow of a checked wallet and queues only the
  * wallets it sent to, one hop further out, so an edge is stored when one end is
  * checked. Take buyer → w1 → … → wk → seller. The buyer's and the seller's own
  * lists hold the first and last edge, and wi → wi+1 needs wi checked, which
@@ -195,137 +198,13 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
  * reach. Money reached by an NFT hop restarts at a trader (hop 0), so it needs
  * less. With `hops.max` null only the token's own hops are read: no money.
  *
- * Only the ETH and WETH rows count (T12): other tokens are read by a read of
+ * Only the ETH and WETH rows count: other tokens are read by a read of
  * their own, whose coverage the tokens row decides, so a lens using them
  * alone needs no money read.
  */
 export function depthNeeded(rule: LensRule): number {
   const money = WALKED.some((k) => rule.edges[k].use);
   return money && rule.hops.max !== null ? Math.max(0, rule.hops.max - 1) : 0;
-}
-
-/**
- * How many of a collection's wallets are still to be read at a depth no
- * deeper than `depth` (MoneyRead.pendingByDepth). The editor's money row and
- * moneyShort both ask it, so they cannot disagree on what is pending.
- */
-export function pendingUpTo(pendingByDepth: Readonly<Record<number, number>>, depth: number): number {
-  return Object.entries(pendingByDepth).reduce((sum, [d, n]) => sum + (Number(d) <= depth ? n : 0), 0);
-}
-
-/**
- * Why a collection's money is not yet read as far as `rule` needs (Rulings
- * S25, S31, S36), or null when it is. 'seeding': the walk that finds the
- * wallets past `globalHops` is still running and the rule reaches past them
- * (seeding finds only those, so a lens within the global limit is not held
- * back). 'pending': wallets at a depth the rule needs, or nearer, are still to
- * read. 'limit': the rule needs more hops than the collection is followed to.
- * 'behind': all of it is read, but the lens's run is behind the collection's
- * version (`behind`), so its share is from before the wallets past
- * `globalHops` were; only those are this collection's own, so a lens within
- * the global limit is not held back. The order is the one the editor's row
- * reports them in. `money` is the part of MoneyRead this reads. A rule with
- * no money edge needs depth 0, so it is never short. The money check still
- * running on the traders themselves is not read here: floorCauses' "money is
- * not fully read yet" says it.
- */
-export function moneyReason(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): 'seeding' | 'pending' | 'limit' | 'behind' | null {
-  const needed = depthNeeded(rule);
-  if (money.seeding && needed > globalHops) return 'seeding';
-  if (pendingUpTo(money.pendingByDepth, needed) > 0) return 'pending';
-  if (needed > money.limit) return 'limit';
-  return behind && needed > globalHops ? 'behind' : null;
-}
-
-/** The part of MoneyRead that says how far out its money is read, which moneyReason and readThrough read. */
-export type MoneyDepths = { limit: number; pendingByDepth: Readonly<Record<number, number>>; seeding: boolean };
-
-/**
- * How many hops out a collection's money is read through, for "Wallets up to
- * L hops out" (Ruling S37): never a depth not read yet. While the walk past
- * `globalHops` is finding wallets, only the global limit is; while wallets
- * are pending, one short of the shallowest of them (all are past the global
- * limit: MoneyRead.pendingByDepth); else its limit.
- */
-export function readThrough(money: MoneyDepths, globalHops: number): number {
-  if (money.seeding) return globalHops;
-  const pending = Object.keys(money.pendingByDepth).map(Number);
-  return pending.length > 0 ? Math.min(...pending) - 1 : money.limit;
-}
-
-/** Whether a share is a floor for want of money read: any reason of moneyReason. */
-export function moneyShort(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): boolean {
-  return moneyReason(rule, money, globalHops, behind) !== null;
-}
-
-/** The part of TokenCounts that tokensReason reads (Store.countTokens writes the rest). */
-type TokenProgress = { wallets: number; read: number; settled: boolean; payees: boolean };
-
-export type TokensReason = 'off' | 'seeding' | 'pending' | 'behind' | 'unreached';
-
-/**
- * Why a collection's other tokens are not read as far as `rule` needs (T11),
- * or null when they are, or when the rule does not use them. One decision for
- * the editor's Other tokens row and for every share's "at least", as
- * moneyReason is for the money row. Checked in this order: 'off' (Start
- * reading was never pressed: `started`); 'seeding' (no count yet, or the walk
- * that finds the set's wallets is not settled, so more may join); 'pending'
- * (fewer wallets read than the set holds; a failed read is not read);
- * 'behind' (all read, but the lens's run took in another count:
- * `runTokensRead`); 'unreached' (all read, yet the rule allows more middle
- * wallets than the read reaches, T7: any length, or one or more).
- *
- * The setting is the count's own `counts.payees`, the tokens.payees it was
- * made under: a count is all 'unreached' is ever judged against, so the
- * setting the worker runs with now is not read here. With payees in, the
- * floor rises to two middles only when every one-middle loop has its middle
- * read (Ruling P13): other tokens followed 'along' (under 'either', a middle
- * that paid both traders is a payer, in no set), no ETH or WETH row on (a
- * buyer -ETH-> M -token-> seller loop's M may be out of reach), and
- * marketplaces and known contracts never middles (they are left out of
- * token_payees). Otherwise one middle is already more than is read.
- */
-export function tokensReason(rule: LensRule, started: boolean, counts: TokenProgress | null, runTokensRead: number | null): TokensReason | null {
-  const tokens = rule.edges['other-tokens'];
-  if (!tokens.use) return null;
-  if (!started) return 'off';
-  if (counts === null || !counts.settled) return 'seeding';
-  if (counts.read < counts.wallets) return 'pending';
-  if (counts.read !== runTokensRead) return 'behind';
-  const payeesClose = counts.payees && tokens.direction === 'along' && !WALKED.some((k) => rule.edges[k].use) && rule.never.marketplaces;
-  const max = rule.hops.max;
-  return max === null || max >= (payeesClose ? 2 : 1) ? 'unreached' : null;
-}
-
-/**
- * How many more wallets following a collection's money one hop past its
- * limit would read, as the worker last counted it (Store.countNext), for
- * the lens editor's Fetch them. `depth` is the hop counted; `wallets` are
- * the ones there still to read. `growth` is how many wallets the chain
- * holds at a depth for each at the one before, null with nothing to go by.
- * `cut`: the walk stopped short of every wallet and scaled what it found,
- * so even `depth` is about. `within`: the walk's wallets out to the limit
- * itself (depths 0 to depth - 1), scaled as it was cut, which Start reading
- * (other tokens) would read; an estimate stored before it was counted has
- * none, and reads as not counted. `at` is when it was counted.
- */
-export interface FollowEstimate { depth: number; wallets: number; growth: number | null; cut: boolean; within: number; at: string }
-
-/**
- * About how many wallets following out to `toDepth` would read, from what
- * was counted: the counted depth, then each level past it the one before
- * times `growth` (none past it when there is no growth to go by), since the
- * deeper ones would need the very reads being priced. `exactTo` is the
- * deepest depth counted exactly, one short of `depth` when the walk was cut.
- * Null with nothing counted, or asked for less than was counted.
- */
-export function estimateTo(estimate: FollowEstimate | null, toDepth: number): { wallets: number; exactTo: number } | null {
-  if (estimate === null || toDepth < estimate.depth) return null;
-  let wallets = estimate.wallets;
-  if (estimate.growth !== null) {
-    for (let d = estimate.depth + 1, level = estimate.wallets; d <= toDepth; d++) wallets += (level *= estimate.growth);
-  }
-  return { wallets: Math.round(wallets), exactTo: estimate.cut ? estimate.depth - 1 : estimate.depth };
 }
 
 // ---- names and ids -----------------------------------------------------------

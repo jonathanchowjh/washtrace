@@ -4,15 +4,15 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/head';
+import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
 import { Transfers, Wallet } from '@/components/transfers';
-import { addressOf, chainOf } from '@/lib/api';
+import { addressOf, chainOf } from '@/lib/params';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, lensList, plural, short, num } from '@/lib/format';
 import { explorerAddress, explorerTx, walletLinks } from '@/lib/links';
-import { HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
+import { FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { COUNTERPARTIES, FLOWS, TRADES, walletOpts, walletView, type WalletOpts } from '@/lib/views';
 import { Time } from '@/components/time';
@@ -98,7 +98,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
     : narrowed && pages.trades.pages <= 1 ? 'None of them matches these filters.' : 'None of them is on this page.';
   // Only an apart title says it already; beside counted trades the grey ones are "more", alone they are not.
   const apartNote = apart === 0 || tone === 'apart' ? null
-    : `${apart}${hits.length > 0 ? ' more' : ''} ${apart === 1 ? 'is' : 'are'} flagged only by ${LENSES.AU.name}, which is not counted.`;
+    : `${apart}${hits.length > 0 ? ' more' : ''} ${apart === 1 ? 'is' : 'are'} ${FLAGGED_ONLY_AU}`;
 
   const money = funding === null ? 'Its money is not read: it never traded a watched collection.'
     : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`

@@ -4,7 +4,7 @@ import type { PreviewResult } from '@washtrace/detect';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
 import { Preview } from '@/components/preview';
 
-/** DEFAULT_RULE follows money either way, a floor of its own (Ruling S19); ALONG follows it as sent. */
+/** DEFAULT_RULE follows money either way, a floor of its own; ALONG follows it as sent. */
 const ALONG = structuredClone(DEFAULT_RULE);
 for (const k of ['eth', 'internal', 'weth'] as const) ALONG.edges[k].direction = 'along';
 const ADDR = '0x' + 'b'.repeat(40);
@@ -102,7 +102,7 @@ describe('Preview polling', () => {
     expect(c.container.textContent).toContain('Caught at least 15.0% of');
   });
 
-  it('says at least for a lens whose other tokens are not all read, though the result says atLeast: false, and not once they are (T11)', async () => {
+  it('says at least for a lens whose other tokens are not all read, though the result says atLeast: false, and not once they are', async () => {
     const tokens: LensRule = structuredClone(ALONG);
     tokens.edges['other-tokens'].use = true;
     routes({ status: 202, body: { id: 41 } }, [done({ atLeast: false, truncated: 0, untimed: 0 }, tokens)]);

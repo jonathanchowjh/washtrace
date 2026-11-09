@@ -167,7 +167,7 @@ describe('GET trades', () => {
     expect(lines.join('\n')).not.toMatch(/\bL7\b/);
   });
 
-  it('says not judged yet in a lens of yours\'s cell for a trade past the block its run read, and bounds every read by it (Ruling FF)', async () => {
+  it('says not judged yet in a lens of yours\'s cell for a trade past the block its run read, and bounds every read by it', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', 8)];
     state.stream = async function* () { yield row(1, { blockNumber: 8, lenses: ['A', 'L7'] }); yield row(2, { blockNumber: 9, lenses: ['A'] }); };
     const lines = (await (await get('format=csv')).text()).trim().split('\n');

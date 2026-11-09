@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { HEADLINE, METHODS, type AnalysisRow, type FlaggedTransfer, type Lens, type LensRun, type Method, type MethodTotals, type TradeRow, type Transfer } from '@washtrace/detect';
 import { ruleLine } from '@washtrace/detect/lens-rule';
 import { isOwnKey, type LensKey, type TradeContext } from '@washtrace/detect/trades';
-import { FIGURES_FROM, LENSES, NOT_JUDGED_YET, pct, num, runStateWords, type Lenses } from './format';
+import { LENSES, NOT_JUDGED_YET, pct, num, type Lenses } from './format';
+import { runStateWords } from './lens-state';
 
 /**
  * The analysis, said the way a reader asks it. One collection's answer is a
@@ -36,8 +37,11 @@ export const APART_WHY = 'on real data it flags as many sales as it does with bu
 /** What a page says of a trade no analysis has covered: unread is not clean. */
 export const NOT_JUDGED = 'Its transfers are read, but no analysis has covered them yet. That is not the same as clean.';
 
+/** What a page says of a trade only Money loops back flags; the sentences before it differ. */
+export const FLAGGED_ONLY_AU = `flagged only by ${LENSES.AU.name}, which is not counted.`;
+
 /** The lead of any table of trades, saying what the row tints mean. */
-export const TINT_LEAD = `Rows tinted for ${LENSES.A.name} or ${LENSES.AC.name} are flagged; grey rows are flagged only by ${LENSES.AU.name}, which is not counted.`;
+export const TINT_LEAD = `Rows tinted for ${LENSES.A.name} or ${LENSES.AC.name} are flagged; grey rows are ${FLAGGED_ONLY_AU}`;
 
 /** How a trade, or a whole page, reads: the hue of the strongest counted lens, grey for an apart lens alone. */
 export type Tone = 'cycle' | 'money' | 'apart' | 'clean';
@@ -91,7 +95,7 @@ export function ownRan(runs: readonly { lens: Lens; run: LensRun | null }[]): Le
 }
 
 /**
- * Which of your lenses the over-time chart draws (plan ruling P9): seven
+ * Which of your lenses the over-time chart draws: seven
  * lines cannot be read, so at most three that have figures, the chosen one
  * first and then the most recently run. The rest are `left`, which the chart
  * names under itself rather than dropping them. A lens with no finished run
@@ -110,7 +114,7 @@ export function chartLenses<T extends { lens: Lens; run: LensRun | null }>(runs:
  * `through`): the built-ins that ran in the latest analysis, your lenses with
  * figures, and for each of those the block its run read through. A lens of
  * yours judged nothing past that block, so the store reads a trade past it as
- * not judged yet by it, never as clean (Ruling FF). Every page and route that
+ * not judged yet by it, never as clean. Every page and route that
  * reads trades or a lens's lists takes it from here.
  */
 export function lensContext(latest: Pick<AnalysisRow, 'totals'> | null, runs: readonly { lens: Lens; run: LensRun | null }[]): Pick<TradeContext, 'ran'> & { through: Partial<Record<LensKey, number | null>> } {
@@ -147,42 +151,6 @@ export function leftOut(latest: Pick<AnalysisRow, 'totals'> | null, runs: readon
 export function judgedBy(r: Pick<TradeRow, 'judged' | 'blockNumber'>, m: LensKey, through: TradeContext['through']): boolean {
   const block = isOwnKey(m) ? through?.[m] : undefined;
   return r.judged && (block === undefined || block === null || r.blockNumber <= block);
-}
-
-/** How a lens of yours can be behind: its figures are from before its latest edit, or from before the latest analysis. */
-export type Behind = 'edit' | 'analysis';
-
-/**
- * Why the figures a lens of yours shows are not from its rule now on the
- * latest analysis, or null when they are (or it has none to show). It holds
- * in any status: a queued, running or failed run keeps the figures of the
- * last one that saved, and `lensVersion` and `analysisId` are that run's
- * (Ruling FF). An edit is said first: then the flags are another rule's.
- */
-export function behindOf(run: LensRun | null, lens: Pick<Lens, 'version'>, latest: Pick<AnalysisRow, 'id'> | null): Behind | null {
-  if (run === null || run.totals === null) return null;
-  if (run.lensVersion < lens.version) return 'edit';
-  return run.analysisId !== (latest?.id ?? null) ? 'analysis' : null;
-}
-
-/**
- * Whether a lens of yours's figures are from before the collection's latest
- * write (Ruling S36): written to since its latest analysis (`stale`, which a
- * reach wallet's check makes it), or from a run on an analysis older than
- * `latest`. Then it has not read what Fetch them fetched since, so its share
- * of a lens reaching past the global limit is a floor (moneyReason's
- * 'behind'). False with no figures to show.
- */
-export function behindVersion(run: LensRun | null, latest: Pick<AnalysisRow, 'id'> | null, stale: boolean): boolean {
-  return run !== null && run.totals !== null && (stale || run.analysisId !== (latest?.id ?? null));
-}
-
-/** The line above Trades and the flagged lists: each lens in view that is behind, by name, and what that means for what is shown. Null when none is. */
-export function behindLine(lenses: readonly { name: string; behind: Behind }[]): string | null {
-  if (lenses.length === 0) return null;
-  return lenses.map(({ name, behind }) => behind === 'edit'
-    ? `${name} shows ${FIGURES_FROM.edit}, so its flags are the old rule's until the new run saves.`
-    : `${name} shows ${FIGURES_FROM.analysis}, so trades after it are not judged by it yet.`).join(' ');
 }
 
 /** Every saved lens by key (run or not, so a queued lens's chip still has its name): its name, the hue `own`, and its rule in words. */

@@ -97,7 +97,8 @@ export function tokenGraph(
     }
     holder = t.to;
     parked = null;
-    // A mint, or a token handed back to the wallet that parked it.
+    // No hop for a mint, a move out of custody with nothing read in (no source),
+    // or a token handed back to the wallet that parked it.
     if (source === null) continue;
     if (fromHeld && source === t.to) {
       returned.push(i);

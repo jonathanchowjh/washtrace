@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { connection } from 'next/server';
-import { addressOf, chainOf, txOf } from '@/lib/api';
+import { addressOf, chainOf, txOf } from '@/lib/params';
 import { parseSearch } from '@/lib/search';
 import { store } from '@/lib/store';
 

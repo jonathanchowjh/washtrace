@@ -2,19 +2,12 @@
 
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { WALKED, depthNeeded, moneyReason, pendingUpTo, readThrough, tokensReason, type LensRule } from '@washtrace/detect/lens-rule';
+import { MOST_HOPS, WALKED, depthNeeded, type LensRule } from '@washtrace/detect/lens-rule';
+import { moneyReason, pendingUpTo, readThrough, tokensReason } from '@washtrace/detect/lens-reads';
 import type { MoneyRead, TokenCounts } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { eta, floorTime, num, plural } from '@/lib/format';
-import { send } from './lens-actions';
-
-const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
-
-/** The most hops follow.hops allows (the Settings bound, env.ts hops()): a lens that needs more cannot be fetched. The follow route keeps the same number. */
-const MOST_HOPS = 10;
-
-/** A share floored to a whole percent, so 99.96% reads 99% and never 100% while the check is still running (pct would round it up). */
-const floorPct = (part: number, whole: number) => `${whole === 0 ? 0 : Math.floor((part / whole) * 100)}%`;
+import { eta, floorPct, floorTime, num, plural } from '@/lib/format';
+import { BUTTON, send } from './lens-actions';
 
 const hops = (n: number) => `${n} ${n === 1 ? 'hop' : 'hops'}`;
 
@@ -31,7 +24,7 @@ const hops = (n: number) => `${n} ${n === 1 ? 'hop' : 'hops'}`;
  * and `callsPerWallet` come from the server, which this client component may
  * not import. `funding` is whether an Etherscan key is set. `behind`: the
  * edited lens's run is behind the collection's version, so it has not read
- * what was fetched since (Ruling S36); false for a lens not run yet.
+ * what was fetched since; false for a lens not run yet.
  * `paused`: the collection is paused, so the worker does not walk it.
  * `tokens`: what the Other tokens row reads (tokensReason): `started` is
  * whether Start reading was pressed, `counts` the worker's last count of that
@@ -98,17 +91,17 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
       return { text: `The traders' check is still running: ${num(money.traders.checked)} of ${num(money.traders.of)} traders checked. Wallets further out are followed after it.` };
     }
     if (needed > MOST_HOPS) return { text: `Needs more than washtrace follows (${MOST_HOPS} hops)` };
-    // One decision with the share's "at least" (moneyReason): money still being read for this lens is never "Enough" (Rulings S25, S31).
+    // One decision with the share's "at least" (moneyReason): money still being read for this lens is never "Enough".
     const why = moneyReason(rule, money, followHops, behind);
     // seedReach skips a paused collection, so the walk is not running: it goes on once resumed.
     if (why === 'seeding' && paused) return { text: 'Paused: finding the wallets continues once this collection is resumed' };
     if (why === 'seeding') return { text: `Finding the wallets up to ${hops(money.ownLimit ?? money.limit)} out from the money already read` };
     if (why === 'pending') return { text: `Reading: ${plural(pendingUpTo(money.pendingByDepth, needed), 'wallet')} still to read up to ${hops(needed)}` };
-    // Behind as written to since the latest analysis, or as run on an older one: the analysis or the lens run is to come (Ruling S41).
+    // Behind as written to since the latest analysis, or as run on an older one: the analysis or the lens run is to come.
     if (why === 'behind') return { text: 'Read: the next analysis or lens run takes it in' };
     const k = rule.hops.max!;
     if (why === null) {
-      // Money followed against its direction is not walked back, so a loop that way can be missed (Ruling S19).
+      // Money followed against its direction is not walked back, so a loop that way can be missed.
       return used.some((e) => rule.edges[e].direction === 'either')
         ? { text: <>Enough the way money was sent: the loop is at most {hops(k)}<span className="block text-xs text-muted-foreground">money is followed only the way it was sent, so a loop against it can be missed</span></> }
         : { text: `Enough: the loop is at most ${hops(k)}` };
@@ -163,9 +156,9 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
     const all = `All ${num(c.wallets)} wallets read`;
     if (why === 'behind') return { read: all, text: 'Read: the next lens run takes it in' };
     if (why === null) return { read: all, text: 'Enough' };
-    // Reached by ETH or WETH only, or also by one token payment when the count took payees in (T7). The words follow the setting
-    // alone: with payees in, the floor may still be one middle (Ruling P13), so the loop missed is not always a longer one;
-    // not "alone" either, as a missed loop may mix ETH and tokens, but always has a token edge (Ruling P16).
+    // Reached by ETH or WETH only, or also by one token payment when the count took payees in. The words follow the setting
+    // alone: with payees in, the floor may still be one middle, so the loop missed is not always a longer one;
+    // not "alone" either, as a missed loop may mix ETH and tokens, but always has a token edge.
     return { read: all, text: c.payees
       ? 'Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed'
       : 'Enough for wallets reached by ETH or WETH: a loop through tokens can be missed' };
@@ -173,7 +166,7 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
 
   const verdict = forMoney();
   const tokenVerdict = forTokens();
-  // The depth read through, never the limit just raised and not read yet (Ruling S37).
+  // The depth read through, never the limit just raised and not read yet.
   const readSoFar = !funding || !usesMoney
     ? 'What is already stored'
     : `Wallets up to ${hops(readThrough(money, followHops))} out: ${floorPct(money.traders.checked, money.traders.of)} of ${num(money.traders.of)}`;
@@ -220,7 +213,7 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
             <td className="py-1.5 pr-3">{tokenVerdict.read}</td>
             <td className="py-1.5 pr-3">
               {tokenVerdict.text}
-              {/* Every state names the tokens, the ones whose button spends reads included (Ruling P15). */}
+              {/* Every state names the tokens, the ones whose button spends reads included. */}
               <span className="mt-1 block text-xs text-muted-foreground">{reads}. washtrace does not read past a wallet whose token list was too long to read, and a wallet that sent these tokens to more than {fanout} others is no way back.</span>
               {tokenError ? <span role="alert" className="mt-1 block text-xs text-fault">{tokenError}</span> : null}
             </td>

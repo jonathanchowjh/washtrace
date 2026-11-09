@@ -50,14 +50,14 @@ await migrating.run();
 // the process was started from: `npm run worker` starts it in apps/worker.
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
-// The environment wins over the console's settings, which each pass re-reads.
+// A value saved in the console wins over the environment; each pass re-reads the console's settings.
 const worker = new Worker(store, (s) => workerConfig(process.env, s), url, storedDir(process.env, root));
 // Before the first pass, which may start a load of its own.
 await worker.sync.clearStaleProgress();
 worker.start();
 started = worker;
 // A Test asked for in the console is heard at once over LISTEN, not next pass.
-void worker.listen();
+void worker.checks.listen();
 
 // Chain ids and on/off only: never an RPC URL or the key.
 const config = workerConfig(process.env, await store.settings().catch(() => new Map<string, string>()));

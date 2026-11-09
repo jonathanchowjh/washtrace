@@ -1,5 +1,6 @@
 import { ETHERSCAN_V2 } from './etherscan.js';
 import { STORED_REPO } from './hub.js';
+import { MOST_HOPS } from './lens-rule.js';
 import { SECRET_KEYS, type SettingSource } from './store.js';
 
 /**
@@ -135,7 +136,7 @@ export function maskedUrl(url: string): string {
 /** Default 3: enough for a payment back through three outside wallets, the demo's #113. */
 function hops(raw: string | undefined): number {
   const n = Number(raw ?? '3');
-  return Number.isInteger(n) && n >= 0 && n <= 10 ? n : 3;
+  return Number.isInteger(n) && n >= 0 && n <= MOST_HOPS ? n : 3;
 }
 
 export function messageOf(err: unknown): string {

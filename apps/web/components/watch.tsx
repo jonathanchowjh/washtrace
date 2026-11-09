@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { Warn } from '@/components/head';
+import { Warn } from '@/components/ui';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { CHAINS } from '@/lib/chains';
 import { storedLine, type StoredSize } from '@/lib/format';

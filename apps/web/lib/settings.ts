@@ -1,11 +1,12 @@
 import type { SettingSource } from '@washtrace/detect';
+import { MOST_HOPS } from '@washtrace/detect/lens-rule';
 
 /**
  * The settings the console can change, how each is checked, and how each is
  * shown. The worker reads the same keys (workerConfig), a console value
  * first, then the environment; this file only decides what the API accepts
  * and what it answers.
- * Free of runtime imports, so the settings page can use FIELDS as well.
+ * Free of server imports (its one runtime import, the hop limit, is client-safe), so the settings page can use FIELDS as well.
  */
 
 /**
@@ -123,9 +124,9 @@ export const FIELDS: readonly Field[] = [
     key: 'follow.hops',
     label: 'Follow hops',
     secret: false,
-    validate: (v) => (/^\d+$/.test(v) && Number(v) <= 10 ? null : 'Follow hops must be a whole number from 0 to 10.'),
-    // hops() in env.ts: '5.0' and '1e1' pass; outside 0–10 the worker uses 3.
-    used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 10,
+    validate: (v) => (/^\d+$/.test(v) && Number(v) <= MOST_HOPS ? null : `Follow hops must be a whole number from 0 to ${MOST_HOPS}.`),
+    // hops() in env.ts: '5.0' and '1e1' pass; outside 0–MOST_HOPS the worker uses 3.
+    used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= MOST_HOPS,
     fallback: '3',
   },
   {

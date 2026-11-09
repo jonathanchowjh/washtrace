@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Head } from '@/components/head';
+import { Head } from '@/components/ui';
 
 export default function NotFound() {
   return (

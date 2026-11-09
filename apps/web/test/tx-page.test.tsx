@@ -197,7 +197,8 @@ describe('the trade page: one card per lens', () => {
   });
 
   it('a run from before your last edit says so, as its tab does, never "under its rule"', async () => {
-    const { OWN_NOT_CAUGHT, OWN_BEFORE_EDIT, CAPPED } = await import('@/lib/format');
+    const { OWN_NOT_CAUGHT, CAPPED } = await import('@/lib/format');
+    const { OWN_BEFORE_EDIT } = await import('@/lib/lens-state');
     expect(OWN_BEFORE_EDIT).toBe('Shows figures from before its latest edit: the run they came from did not catch this transfer, and the new rule’s run has not saved yet.');
     roundTrip([]);
     // Edited since its run (version 2, run at 1): the run's rule is not the one it has now.
@@ -209,7 +210,7 @@ describe('the trade page: one card per lens', () => {
   });
 
   it('a run from before an edit is not read by the rule it has now: a non-sale under a now sales-only rule says the run, not "judges sales only"', async () => {
-    const { OWN_BEFORE_EDIT } = await import('@/lib/format');
+    const { OWN_BEFORE_EDIT } = await import('@/lib/lens-state');
     state.tx = [transfer(A1, '7', TX, 5, 5, [], S, B, null)];
     state.lenses = [lens(7, 'Fast flips', { 1: {} }, DEFAULT_RULE, 2)];
     const li = cards(await txPage(), 'How each lens reads First #7').get('Fast flips')!;
@@ -261,7 +262,7 @@ describe('the trade page: one card per lens', () => {
     expect(tab(second.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A2}?method=A#evidence`);
   });
 
-  it('across two collections, the answer names the one whose latest analysis missed a lens, never that a lens it names as flagging flags nothing (Ruling S17)', async () => {
+  it('across two collections, the answer names the one whose latest analysis missed a lens, never that a lens it names as flagging flags nothing', async () => {
     // No key: the first collection's stored trail runs Money loops back, which flags its sale; the second's analysis runs neither money lens.
     roundTrip(['A', 'AU']);
     const other = transfer(A2, '8', TX, 9, 5);
@@ -319,7 +320,7 @@ describe('the trade page: one card per lens', () => {
     }
   });
 
-  it('a sale only your lens caught: the verdict stays the built-ins’, and names the lens of yours that caught it (P8)', async () => {
+  it('a sale only your lens caught: the verdict stays the built-ins’, and names the lens of yours that caught it', async () => {
     roundTrip([]);
     state.lenses = [lens(7, 'Fast flips', { 1: {} }), lens(8, 'Slow loops', { 1: {} })];
     state.own = [caughtOwn(7)];
@@ -453,7 +454,7 @@ describe('a built-in’s miss line is true of the trade it misses', () => {
 });
 
 /**
- * Ruling S10: a transfer a lens does not judge never gets that lens's "not
+ * A transfer a lens does not judge never gets that lens's "not
  * caught" line. Which transfers each lens judges is the engine's call, so
  * the flags here are analyze()'s and runLens's own: the built-ins judge every
  * step of the token's graph, where graph.ts folds custody away; a lens of

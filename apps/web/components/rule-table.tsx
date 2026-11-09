@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { EDGE_TYPES, type EdgeKind, type EdgeRule, type LensRule } from '@washtrace/detect/lens-rule';
-import { ethToWei, weiToEth } from '@/lib/trades-url';
+import { ethToWei, weiToEth } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 const CONTROL = 'rounded-md border bg-background px-2 py-1 text-sm disabled:opacity-60';
@@ -69,7 +69,7 @@ export function RuleTable({ rule, onChange }: { rule: LensRule; onChange?: (rule
                   </td>
                   <td className="py-1.5 pr-3">
                     {kind === 'other-tokens' ? (
-                      // Tokens differ in value and washtrace has no prices, so a raw-unit floor means one thing at 6 decimals and another at 18 (T9): checkRule refuses one.
+                      // Tokens differ in value and washtrace has no prices, so a raw-unit floor means one thing at 6 decimals and another at 18: checkRule refuses one.
                       <span className="text-muted-foreground">Any amount: tokens differ in value</span>
                     ) : money ? (
                       <Field label={`${label}: smallest payment counted, in ETH`} text={e.minWei === null ? '' : weiToEth(e.minWei)} none="any" disabled={locked || dead}

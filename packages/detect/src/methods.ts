@@ -22,7 +22,9 @@ export const RULES = {
    * Not in the paper. A wallet joined to more than this many of the
    * collection's wallets by money is an exchange, a bridge or a router, and
    * as the middle of a path it would join every customer to every other.
-   * It stays a wallet in its own right; it only stops being a middle.
+   * It stays a wallet in its own right; it only stops being a middle. Every
+   * contract and every truncated wallet is a hub too, whatever its degree
+   * (MoneyGraph's constructor).
    */
   hubDegree: 20,
   /** A reach search stops after this many wallets, and is counted as truncated. */
@@ -85,9 +87,9 @@ export function analyze(input: Input): Analysis {
       flagged.AU.set(ref, w);
       flagged.AC.set(ref, w);
     }
-    // One sale can still be a wash trade when money closes it: Figure 8's cycle 1.
     if (!input.fundingAvailable) continue;
 
+    // One sale can still be a wash trade when money closes it: Figure 8's cycle 1.
     const holders = new Set<string>();
     for (const h of graph.hops) { holders.add(h.from); holders.add(h.to); }
     const via: [string, string][] = [];
@@ -109,7 +111,7 @@ export function analyze(input: Input): Analysis {
     for (const [ref, witness] of flagged[method]) {
       flags.push({ txHash: transfers[ref]!.txHash, logIndex: transfers[ref]!.logIndex, method, witness });
     }
-    totals[method] = sum(transfers, moved, flagged[method], input.money, available);
+    totals[method] = methodTotals(transfers, moved, flagged[method], input.money, available);
   }
 
   // What the totals did not count, in chain order: mints, burns and custody moves. Whoever lists the trades needs it to tell "not counted" from "not flagged".
@@ -378,7 +380,7 @@ function runs(ends: Int32Array, rank: Int32Array): { start: Int32Array; run: Int
 }
 
 /** One method's totals from the trades it flagged; a lens run sums its own the same way, so its share reads like a built-in's. */
-export function sum(
+export function methodTotals(
   transfers: readonly Transfer[],
   moved: readonly number[],
   flagged: ReadonlyMap<number, unknown>,

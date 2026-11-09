@@ -403,7 +403,7 @@ WHERE c.analyzed_version > 0
 ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS facts_key text;
 `,
   `
--- Your own lenses (Cycle lab 3b). A lens is a rule the engine runs per
+-- Your own lenses. A lens is a rule the engine runs per
 -- collection. Its version moves with each edit, so a run saved against an
 -- older one is thrown away. A run keeps its last totals while it is queued
 -- again, and its flags live apart from the built-ins' (flags.method stays as
@@ -471,7 +471,7 @@ END $$`,
     ],
   },
   `
--- Preview (Cycle lab 3b, P2): a lens tried on a sample before it is saved.
+-- Preview: a lens tried on a sample before it is saved.
 -- The editor queues a row and polls it; the worker's lens pass takes the
 -- oldest queued one first. A row is kept an hour at most (the worker sweeps
 -- it) and goes with its collection; a poll after either answers "gone".
@@ -503,7 +503,7 @@ CREATE INDEX IF NOT EXISTS lens_flags_tx_idx ON washtrace.lens_flags (tx_hash);
     outside: ['DROP INDEX CONCURRENTLY IF EXISTS washtrace.flows_from_idx'],
   },
   `
--- Data this lens needs (3c): one collection follows its money further out
+-- Data this lens needs: one collection follows its money further out
 -- than follow.hops. follow_hops is its own hop limit, null for the global
 -- one; the larger of the two wins, as a lower one would free nothing, the
 -- wallets being the chain's. 10 is the most follow.hops itself may be.
@@ -538,7 +538,7 @@ CREATE INDEX IF NOT EXISTS reach_wallet_idx ON washtrace.reach (chain_id, addres
 CREATE INDEX IF NOT EXISTS reach_unstepped_idx ON washtrace.reach (collection_id, depth) WHERE NOT stepped;
 `,
   `
--- Other tokens (3c slice 2): a short list of major tokens per chain
+-- Other tokens: a short list of major tokens per chain
 -- (TOKENS), read for one collection's wallets once it presses Start reading
 -- (read_tokens_at). Their transfers have a table of their own, never flows,
 -- so nothing that reads flows (the built-in lenses, the money follow, the

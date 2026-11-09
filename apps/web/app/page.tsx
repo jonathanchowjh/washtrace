@@ -1,24 +1,23 @@
 import type { Metadata } from 'next';
-import { cookies, headers } from 'next/headers';
+import { headers } from 'next/headers';
 import { connection } from 'next/server';
-import { messageOf, type CollectionRow as Collection } from '@washtrace/detect';
-import { Empty, Head, Problem, STORE_DOWN, Silent, SortLink } from '@/components/head';
+import { ConfigError, messageOf, type CollectionRow as Collection } from '@washtrace/detect';
+import { Empty, Head, Problem, STORE_DOWN, Silent, SortLink } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { HowWeLook } from '@/components/methods';
 import { CollectionRow, COLS } from '@/components/collection-row';
 import { Refresh } from '@/components/refresh';
 import { CollectionTabs, type Tab } from '@/components/tabs';
 import { AddCollection, Suggested, WatchPanel } from '@/components/watch';
+import { readerZone } from '@/lib/api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { ConfigError } from '@/lib/config';
 import { short, storedSizes } from '@/lib/format';
 import { homeHref } from '@/lib/links';
-import { tabCounts, waiting } from '@/lib/coverage';
+import { tabCounts, analysisWaitText } from '@/lib/coverage';
 import { range } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedManifest } from '@/lib/store';
-import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 export const metadata: Metadata = { title: 'Collections' };
 
@@ -154,7 +153,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
   const now = Date.now();
   const silent = workerSilent(passes, now);
   // The reader's zone, for when a failed analysis is tried again. UTC until it is known.
-  const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
+  const zone = await readerZone();
   return (
     <>
       <Head title="Collections" sub="Each NFT collection being watched, and how much of its trading looks like wash trading.">
@@ -200,7 +199,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
             {/* The column holds the reading, its download progress, the last analysis and the controls; it sorts by the last analysis. */}
             <SortBy to="analysed" view={view} sort={sort} dir={dir}>Reading · last analyzed</SortBy>
           </div>
-          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={waiting(c, analyze, names, rpcChains, now, zone, silent !== null)} rpcChains={rpcChains} funding={funding} silent={silent !== null} writable={writable} now={now} />)}</ul>
+          <ul className="divide-y">{shown.map((c) => <CollectionRow key={c.id} c={c} why={analysisWaitText(c, analyze, names, rpcChains, now, zone, silent !== null)} rpcChains={rpcChains} funding={funding} silent={silent !== null} writable={writable} now={now} />)}</ul>
         </div>
       )}
     </>

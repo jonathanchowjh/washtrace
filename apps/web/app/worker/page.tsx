@@ -1,17 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
-import { Bar, Head, Notices, Pill, Problem, STORE_DOWN, Section, type PillTone } from '@/components/head';
+import { Bar, Head, Notices, Pill, Problem, STORE_DOWN, Section, type PillTone } from '@/components/ui';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
 import { LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
 import { JOB_STEP, type JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
+import { readerZone } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 import { Time } from '@/components/time';
 import { PipelineErrors, PipelineTable } from '@/components/pipeline';
 
@@ -45,7 +44,7 @@ export default async function WorkerPage() {
   let v: Awaited<ReturnType<typeof workerView>>;
   try {
     // The reader's zone, for the dates in the notices.
-    v = await workerView(parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone);
+    v = await workerView(await readerZone());
   } catch (err) {
     return <><Head title="Worker" /><Problem title={STORE_DOWN}>{messageOf(err)}</Problem></>;
   }

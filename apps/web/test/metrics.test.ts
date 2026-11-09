@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@washtrace/detect';
-import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, waiting } from '@/lib/coverage';
+import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, analysisWaitText } from '@/lib/coverage';
 import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
-import { APART_WHY, behindLine, behindOf, behindVersion, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
+import { APART_WHY, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes, localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
@@ -142,7 +142,7 @@ describe('coverage', () => {
     expect(c.download).toBeNull();
     expect(cov(row({ downloadFile: 'transfers', downloadProgress: null, pausedAt: 5 })).reading).toBe('paused');
     expect(cov(row({ downloadFile: 'trail', downloadProgress: null })).reading).not.toBe('queued');
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), ON, 0)).toBe('Waiting to download stored data · it is analyzed once it has loaded.');
+    expect(analysisWaitText(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: null }), undefined, new Map(), ON, 0)).toBe('Waiting to download stored data · it is analyzed once it has loaded.');
   });
 
   it('a trail download is no reading of its own', () => {
@@ -152,7 +152,7 @@ describe('coverage', () => {
   });
 
   it('says it waits for a download before the first analysis', () => {
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), ON, 0)).toBe('Downloading stored data · it is analyzed once it has loaded.');
+    expect(analysisWaitText(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.1 }), undefined, new Map(), ON, 0)).toBe('Downloading stored data · it is analyzed once it has loaded.');
   });
 
   it('never shows a load as done before it has committed', () => {
@@ -364,7 +364,7 @@ describe('tabCounts', () => {
   });
 });
 
-describe('waiting', () => {
+describe('analysisWaitText', () => {
   const NOW = 100 * 60_000;
   const pass = (more: Partial<PassRow> = {}): PassRow => ({
     job: 'analyze', startedAt: NOW - 2 * 60_000, finishedAt: null, tookMs: null, outcome: null, detail: null, heartbeatAt: NOW, doing: 'Analyzing', subjectId: 1, ...more,
@@ -373,56 +373,56 @@ describe('waiting', () => {
   const fresh = row({ latest: null });
 
   it('promises nothing for a paused collection', () => {
-    expect(waiting(row({ latest: null, pausedAt: 1 }), pass(), names, ON, NOW)).toBe('Paused · it is not analyzed until you resume it.');
+    expect(analysisWaitText(row({ latest: null, pausedAt: 1 }), pass(), names, ON, NOW)).toBe('Paused · it is not analyzed until you resume it.');
   });
 
   it('waits for stored data to load, not for transfers to be read', () => {
-    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW)).toBe('Loading stored data · it is analyzed once it has loaded.');
+    expect(analysisWaitText(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW)).toBe('Loading stored data · it is analyzed once it has loaded.');
   });
 
   it('waits for transfers when none are read', () => {
-    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, ON, NOW)).toBe('Waiting for its first transfers.');
+    expect(analysisWaitText(row({ latest: null, transfers: 0 }), undefined, names, ON, NOW)).toBe('Waiting for its first transfers.');
   });
 
   it('says nothing is read while its chain has no RPC, but not once it has transfers', () => {
-    expect(waiting(row({ latest: null, transfers: 0 }), undefined, names, new Set(), NOW)).toBe('Nothing is read until its chain has an RPC.');
-    expect(waiting(row({ latest: null, transfers: 5 }), undefined, names, new Set(), NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(analysisWaitText(row({ latest: null, transfers: 0 }), undefined, names, new Set(), NOW)).toBe('Nothing is read until its chain has an RPC.');
+    expect(analysisWaitText(row({ latest: null, transfers: 5 }), undefined, names, new Set(), NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
   });
 
   it('says its own first analysis is running', () => {
-    expect(waiting(fresh, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
+    expect(analysisWaitText(fresh, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
   });
 
   it('names the collection it is queued behind', () => {
-    expect(waiting(fresh, pass({ subjectId: 7, startedAt: NOW - 14 * 60_000 }), names, ON, NOW))
+    expect(analysisWaitText(fresh, pass({ subjectId: 7, startedAt: NOW - 14 * 60_000 }), names, ON, NOW))
       .toBe('Waiting for its first analysis · queued behind Terraforms (running 14 min).');
   });
 
   it('says the next pass is near when none is running', () => {
-    expect(waiting(fresh, undefined, names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
-    expect(waiting(fresh, pass({ finishedAt: NOW - 1_000 }), names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(analysisWaitText(fresh, undefined, names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
+    expect(analysisWaitText(fresh, pass({ finishedAt: NOW - 1_000 }), names, ON, NOW)).toBe('Waiting for its first analysis · the next pass starts within a minute.');
   });
 
   it('says its analysis failed and when it is tried again, never that the next pass is near', () => {
     const at = NOW + 20 * 60_000;
     const failing = row({ latest: null, analysisError: 'out of memory', analysisRetryAt: at });
     const said = `Its analysis failed: out of memory · it is tried again after ${localTime(at, 'time', 'Asia/Tokyo', 'en-GB')}.`;
-    expect(waiting(failing, undefined, names, ON, NOW, 'Asia/Tokyo')).toBe(said);
+    expect(analysisWaitText(failing, undefined, names, ON, NOW, 'Asia/Tokyo')).toBe(said);
     // Queued behind another collection, the failure is still what holds it.
-    expect(waiting(failing, pass({ subjectId: 7 }), names, ON, NOW, 'Asia/Tokyo')).toBe(said);
-    expect(waiting(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, ON, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
+    expect(analysisWaitText(failing, pass({ subjectId: 7 }), names, ON, NOW, 'Asia/Tokyo')).toBe(said);
+    expect(analysisWaitText(row({ latest: null, analysisError: 'out of memory', analysisRetryAt: NOW - 1 }), undefined, names, ON, NOW)).toBe('Its analysis failed: out of memory · it is due to be tried again.');
     // Being tried again now.
-    expect(waiting(failing, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
+    expect(analysisWaitText(failing, pass(), names, ON, NOW)).toBe('First analysis running · started 2 min ago.');
   });
 
   it('claims no download, load or analysis while the worker is silent, but still says a pause', () => {
     const said = 'Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.';
-    expect(waiting(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
-    expect(waiting(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(analysisWaitText(row({ latest: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(analysisWaitText(row({ latest: null, transfers: 0, restoreProgress: 0.1 }), undefined, names, ON, NOW, 'UTC', true)).toBe(said);
     // A stalled pass on it is not an analysis running.
-    expect(waiting(fresh, pass({ startedAt: NOW - 47 * 60_000, heartbeatAt: NOW - 40 * 60_000 }), names, ON, NOW, 'UTC', true)).toBe(said);
-    expect(waiting(fresh, undefined, names, ON, NOW, 'UTC', true)).toBe(said);
-    expect(waiting(row({ latest: null, pausedAt: 1 }), undefined, names, ON, NOW, 'UTC', true)).toBe('Paused · it is not analyzed until you resume it.');
+    expect(analysisWaitText(fresh, pass({ startedAt: NOW - 47 * 60_000, heartbeatAt: NOW - 40 * 60_000 }), names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(analysisWaitText(fresh, undefined, names, ON, NOW, 'UTC', true)).toBe(said);
+    expect(analysisWaitText(row({ latest: null, pausedAt: 1 }), undefined, names, ON, NOW, 'UTC', true)).toBe('Paused · it is not analyzed until you resume it.');
   });
 
   it('knows which collection the running analyze pass is on', () => {
@@ -505,7 +505,7 @@ describe('your lenses', () => {
     });
   });
 
-  it('lensContext reads the lenses that ran and, for each of yours with figures, the block its run read through (Ruling FF)', () => {
+  it('lensContext reads the lenses that ran and, for each of yours with figures, the block its run read through', () => {
     const latest = { totals: { A: { available: true }, AU: { available: false }, AC: { available: true } } } as never;
     const through = [{ lens: lens(7, 'Blur 3-hop'), run: { ...run({}), throughBlock: 90 } }, { lens: lens(8, 'Whole'), run: { ...run({}), throughBlock: null } }, ...runs.slice(1)];
     expect(lensContext(latest, through)).toEqual({ ran: ['A', 'AC', 'L7', 'L8'], through: { L7: 90, L8: null } });
@@ -535,45 +535,7 @@ describe('your lenses', () => {
   });
 });
 
-describe('a lens of yours that is behind (Ruling FF)', () => {
-  const lens = { id: 7, key: 'L7' as const, name: 'Blur 3-hop', rule: DEFAULT_RULE, version: 2, createdAt: 0, updatedAt: 0 };
-  const run = (status: string, over: object = {}) => ({ lensId: 7, collectionId: 1, status, lensVersion: 2, analysisId: 5, totals: {}, ...over }) as never;
-  const latest = { id: 5 };
-
-  it('is behind after an edit, or after a newer analysis, in any status; the edit is said first', () => {
-    for (const status of ['done', 'queued', 'running', 'failed']) {
-      expect(behindOf(run(status), lens, latest), status).toBeNull();
-      expect(behindOf(run(status, { lensVersion: 1 }), lens, latest), status).toBe('edit');
-      expect(behindOf(run(status, { analysisId: 4 }), lens, latest), status).toBe('analysis');
-      expect(behindOf(run(status, { lensVersion: 1, analysisId: 4 }), lens, latest), status).toBe('edit');
-    }
-  });
-
-  it('is never behind with no figures to show: no run, or a run that has not saved', () => {
-    expect(behindOf(null, lens, latest)).toBeNull();
-    expect(behindOf(run('queued', { totals: null, lensVersion: 1, analysisId: null }), lens, latest)).toBeNull();
-    // Figures with no analysis now to match are from one that is gone: behind, by the rule as written.
-    expect(behindOf(run('done'), lens, null)).toBe('analysis');
-  });
-
-  it('is behind the collection\'s version when written to since the latest analysis, or run on an older one (Ruling S36)', () => {
-    expect(behindVersion(run('done'), latest, false)).toBe(false);
-    // A reach wallet checked since: the version moved, and no analysis has read it yet.
-    expect(behindVersion(run('done'), latest, true)).toBe(true);
-    // A newer analysis read it, and this run is from the one before.
-    expect(behindVersion(run('done', { analysisId: 4 }), latest, false)).toBe(true);
-    // No figures, no share to floor.
-    expect(behindVersion(null, latest, true)).toBe(false);
-    expect(behindVersion(run('queued', { totals: null }), latest, true)).toBe(false);
-  });
-
-  it('says each lens behind by name, and why, in one line', () => {
-    expect(behindLine([])).toBeNull();
-    expect(behindLine([{ name: 'Blur 3-hop', behind: 'edit' }, { name: 'Slow flips', behind: 'analysis' }])).toBe(
-      "Blur 3-hop shows figures from before its latest edit, so its flags are the old rule's until the new run saves. "
-      + 'Slow flips shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
-  });
-
+describe('judgedBy', () => {
   it('judgedBy: a lens of yours judged a trade only through its run\'s block; a built-in, every trade the analysis judged', () => {
     const row = (blockNumber: number, judged = true) => ({ blockNumber, judged });
     expect(judgedBy(row(10), 'L7', { L7: 10 })).toBe(true);

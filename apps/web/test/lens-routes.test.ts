@@ -170,7 +170,7 @@ describe('PATCH /api/lenses/[id]', () => {
     expect(fake.nameTaken).toHaveBeenCalledWith('Renamed', 7);
   });
 
-  it('queues its run on the collection it was edited from, in the same store call, as Save and run says (M2)', async () => {
+  it('queues its run on the collection it was edited from, in the same store call, as Save and run says', async () => {
     const res = await edit(req('PATCH', NEW), idCtx('7'));
     expect(res.status).toBe(200);
     expect(fake.collection).toHaveBeenCalledWith(1, ADDR);
@@ -233,7 +233,7 @@ describe('PATCH /api/lenses/[id]', () => {
 });
 
 describe('DELETE /api/lenses/[id]', () => {
-  it('deletes', async () => {
+  it('DELETE returns 200 {deleted:true} and removes lens 7', async () => {
     const res = await remove(req('DELETE'), idCtx('7'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ deleted: true });

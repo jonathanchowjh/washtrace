@@ -1,13 +1,13 @@
 import Link from 'next/link';
 import { METHODS, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
-import { SortHead } from '@/components/head';
+import { SortHead } from '@/components/ui';
 import { DOT } from '@/components/methods';
 import { Wallet } from '@/components/transfers';
-import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, type Lenses } from '@/lib/format';
+import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
-import { bandLabel, chips, duration, groupFilter, tradesHref, weiToEth, type View } from '@/lib/trades-url';
+import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 
 /**
@@ -178,7 +178,7 @@ function groupLabel(by: TradeGroupBy, key: string): string {
 /**
  * How the matching trades split up, each row a link to its own trades. A lens
  * of yours's share is of the trades it judged in the group (`judged`), not of
- * every one: those past the block its run read are not judged yet (Ruling FF).
+ * every one: those past the block its run read are not judged yet.
  */
 export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & {
   groups: { key: string; trades: number; caught: Partial<Record<LensKey, number>>; judged?: Partial<Record<LensKey, number>> }[] | null; ran: readonly LensKey[];

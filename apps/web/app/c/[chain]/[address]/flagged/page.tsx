@@ -3,22 +3,22 @@ import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { cookies } from 'next/headers';
 import { METHODS, moneyFor, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
 import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
-import { Empty, Head, Segmented } from '@/components/head';
-import { LensList, clampedPage, listView } from '@/components/lens-lists';
+import { Empty, Head, Segmented } from '@/components/ui';
+import { LensList } from '@/components/lens-lists';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
-import { addressOf, chainOf, lensKeyOf } from '@/lib/api';
+import { lensKeyOf, readerZone } from '@/lib/api';
 import { NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
-import { behindLine, behindOf, lensContext, ownLenses } from '@/lib/metrics';
-import { pages } from '@/lib/params';
+import { behindLine, behindOf } from '@/lib/lens-state';
+import { lensContext, ownLenses } from '@/lib/metrics';
+import { addressOf, chainOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { ZONE_COOKIE, parseZone } from '@/lib/zone';
+import { clampedPage, listView } from '@/lib/views';
 
 /** Tokens or wallets to a page; the Trades list's page is TRADES_PAGE. */
 const PAGE = 50;
@@ -73,11 +73,11 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
   if (!c) notFound();
   const { one, kind } = askedOf(q);
   // The reader's zone, detected in the browser: months and dates are read in their calendar. UTC until it is known.
-  const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
+  const zone = await readerZone();
   // The lenses of yours that exist and the ones that ran: a key outside the first is dropped like junk, one outside the second holds nothing.
   const runs = await runsOf(c.id);
   const own = ownLenses(runs);
-  // Your lenses are read only through the block their run read (Ruling FF).
+  // Your lenses are read only through the block their run read.
   const lenses = lensContext(c.latest, runs);
   const { ran } = lenses;
   const { q: asked, view } = parseView(q, zone, new Set(Object.keys(own)));
@@ -117,7 +117,7 @@ export default async function FlaggedPage({ params, searchParams }: Props) {
   const inView = runs.filter((r) => (kind === 'trades' ? ran.includes(r.lens.key) : r.lens.key === method));
   const behind = behindLine(inView.flatMap((r) => { const b = behindOf(r.run, r.lens, c.latest); return b === null ? [] : [{ name: r.lens.name, behind: b }]; }));
 
-  // A built-in's sentence is about the latest analysis once there is one (Ruling S16); one of yours says it in the words its panel uses.
+  // A built-in's sentence is about the latest analysis once there is one; one of yours says it in the words its panel uses.
   const notRun = (m: LensKey) => (isOwnKey(m) ? notRunHere(lensInfo(m, own)!.name) : notRunAll([m], c.latest !== null));
   const skipped = trades === null ? '' : query.notCaught.filter((m) => !(trades.ran as readonly string[]).includes(m)).map((m) => ` ${notRun(m)} It is left out of "not flagged by".`).join('');
   const csv = `/api/collections/${chainId}/${address}/trades?format=csv${tradesHref(base, query).slice(`${base}/flagged?kind=trades`.length)}`;

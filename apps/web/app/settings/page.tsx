@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { connection } from 'next/server';
 import { headers } from 'next/headers';
 import { messageOf } from '@washtrace/detect';
-import { Head, Problem, STORE_DOWN } from '@/components/head';
+import { Head, Problem, STORE_DOWN } from '@/components/ui';
 import { Settings } from '@/components/settings';
 import { settingsView } from '@/lib/views';
 

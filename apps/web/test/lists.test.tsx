@@ -69,7 +69,7 @@ vi.mock('@/lib/store', () => ({
     collections: async () => [],
     sources: async () => ({}),
     settings: async () => new Map(),
-    importedFunding: async () => false,
+    importedMoney: async () => false,
     lensTokens: async (...a: unknown[]) => read('tokens', a),
     lensWallets: async (...a: unknown[]) => read('wallets', a),
   }),
@@ -290,7 +290,7 @@ describe('the list of a lens of yours', () => {
     expect(state.calls.tokens[0]![1]).toBe('L7');
   });
 
-  it('opens a token as its page with the lens\'s loops lit, says why in the built-ins\' words, and promises what a built-in does (P7)', async () => {
+  it('opens a token as its page with the lens\'s loops lit, says why in the built-ins\' words, and promises what a built-in does', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', { totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
     state.tokens = { rows: [token('7', { loops: 3, wallets: 4, closedByMoney: 2, middles: 1, laps: 3, pairs: 0 })], total: 1 };
     const page7 = `${BASE}/t/7?method=L7#why`;
@@ -317,7 +317,7 @@ describe('the list of a lens of yours', () => {
     expect(el.querySelector('section[aria-label="Wallets Blur 3-hop flagged"]')?.textContent).not.toMatch(/loop/);
   });
 
-  it('reads your lens\'s lists through the block its run read, on the collection page and the flagged page (Ruling FF)', async () => {
+  it('reads your lens\'s lists through the block its run read, on the collection page and the flagged page', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8, totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
     await collectionPage({ method: 'L7' });
     expect(state.calls.tokens[0]![3]).toMatchObject({ through: { L7: 8 } });
@@ -328,7 +328,7 @@ describe('the list of a lens of yours', () => {
     expect(state.calls.tokens[0]![3]).toMatchObject({ through: { L7: 8 } });
   });
 
-  it('says above the flagged list when your lens is behind, and why, and says nothing when it is not (Ruling FF)', async () => {
+  it('says above the flagged list when your lens is behind, and why, and says nothing when it is not', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
     expect((await flaggedPage({ method: 'L7', kind: 'wallets' })).textContent)
       .toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');

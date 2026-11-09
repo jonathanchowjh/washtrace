@@ -35,13 +35,13 @@ describe('GET a collection with ?method=', () => {
     expect((fake.lensTokens.mock.calls[0]![3] as { ran: string[] }).ran).toContain('L7');
   });
 
-  it('reads your lens\'s lists only through the block its run read (Ruling FF)', async () => {
+  it('reads your lens\'s lists only through the block its run read', async () => {
     await get('L7');
     expect(fake.lensTokens.mock.calls[0]![3]).toMatchObject({ ran: ['A', 'AC', 'L7'], through: { L7: 90 } });
     expect(fake.lensWallets.mock.calls[0]![3]).toMatchObject({ through: { L7: 90 } });
   });
 
-  it('answers each lens of yours with its run, so a reader tells queued, failed or never run from one that ran and flags nothing (Ruling FF)', async () => {
+  it('answers each lens of yours with its run, so a reader tells queued, failed or never run from one that ran and flags nothing', async () => {
     const body = await (await get('L7')).json();
     expect(body.lenses).toEqual(JSON.parse(JSON.stringify(RUNS)));
     expect(body.lenses.map((l: { lens: { key: string }; run: { status: string } | null }) => [l.lens.key, l.run?.status ?? null]))

@@ -4,19 +4,18 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
-import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/head';
+import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
-import { addressOf, chainOf, tokenIdOf } from '@/lib/api';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
 import { tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
-import { pages } from '@/lib/params';
+import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
-import { APART_WHY, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
+import { APART_WHY, FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
 import { tokenView } from '@/lib/views';
 
 /** Transfers on one page of the table; the graph still draws every one. */
@@ -55,8 +54,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const flagged = transfers.filter(counted).length;
   const apart = transfers.filter((t) => toneOf(t) === 'apart').length;
   const lenses = by.filter((m) => HEADLINE.includes(m));
-  const apartNote = apart === 0 ? '' : ` ${apart} more ${apart === 1 ? 'is' : 'are'} flagged only by ${LENSES.AU.name}, which is not counted.`;
-  // Your lenses' catches, said apart: the verdict and its title stay the built-ins' (P8).
+  const apartNote = apart === 0 ? '' : ` ${apart} more ${apart === 1 ? 'is' : 'are'} ${FLAGGED_ONLY_AU}`;
+  // Your lenses' catches, said apart: the verdict and its title stay the built-ins'.
   const ownByRow = new Map<string, LensKey[]>();
   for (const f of own) {
     const keys = ownByRow.get(`${f.txHash}:${f.logIndex}`) ?? [];
@@ -73,8 +72,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : METHODS.some((m) => t.flags[m]));
   const kept = transfers.flatMap((t, i) => (keeps(t) ? [i + 1] : []));
   const pageCount = pages(kept.length, PAGE);
-  const asked = Number(sp.page ?? '1');
-  const page = Number.isSafeInteger(asked) ? Math.min(pageCount, Math.max(1, asked)) : 1;
+  const page = Math.min(pageCount, pageOf(sp.page));
   const shown = kept.slice((page - 1) * PAGE, page * PAGE);
   const shownFlagged = kept.filter((n) => METHODS.some((m) => transfers[n - 1]!.flags[m])).length;
   const here = `${base}/t/${tokenId}`;
@@ -120,7 +118,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <>
             {NOT_JUDGED}
             {/* Not judged means no counted lens flags any of it (verdict), so only an apart flag is left to say. */}
-            {apart > 0 ? ` ${apart} of ${transfers.length} transfers are flagged only by ${LENSES.AU.name}, which is not counted.` : ''}
+            {apart > 0 ? ` ${apart} of ${transfers.length} transfers are ${FLAGGED_ONLY_AU}` : ''}
             {notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}
           </>
         ) : apartOnly ? (

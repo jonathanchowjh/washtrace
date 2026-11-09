@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import type { Method, Preview as PreviewRow } from '@washtrace/detect';
 import { checkRule, type LensRule } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { atLeastOf, num, pctTenth, type TokensFloor } from '@/lib/format';
+import { floorPct, num, pctTenth } from '@/lib/format';
+import { atLeastOf, type TokensFloor } from '@/lib/lens-state';
 import { send } from './lens-actions';
 
 const POLL_MS = 1000;
@@ -117,7 +118,7 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
           disabled={!writable || running} title={writable ? "Judge this rule on a sample of this collection's sales, without saving it" : LOCAL_ONLY} onClick={start}>Preview</button>
         <span aria-live="polite" className="text-sm">
           {row?.status === 'queued' ? 'Waiting for the worker (an analysis or lens run may be going)' : null}
-          {row?.status === 'running' ? (row.progress && Math.floor(row.progress * 100) > 0 ? `Previewing… ${Math.floor(row.progress * 100)}%` : 'Loading the collection…') : null}
+          {row?.status === 'running' ? (row.progress && Math.floor(row.progress * 100) > 0 ? `Previewing… ${floorPct(row.progress, 1)}` : 'Loading the collection…') : null}
           {row?.status === 'done' && row.result ? resultLine(row, roundTripsName, notFinal, funded, moneyShort, tokens) : null}
         </span>
       </div>

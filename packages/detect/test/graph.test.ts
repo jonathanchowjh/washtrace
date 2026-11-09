@@ -105,7 +105,7 @@ describe('parkedOf', () => {
     expect(parkedOf(ts, new Set())).toEqual([null, null, a]);
   });
 
-  // The cases the Task 4 review probed by hand, each given in reverse chain order.
+  // Cases probed by hand, each given in reverse chain order.
   const second = w('e5d');
   const both = new Set([escrow, second]);
   const chain = (ts: ReturnType<typeof transfer>[]) => ts.map((t, i) => ({ ...t, blockNumber: 10 + i })).reverse();

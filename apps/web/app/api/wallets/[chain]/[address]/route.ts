@@ -1,4 +1,5 @@
-import { addressOf, bad, chainOf, handle, json } from '@/lib/api';
+import { bad, handle, json } from '@/lib/api';
+import { addressOf, chainOf } from '@/lib/params';
 import { verdictFields } from '@/lib/metrics';
 import { walletOpts, walletView } from '@/lib/views';
 

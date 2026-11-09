@@ -1,14 +1,14 @@
-import { BEHIND_BLOCKS, BUDGET_MS, EVERY, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
+import { BEHIND_BLOCKS, BUDGET_MS, EVERY, NOT_DONE, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { LENSES, eta, formatBytes, localTime, num } from './format';
-import { analysisRetry, downloaded, isRunning, progress, restoreText, storedOnly } from './coverage';
+import { LENSES, eta, floorPct, formatBytes, localTime, num } from './format';
+import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './coverage';
 import { FIELDS, type SourcesConfig } from './settings';
 
 /** Everything the status report is made from, read by the route in one go. */
 export interface Snapshot {
   passes: readonly PassRow[];
   collections: readonly CollectionRow[];
-  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the hops set (fundingBacklog). */
+  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the hops set (moneyBacklog). */
   funding: readonly { chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; doneLastHour: number }[];
   /** From the worker's report (configFromSources), never this process's environment. */
   config: SourcesConfig;
@@ -55,7 +55,7 @@ export const JOB_STEP: Readonly<Record<Job, string>> = {
   ingest: 'Read transfers', fund: 'Check wallets for money', analyze: 'Run the built-in lenses', lens: 'Run your lenses',
 };
 
-/** Analyze and lens take the same lock (R8), so while one runs the other's passes are skipped, and a skipped pass records nothing. */
+/** Analyze and lens take the same lock, so while one runs the other's passes are skipped, and a skipped pass records nothing. */
 const PARTNER: Partial<Record<Job, Job>> = { analyze: 'lens', lens: 'analyze' };
 
 /** `job`'s partner on the shared lock and its row, for `jobState`. */
@@ -76,8 +76,8 @@ export function partnerOf(passes: readonly PassRow[], job: Job): { job: Job; pas
  * so a finished job is not overdue; and its wait counts from the later of
  * its own and the partner's finish, so a long partner pass that just ended
  * does not make it overdue at once. A stalled partner gives no cover. The
- * later finish is capped at one partner ceiling (STUCK_MS) past its own
- * (Ruling O): short partner passes would otherwise chain, each one renewing
+ * later finish is capped at one partner ceiling (STUCK_MS) past its own:
+ * short partner passes would otherwise chain, each one renewing
  * the cover, and a job that stopped would read on time for ever.
  */
 export function jobState(p: PassRow | undefined, job: Job, now: number, partner?: { job: Job; pass: PassRow | undefined }): { state: JobState; why: 'silent' | 'stuck' | 'overdue' | null } {
@@ -92,18 +92,18 @@ export function jobState(p: PassRow | undefined, job: Job, now: number, partner?
   return { state: p.outcome === 'failed' ? 'failed' : 'ok', why: null };
 }
 
-/** Ruling M: the partner is running and not stalled, so it holds the shared lock, and this job's passes are skipped, not missed. */
+/** The partner is running and not stalled, so it holds the shared lock, and this job's passes are skipped, not missed. */
 function partnerHolds(partner: { job: Job; pass: PassRow | undefined } | undefined, now: number): boolean {
   return partner?.pass !== undefined && jobState(partner.pass, partner.job, now).state === 'running';
 }
 
 /**
- * Ruling QQ: whether `job`, which has never run, is waiting on its partner
+ * Whether `job`, which has never run, is waiting on its partner
  * rather than on a worker that is down. Covered while the partner holds the
  * lock (a stalled one covers nothing) or once it finished, for the wait a
  * pass of `job`'s own would be allowed: the cover jobState gives a finished
  * job, from the partner's finish. With no finish of its own there is nothing
- * to cap it from (Ruling O), so a dead job reads covered while its partner's
+ * to cap it from, so a dead job reads covered while its partner's
  * passes go on.
  */
 function neverCovered(job: Job, now: number, partner: { job: Job; pass: PassRow | undefined } | undefined): boolean {
@@ -144,7 +144,7 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     const partner = partnerOf(s.passes, job);
     const { state, why } = jobState(p, job, now, partner);
     if (!p) {
-      // The job's line still reads never run; only the notice waits on a partner that holds the lock (Ruling QQ).
+      // The job's line still reads never run; only the notice waits on a partner that holds the lock.
       if (!neverCovered(job, now, partner)) needsYou(`${JOB_STEP[job]} has never run.`, WORKER_DOWN);
     } else if (isRunning(p)) {
       // Silent: the worker stopped beating. Stuck: past its ceiling with a fresh beat, so the worker is up and this pass is not.
@@ -179,13 +179,13 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
       const e = s.manifest ? entryFor(s.manifest, c.chainId, c.address) : null;
       const bytes = c.downloadFile === 'trail' ? e?.trail?.bytes : e?.transfers.bytes;
       const what = c.downloadFile === 'trail' ? 'the money trail' : 'stored data';
-      notice('working', `Downloading ${what} for ${label} · ${downloaded(c.downloadProgress)}${bytes === undefined ? '' : ` of ${formatBytes(bytes)}`}`);
+      notice('working', `Downloading ${what} for ${label} · ${floorPct(c.downloadProgress, 1)}${bytes === undefined ? '' : ` of ${formatBytes(bytes)}`}`);
     }
     // The downloaded trail goes into the database after the download; the lenses run again once it is in.
-    if (!paused && c.trailProgress !== null) notice('working', `Loading the money trail for ${label} · ${downloaded(c.trailProgress)}`);
+    if (!paused && c.trailProgress !== null) notice('working', `Loading the money trail for ${label} · ${floorPct(c.trailProgress, 1)}`);
     // Not a fault: its chain is read instead where there is an RPC, and the note says it is tried again. A paused collection tries nothing.
     if (!paused && c.downloadNote) notice('info', `${label}: ${c.downloadNote}`);
-    if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, 0.99))}`);
+    if (restoring) notice('working', `Loading stored data for ${label} · ${progress(Math.min(c.restoreProgress!, NOT_DONE))}`);
     // Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again.
     const restore = restoreText(c, new Set(s.config.chains), now, zone);
     if (restore !== null) notice('info', `${label}: ${restore}`);

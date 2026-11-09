@@ -1,12 +1,12 @@
 'use client';
 
-import { Head, Problem, STORE_DOWN } from '@/components/head';
+import { Head, Problem, STORE_DOWN } from '@/components/ui';
 
 /**
  * What a page shows when its read throws: the collection, flagged, token,
  * wallet and trade pages await the store with no catch of their own, and the
  * pages that do catch say the same words. A client file, so it imports only
- * head.tsx, which reaches nothing of the store.
+ * ui.tsx, which reaches nothing of the store.
  *
  * `retry` is Next's refresh-and-reset: a store read that threw on the server
  * is in the page's payload, so `reset` alone would re-render the same error.

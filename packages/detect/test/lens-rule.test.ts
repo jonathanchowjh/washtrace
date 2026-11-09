@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { COPIES, DEFAULT_RULE, EDGE_TYPES, INT4_MAX, NAME_MAX, checkRule, estimateTo, nameError, ruleLine, type FollowEstimate, type LensRule } from '../src/lens-rule.js';
+import { COPIES, DEFAULT_RULE, EDGE_TYPES, INT4_MAX, NAME_MAX, checkRule, nameError, ruleLine, type LensRule } from '../src/lens-rule.js';
+import { estimateTo, type FollowEstimate } from '../src/lens-reads.js';
 
 const clone = (): LensRule => structuredClone(DEFAULT_RULE);
 const errorOf = (raw: unknown) => {
@@ -102,7 +103,7 @@ describe('checkRule errors', () => {
     expect(checkRule(o)).toEqual({ rule: o });
   });
 
-  it("refuses a smallest amount on other tokens switched on, with T9's message; switched off, the value is ignored and the rule reads (Ruling P12)", () => {
+  it("refuses a smallest amount on other tokens switched on, with its message; switched off, the value is ignored and the rule reads", () => {
     const on = clone();
     on.edges['other-tokens'] = { ...on.edges['other-tokens'], use: true, minWei: '1000000' };
     expect(errorOf(on)).toBe('Other tokens take no smallest amount: tokens differ in value.');
@@ -242,14 +243,14 @@ describe('COPIES', () => {
       expect(d.length).toBeGreaterThan(0);
       expect(d.endsWith('.')).toBe(true);
       expect(d.slice(0, -1)).not.toContain('. ');
-      // A lens ignores sale money too (Ruling K) and bars wallets whose history was cut short (Ruling BB): neither is a difference.
+      // A lens ignores sale money too and bars wallets whose history was cut short: neither is a difference.
       expect(d).not.toMatch(/sales|cut short|truncated/);
-      // Nor is the go-between: the copies bar it as the built-ins do (Ruling JJ).
+      // Nor is the go-between: the copies bar it as the built-ins do.
       expect(d).not.toMatch(/go-between|linked to more than/);
     }
   });
 
-  it('bars a wallet linked to more than 20 of this collection\'s wallets in the money copies, as hubDegree does (Ruling JJ)', () => {
+  it('bars a wallet linked to more than 20 of this collection\'s wallets in the money copies, as hubDegree does', () => {
     expect(COPIES.AU.rule.never).toEqual({ marketplaces: true, over: 20, addresses: [] });
     expect(COPIES.AC.rule.never).toEqual({ marketplaces: true, over: 20, addresses: [] });
     expect(COPIES.AU.differs).toBe('Money loops back also needs two laps when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.');

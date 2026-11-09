@@ -43,8 +43,8 @@ export interface Analysed {
  * thread's whole body; tests and the profiler call it in-process.
  */
 export async function analyzeStored(store: Store, request: AnalysisRequest): Promise<Analysed> {
-  const { storeUrl: _, id, chainId, followHops, ...settings } = request;
-  const input = await store.analysisInput(id, chainId, followHops);
+  const { storeUrl: _, id, chainId, followHops: globalHops, ...settings } = request;
+  const input = await store.analysisInput(id, chainId, globalHops);
   return { analysis: analyze({ ...input, ...settings }), through: input.through };
 }
 

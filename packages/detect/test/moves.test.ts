@@ -19,7 +19,7 @@ describe('Moves', () => {
     const m = build();
     expect(Array.from(m.time)).toEqual([10, 10, 20, 30, 40]);
     // The two time-10 edges keep the order they were added in.
-    expect(Array.from(m.eth)).toEqual([0.5, 0.25, 2, 1.5, 3]);
+    expect(Array.from(m.amountEth)).toEqual([0.5, 0.25, 2, 1.5, 3]);
     expect(Array.from(m.kind)).toEqual([MOVE_KIND.weth, MOVE_KIND.eth, MOVE_KIND.internal, MOVE_KIND.eth, MOVE_KIND.eth]);
     expect(Array.from(m.block)).toEqual([1, 1, 2, 3, 4]);
     expect(Array.from(m.sale)).toEqual([1, 1, 0, 0, 0]);
@@ -54,7 +54,7 @@ describe('Moves', () => {
     m.seal();
     expect(m.size).toBe(MANY);
     for (const i of [0, 1, (1 << 21) - 1, 1 << 21, MANY - 1]) {
-      expect([m.time[i], m.block[i], m.kind[i], m.eth[i], m.sale[i], m.name(m.from[i]!)]).toEqual([(i / 7) | 0, i, i % 3, i / 4, i % 5 === 0 ? 1 : 0, i % 2 ? 'a' : 'b']);
+      expect([m.time[i], m.block[i], m.kind[i], m.amountEth[i], m.sale[i], m.name(m.from[i]!)]).toEqual([(i / 7) | 0, i, i % 3, i / 4, i % 5 === 0 ? 1 : 0, i % 2 ? 'a' : 'b']);
     }
     expect(m.into(m.id('c')!)).toHaveLength(MANY);
     expect(m.out(m.id('a')!)[0]).toBe(1);
@@ -91,7 +91,7 @@ describe('Moves', () => {
     const m = new Moves();
     m.add('a', 'b', MOVE_KIND.eth, 1, 1, 0.1, false);
     m.seal();
-    expect(m.eth[0]).toBe(Math.fround(0.1));
+    expect(m.amountEth[0]).toBe(Math.fround(0.1));
   });
 
   it('refuses a second seal, and an edge after the first, keeping what it holds', () => {

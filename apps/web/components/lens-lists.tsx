@@ -2,37 +2,14 @@ import Link from 'next/link';
 import type { TokenLine, WalletLine } from '@washtrace/detect';
 import { findOf, isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, tokenLabel, type Lenses } from '@/lib/format';
-import { findText, pageOf, pages } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
+import { SORTS } from '@/lib/views';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 import { cn } from '@/lib/utils';
-import { Empty } from './head';
+import { Empty } from './ui';
 import { DOT } from './methods';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
-
-/** Each list's orders, as the URL names them and as its sort links read. */
-export const SORTS = {
-  tokens: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
-  wallets: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
-} as const;
-
-/** A list's page, order and Find from the URL. Junk is dropped: an unknown order is the default, and a page under 1 is the first. */
-export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?: string; find?: string }): { page: number; sort: string; find: string | null } {
-  return {
-    page: pageOf(raw.page),
-    sort: SORTS[kind].some(([s]) => s === raw.sort) ? raw.sort! : 'caught',
-    find: findText(raw.find),
-  };
-}
-
-/** Page `asked` of a list, or its last when `asked` is past the end: the first read's count says where the end is. */
-export async function clampedPage<T>(asked: number, size: number, read: (offset: number) => Promise<{ rows: T[]; total: number }>): Promise<{ rows: T[]; total: number; page: number }> {
-  const first = await read((asked - 1) * size);
-  if (first.rows.length > 0 || first.total === 0) return { ...first, page: asked };
-  const page = pages(first.total, size);
-  return { ...(await read((page - 1) * size)), page };
-}
 
 /**
  * The tokens or wallets one lens flagged trades of, each saying why in words,

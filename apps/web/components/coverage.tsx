@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { CollectionRow } from '@washtrace/detect';
-import { LENSES, lensList, num } from '@/lib/format';
-import { TRAIL_LOADING, downloaded, progress, restoreNext, type Coverage } from '@/lib/coverage';
-import { Bar, Pill, Warn, type PillTone } from '@/components/head';
+import { floorPct, num } from '@/lib/format';
+import { TRAIL_LOADING, progress, restoreNext, trust, type Coverage } from '@/lib/coverage';
+import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import type { Stage } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
@@ -99,30 +99,6 @@ export function AnalysisFailed({ c, now, retrying = false, className }: { c: Col
   );
 }
 
-/** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
-export function trust(c: CollectionRow, cov: Coverage): string | null {
-  // No analysis yet means no shares on screen; the empty state says why instead.
-  if (c.latest === null) return null;
-  if (cov.reading === 'queued') return 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
-  if (cov.reading === 'downloading') return 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
-  if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
-  if (cov.reading === 'silent') return 'The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.';
-  if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
-  if (cov.reading === 'stored-only') return cov.stops !== null
-    ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
-    : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.';
-  if (cov.reading === 'head-unknown') return 'The chain\'s newest block is not known right now, so these numbers rest on what was read, not on the chain as it is now.';
-  if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
-  if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
-  if (cov.reading === 'analyzing') return 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.';
-  const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
-  // Not final with nothing checking: no key, so the rest wait for one.
-  if (cov.notFinal.length > 0 && cov.reading === 'complete') return `${checked} of wallets that traded it were checked for money, so ${lensList(cov.notFinal)} are not final: with no Etherscan key the rest go unchecked.`;
-  if (cov.notFinal.length > 0) return `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`;
-  if (!cov.money) return `Every transfer is read. Money links were not checked, so only ${LENSES.A.name} ran.`;
-  return 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.';
-}
-
 /**
  * The reading in one line, for the top of a collection: what holds the
  * numbers back right now, how far along it is, and what that means for them.
@@ -145,7 +121,7 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
     : cov.reading === 'stored-only' ? { share: 0, figure: 'No RPC', of: 'Nothing is read until its chain has an RPC.' }
     : cov.reading === 'silent' ? { share: cov.blocks ?? 0, figure: 'Silent', of: 'The worker is not reporting, so nothing here is kept current' }
     : cov.reading === 'queued' ? { share: 0, figure: 'Waiting', of: 'to download its stored data from Hugging Face' }
-    : cov.reading === 'downloading' ? { share: cov.download ?? 0, figure: downloaded(cov.download ?? 0), of: 'of its stored data downloaded from Hugging Face' }
+    : cov.reading === 'downloading' ? { share: cov.download ?? 0, figure: floorPct(cov.download ?? 0, 1), of: 'of its stored data downloaded from Hugging Face' }
     : cov.reading === 'restoring' ? { share: cov.restore ?? 0, of: 'Loading stored data: history cut ahead of time, so the chain is read only from where it stops' }
     : cov.reading === 'catching-up' ? { share: cov.blocks ?? 0, of: 'of its history read' }
     // Stage 6 says when a failed first analysis is tried again.

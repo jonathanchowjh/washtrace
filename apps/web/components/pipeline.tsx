@@ -2,11 +2,11 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, RestoreNote } from '@/components/coverage';
-import { Bar, Pill, Warn, type PillTone } from '@/components/head';
+import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import { Time } from '@/components/time';
 import { chainName } from '@/lib/chains';
-import { downloaded, progress, storedOnly, type Coverage } from '@/lib/coverage';
-import { STAGE_LABELS, formatBytes, num, pct, plural, short, took } from '@/lib/format';
+import { progress, storedOnly, type Coverage } from '@/lib/coverage';
+import { STAGE_LABELS, floorPct, formatBytes, num, pct, plural, short, took } from '@/lib/format';
 import { STATE_WORDS, TITLES, type Stage, type StageState } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 
@@ -74,7 +74,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
                 <td key={x.n} className="p-0">
                   <Link href={`/c/${r.chainId}/${r.address}#reading`} tabIndex={-1} prefetch={false} className="block px-2 py-2.5 whitespace-nowrap">
                     <StageChip state={x.state} />
-                    {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? downloaded(x.share) : progress(x.share)}</span> : null}
+                    {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? floorPct(x.share, 1) : progress(x.share)}</span> : null}
                   </Link>
                 </td>
               ))}
@@ -180,7 +180,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
 
   // Stage 1 and 2: the stored files. The worker's own notes say why one failed and when it is tried again.
   const v1 = s1.state === 'not-needed' ? s1.skipped
-    : s1.state === 'running' ? `${s1.file === 'trail' ? 'Money trail' : 'Transfers'} downloading from stored data · ${downloaded(s1.share!)}${size(s1.file === 'trail' ? trailBytes : transfersBytes)}`
+    : s1.state === 'running' ? `${s1.file === 'trail' ? 'Money trail' : 'Transfers'} downloading from stored data · ${floorPct(s1.share!, 1)}${size(s1.file === 'trail' ? trailBytes : transfersBytes)}`
     : s1.state === 'done' ? 'Downloaded from stored data.'
     // The transfers are in (or loading) and a trail is still to come: the file that is waited for is the trail, not the transfers.
     : s1.state === 'waiting' ? ((c.storedThroughTime !== null || c.restoreProgress !== null) && c.downloadFile !== 'transfers' ? 'Transfers downloaded; the money trail is next.' : 'Waiting to download stored data')
@@ -190,7 +190,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : null;
   const trailed = c.trailImportedSha != null;
   const v2 = s2.state === 'not-needed' ? s2.skipped
-    : s2.state === 'running' ? (s2.file === 'trail' ? `Money trail loading from stored data · ${downloaded(s2.share!)}` : `Loading stored data · ${progress(s2.share!)}`)
+    : s2.state === 'running' ? (s2.file === 'trail' ? `Money trail loading from stored data · ${floorPct(s2.share!, 1)}` : `Loading stored data · ${progress(s2.share!)}`)
     : s2.state === 'done' ? 'Loaded into the database.'
     : s2.state === 'waiting' ? (s1.state === 'done' ? 'Downloaded; waiting for the load to start.' : 'Waiting for the stored data to download.')
     : s2.state === 'paused' ? 'Paused · stored data is not loaded until you resume it.'
@@ -231,10 +231,10 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
 
   return (
     <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
-      <Step stage={s1} figure={s1.state === 'running' ? downloaded(s1.share!) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
+      <Step stage={s1} figure={s1.state === 'running' ? floorPct(s1.share!, 1) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
         <DownloadNote c={c} />
       </Step>
-      <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? downloaded(s2.share!) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
+      <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? floorPct(s2.share!, 1) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
         {trailed ? (
           <p className="text-xs text-muted-foreground">
             Money trail loaded from stored data{trail ? ` · ${num(trail.checked)} of ${num(trail.of)} traders in the trail checked` : ''}

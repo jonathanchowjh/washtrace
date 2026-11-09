@@ -4,8 +4,9 @@ import { METHODS, type Lens, type LensRun, type Method, type MethodTotals } from
 import type { LensKey } from '@washtrace/detect/trades';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { LENSES, atLeastOf, floorCauses, pctTenth, runStateWords, type Lenses, type TokensFloor } from '@/lib/format';
-import { APART, APART_WHY, behindOf, ownLenses, part, type Behind } from '@/lib/metrics';
+import { LENSES, floorPct, pctTenth, type Lenses } from '@/lib/format';
+import { atLeastOf, behindOf, floorCauses, runStateWords, type Behind, type TokensFloor } from '@/lib/lens-state';
+import { APART, APART_WHY, ownLenses, part } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
 import { LensName, LensPicture } from './methods';
@@ -47,9 +48,9 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
   paused: boolean;
   runs: Runs; notFinal: readonly Method[];
-  /** By lens key: whether the collection's money is read as far as that lens needs (moneyShort of lens-rule). */
+  /** By lens key: whether the collection's money is read as far as that lens needs (moneyShort of lens-reads). */
   moneyShort: Readonly<Record<string, boolean>>;
-  /** By lens key: whether the collection's other tokens are read as far as that lens needs (tokensReason of lens-rule), and the setting the count was made under. */
+  /** By lens key: whether the collection's other tokens are read as far as that lens needs (tokensReason of lens-reads), and the setting the count was made under. */
   tokens: Readonly<Record<string, TokensFloor>>;
   coverage: Funding; writable: boolean;
   /** The lens editor, when `?lens=` asks for one: it takes the panel's place, under the same tab. */
@@ -220,7 +221,7 @@ function RunLine({ name, run, analysed, behind, paused }: { name: string; run: L
     case 'queued':
       return <p className="text-muted-foreground">{said} {paused ? resumed : run.totals !== null ? null : analysed ? 'The worker runs it next.' : "It waits for this collection's first analysis."}</p>;
     case 'running':
-      return <p className="text-muted-foreground">{said}{run.progress === null ? '' : ` It is ${Math.floor(run.progress * 100)}% done.`}</p>;
+      return <p className="text-muted-foreground">{said}{run.progress === null ? '' : ` It is ${floorPct(run.progress, 1)} done.`}</p>;
     case 'failed':
       return (
         <p className="text-fault">

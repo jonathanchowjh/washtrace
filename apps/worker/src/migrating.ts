@@ -36,7 +36,7 @@ export class Migrating {
   }
 
   /**
-   * Ruling PP: 200 `migrating` while nothing has failed, so a slow first
+   * 200 `migrating` while nothing has failed, so a slow first
    * migration (#28 builds an index over every flow, ten minutes and more on a
    * live install) is not taken for a dead worker and stopped part way; 503
    * with the error once an attempt has failed, until one takes, so a migrate

@@ -159,13 +159,13 @@ describe('status', () => {
 
   it('says a failed lens pass as the job\'s own failure, sent to the log, and counts the job among those that must have run', () => {
     const s = snapshot({ passes: [pass('lens', 1_000, { outcome: 'failed', detail: 'out of memory' })] });
-    // Analyze has never run either, but the lens pass that just finished held their lock: it is covered (Ruling QQ).
+    // Analyze has never run either, but the lens pass that just finished held their lock: it is covered.
     expect(texts(s, 'needs-you')).toEqual(['Read transfers has never run.', 'Check wallets for money has never run.', 'Run your lenses failed: out of memory']);
     expect(status(s, NOW).notices.find((n) => n.severity === 'needs-you' && n.text.startsWith('Run your lenses failed'))).toMatchObject({ doThis: "Check the worker's log: docker compose logs worker" });
     expect(texts(snapshot({ passes: [pass('ingest', 10_000), pass('fund', 2_000), pass('analyze', 10_000)] }), 'needs-you')).toEqual([]);
   });
 
-  describe('analyze and lens share the analysis lock (Ruling M)', () => {
+  describe('analyze and lens share the analysis lock', () => {
     const running = (job: string, ago: number, more: Partial<PassRow> = {}) => pass(job, ago, { finishedAt: null, outcome: null, heartbeatAt: NOW - 5_000, ...more });
     const base = [pass('ingest', 10_000), pass('fund', 2_000)];
 
@@ -202,7 +202,7 @@ describe('status', () => {
       expect(stateOf(s, 'lens')).toBe('stalled');
     });
 
-    describe('a job that has never run while its partner holds the lock (Ruling QQ)', () => {
+    describe('a job that has never run while its partner holds the lock', () => {
       // Built by hand: snapshot() would add a lens pass to a list without one.
       const without = (passes: PassRow[]): Snapshot => ({ ...snapshot(), passes });
       const never = 'Run your lenses has never run.';
@@ -240,7 +240,7 @@ describe('status', () => {
       expect(workerSilent(passes, NOW)).toBeNull();
     });
 
-    it('caps the cover at one partner ceiling: lens passes every minute do not keep a stopped analyze on time (Ruling O)', () => {
+    it('caps the cover at one partner ceiling: lens passes every minute do not keep a stopped analyze on time', () => {
       // Analyze last finished at `stopped`; from then on a lens pass finishes every minute, each 30 s before the moment read.
       const stopped = NOW - 120 * MIN;
       const due = stopped + STUCK_MS.lens + 3 * EVERY.analyze + BUDGET_MS;
@@ -384,7 +384,7 @@ describe('status', () => {
   });
 
   it('says wallets held back by paused collections as information, never as a key to check', () => {
-    // fundingBacklog counts a paused collection's failed wallets as stranded, not failed: no lane retries them.
+    // moneyBacklog counts a paused collection's failed wallets as stranded, not failed: no lane retries them.
     const s = snapshot({ funding: [{ chainId: 1, pending: 0, done: 1, failed: 0, stranded: 3, truncated: 0, doneLastHour: 0 }] });
     expect(texts(s, 'needs-you')).toEqual([]);
     expect(texts(s, 'info')).toContain('Ethereum: 3 wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.');

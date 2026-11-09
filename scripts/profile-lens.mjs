@@ -3,7 +3,7 @@
 // flags against the ones the collection's stored analysis holds.
 //
 // It reads the transfers up to the latest analysis's through block, as the worker's
-// lens job does (R7), so A is judged on the same trades as the stored flags and
+// lens job does, so A is judged on the same trades as the stored flags and
 // transfers ingested since then show no difference.
 //
 //   npm run --workspace @washtrace/detect build
@@ -17,7 +17,9 @@
 // runs in a thread whose own heap the main thread cannot read, and the resident
 // size is what a container's limit is held to and is never below the heap.
 import { readFileSync } from 'node:fs';
-import { Store, runLensInThread, storeUrl, COPIES, DEFAULT_RULE, checkRule } from '../packages/detect/dist/index.js';
+import { Store, storeUrl } from '../packages/detect/dist/index.js';
+import { runLensInThread } from '../packages/detect/dist/lens-thread.js';
+import { COPIES, DEFAULT_RULE, checkRule } from '../packages/detect/dist/lens-rule.js';
 
 const id = Number(process.argv[2]);
 const which = process.argv[3];

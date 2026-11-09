@@ -1,12 +1,12 @@
 import { AddressGraph, chainOrder, tokenGraph } from './graph.js';
 import { EDGE_TYPES, type EdgeKind, type LensRule } from './lens-rule.js';
-import { sum } from './methods.js';
+import { methodTotals } from './methods.js';
 import { MOVE_KIND, adjacency, type Moves } from './moves.js';
 import type { LensFlag, LensInput, LensTotals, LoopEdge } from './store.js';
 
 /**
- * R6: the most edges one trade's search may read, every edge it examines
- * counted (Ruling L). A dense money graph has more simple paths of six
+ * The most edges one trade's search may read, every edge it examines
+ * counted. A dense money graph has more simple paths of six
  * wallets than any run could walk; a search stopped here is counted in
  * `totals.truncated`, so the share reads "at least", and the trade is never
  * called clean for it.
@@ -24,6 +24,8 @@ const COLLECTION = KINDS.indexOf('nft-collection');
 const MONEY: readonly EdgeKind[] = ['eth', 'internal', 'weth', 'other-tokens', 'other-tokens'];
 const MONEY_AT = MONEY.map((k) => KINDS.indexOf(k));
 const NONE: readonly number[] = [];
+/** The funding edge `accept` and `record` get for a loop closed at the seller: there is no funder, so no edge. */
+const SELLER = -1;
 
 /**
  * Judges every trade of a collection by the owner's own rule: is there a way
@@ -32,7 +34,7 @@ const NONE: readonly number[] = [];
  * flag's path. A money edge's hash is not held here; `moneyEdges` says which
  * to look up with `Store.moveTxs`.
  *
- * `only`, Preview's sample (P4), holds `${txHash}:${logIndex}` keys: a trade
+ * `only`, Preview's sample, holds `${txHash}:${logIndex}` keys: a trade
  * outside it is not judged, and the totals count only those judged. Every
  * other transfer still makes the token graph, so a sampled trade's loop is
  * found through the same hops as in a full run.
@@ -65,7 +67,7 @@ function firstAt(edges: Int32Array, time: Uint32Array, t: number): number {
 /** The rule's money rows by `MOVE_KIND` byte, and whether one edge passes them. */
 function moneyRows(rule: LensRule) {
   const on = MONEY.map((k) => rule.edges[k].use);
-  // Ruling P10: a token edge whose receiver washtrace cannot judge is walked along its arrow only.
+  // A token edge whose receiver washtrace cannot judge is walked along its arrow only.
   const either = MONEY.map((k, b) => b !== MOVE_KIND.otherOneWay && rule.edges[k].direction === 'either');
   // SQL already dropped what is under each floor, exactly; this float check is
   // the engine's own, so the tolerance only keeps it from dropping an edge at the
@@ -76,11 +78,11 @@ function moneyRows(rule: LensRule) {
   });
   return {
     on, either, any: on.some(Boolean), anyEither: on.some((o, k) => o && either[k]),
-    // Ruling K: money paid in any of this collection's transactions is an NFT's price, as the built-ins read it,
+    // Money paid in any of this collection's transactions is an NFT's price, as the built-ins read it,
     // not a way back: else a buyer whose offers a seller took twice would close each sale with the other's payment.
-    counts: (e: number, moves: Moves): boolean => {
+    followable: (e: number, moves: Moves): boolean => {
       const k = moves.kind[e]!;
-      return on[k]! && moves.eth[e]! >= minEth[k]! && moves.sale[e] === 0;
+      return on[k]! && moves.amountEth[e]! >= minEth[k]! && moves.sale[e] === 0;
     },
   };
 }
@@ -134,7 +136,7 @@ class LensSearch {
   private at = NaN;
   private tradeTx = -1;
   /** By wallet: the funder's last payment to this trade's seller, or -1; `funders` lists the wallets set, to clear. */
-  private readonly fundEdge: Int32Array;
+  private readonly fundingEdgeOf: Int32Array;
   private readonly funders: number[] = [];
   private readonly stepKind: number[] = [];
   private readonly stepId: number[] = [];
@@ -211,7 +213,7 @@ class LensSearch {
     this.barred = new Uint8Array(N);
     // By the few addresses named, not by every wallet's name: Moves keeps no string per wallet. A
     // wallet whose funding history was cut short is a go-between to a money lens, as to the built-ins.
-    // One whose token list was is not (T6): its own token edges are never loaded, which is all it
+    // One whose token list was cut short is not a sender washtrace can judge: its own token edges are never loaded, which is all it
     // could not be judged on, and barring it would lose an ETH loop through it.
     const named = [...(never.marketplaces ? input.contracts : []), ...never.addresses, ...(this.money.any ? input.truncated : [])];
     for (const address of named) {
@@ -220,14 +222,14 @@ class LensSearch {
     }
     if (never.over !== null) this.barHubs(never.over, N);
     this.onPath = new Uint8Array(N);
-    this.fundEdge = new Int32Array(N).fill(-1);
+    this.fundingEdgeOf = new Int32Array(N).fill(-1);
   }
 
   /**
-   * Ruling BB: bars each wallet linked by money to more than `over` of this
+   * Bars each wallet linked by money to more than `over` of this
    * collection's wallets (the ends of its hops), counted as the built-ins'
    * hubDegree counts them: distinct wallets, either way, and no money paid in
-   * one of the collection's own transactions (Ruling K). An exchange's hot
+   * one of the collection's own transactions. An exchange's hot
    * wallet is never followed, so only its payments to this collection's
    * wallets are loaded; counting those payments missed it on all but the
    * biggest collections, and two of its customers' sale read as a loop. One
@@ -255,8 +257,8 @@ class LensSearch {
   run(onProgress?: (share: number) => void, only?: ReadonlySet<string>): { totals: LensTotals; flags: LensFlag[]; moneyEdges: MoneyEdge[]; judged: number; hops: number } {
     const sampled = (r: number) => only === undefined || only.has(`${this.transfers[r]!.txHash}:${this.transfers[r]!.logIndex}`);
     const judges = (r: number) => this.rule.judges === 'owners' || this.transfers[r]!.marketplace !== null;
-    let judged = 0;
-    for (const r of this.hopRef) if (r >= 0 && sampled(r) && judges(r)) judged += 1;
+    let salesWithHop = 0;
+    for (const r of this.hopRef) if (r >= 0 && sampled(r) && judges(r)) salesWithHop += 1;
     const moved: number[] = [];
     let done = 0;
     let shown = 0;
@@ -269,7 +271,7 @@ class LensSearch {
         moved.push(r);
         if (!judges(r)) continue;
         this.judge(h, r);
-        const share = Math.floor((++done * 100) / judged);
+        const share = Math.floor((++done * 100) / salesWithHop);
         if (share > shown) {
           shown = share;
           onProgress?.(share / 100);
@@ -277,9 +279,9 @@ class LensSearch {
       }
     }
     if (shown < 100) onProgress?.(1);
-    const totals = { ...sum(this.transfers, moved, this.flagged, this.input.money, true), truncated: this.truncated, untimed: this.untimed };
-    // `hops`: the sales given that have a hop, so the token graph did not fold them away. `judged`: those of them the lens judged, which leaves out an untimed trade (R5).
-    return { totals, flags: this.flags, moneyEdges: this.moneyEdges, judged: judged - this.untimed, hops: judged };
+    const totals = { ...methodTotals(this.transfers, moved, this.flagged, this.input.money, true), truncated: this.truncated, untimed: this.untimed };
+    // `judged` leaves out an untimed trade; `hops` keeps it.
+    return { totals, flags: this.flags, moneyEdges: this.moneyEdges, judged: salesWithHop - this.untimed, hops: salesWithHop };
   }
 
   private name(v: number): string {
@@ -319,7 +321,7 @@ class LensSearch {
 
   private judge(h: number, r: number): void {
     const t = this.transfers[r]!;
-    // R5: a window or loop order is measured from the trade, which an untimed one cannot give.
+    // A window or loop order is measured from the trade, which an untimed one cannot give.
     if (t.blockTime === null && (this.rule.window !== null || this.loopOrder)) {
       this.untimed += 1;
       return;
@@ -335,52 +337,52 @@ class LensSearch {
 
     // A wallet selling to itself is a loop already, with no way back to find.
     if (this.seller === this.buyer) {
-      if (this.rule.hops.min === 0) this.accept(-1);
+      if (this.rule.hops.min === 0) this.accept(SELLER);
       return;
     }
     if (this.rule.hops.max === null) {
-      this.reach();
+      this.searchAnyLength();
       return;
     }
-    if (this.rule.closes === 'seller-or-funder' && this.money.any) this.fund();
-    // Ruling MM: the buyer is checked as a funder first, at k = 0, as `arrive` checks every other wallet. It is
-    // D12 read literally, and closes 'seller' already closes on a buyer's payment to the seller outside a sale.
-    // `never` does not hold it: the buyer is never checked against it (Ruling J).
-    const own = this.fundEdge[this.buyer]!;
+    if (this.rule.closes === 'seller-or-funder' && this.money.any) this.collectFunders();
+    // The buyer is checked as a funder first, at k = 0, as `arrive` checks every other wallet. It reads
+    // the rule literally: closes 'seller' already closes on a buyer's payment to the seller outside a sale.
+    // `never` does not hold it: the buyer is never checked against it.
+    const own = this.fundingEdgeOf[this.buyer]!;
     if (!(own >= 0 && this.rule.hops.min === 0 && this.accept(own))) {
       this.onPath[this.buyer] = 1;
       this.walk(this.buyer, this.at, 0);
       this.onPath[this.buyer] = 0;
     }
-    for (const v of this.funders) this.fundEdge[v] = -1;
+    for (const v of this.funders) this.fundingEdgeOf[v] = -1;
     this.funders.length = 0;
     if (!this.found && this.capped) this.truncated += 1;
   }
 
   /**
-   * D12: the wallets that funded this trade's seller, into `fundEdge`, each
+   * The wallets that funded this trade's seller, into `fundingEdgeOf`, each
    * keeping its last payment. A funder sent the seller money over a money row
    * the rule has on, strictly before the trade, within the window's before
    * side when the rule has a window (an "after" window leaves none), and never
-   * in a transaction of this collection's transfers (Ruling K): a sale's
+   * in a transaction of this collection's transfers: a sale's
    * payment legs, such as Seaport's internal ETH to the seller, are an NFT's
    * price, and reading them as funding would catch every honest sale. The
-   * search then holds a funder to `never` as it holds a middle (Ruling J).
+   * search then holds a funder to `never` as it holds a middle.
    */
-  private fund(): void {
+  private collectFunders(): void {
     const { moves } = this;
     const into = moves.into(this.seller);
     const [lo, hi] = fundingSpan(into, this.at, this.rule.window, moves);
     for (let i = lo; i < hi; i++) {
       const e = into[i]!;
-      if (!this.money.counts(e, moves)) continue;
+      if (!this.money.followable(e, moves)) continue;
       const v = moves.from[e]!;
-      if (this.fundEdge[v]! < 0) this.funders.push(v);
-      this.fundEdge[v] = e;
+      if (this.fundingEdgeOf[v]! < 0) this.funders.push(v);
+      this.fundingEdgeOf[v] = e;
     }
   }
 
-  /** One more edge read, and true once that is past the cap (Ruling L: every edge read counts, so no wide middle runs on). */
+  /** One more edge read, and true once that is past the cap (every edge read counts, so no wide middle runs on). */
   private spend(): boolean {
     if (++this.states <= SEARCH_CAP) return false;
     this.capped = true;
@@ -415,7 +417,7 @@ class LensSearch {
           if (this.spend()) return true;
           // Another token's hop, and not one of the trade's own: a bundle's other tokens went the same way as this one.
           if (this.hopToken[h] === this.token || (this.tradeTx >= 0 && this.hopTx[h] === this.tradeTx)) continue;
-          // Ruling CC: nor a priced sale. A token bought at a price is not value handed back, as a sale's payment is no way back (Ruling K).
+          // Nor a priced sale. A token bought at a price is not value handed back, as a sale's payment is no way back.
           if (this.hopRef[h]! >= 0 && this.transfers[this.hopRef[h]!]!.marketplace !== null) continue;
           if (this.step(COLLECTION, h, rev, rev ? hopFrom[h]! : hopTo[h]!, hopTime[h]!, prev, k)) return true;
         }
@@ -425,12 +427,12 @@ class LensSearch {
       const { moves, money } = this;
       for (const e of moves.out(u)) {
         if (this.spend()) return true;
-        if (money.counts(e, moves) && this.step(MONEY_AT[moves.kind[e]!]!, e, false, moves.to[e]!, moves.time[e]!, prev, k)) return true;
+        if (money.followable(e, moves) && this.step(MONEY_AT[moves.kind[e]!]!, e, false, moves.to[e]!, moves.time[e]!, prev, k)) return true;
       }
       if (money.anyEither) {
         for (const e of moves.into(u)) {
           if (this.spend()) return true;
-          if (!money.either[moves.kind[e]!] || !money.counts(e, moves)) continue;
+          if (!money.either[moves.kind[e]!] || !money.followable(e, moves)) continue;
           if (this.step(MONEY_AT[moves.kind[e]!]!, e, true, moves.from[e]!, moves.time[e]!, prev, k)) return true;
         }
       }
@@ -455,12 +457,12 @@ class LensSearch {
   /** At `v` after `k` edges back: close at the seller or a funder, or go on through `v` as a middle. */
   private arrive(v: number, time: number, k: number): boolean {
     const { min, max } = this.rule.hops;
-    // R2: the middles are the wallets after the buyer, so closing at the seller passed k - 1, and at a funder k.
-    if (v === this.seller) return k - 1 >= min && this.accept(-1);
-    // Ruling J: `never` holds for a funder as for a middle, else Seaport or an exchange that once paid the seller closes every sale.
+    // The middles are the wallets after the buyer, so closing at the seller passed k - 1, and at a funder k.
+    if (v === this.seller) return k - 1 >= min && this.accept(SELLER);
+    // `never` holds for a funder as for a middle, else Seaport or an exchange that once paid the seller closes every sale.
     if (this.barred[v]) return false;
-    const fund = this.fundEdge[v]!;
-    if (fund >= 0 && k >= min && k <= max! && this.accept(fund)) return true;
+    const fundingEdge = this.fundingEdgeOf[v]!;
+    if (fundingEdge >= 0 && k >= min && k <= max! && this.accept(fundingEdge)) return true;
     this.onPath[v] = 1;
     const stop = this.walk(v, time, k);
     this.onPath[v] = 0;
@@ -468,14 +470,14 @@ class LensSearch {
   }
 
   /**
-   * R2's "any" length: only the token's own hops are on, so this is a
+   * The "any" length: only the token's own hops are on, so this is a
    * breadth-first search of the token's graph, and the way back judged is
    * the first found layer by layer, which is exact because `checkRule` keeps
    * `hops.min` at 0 here. A wallet is entered again only at an earlier time,
    * which loop order makes better; otherwise once. No cap: it is bounded by
    * the token's own hops, and Round trips' copy runs here, so it stays exact.
    */
-  private reach(): void {
+  private searchAnyLength(): void {
     const row = this.rule.edges['nft-token'];
     // Along the arrows, a way back exists only inside one strongly connected component.
     if (row.direction === 'along') {
@@ -499,7 +501,7 @@ class LensSearch {
             if (v === this.seller) {
               this.trace(at, parent, via, rev, p);
               this.push(TOKEN, h, back, v);
-              if (this.accept(-1)) return;
+              if (this.accept(SELLER)) return;
               this.clear();
               continue;
             }
@@ -549,7 +551,7 @@ class LensSearch {
     this.used[kind]! -= 1;
   }
 
-  /** R5: within `days` of the trade on the window's side; any time without one. NaN never is. */
+  /** Within `days` of the trade on the window's side; any time without one. NaN never is. */
   private inWindow(time: number): boolean {
     const w = this.rule.window;
     if (!w) return true;
@@ -559,28 +561,28 @@ class LensSearch {
   }
 
   /**
-   * The loop on the path (closed at the funder whose edge is `fund`, or at
-   * the seller for -1), kept if it has R1's loops. The funding edge counts
+   * The loop on the path (closed at the funder whose edge is `fundingEdge`, or at
+   * the seller for SELLER), kept if it has the loops. The funding edge counts
    * against no row's `max` and is exempt from loop order: it is not a step
-   * of the way back but what made F the seller's funder, and by D12 it is
+   * of the way back but what made F the seller's funder, and it is
    * always before the trade, where loop order (which starts at the trade)
    * could never place it.
    */
-  private accept(fund: number): boolean {
-    if (this.rule.minCycles > 1 && this.cyclesOf(fund) < this.rule.minCycles) return false;
-    this.record(fund);
+  private accept(fundingEdge: number): boolean {
+    if (this.rule.minCycles > 1 && this.cyclesOf(fundingEdge) < this.rule.minCycles) return false;
+    this.record(fundingEdge);
     this.found = true;
     return true;
   }
 
   /**
-   * R1: the cycles of the strongly connected component holding the trade, in
+   * The cycles of the strongly connected component holding the trade, in
    * the token's own hops plus the loop's other edges, each as walked. A row
    * whose repeats are `once` adds one edge per wallet pair.
    */
-  private cyclesOf(fund: number): number {
+  private cyclesOf(fundingEdge: number): number {
     // A way back of the token's own hops, along their arrows, adds nothing to the token's graph.
-    if (fund < 0 && this.stepKind.every((k, i) => k === TOKEN && !this.stepRev[i])) {
+    if (fundingEdge === SELLER && this.stepKind.every((k, i) => k === TOKEN && !this.stepRev[i])) {
       const { comp, cycles } = this.components();
       const c = comp.get(this.seller);
       return c !== undefined && c === comp.get(this.buyer) ? cycles[c]! : 0;
@@ -591,7 +593,7 @@ class LensSearch {
       if (this.stepKind[i] !== TOKEN || this.stepRev[i]) add(this.stepKind[i]!, u, v);
       u = v;
     });
-    if (fund >= 0) add(MONEY_AT[this.moves.kind[fund]!]!, u, this.seller);
+    if (fundingEdge !== SELLER) add(MONEY_AT[this.moves.kind[fundingEdge]!]!, u, this.seller);
     const s = g.ids.get(String(this.seller))!, b = g.ids.get(String(this.buyer))!;
     for (const c of g.components()) if (c.nodes.includes(s) && c.nodes.includes(b)) return c.cycles;
     return 0;
@@ -614,6 +616,7 @@ class LensSearch {
 
   /** The current token's hops as a graph, bridges included, and how to add an edge of a row to it. */
   private baseGraph(): { g: AddressGraph; add: (kind: number, from: number, to: number) => void } {
+    // The names in this graph are wallet numbers, as strings.
     const g = new AddressGraph();
     const pairs = new Set<string>();
     const add = (kind: number, from: number, to: number) => {
@@ -630,7 +633,7 @@ class LensSearch {
   }
 
   /** The loop as its edges, each as it happened (one walked against its arrow reads backwards), and its wallets in loop order. */
-  private record(fund: number): void {
+  private record(fundingEdge: number): void {
     const flag = this.flags.length;
     const path: LoopEdge[] = [this.hopEdge(this.tradeHop, 'nft-token')];
     const wallets = [this.name(this.seller), this.name(this.buyer)];
@@ -639,7 +642,7 @@ class LensSearch {
       path.push(kind === TOKEN || kind === COLLECTION ? this.hopEdge(id, KINDS[kind]!) : this.moneyEdge(id, KINDS[kind]!, flag, path.length));
       if (this.stepTo[i] !== this.seller) wallets.push(this.name(this.stepTo[i]!));
     });
-    if (fund >= 0) path.push(this.moneyEdge(fund, 'funds', flag, path.length));
+    if (fundingEdge !== SELLER) path.push(this.moneyEdge(fundingEdge, 'funds', flag, path.length));
     const t = this.transfers[this.hopRef[this.tradeHop]!]!;
     const out: LensFlag = { txHash: t.txHash, logIndex: t.logIndex, path, wallets };
     this.flags.push(out);

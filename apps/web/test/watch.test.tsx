@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addressOf } from '@/lib/api';
+import { addressOf } from '@/lib/params';
 import { localTime, storedSizes } from '@/lib/format';
-import { waiting } from '@/lib/coverage';
+import { analysisWaitText } from '@/lib/coverage';
 import { storedManifest } from '@/lib/store';
 import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
 import { LOCAL_ONLY } from '@/lib/auth';
@@ -357,7 +357,7 @@ describe('CollectionRow', () => {
 
   it('with no analysis and a download under way, a silent worker claims no progress beside its pill', () => {
     const c = { ...base, cursorBlock: null, startBlock: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 } as typeof base;
-    const { container } = render(<CollectionRow writable c={c} why={waiting(c, undefined, new Map(), ON, 0, 'UTC', true)} rpcChains={ON} funding silent now={0} />);
+    const { container } = render(<CollectionRow writable c={c} why={analysisWaitText(c, undefined, new Map(), ON, 0, 'UTC', true)} rpcChains={ON} funding silent now={0} />);
     expect(container.textContent).toContain('Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.');
     expect(container.textContent).not.toContain('Downloading stored data');
   });

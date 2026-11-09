@@ -1,5 +1,5 @@
-import { BEHIND_BLOCKS, METHODS, type CollectionRow, type Method, type PassRow } from '@washtrace/detect';
-import { localTime, pct, plural, num } from './format';
+import { BEHIND_BLOCKS, METHODS, NOT_DONE, type CollectionRow, type Method, type PassRow } from '@washtrace/detect';
+import { LENSES, floorPct, lensList, localTime, pct, plural, num } from './format';
 
 /**
  * A collection's reading progress, said the way the console shows it: how far
@@ -13,11 +13,6 @@ import { localTime, pct, plural, num } from './format';
 export function progress(share: number): string {
   const text = pct(share, 1);
   return share < 1 && text === '100%' ? '>99%' : text;
-}
-
-/** A download's share rounded down, as the Hub's own count would say it: 41.6% reads 41%, never a step ahead of the bytes. */
-export function downloaded(share: number): string {
-  return `${Math.floor(share * 100)}%`;
 }
 
 export type Reading = 'queued' | 'downloading' | 'restoring' | 'stored-only' | 'head-unknown' | 'starting' | 'catching-up' | 'analyzing' | 'checking' | 'complete' | 'paused' | 'silent';
@@ -135,31 +130,31 @@ export function coverage(
   const notFinal: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
   // A load is never resumed after a pause, so progress left on a paused collection is stale.
   // Never shown as done: the data is not there until the load commits, and then the progress is gone.
-  const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, 0.99) : null;
+  const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, NOT_DONE) : null;
   // The download comes first: the stored data cannot load until it has arrived. Capped like a load, for the same reason.
-  const download = c.pausedAt === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null ? Math.min(c.downloadProgress!, 0.99) : null;
+  const download = c.pausedAt === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) !== null ? Math.min(c.downloadProgress!, NOT_DONE) : null;
   // Held for a download that has not started (another runs, or another replica has the lock): the worker marks the file, with no progress.
   const queued = c.pausedAt === null && download === null && c.downloadFile === 'transfers' && (c.downloadProgress ?? null) === null;
   // Nothing moves stored data, so a missing RPC is what holds the reading: whatever was read, it reads stored-only.
   const noRpc = c.pausedAt === null && restore === null && download === null && !queued && !rpcChains.has(c.chainId);
-  const stored = noRpc && storedOnly(c, rpcChains);
+  const isStoredOnly = noRpc && storedOnly(c, rpcChains);
   // Read on past the stored data while an RPC was set: it stops at its cursor, whose time is not known. Before the block was kept, the date stands.
-  const past = stored && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
-  const stops = stored && !past ? c.storedThroughTime! : null;
+  const readPastStored = isStoredOnly && (c.storedThroughBlock ?? null) !== null && c.cursorBlock! > c.storedThroughBlock!;
+  const stops = isStoredOnly && !readPastStored ? c.storedThroughTime! : null;
   const unsynced = stops === null ? null : unsyncedFor(now - stops);
   // Read from the chain with no stored data before the RPC went: what was read stands, so it stops at its cursor too.
-  const chainRead = noRpc && !stored && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && (c.transfers ?? 0) > 0;
-  const readTo = past || chainRead ? c.cursorBlock : null;
+  const chainRead = noRpc && !isStoredOnly && c.cursorBlock !== null && c.startBlock !== null && c.cursorBlock >= c.startBlock && (c.transfers ?? 0) > 0;
+  const readTo = readPastStored || chainRead ? c.cursorBlock : null;
   // A trail loads beside the reading, not as one: the lenses that need it wait on it. The same cap as a load.
   const trailShare = c.downloadFile === 'trail' && (c.downloadProgress ?? null) !== null ? c.downloadProgress! : (c.trailProgress ?? null);
-  const trail = c.pausedAt === null && !silent && trailShare !== null ? Math.min(trailShare, 0.99) : null;
+  const trail = c.pausedAt === null && !silent && trailShare !== null ? Math.min(trailShare, NOT_DONE) : null;
   // No bar under a pill moves while nothing reports.
   const base = { blocks, behind, wallets, money, notFinal, restore: silent ? null : restore, download: silent ? null : download, stops, unsynced, readTo, trail };
   // Where the trail is loading, the label says so: the reading is true, and the lenses that need the trail have not run on it.
   const out = (reading: Reading, label: string): Coverage => ({ ...base, reading, label: trail !== null && TRAIL_READINGS.has(reading) ? `${label}${TRAIL_LOADING}` : label });
   // A reading that claims progress cannot be kept while nothing reports.
   const moving = (reading: Reading, label: string): Coverage => silent ? out('silent', 'Worker silent · not kept current') : out(reading, label);
-  if (download !== null) return moving('downloading', `Downloading stored data · ${downloaded(download)}`);
+  if (download !== null) return moving('downloading', `Downloading stored data · ${floorPct(download, 1)}`);
   if (queued && restore === null) return moving('queued', 'Waiting to download stored data');
   if (restore !== null) return moving('restoring', `Loading stored data · ${progress(restore)}`);
   if (c.pausedAt !== null) return out('paused', c.cursorBlock === null || (c.startBlock !== null && c.cursorBlock < c.startBlock) ? 'Paused · not read yet' : `Paused · read to block ${num(c.cursorBlock)}`);
@@ -197,7 +192,7 @@ export function unread(cov: Pick<Coverage, 'behind'>): boolean {
   return cov.behind !== null && cov.behind > BEHIND_BLOCKS;
 }
 
-/** A pass is running from when it starts until it finishes. The status route and the pages both decide it here. */
+/** A pass is running from when it starts until it finishes, and again when it restarts after an earlier finish (`finishedAt < startedAt`). The status route and the pages both decide it here. */
 export function isRunning(p: PassRow): boolean {
   return p.finishedAt === null || p.finishedAt < p.startedAt;
 }
@@ -224,7 +219,7 @@ export function analysisRetry(c: Pick<CollectionRow, 'analysisRetryAt'>, now: nu
  * first, said in `zone`. While the worker is silent (workerSilent) nothing is
  * downloaded, loaded or analyzed, so no step is claimed as under way.
  */
-export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', silent = false): string {
+export function analysisWaitText(c: CollectionRow, analyzePass: PassRow | undefined, names: ReadonlyMap<number, string>, rpcChains: ReadonlySet<number>, now: number, zone = 'UTC', silent = false): string {
   // Never analyzed while paused, so promise nothing.
   if (c.pausedAt !== null) return 'Paused · it is not analyzed until you resume it.';
   if (silent) return 'Not analyzed yet · the worker is silent, so nothing is read or analyzed until it reports again.';
@@ -240,4 +235,28 @@ export function waiting(c: CollectionRow, analyzePass: PassRow | undefined, name
   if (c.analysisError) return `Its analysis failed: ${c.analysisError} · ${analysisRetry(c, now, zone)}.`;
   if (running === null) return 'Waiting for its first analysis · the next pass starts within a minute.';
   return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
+}
+
+/** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
+export function trust(c: CollectionRow, cov: Coverage): string | null {
+  // No analysis yet means no shares on screen; the empty state says why instead.
+  if (c.latest === null) return null;
+  if (cov.reading === 'queued') return 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
+  if (cov.reading === 'downloading') return 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
+  if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
+  if (cov.reading === 'silent') return 'The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.';
+  if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
+  if (cov.reading === 'stored-only') return cov.stops !== null
+    ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
+    : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.';
+  if (cov.reading === 'head-unknown') return 'The chain\'s newest block is not known right now, so these numbers rest on what was read, not on the chain as it is now.';
+  if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
+  if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
+  if (cov.reading === 'analyzing') return 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.';
+  const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
+  // Not final with nothing checking: no key, so the rest wait for one.
+  if (cov.notFinal.length > 0 && cov.reading === 'complete') return `${checked} of wallets that traded it were checked for money, so ${lensList(cov.notFinal)} are not final: with no Etherscan key the rest go unchecked.`;
+  if (cov.notFinal.length > 0) return `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`;
+  if (!cov.money) return `Every transfer is read. Money links were not checked, so only ${LENSES.A.name} ran.`;
+  return 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.';
 }

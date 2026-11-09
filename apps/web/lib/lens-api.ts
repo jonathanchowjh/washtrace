@@ -1,6 +1,7 @@
 import { METHODS, type Lens, type Method } from '@washtrace/detect';
 import { COPIES, DEFAULT_RULE, INT4_MAX, NAME_MAX, checkRule, nameError, type LensRule } from '@washtrace/detect/lens-rule';
-import { addressOf, bad, chainIdOf } from './api';
+import { bad } from './api';
+import { addressOf, chainIdOf } from './params';
 import { LENSES } from './format';
 
 /**

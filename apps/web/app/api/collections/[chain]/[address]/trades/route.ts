@@ -1,13 +1,10 @@
-import { cookies } from 'next/headers';
 import { METHODS, moneyFor, type TradeRow } from '@washtrace/detect';
 import { venueOf, VENUES, type LensKey, type TradeContext } from '@washtrace/detect/trades';
-import { addressOf, bad, chainOf, handle, json } from '@/lib/api';
-import { LENSES, NOT_RUN, type Lenses } from '@/lib/format';
+import { collectionFrom, handle, json, readerZone } from '@/lib/api';
+import { LENSES, NOT_RUN, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy, lensContext, ownLenses } from '@/lib/metrics';
 import { pages as pagesOf } from '@/lib/params';
-import { store } from '@/lib/store';
-import { TRADES_PAGE, holdsNothing, paramsOf, parseView, weiToEth } from '@/lib/trades-url';
-import { ZONE_COOKIE, parseZone } from '@/lib/zone';
+import { TRADES_PAGE, holdsNothing, paramsOf, parseView } from '@/lib/trades-url';
 
 /** The columns: the three built-ins, then each of your lenses by name, then the transaction. Per request, as the lenses are. */
 const headerOf = (own: Lenses) => ['date', 'token', 'seller', 'buyer', 'price', 'currency', 'marketplace', 'held_seconds', 'buyer_age_seconds', 'price_vs_floor',
@@ -71,26 +68,22 @@ async function* nothing(): AsyncGenerator<TradeRow> {}
 /**
  * GET: the collection's trades under the same filters as the Trades page.
  * JSON is one page (50) with its count, and `through`: for each lens of yours
- * in `ran`, the block its run read, past which a row is not judged by it
- * (Ruling FF); `format=csv` streams every trade the filters hold. A filter on
+ * in `ran`, the block its run read, past which a row is not judged by it;
+ * `format=csv` streams every trade the filters hold. A filter on
  * a lens that did not run, or a Find nothing can read, holds no trades.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ chain: string; address: string }> }): Promise<Response> {
   return handle(async () => {
-    const p = await params;
-    const chainId = chainOf(p.chain);
-    const address = addressOf(p.address);
-    if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
-    const s = store();
-    const c = await s.collection(chainId, address);
-    if (c === null) return bad('This collection is not watched.', 404);
+    const found = await collectionFrom(params);
+    if (found instanceof Response) return found;
+    const { s, chainId, address, collection: c } = found;
     const url = new URL(req.url);
-    const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
+    const zone = await readerZone();
     const runs = await s.lensRuns(c.id);
     const own = ownLenses(runs);
     // A key of a lens that was deleted is junk, dropped here; one that has not run stays, and holds nothing.
     const { q, view } = parseView(paramsOf(url.searchParams), zone, new Set(Object.keys(own)));
-    // Your lenses are read only through the block their run read (Ruling FF), here as on the page.
+    // Your lenses are read only through the block their run read, here as on the page.
     const ctx = { money: moneyFor(chainId), zone, ...lensContext(c.latest, runs) };
     const { ran } = ctx;
     const empty = holdsNothing(q, ran) !== null;

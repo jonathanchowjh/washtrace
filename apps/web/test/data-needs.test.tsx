@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_RULE, tokensReason, type LensRule } from '@washtrace/detect/lens-rule';
+import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
+import { tokensReason } from '@washtrace/detect/lens-reads';
 import type { MoneyRead } from '@washtrace/detect';
 import { DataNeeds } from '@/components/data-needs';
 import { LOCAL_ONLY } from '@/lib/auth';
@@ -15,7 +16,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** A rule whose money is followed only the way it was sent, so it can read plain "Enough" (Ruling S19). */
+/** A rule whose money is followed only the way it was sent, so it can read plain "Enough". */
 function along(max: number | null, edit: (r: LensRule) => void = () => {}): LensRule {
   const r = structuredClone(DEFAULT_RULE);
   for (const k of ['eth', 'internal', 'weth'] as const) r.edges[k].direction = 'along';
@@ -78,7 +79,7 @@ describe('the money row', () => {
     expect(row(view({ fanout: 40 }), 'ETH, internal ETH, WETH').textContent).toContain('sent to more than 40 others');
   });
 
-  it('with money followed either way never reads plain Enough (Ruling S19)', () => {
+  it('with money followed either way never reads plain Enough', () => {
     const r = row(view({ rule: along(4, (x) => { x.edges.eth.direction = 'either'; }) }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Enough the way money was sent: the loop is at most 4 hops');
     expect(r.textContent).toContain('money is followed only the way it was sent, so a loop against it can be missed');
@@ -98,7 +99,7 @@ describe('the money row', () => {
     expect(r.textContent).toContain('Fetch them queues the reads in the worker; the run uses what is read and marks its share "at least".');
   });
 
-  it('says it has not counted yet, and still offers Fetch them (Ruling S21)', () => {
+  it('says it has not counted yet, and still offers Fetch them', () => {
     const r = row(view({ rule: along(6), estimate: null }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Not counted yet: washtrace counts how many wallets this means in a coming money check.');
     expect(within(r).getByRole('button', { name: 'Fetch them' })).toBeTruthy();
@@ -124,7 +125,7 @@ describe('the money row', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it('reads the real share in Read so far while the traders\' check runs: 94% (Ruling S32)', () => {
+  it('reads the real share in Read so far while the traders\' check runs: 94%', () => {
     const r = row(view({ rule: along(6), money: { ...MONEY, traders: { checked: 9400, of: 10_000 } } }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Wallets up to 3 hops out: 94% of 10,000');
     expect(r.textContent).toContain("The traders' check is still running");
@@ -136,7 +137,7 @@ describe('the money row', () => {
     expect(r.textContent).toContain('Wallets up to 3 hops out: 99% of 10,000');
   });
 
-  it('a truncated trader is checked as far as it will be: every trader done offers Fetch them (Ruling S35)', () => {
+  it('a truncated trader is checked as far as it will be: every trader done offers Fetch them', () => {
     // moneyRead counts it checked, so checked reaches of.
     const r = row(view({ rule: along(6), money: { ...MONEY, traders: { checked: 2, of: 2 } } }), 'ETH, internal ETH, WETH');
     expect(r.textContent).not.toContain("The traders' check is still running");
@@ -178,7 +179,7 @@ describe('the money row', () => {
   });
 });
 
-describe('money still being read (Ruling S25)', () => {
+describe('money still being read', () => {
   it('while seeding never reads Enough, and shows no button', () => {
     const r = row(view({ rule: along(6), money: { ...MONEY, limit: 5, ownLimit: 5, seeding: true } }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Finding the wallets up to 5 hops out from the money already read');
@@ -193,7 +194,7 @@ describe('money still being read (Ruling S25)', () => {
     expect(within(r).queryByRole('button')).toBeNull();
   });
 
-  it('seeding does not hold back a lens that needs no more than the global limit (Ruling S31)', () => {
+  it('seeding does not hold back a lens that needs no more than the global limit', () => {
     const r = row(view({ rule: along(4), money: { ...MONEY, limit: 5, ownLimit: 5, seeding: true } }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Enough: the loop is at most 4 hops');
     expect(r.textContent).not.toContain('Finding the wallets');
@@ -207,7 +208,7 @@ describe('money still being read (Ruling S25)', () => {
     expect(within(r).queryByRole('button')).toBeNull();
   });
 
-  it('read, but the lens\'s run is behind it: says the next analysis or lens run takes it in, never Enough, with no button (Ruling S36)', () => {
+  it('read, but the lens\'s run is behind it: says the next analysis or lens run takes it in, never Enough, with no button', () => {
     const r = row(view({ rule: along(6), money: { ...MONEY, limit: 5, ownLimit: 5 }, behind: true }), 'ETH, internal ETH, WETH');
     expect(r.textContent).toContain('Read: the next analysis or lens run takes it in');
     expect(r.textContent).not.toContain('Enough');
@@ -219,7 +220,7 @@ describe('money still being read (Ruling S25)', () => {
     expect(r.textContent).toContain('Enough: the loop is at most 4 hops');
   });
 
-  it('Read so far names the depth read through, not the new limit (Ruling S37)', () => {
+  it('Read so far names the depth read through, not the new limit', () => {
     const at = (money: object) => row(view({ rule: along(6), money: { ...MONEY, limit: 5, ownLimit: 5, ...money } }), 'ETH, internal ETH, WETH').textContent;
     expect(at({ seeding: true })).toContain('Wallets up to 3 hops out: 100% of 10,000');
     cleanup();
@@ -247,7 +248,7 @@ describe('the other two rows', () => {
 
 describe('the Other tokens row', () => {
   const SYMBOLS = 'USDC, USDT, DAI, APE';
-  /** The line every state carries: the tokens read, then what is never read past (Ruling P15). */
+  /** The line every state carries: the tokens read, then what is never read past. */
   const LIMITS = `Reads ${SYMBOLS}. washtrace does not read past a wallet whose token list was too long to read, and a wallet that sent these tokens to more than 25 others is no way back.`;
   /** A rule that uses Other tokens and no ETH or WETH, with hops.max k. */
   const tokenRule = (max: number | null = 3) => along(max, (r) => { for (const k of ['eth', 'internal', 'weth'] as const) r.edges[k].use = false; r.edges['other-tokens'].use = true; });
@@ -369,7 +370,7 @@ describe('the Other tokens row', () => {
     expect(cells(tokenRow({ rule: tokenRule(1), tokens: started({ payees: true }) }))[2]).toBe(`Enough${LIMITS}`);
     expect(cells(tokenRow({ rule: tokenRule(2), tokens: started({ payees: true }) }))[2]).toBe(
       `Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed${LIMITS}`);
-    // Followed either way, a middle that paid both traders is in no set: one middle is already more than is read, in the setting's words (Ruling P13).
+    // Followed either way, a middle that paid both traders is in no set: one middle is already more than is read, in the setting's words.
     const either = tokenRule(1);
     either.edges['other-tokens'].direction = 'either';
     expect(cells(tokenRow({ rule: either, tokens: started({ payees: true }) }))[2]).toBe(

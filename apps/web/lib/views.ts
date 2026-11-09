@@ -1,28 +1,32 @@
-import { CUSTODIANS, EVERY, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type Lens, type LensRun, type OwnFlag, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type Lens, type LensRun, type OwnFlag, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
+import type { LensRule } from '@washtrace/detect/lens-rule';
+import { moneyShort, tokensReason } from '@washtrace/detect/lens-reads';
 import type { Lenses } from './format';
 import { addressOf, findText, pageOf, pages as pagesOf } from './params';
 import { authConfigured, mayWrite } from './auth';
-import { analyzingOn, storedOnly } from './coverage';
+import { analyzingOn, storedOnly, unread, type Coverage } from './coverage';
+import { atLeastOf, staleSinceLastWrite, floorCauses, runStateWords, type TokensFloor } from './lens-state';
 import { lensContext, ownLenses, ranFlags, verdict, type Verdict } from './metrics';
-import { configFromSources, fieldViews, hopsFollowed } from './settings';
+import { callsPerSecond, configFromSources, fieldViews, hopsFollowed, type SourcesConfig } from './settings';
 import { pipeline } from './pipeline';
 import { status, workerSilent } from './status';
 import { store, storedManifest } from './store';
 
 /**
  * Reads a page and its API route both serve, in one place, so the console
- * never shows what the API would not say.
+ * never shows what the API would not say; and the shaping only a page needs
+ * (txView, collectionView), so its component renders what comes back.
  */
 
 /**
  * What a token's graph is drawn from: its transfers with the flags of the
  * built-ins that ran, and your lenses' flags of it, of the lenses that ran
  * there (lensContext's `ran`). The token page and the trade page both read it
- * through tokenGraph, so layout() over it gives both the same loop keys, and
+ * through drawingInputs, so layout() over it gives both the same loop keys, and
  * a trade's card opens the token page with its loop lit by ?loop=.
  */
-export interface TokenGraph {
+export interface TokenDrawing {
   transfers: FlaggedTransfer[];
   /** Wallets that joined two holders by money without holding the token: AC's middles. */
   middles: string[];
@@ -36,7 +40,7 @@ export type TokenView = {
   tokenId: string;
   /** Your lenses' names, for their chips and lines. */
   ownLenses: Lenses;
-} & TokenGraph & Verdict;
+} & TokenDrawing & Verdict;
 
 /** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
 export const TRADES = 100;
@@ -50,7 +54,7 @@ async function latestByAddress(s: Store, chainId: number, transfers: readonly Fl
 }
 
 /** A token's graph from its transfers as read (`all`), keeping the built-ins that ran in `c.latest` and your lenses in `ran` (lens ids). */
-async function tokenGraph(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, tokenId: string, all: readonly FlaggedTransfer[], ran: readonly number[]): Promise<TokenGraph> {
+async function drawingInputs(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, tokenId: string, all: readonly FlaggedTransfer[], ran: readonly number[]): Promise<TokenDrawing> {
   // Only the lenses that ran: the verdict, the middles and the rows all read these.
   const transfers = all.map((t) => ranFlags(t, c.latest));
   const middles = [...new Set(transfers.flatMap((t) => {
@@ -77,7 +81,7 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
   if (!c) return 'not-watched';
   const [all, runs] = await Promise.all([s.token(c.id, tokenId), s.lensRuns(c.id)]);
   if (all.length === 0) return 'no-transfer';
-  const graph = await tokenGraph(s, chainId, c, tokenId, all, ownRanIds(c.latest, runs));
+  const graph = await drawingInputs(s, chainId, c, tokenId, all, ownRanIds(c.latest, runs));
   return {
     collection: { id: c.id, chainId, address, name: c.name }, tokenId, ...graph, ownLenses: ownLenses(runs),
     ...verdict(graph.transfers.map((t) => ({ t, latest: c.latest }))),
@@ -124,7 +128,7 @@ export type TxView = {
   /** By address: each collection its transfers are in. */
   collections: Record<string, TxCollection>;
   /** Beside `transfers`: its token's graph when some lens caught it, else null, since a card that does not catch draws nothing. */
-  graphs: (TokenGraph | null)[];
+  graphs: (TokenDrawing | null)[];
   /**
    * Beside `transfers`: for a move out of custody to a wallet (outOfCustody),
    * the wallet the engine holds the token for, the one that put it in (null:
@@ -147,7 +151,7 @@ export async function txView(chainId: number, tx: string): Promise<TxView> {
   await Promise.all(Object.entries(watched).map(async ([address, c]) => {
     collections[address] = { id: c.id, chainId, address, name: c.name, latest: c.latest, runs: await s.lensRuns(c.id) };
   }));
-  const of = (t: FlaggedTransfer): TxCollection | undefined => collections[t.collection?.address ?? ''];
+  const collectionOf = (t: FlaggedTransfer): TxCollection | undefined => collections[t.collection?.address ?? ''];
   const ran = new Map(Object.values(collections).map((c) => [c.id, ownRanIds(c.latest, c.runs)]));
   const own = stored.filter((f) => ran.get(f.collectionId)?.includes(f.lensId) === true);
   // A token is read only when some lens caught a transfer of it here or it came out of custody, and once however many of its transfers the transaction moved.
@@ -157,18 +161,18 @@ export async function txView(chainId: number, tx: string): Promise<TxView> {
     if (!history.has(key)) history.set(key, s.token(c.id, tokenId));
     return history.get(key)!;
   };
-  const read = new Map<string, Promise<TokenGraph>>();
+  const read = new Map<string, Promise<TokenDrawing>>();
   const graphs = await Promise.all(v.transfers.map((t) => {
-    const c = of(t);
+    const c = collectionOf(t);
     if (c === undefined) return null;
     const caught = Object.keys(t.flags).length > 0 || own.some((f) => f.collectionId === c.id && f.logIndex === t.logIndex);
     if (!caught) return null;
     const key = `${c.address}/${t.tokenId}`;
-    if (!read.has(key)) read.set(key, historyOf(c, t.tokenId).then((all) => tokenGraph(s, chainId, c, t.tokenId, all, ran.get(c.id)!)));
+    if (!read.has(key)) read.set(key, historyOf(c, t.tokenId).then((all) => drawingInputs(s, chainId, c, t.tokenId, all, ran.get(c.id)!)));
     return read.get(key)!;
   }));
   const custody = await Promise.all(v.transfers.map(async (t) => {
-    const c = of(t);
+    const c = collectionOf(t);
     return c === undefined || !outOfCustody(t) ? null : { parked: parkedFor(t, await historyOf(c, t.tokenId)) };
   }));
   // Your lenses are the install's, not a collection's: any collection's runs name them all.
@@ -201,9 +205,32 @@ function parkedFor(t: FlaggedTransfer, all: readonly FlaggedTransfer[]): string 
   return at < 0 ? null : parkedOf(all, ESCROWS)[at] ?? null;
 }
 
+/** Each list's orders, as the URL names them and as its sort links read. */
+export const SORTS = {
+  tokens: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
+  wallets: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
+} as const;
+
+/** A list's page, order and Find from the URL. Junk is dropped: an unknown order is the default, and a page under 1 is the first. */
+export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?: string; find?: string }): { page: number; sort: string; find: string | null } {
+  return {
+    page: pageOf(raw.page),
+    sort: SORTS[kind].some(([s]) => s === raw.sort) ? raw.sort! : 'caught',
+    find: findText(raw.find),
+  };
+}
+
+/** Page `asked` of a list, or its last when `asked` is past the end: the first read's count says where the end is. */
+export async function clampedPage<T>(asked: number, size: number, read: (offset: number) => Promise<{ rows: T[]; total: number }>): Promise<{ rows: T[]; total: number; page: number }> {
+  const first = await read((asked - 1) * size);
+  if (first.rows.length > 0 || first.total === 0) return { ...first, page: asked };
+  const page = pagesOf(first.total, size);
+  return { ...(await read((page - 1) * size)), page };
+}
+
 /**
  * What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`.
- * `partners` is the page of the money partners that the result and the store call counterparties (`COUNTERPARTIES`, `cut.counterparties`): the URL and `pages` say partners, so a caller's `partners=2` is read back as `pages.partners`.
+ * `partners` is the page of counterparties; the URL param and `pages.partners` keep that name.
  */
 export type WalletOpts = { trades: number; partners: number; flows: number; filter: WalletFilter; dir: FlowDir; psort: PartnerSort };
 
@@ -246,14 +273,14 @@ export async function walletView(chainId: number, address: string, opts: WalletO
   const s = store();
   const { with: other, ...narrow } = opts.filter;
   const narrowed = Object.keys(narrow).length > 0;
-  const [funding, collections, all, flagged, matched, partnersTotal, flowsTotal, betweenTotal] = await Promise.all([
+  const [funding, collections, all, flagged, matched, counterpartiesTotal, flowsTotal, betweenTotal] = await Promise.all([
     s.wallet(chainId, address), s.walletCollections(chainId, address),
     s.walletTradeCount(chainId, address), s.walletTradeCount(chainId, address, { flaggedOnly: true }),
     narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
     other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),
     other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other }),
   ]);
-  const pages = { trades: paged(opts.trades, matched ?? all, TRADES), partners: paged(opts.partners, partnersTotal, COUNTERPARTIES), flows: paged(opts.flows, flowsTotal, FLOWS) };
+  const pages = { trades: paged(opts.trades, matched ?? all, TRADES), partners: paged(opts.partners, counterpartiesTotal, COUNTERPARTIES), flows: paged(opts.flows, flowsTotal, FLOWS) };
   const offset = (p: { page: number }, size: number) => (p.page - 1) * size;
   const [shown, counterparties, betweenShown, flows] = await Promise.all([
     s.walletTransfers(chainId, address, TRADES, offset(pages.trades, TRADES), narrow),
@@ -262,8 +289,10 @@ export async function walletView(chainId: number, address: string, opts: WalletO
     other === undefined ? [] : s.flowsBetween(chainId, address, other, opts.dir, FLOWS, offset(pages.flows, FLOWS)),
   ]);
   const latest = await latestByAddress(s, chainId, [...shown, ...betweenShown]);
-  const judge = (ts: readonly FlaggedTransfer[]) => ts.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
-  const rows = judge(shown);
+  // The API's `cut`: which list has more than one page.
+  const hasMore = { trades: pages.trades.pages > 1, counterparties: pages.partners.pages > 1 };
+  const withLatest = (ts: readonly FlaggedTransfer[]) => ts.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
+  const rows = withLatest(shown);
   return {
     funding,
     collections,
@@ -272,22 +301,76 @@ export async function walletView(chainId: number, address: string, opts: WalletO
     /** Every trade it has, and those counted flagged, whatever the filter. */
     counts: { trades: all, flagged },
     pages,
-    // Kept for the API: which list has more than one page.
-    cut: { trades: pages.trades.pages > 1, counterparties: pages.partners.pages > 1 },
+    cut: hasMore,
     // The trades between the two are the first TRADES; past that the page opens the rest as a Find on the other wallet.
-    between: other === undefined ? null : { trades: judge(betweenShown).map((r) => ranFlags(r.t, r.latest)), tradesTotal: betweenTotal, flows, flowsTotal },
+    between: other === undefined ? null : { trades: withLatest(betweenShown).map((r) => ranFlags(r.t, r.latest)), tradesTotal: betweenTotal, flows, flowsTotal },
     ...verdict(rows),
+  };
+}
+
+type LensRuns = { lens: Lens; run: LensRun | null }[];
+
+/**
+ * What the collection page shapes from the store before it renders: whether
+ * money is funded, the lens editor's "Data this lens needs" figures (`needs`,
+ * only while the editor is open), and, for each of your lenses, whether its
+ * share is "at least" and why. One read of how far money is read, and one
+ * count of other tokens, serve the editor's rows and every lens's floor.
+ */
+export async function collectionView(s: Store, c: CollectionRow, runs: LensRuns, o: {
+  config: SourcesConfig; cov: Coverage; editing: { lensId?: number } | null; watched: number;
+  /** The chosen lens when it is yours; `chart`: chartLenses of the runs, the lenses of yours the over-time chart draws, leaves out, or has no figures for. */
+  yours: LensRuns[number] | null; chart: { drawn: LensRuns; left: LensRuns; notRun: LensRuns };
+}) {
+  const { config, cov, editing, yours } = o;
+  // What the editor's "Data this lens needs" compares its rule with, and the depth moneyRead and each lens's "at least" (moneyShort) are counted to.
+  const followHops = hopsFollowed(config);
+  const funded = config.funding || (c.trailImportedSha !== null && await s.importedMoney(c.id));
+  // One read of how far its money is read serves the editor's rows and every lens's "at least" (moneyShort).
+  const money = editing || runs.length > 0 ? await s.moneyRead(c.id, followHops) : null;
+  // A run behind the collection's version has not read what was fetched since.
+  const runBehind = (run: LensRun | null) => staleSinceLastWrite(run, c.latest, c.stale);
+  const shortOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }) => money !== null && moneyShort(lens.rule, money, followHops, runBehind(run));
+  // The same for other tokens: one count, the worker's, serves the editor's row and every lens's "at least" (tokensReason). Each lens compares it with the count its own run took in.
+  const tokenCounts = c.readTokens && (editing || runs.length > 0) ? await s.tokenCounts(c.id) : null;
+  const tokensFloorOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }): TokensFloor =>
+    ({ reason: tokensReason(lens.rule, c.readTokens, tokenCounts, run?.tokensRead ?? null), payees: tokenCounts?.payees ?? config.tokensPayees });
+  const editedRun = editing ? runs.find((r) => r.lens.id === editing.lensId)?.run ?? null : null;
+  const needs = editing && money ? {
+    transfers: c.transfers, transfersRead: !unread(cov), money, funding: config.funding, perSecond: callsPerSecond(config),
+    watched: o.watched, followHops, fanout: FOLLOW_FANOUT, callsPerWallet: 2 + (WRAPPED[c.chainId]?.length ?? 0),
+    behind: runBehind(editedRun),
+    paused: c.pausedAt !== null,
+    tokens: {
+      started: c.readTokens, counts: tokenCounts, payees: config.tokensPayees,
+      runTokensRead: editedRun?.tokensRead ?? null,
+      symbols: (TOKENS[c.chainId] ?? []).map((x) => x.symbol).join(', '),
+    },
+  } : null;
+  // A share of yours is a floor while what it needs is only partly read; its tab, its stat line and the lead below all say so alike.
+  const atLeast = yours !== null && yours.run?.totals != null && atLeastOf(yours.lens.rule, yours.run.totals, cov.notFinal, funded, shortOf(yours), tokensFloorOf(yours));
+  return {
+    funded, needs, atLeast,
+    moneyShort: Object.fromEntries(runs.map((r) => [r.lens.key, shortOf(r)])),
+    tokens: Object.fromEntries(runs.map((r) => [r.lens.key, tokensFloorOf(r)])),
+    chartOwn: o.chart.drawn.map((r) => ({
+      key: r.lens.key, name: r.lens.name,
+      atLeast: atLeastOf(r.lens.rule, r.run!.totals!, cov.notFinal, funded, shortOf(r), tokensFloorOf(r)),
+      floorWhy: floorCauses(r.lens.rule, r.run!.totals!, cov.notFinal, funded, shortOf(r), tokensFloorOf(r)).join('; '),
+    })),
+    chartLeft: o.chart.left.map((r) => ({ key: r.lens.key, name: r.lens.name })),
+    chartNotRun: o.chart.notRun.map((r) => ({ key: r.lens.key, name: r.lens.name, why: runStateWords(r.run)!.full })),
   };
 }
 
 /**
  * Whether some collection's loaded money trail feeds its money lenses (see
- * Store.importedFunding), so having no Etherscan key does not turn them off.
+ * Store.importedMoney), so having no Etherscan key does not turn them off.
  * The one answer the worker page, Settings and /api/status all give.
  */
 export async function trailFunded(s: Store, collections: readonly CollectionRow[]): Promise<boolean> {
   const trailed = collections.filter((c) => c.trailImportedSha !== null);
-  return (await Promise.all(trailed.map((c) => s.importedFunding(c.id)))).some(Boolean);
+  return (await Promise.all(trailed.map((c) => s.importedMoney(c.id)))).some(Boolean);
 }
 
 /**
@@ -312,17 +395,17 @@ export async function statusReport(zone = 'UTC') {
   const [passes, collections, sources, settings] = await Promise.all([s.passes(), s.collections(), s.sources(), s.settings()]);
   // What the worker reported, not this process's environment: only the worker reads the chain.
   const config = configFromSources(sources, settings);
-  const backlog = await s.fundingBacklog(hopsFollowed(config));
+  const backlog = await s.moneyBacklog(hopsFollowed(config));
   // With no key, whether a loaded money trail still feeds the money lenses.
-  const fed = config.funding ? false : await trailFunded(s, collections);
+  const trailFeeds = config.funding ? false : await trailFunded(s, collections);
   const manifest = await storedManifest();
-  const report = status({ passes, collections, funding: backlog, config, trailFunded: fed, manifest }, Date.now(), zone);
-  return { passes, collections, config, backlog, fed, manifest, report };
+  const report = status({ passes, collections, funding: backlog, config, trailFunded: trailFeeds, manifest }, Date.now(), zone);
+  return { passes, collections, config, backlog, trailFeeds, manifest, report };
 }
 
 /** The worker page and /api/worker. `zone` is the reader's, for the dates in the notices. */
 export async function workerView(zone = 'UTC') {
-  const { passes, collections, config, backlog, fed, manifest, report } = await statusReport(zone);
+  const { passes, collections, config, backlog, trailFeeds, manifest, report } = await statusReport(zone);
   const silent = workerSilent(passes, Date.now()) !== null;
   return {
     every: EVERY,
@@ -330,7 +413,7 @@ export async function workerView(zone = 'UTC') {
     // null numbers are the worker's defaults; the page says them from FIELDS.
     funding: config.funding ? { source: 'etherscan-v2', perSecond: config.perSecond } : null,
     followHops: config.followHops,
-    trailFunded: fed,
+    trailFunded: trailFeeds,
     passes,
     jobs: report.jobs,
     notices: report.notices,

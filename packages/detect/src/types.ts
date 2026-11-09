@@ -92,7 +92,7 @@ export interface Flag {
 
 /** One method's totals for a collection. Paper Table 3's "Wash Trade Share" is `flagged / transfers`. */
 export interface MethodTotals {
-  /** Ownership changes counted: mints, burns, custody round trips and inferred bridges excluded. */
+  /** Ownership-change hops counted: mints, burns, custody round trips and inferred bridges excluded. Stored and sent as `transfers`. */
   transfers: number;
   flagged: number;
   sales: number;
@@ -100,6 +100,7 @@ export interface MethodTotals {
   /** Priced sales only, in wei of the native token and its wrappers. */
   volumeWei: string;
   flaggedVolumeWei: string;
+  /** Wallets this method flagged (unlike `Analysis.wallets`, all the collection's). Stored and sent as `wallets`. */
   wallets: number;
   tokens: number;
   /** False when the method needs funding data and no funding source is configured. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
-import { bandLabel, chips, ethToWei, groupFilter, parseView, tradesHref } from '../lib/trades-url';
+import { ethToWei } from '../lib/format';
+import { bandLabel, chips, groupFilter, parseView, tradesHref } from '../lib/trades-url';
 
 /** Your lenses that exist, as the page reads them from the store: L7, L9 and L12 here, so a link can carry them. */
 const OWN: ReadonlySet<string> = new Set(['L7', 'L9', 'L12']);

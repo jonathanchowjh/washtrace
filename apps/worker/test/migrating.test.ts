@@ -12,7 +12,7 @@ function stubStore() {
 }
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
-describe('Migrating: the start-up migration and what /health answers meanwhile (Ruling PP)', () => {
+describe('Migrating: the start-up migration and what /health answers meanwhile', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('answers 200 migrating while nothing has failed, 503 with the scrubbed error after a failed attempt, and 200 again once one takes', async () => {

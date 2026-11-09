@@ -11,7 +11,7 @@ import { History } from '@/components/methods';
 const on = { available: true } as MethodTotals;
 const off = { available: false } as MethodTotals;
 
-describe('History, at the boundary to the chart (Ruling S6)', () => {
+describe('History, at the boundary to the chart', () => {
   it('a built-in is flagged of the period\'s sales; a lens of yours is flagged of the sales it has judged', () => {
     render(
       <History

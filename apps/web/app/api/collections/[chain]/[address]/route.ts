@@ -1,7 +1,6 @@
 import { moneyFor } from '@washtrace/detect';
-import { addressOf, bad, chainOf, handle, json, lensKeyOf, writeBody } from '@/lib/api';
+import { bad, collectionFrom, handle, json, lensKeyOf, writeBody } from '@/lib/api';
 import { lensContext, ownLenses } from '@/lib/metrics';
-import { store } from '@/lib/store';
 
 const NOT_PAUSED = 'Pause this collection before deleting its data.';
 
@@ -18,13 +17,9 @@ type Ctx = { params: Promise<{ chain: string; address: string }> };
  */
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
-    const p = await params;
-    const chainId = chainOf(p.chain);
-    const address = addressOf(p.address);
-    if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
-    const s = store();
-    const collection = await s.collection(chainId, address);
-    if (!collection) return bad('This collection is not watched.', 404);
+    const found = await collectionFrom(params);
+    if (found instanceof Response) return found;
+    const { s, chainId, collection } = found;
     const runs = await s.lensRuns(collection.id);
     const method = lensKeyOf(new URL(req.url).searchParams.get('method'), ownLenses(runs));
     // UTC, not the reader's cookie zone as the trades route reads: the lens lists do not bucket by month.
@@ -42,13 +37,9 @@ export async function DELETE(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
     const written = await writeBody(req);
     if (written instanceof Response) return written;
-    const p = await params;
-    const chainId = chainOf(p.chain);
-    const address = addressOf(p.address);
-    if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
-    const s = store();
-    const collection = await s.collection(chainId, address);
-    if (!collection) return bad('This collection is not watched.', 404);
+    const found = await collectionFrom(params);
+    if (found instanceof Response) return found;
+    const { s, chainId, address, collection } = found;
     if (collection.pausedAt === null) return bad(NOT_PAUSED, 409);
     if (!(await s.removeCollection(chainId, address))) {
       // The store deletes only paused rows, so a resume between our read and its delete lands here: say which it was.

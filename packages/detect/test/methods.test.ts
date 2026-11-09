@@ -212,7 +212,7 @@ describe('the lab fixtures match the engine', () => {
     expect(made.totals).toEqual(fixture.totals);
   };
 
-  it('LAB, with no funding', () => {
+  it('analyze reproduces LAB.analysis with funding off', () => {
     same(analyze(input(LAB.transfers, [], { fundingAvailable: false, money: MONEY })), LAB.analysis);
   });
 

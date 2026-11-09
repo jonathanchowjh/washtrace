@@ -1,15 +1,18 @@
+import { cookies } from 'next/headers';
 import { connection } from 'next/server';
-import { messageOf, METHODS, type Method } from '@washtrace/detect';
+import { ConfigError, messageOf, METHODS, type Method } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { ACTOR_HEADER, LOCAL_ONLY, mayWrite } from './auth';
-import { ConfigError } from './config';
-
-export { addressOf, chainIdOf, chainOf, idOf, tokenIdOf, txOf } from './params';
+import { addressOf, chainOf } from './params';
+import { store } from './store';
+import { ZONE_COOKIE, parseZone } from './zone';
 
 /**
- * What every API route shares: JSON in and out, parsing of the chain and
- * address in a path, and one place that turns a misconfiguration into a 503
- * that says what to set rather than a bare 500.
+ * What every API route shares: JSON in and out, the collection a path names,
+ * and one place that turns a misconfiguration into a 503
+ * that says what to set rather than a bare 500. It also holds the reader's
+ * zone (readerZone), which needs next/headers and so cannot live in zone.ts,
+ * the file client components import.
  */
 
 export function json(body: unknown, status = 200): Response {
@@ -71,6 +74,22 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
     console.error('[washtrace] %s', messageOf(err));
     return bad(messageOf(err), 500);
   }
+}
+
+/** The collection a route's path names, with the store that found it, or the 404 saying the path is not one or the collection is not watched. */
+export async function collectionFrom(params: Promise<{ chain: string; address: string }>) {
+  const p = await params;
+  const chainId = chainOf(p.chain);
+  const address = addressOf(p.address);
+  if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
+  const s = store();
+  const collection = await s.collection(chainId, address);
+  return collection ? { s, chainId, address, collection } : bad('This collection is not watched.', 404);
+}
+
+/** The reader's time zone from their cookie, UTC when they have none. Here, not in zone.ts, which the browser reads too and so cannot import next/headers. */
+export async function readerZone(): Promise<string> {
+  return parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone ?? 'UTC';
 }
 
 /** AC by default: the lens that counts the most, and a superset of Round trips. */

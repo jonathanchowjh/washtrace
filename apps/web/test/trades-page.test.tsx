@@ -371,12 +371,12 @@ describe('the flagged page, Trades view', () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
       expect(await page({ kind: 'trades', caught: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet.');
       expect(state.calls.trades).toHaveLength(0);
-      // A built-in's is about the latest analysis (Ruling S16).
+      // A built-in's is about the latest analysis.
       state.moneyRan = false;
       expect(await page({ kind: 'trades', caught: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     });
 
-    it('reads every trade list through the block your lens\'s run read, so a newer trade is never judged clean by it (Ruling FF)', async () => {
+    it('reads every trade list through the block your lens\'s run read, so a newer trade is never judged clean by it', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
       await dom({ kind: 'trades', not: 'L7', by: 'marketplace' });
       expect(state.calls.trades[0]![2]).toMatchObject({ through: { L7: 8 } });
@@ -404,7 +404,7 @@ describe('the flagged page, Trades view', () => {
       expect(cells).toEqual(['Blur', '4', '50%', '0%', '0%', '50%']);
     });
 
-    it('says above Trades which lens of yours is behind, and why (Ruling FF)', async () => {
+    it('says above Trades which lens of yours is behind, and why', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
       expect(await page({ kind: 'trades' })).toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
       state.runs = [{ ...ownRun(7, 'Blur 3-hop', 'queued', { totals: { available: true } }), lens: { ...ownRun(7, 'Blur 3-hop').lens, version: 2 } }];

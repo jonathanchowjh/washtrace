@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Store, entryFor, parseManifest, storedDir, type Manifest, type StoredEntry } from '@washtrace/detect';
-import { storeUrl } from './config';
+import { Store, entryFor, parseManifest, storeUrl, storedDir, type Manifest, type StoredEntry } from '@washtrace/detect';
 
 /**
  * One Store per process, kept on globalThis: the dev server re-evaluates

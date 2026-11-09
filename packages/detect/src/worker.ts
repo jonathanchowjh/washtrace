@@ -1,11 +1,12 @@
-import pg from 'pg';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
+import { Checks } from './checks.js';
 import { Etherscan, WALLET_MS } from './etherscan.js';
 import { LENS_TIMEOUT_MS, runLensInThread, runPreviewInThread, type LensRequest, type Lensed, type PreviewRequest } from './lens-thread.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
-import { ANALYZE_GAP_MS, CHECKS_CHANNEL, COUNT_TIMEOUT_MS, TOKEN_COUNT_MS, followOf, LOCKS, PREVIEWS_CHANNEL, retryMs, type CheckKind, type CollectionRow, type FundingLane, type PreviewResult, type StaleRow, type Store } from './store.js';
+import { followOf } from './reach.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, TOKEN_COUNT_MS, LOCKS, retryMs, type CollectionRow, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -20,7 +21,7 @@ export type Job = 'ingest' | 'fund' | 'analyze' | 'lens';
 export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_000, analyze: 60_000, lens: 60_000 };
 
 /**
- * Ruling KK: how long a due lens run gives way to due analyses before it runs
+ * How long a due lens run gives way to due analyses before it runs
  * anyway, counted from when it became due (Store.nextLensRun's `dueAt`). On a
  * busy install some analysis is always due, and a lens that always gave way
  * would never run. Past this an analysis waits one lens run, minutes, behind
@@ -55,7 +56,7 @@ export const TOKENS_MS = 10_000;
 
 /**
  * What of a fund pass is kept, at its end, for counting one collection's
- * next hop (Ruling S21) when one is due: COUNT_TIMEOUT_MS, the longest the
+ * next hop when one is due: COUNT_TIMEOUT_MS, the longest the
  * count (capped at WALK_CAP) runs before it is stopped.
  */
 export const COUNT_MS = COUNT_TIMEOUT_MS;
@@ -93,10 +94,10 @@ export function ingestTurns(
   budgetMs: number,
 ): { keepUp: CollectionRow[]; backfill: { c: CollectionRow; sliceMs: number }[] } {
   const atHead = (c: CollectionRow) => c.startBlock !== null && c.cursorBlock !== null && c.headBlock !== null && c.headBlock - c.cursorBlock <= BEHIND_BLOCKS;
-  const waiting = (a: CollectionRow, b: CollectionRow) => (a.servedAt ?? -1) - (b.servedAt ?? -1);
+  const longestWaitingFirst = (a: CollectionRow, b: CollectionRow) => (a.servedAt ?? -1) - (b.servedAt ?? -1);
   const live = cs.filter((c) => c.pausedAt === null);
-  const keepUp = live.filter(atHead).sort(waiting);
-  const rest = live.filter((c) => !atHead(c)).sort(waiting);
+  const keepUp = live.filter(atHead).sort(longestWaitingFirst);
+  const rest = live.filter((c) => !atHead(c)).sort(longestWaitingFirst);
   const n = Math.max(0, Math.min(rest.length, Math.floor(budgetMs / MIN_SLICE_MS)));
   return { keepUp, backfill: rest.slice(0, n).map((c) => ({ c, sliceMs: budgetMs / n })) };
 }
@@ -109,13 +110,13 @@ export function ingestTurns(
  * other turn, sharing those turns among themselves in turn; when they all
  * run dry the rest go on. A lane that has run dry gives its turn to the next.
  */
-export function interleave(lanes: readonly FundingLane[], priorityIds: ReadonlySet<number>): string[] {
+export function interleave(lanes: readonly MoneyLane[], priorityIds: ReadonlySet<number>): string[] {
   const priority = lanes.filter((l) => l.collectionId !== null && priorityIds.has(l.collectionId));
   const others = lanes.filter((l) => !priority.includes(l));
-  const next = new Map<FundingLane, number>(lanes.map((l) => [l, 0]));
+  const next = new Map<MoneyLane, number>(lanes.map((l) => [l, 0]));
   const taken = new Set<string>();
   const order: string[] = [];
-  const take = (lane: FundingLane): boolean => {
+  const take = (lane: MoneyLane): boolean => {
     let i = next.get(lane)!;
     while (i < lane.wallets.length && taken.has(lane.wallets[i]!)) i += 1;
     next.set(lane, i + 1);
@@ -125,7 +126,7 @@ export function interleave(lanes: readonly FundingLane[], priorityIds: ReadonlyS
     return true;
   };
   // One wallet from the first lane of `queue` that still has one; that lane goes to the back, a dry one goes.
-  const turn = (queue: FundingLane[]): void => {
+  const turn = (queue: MoneyLane[]): void => {
     while (queue.length > 0) {
       const lane = queue.shift()!;
       if (take(lane)) {
@@ -163,30 +164,11 @@ export function nextAnalysis(stale: readonly StaleRow[], now: number): StaleRow 
 }
 
 /**
- * A check asked for longer ago than this is finished as expired, not run.
- * The page that asked stopped polling after 20 seconds, and a URL tested now
- * may no longer be the one it asked about.
- */
-const CHECK_EXPIRY_MS = 5 * 60_000;
-
-/** The listener's wait before connecting again grows by this each failure in a row, up to a minute. */
-const RELISTEN_MS = 5_000;
-const RELISTEN_MAX_MS = 60_000;
-
-/**
- * How often the checks run with no request heard, and how long a check may
- * wait before the listener is taken for deaf. A connection a NAT dropped can
- * go quiet with no error; a notification arrives in milliseconds.
- */
-const SWEEP_MS = 30_000;
-const DEAF_MS = 10_000;
-
-/**
  * The polling half of the service. Three jobs on intervals: ingest reads new
  * finalized transfers per collection, fund reads the money of each wallet
  * those transfers named, and analyze reruns the paper's methods over any
  * collection that changed. Beside them it hears the console's Test requests
- * (listen) and runs them at once. Ingest also drives the stored data
+ * (Checks.listen) and runs them at once. Ingest also drives the stored data
  * (`sync`, see StoredSync) before it reads any chain, and analyze leaves out
  * a collection whose stored data is still to load.
  *
@@ -200,6 +182,8 @@ const DEAF_MS = 10_000;
 export class Worker {
   /** The stored data: the Hub's manifest, loads, trail imports and downloads. */
   readonly sync: StoredSync;
+  /** The console's Test requests: the listener and the checks runs. */
+  readonly checks: Checks;
   private readonly timers: ReturnType<typeof setInterval>[] = [];
   private readonly running = new Set<Job>();
   private readonly chains = new Map<string, Chain>();
@@ -212,7 +196,7 @@ export class Worker {
   /** The last heartbeat error logged, so an outage is one line and not one every 30 seconds. */
   private beatFailed = '';
   /** The console's settings as last read, kept when a read fails so a store hiccup changes no setting. */
-  private settings: ReadonlyMap<string, string> = new Map();
+  settings: ReadonlyMap<string, string> = new Map();
   /**
    * Every secret of every config built in this process (see resolved): an
    * old provider's error can arrive after its URL or key is replaced, and
@@ -223,31 +207,18 @@ export class Worker {
   /** The last settings read and sources report errors logged, so an outage is one line and not one a pass. */
   private readFailed = '';
   private reportFailed = '';
-  /** The connection that hears check requests, while listening. It holds no pool slot and is never shared. */
-  private listener: pg.Client | null = null;
-  private listening = false;
-  private relisten: ReturnType<typeof setTimeout> | null = null;
-  private listenFailures = 0;
-  /** Runs the checks every SWEEP_MS while listening, for a request whose notification was lost. */
-  private sweep: ReturnType<typeof setInterval> | null = null;
-  /** The checks run in flight, and whether a request came during it: runs never overlap, and none is missed. */
-  private checking: Promise<void> | null = null;
-  private checkAgain = false;
-  private checksFailed = '';
-  /** Whether the last checks run found another replica holding them: a check left pending is then theirs, not unheard. */
-  private checksSkipped = false;
   /** Analyses that failed, by collection, timed as Store.analysisFailed times them: kept here too, as StoredSync's downloadsFailed is, since the write that records the wait can fail with the analysis. */
   private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
   /**
-   * Ruling RR: whether the last lens pass ran a run; cleared by one that gave
+   * Whether the last lens pass ran a run; cleared by one that gave
    * way or found nothing. The next pass then gives way to a due analysis
    * whatever its run's wait. Passes only try the lock, on fixed timers, so
    * with a backlog of runs past LENS_WAIT_MS lens passes took it back to back
-   * and an analysis waited many runs; alternating keeps KK's cost at one run.
+   * and an analysis waited many runs; alternating keeps the cost at one run.
    */
   private lensRanLast = false;
   /**
-   * Ruling S12: whether the last lens pass ran a preview. The next pass then
+   * Whether the last lens pass ran a preview. The next pass then
    * gives way to a due analysis, once, and sets `handOver` so the lock goes
    * to it (see lens).
    */
@@ -255,8 +226,8 @@ export class Worker {
   private handOver = false;
   /**
    * A preview was asked for while a lens pass was in flight here: that pass
-   * may have looked for one before it was queued, so one more runs after it
-   * (P5). Once, however many were heard: a pass takes one preview.
+   * may have looked for one before it was queued, so one more runs after it.
+   * Once, however many were heard: a pass takes one preview.
    */
   private lensAgain = false;
 
@@ -273,11 +244,12 @@ export class Worker {
     stored: string = storedDir(process.env),
   ) {
     this.sync = new StoredSync(this, store, stored);
+    this.checks = new Checks(this, store, storeUrl);
   }
 
   /**
    * Starts every job's timer, each job's first pass now. The lens job starts
-   * half a period after analyze's (C1): the two take one lock (R8), and Node
+   * half a period after analyze's: the two take one lock, and Node
    * fires timers of one length in the order made, so on the same beat analyze
    * asked first every minute and a lens pass never got the lock.
    */
@@ -305,14 +277,7 @@ export class Worker {
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
     this.sync.stop();
-    this.listening = false;
-    if (this.relisten !== null) clearTimeout(this.relisten);
-    this.relisten = null;
-    if (this.sweep !== null) clearInterval(this.sweep);
-    this.sweep = null;
-    const listener = this.listener;
-    this.listener = null;
-    listener?.end().catch(() => {});
+    this.checks.stop();
   }
 
   /** The jobs with a pass in flight in this process. */
@@ -329,7 +294,7 @@ export class Worker {
    */
   async drain(ms = 30_000): Promise<void> {
     const until = Date.now() + ms;
-    const busy = () => this.running.size > 0 || this.checking !== null || this.sync.inFlight;
+    const busy = () => this.running.size > 0 || this.checks.checking !== null || this.sync.inFlight;
     while (busy() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
   }
 
@@ -344,7 +309,7 @@ export class Worker {
     }, HEARTBEAT_MS);
     alive.unref?.();
     try {
-      // R8: a lens run and an analysis never overlap, so the lens pass holds the analysis lock.
+      // Lens runs and analyses share one lock: they never overlap, so the lens pass holds the analysis lock.
       const outcome = await this.store.locked(LOCKS[job === 'lens' ? 'analyze' : job], false, async () => {
         await this.loadSettings();
         // passStarted is the first beat; with `current` set the keep-alive beats on, though the job's first call is slow.
@@ -367,15 +332,15 @@ export class Worker {
       this.current.delete(job);
       this.running.delete(job);
       if (job === 'lens' && this.handOver) {
-        // Ruling S12: the analysis takes the lock now, then a lens pass for the preview that waited; it stands in for the lensAgain re-run.
+        // The analysis takes the lock now, then a lens pass for the preview that waited; it stands in for the lensAgain re-run.
         this.handOver = false;
         this.lensAgain = false;
         // A stopped worker starts nothing: its timers are cleared and it hears no more.
-        const on = () => this.listening || this.timers.length > 0;
+        const on = () => this.checks.listening || this.timers.length > 0;
         if (on()) void this.run('analyze').then(() => { if (on()) void this.run('lens'); });
       } else if (job === 'lens' && this.lensAgain) {
         this.lensAgain = false;
-        if (this.listening) void this.run('lens');
+        if (this.checks.listening) void this.run('lens');
       }
     }
   }
@@ -396,7 +361,7 @@ export class Worker {
     let collections = await this.store.collections();
     await this.sync.askHub(collections, storedRepo);
     const manifest = await this.sync.storedManifest();
-    const { loaded: restored, waiting } = manifest === null ? { loaded: 0, waiting: new Set<number>() } : await this.sync.restore(collections, manifest);
+    const { loaded: restored, deferred } = manifest === null ? { loaded: 0, deferred: new Set<number>() } : await this.sync.restore(collections, manifest);
     // Read again: a load moved the cursors, and serving the old ones would read what it loaded.
     if (restored > 0) collections = await this.store.collections();
     // After every load of stored data, so a trail waits for its collection's transfers.
@@ -407,7 +372,7 @@ export class Worker {
     const readable: CollectionRow[] = [];
     for (const c of collections) {
       // Its load is next pass's: read now, it would be read from its deploy block for nothing.
-      if (waiting.has(c.id)) continue;
+      if (deferred.has(c.id)) continue;
       if (held.has(c.id)) {
         // Its stored data is on the way: read from where that stops, not from here. Not a fault meanwhile: clears a "No RPC" left from before.
         this.logged.delete(c.id);
@@ -510,7 +475,7 @@ export class Worker {
 
   /**
    * Read the funding of wallets not yet read, collections taking turns, within
-   * the budget (Ruling P9). The reserves come off the end first: COUNT_MS for
+   * the budget. The reserves come off the end first: COUNT_MS for
    * a stale estimate's count, and, with any collection reading tokens,
    * TOKEN_COUNT_MS for their counts. Each chain then walks its reaches (within
    * SEED_MS), reads its started collections' tokens (within TOKENS_MS) and
@@ -518,17 +483,17 @@ export class Worker {
    * had its turn, what checking left unused reads more tokens, chain by chain,
    * and the chains' token counts follow, each chain with a started
    * collection, the ones checking never reached too, each in an equal share
-   * of the time left (Ruling P14). The estimate is counted last, in what is
+   * of the time left. The estimate is counted last, in what is
    * left of the pass.
    */
   async fund(): Promise<string> {
-    const { followHops } = this.resolved();
+    const { followHops: globalHops } = this.resolved();
     const etherscan = this.etherscanClient();
     if (etherscan === null) return 'no funding source configured';
     const started = Date.now();
     const deadline = started + BUDGET_MS;
     const collections = await this.store.collections();
-    const counting = await this.store.nextCount(followHops);
+    const counting = await this.store.nextCount(globalHops);
     const countUntil = deadline - (counting === null ? 0 : COUNT_MS);
     const tokenChains = new Set(collections.filter((c) => c.readTokens).map((c) => c.chainId));
     const checkUntil = tokenChains.size > 0 ? countUntil - TOKEN_COUNT_MS : countUntil;
@@ -538,12 +503,12 @@ export class Worker {
     let failed = 0;
     chains: for (const chainId of new Set(collections.map((c) => c.chainId))) {
       const seedUntil = Math.min(Date.now() + SEED_MS, checkUntil);
-      while (Date.now() < seedUntil && await this.store.seedReach(chainId, followHops, SEED_CHUNK) > 0) {
+      while (Date.now() < seedUntil && await this.store.seedReach(chainId, globalHops, SEED_CHUNK) > 0) {
         await this.beat('fund', "Finding watched collections' wallets from the money already read", null);
       }
       const priority = priorityOn(chainId);
       if (tokenChains.has(chainId)) await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil));
-      const { lanes } = await this.store.fundingLanes(chainId, 20, followHops);
+      const { lanes } = await this.store.moneyLanes(chainId, 20, globalHops);
       const whose = (wallet: string) => {
         const lane = lanes.find((l) => l.wallets.includes(wallet))!;
         const c = collections.find((c) => c.id === lane.collectionId);
@@ -554,11 +519,11 @@ export class Worker {
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
           const { flows, truncated } = await etherscan.flows(chainId, wallet, WALLET_MS);
-          const follow = followHops > 0 ? followOf(chainId, followHops) : undefined;
-          await this.store.fund(chainId, wallet, flows, truncated, follow);
+          const follow = globalHops > 0 ? followOf(chainId, globalHops) : undefined;
+          await this.store.saveMoney(chainId, wallet, flows, truncated, follow);
           done += 1;
         } catch (err) {
-          await this.store.fundingFailed(chainId, wallet, this.scrubbed(err));
+          await this.store.moneyFailed(chainId, wallet, this.scrubbed(err));
           failed += 1;
         }
       }
@@ -566,7 +531,7 @@ export class Worker {
     // After every chain has been checked: the time checking left reads more tokens, then every chain's counts, shared within countUntil.
     for (const chainId of tokenChains) await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil);
     // Each chain an equal share of what is left, worked out again after each, so a chain whose count always runs out cannot
-    // starve the chains after it, and one that finishes early leaves its time to them (Ruling P14).
+    // starve the chains after it, and one that finishes early leaves its time to them.
     const toCount = [...tokenChains];
     for (const [i, chainId] of toCount.entries()) {
       await this.countTokens(chainId, Date.now() + Math.floor((countUntil - Date.now()) / (toCount.length - i)));
@@ -574,8 +539,8 @@ export class Worker {
     if (counting !== null && Date.now() < deadline) {
       const c = collections.find((c) => c.id === counting);
       await this.beat('fund', `Counting the wallets one hop further out for ${c?.name ?? c?.address ?? `collection ${counting}`}`, counting);
-      // A count that fails or runs out of time fails no checking. It was noted as tried, so the next pass counts another (S26).
-      await this.store.countNext(counting, followHops, Math.min(COUNT_MS, deadline - Date.now()))
+      // A count that fails or runs out of time fails no checking. It was noted as tried, so the next pass counts another.
+      await this.store.countNext(counting, globalHops, Math.min(COUNT_MS, deadline - Date.now()))
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
     return `${done} wallets read, ${failed} failed`;
@@ -591,11 +556,11 @@ export class Worker {
    * goes on without tokens.
    */
   private async readTokens(etherscan: Etherscan, chainId: number, collections: readonly CollectionRow[], priority: ReadonlySet<number>, until: number): Promise<number> {
-    const { followHops, tokensPayees } = this.resolved();
+    const { followHops: globalHops, tokensPayees } = this.resolved();
     let tried = 0;
     try {
       while (Date.now() < until) {
-        const { lanes } = await this.store.tokenLanes(chainId, 20, followHops, tokensPayees, until);
+        const { lanes } = await this.store.tokenLanes(chainId, 20, globalHops, tokensPayees, until);
         const order = interleave(lanes, priority);
         if (order.length === 0) break;
         for (const wallet of order) {
@@ -617,10 +582,10 @@ export class Worker {
     return tried;
   }
 
-  /** Store how far the chain's started collections have their tokens read (Ruling S21). A count that fails fails no checking. */
+  /** Store how far the chain's started collections have their tokens read. A count that fails fails no checking. */
   private async countTokens(chainId: number, until: number): Promise<void> {
-    const { followHops, tokensPayees } = this.resolved();
-    await this.store.countTokens(chainId, followHops, tokensPayees, until)
+    const { followHops: globalHops, tokensPayees } = this.resolved();
+    await this.store.countTokens(chainId, globalHops, tokensPayees, until)
       .catch((err) => console.error('[washtrace] chain %d: tokens not counted: %s', chainId, this.scrubbed(err)));
   }
 
@@ -633,11 +598,11 @@ export class Worker {
    * whose load failed and is not due again is analysed on what it has.
    */
   async analyze(): Promise<string> {
-    const { etherscanKey, followHops } = this.resolved();
+    const { etherscanKey, followHops: globalHops } = this.resolved();
     const c = await this.dueAnalysis(Date.now());
     if (c === null) return 'nothing due';
     // A loaded money trail is funding too: the money lenses run on it with no key.
-    const fundingAvailable = etherscanKey !== null || await this.store.importedFunding(c.id);
+    const fundingAvailable = etherscanKey !== null || await this.store.importedMoney(c.id);
     const name = c.name ?? `collection ${c.id}`;
     await this.beat('analyze', `Analyzing ${name}`, c.id);
     const started = Date.now();
@@ -647,7 +612,7 @@ export class Worker {
         storeUrl: this.storeUrl,
         id: c.id,
         chainId: c.chainId,
-        followHops,
+        followHops: globalHops,
         rules: c.rules,
         fundingAvailable,
         custodians: new Set(CUSTODIANS),
@@ -700,14 +665,14 @@ export class Worker {
   /**
    * Sweep previews past PREVIEW_KEEP_MS, then run one thing: a queued preview
    * if there is one, else the next due lens run. A preview goes before any
-   * lens run, and before a due analysis (P2): someone is at the editor
+   * lens run, and before a due analysis: someone is at the editor
    * waiting on it, and it judges a sample of 2,000 sales, not the collection.
-   * But not two in a row while an analysis is due (Ruling S12): every page
+   * But not two in a row while an analysis is due: every page
    * reads the latest analysis, so one held off while someone tunes a lens
    * leaves every number older. After a pass that ran a preview, this one
    * gives way to a due analysis, once, whether a preview or a run is next.
    * Neither the preview nor that giving way touches `lensRanLast`: whether a
-   * lens run gives way is the lens runs' own business (Ruling RR).
+   * lens run gives way is the lens runs' own business.
    *
    * Giving way alone did not get the analysis the lock: passes only try it,
    * and while previews are asked for, the lensAgain re-run and every notify
@@ -718,10 +683,10 @@ export class Worker {
    * analysis to its timer and the preview a minute and an analysis later.
    *
    * A lens run, one a pass: while it has waited less than LENS_WAIT_MS it
-   * gives way to a due analysis (Ruling AA); past that it runs (Ruling KK),
-   * unless the last lens pass ran one (Ruling RR). Picking, starting, running
+   * gives way to a due analysis; past that it runs,
+   * unless the last lens pass ran one. Picking, starting, running
    * and saving a preview or a run all happen under the analysis lock `run`
-   * holds (R8): one thread of the lens's size at a time keeps the memory
+   * holds: one thread of the lens's size at a time keeps the memory
    * budget, and `nextPreview` and `nextLensRun` take a `running` row as one a
    * stopped worker left, which is safe only because nothing else can be
    * running one. A failure is noted on the preview or the run and rethrown,
@@ -756,8 +721,8 @@ export class Worker {
     await this.beat('lens', `Running ${where}`, collectionId);
     const { progress, written } = this.progressWriter(`Running ${where}`, collectionId, (share) => this.store.lensRunProgress(lens.id, collectionId, share));
     try {
-      const { followHops, tokensPayees } = this.resolved();
-      const { totals, flags, tokensRead } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops, payees: tokensPayees }, progress);
+      const { followHops: globalHops, tokensPayees } = this.resolved();
+      const { totals, flags, tokensRead } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops: globalHops, payees: tokensPayees }, progress);
       await written();
       const saved = await this.store.saveLensRun(lens.id, collectionId, lens.version, analysisId, through, totals, flags, Date.now() - started, tokensRead);
       if (saved === 'stale') return `${lens.name} changed while it ran: queued again`;
@@ -777,8 +742,8 @@ export class Worker {
     try {
       // Inside the try: a throw here fails this preview with its own error, not as a swept "worker stopped".
       await this.beat('lens', `Previewing ${where}`, p.collectionId);
-      const { followHops, tokensPayees } = this.resolved();
-      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops, payees: tokensPayees }, progress);
+      const { followHops: globalHops, tokensPayees } = this.resolved();
+      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops: globalHops, payees: tokensPayees }, progress);
       await written();
       await this.store.savePreview(p.id, result);
       return `Previewed ${where}`;
@@ -819,172 +784,13 @@ export class Worker {
   }
 
   /**
-   * Hear the console's Test requests on a connection of its own and run them
-   * at once, not next pass: the page polls for about 20 seconds. Runs the
-   * checks on connecting too, for any asked while no worker listened. A lost
-   * connection is a log line and a retry, 5 seconds later and longer each
-   * time it fails in a row, up to a minute. The checks also run every
-   * SWEEP_MS, for a request not heard. On the same connection it hears the
-   * editor's Preview requests, and runs a lens pass for each (P5); one not
-   * heard waits for the lens timer. Never rejects; `stop` ends it.
-   */
-  async listen(): Promise<void> {
-    if (this.listening) return;
-    this.listening = true;
-    this.sweep = setInterval(() => { void this.sweepChecks(); }, SWEEP_MS);
-    this.sweep.unref?.();
-    await this.connectListener();
-  }
-
-  /**
-   * The timer's run of the checks, which answers and expires them though no
-   * notification came. A check waiting longer than DEAF_MS while no run is
-   * in flight, and the last run went through here, was not heard: the
-   * listener is connected again. Never rejects, and runs nothing once stopped.
-   */
-  private async sweepChecks(): Promise<void> {
-    const deaf = this.listener;
-    if (this.checking === null && this.checksFailed === '' && !this.checksSkipped && deaf !== null) {
-      const pending = await this.store.pendingChecks().catch(() => []);
-      if (this.listener === deaf && this.listening && pending.some((c) => c.ageMs > DEAF_MS)) {
-        console.warn('[washtrace] a Test request went unheard; listening again');
-        this.listener = null;
-        deaf.end().catch(() => {});
-        void this.connectListener();
-      }
-    }
-    // Stopped while it looked: the pool may be ending.
-    if (!this.listening) return;
-    await this.checksSoon();
-  }
-
-  private async connectListener(): Promise<void> {
-    this.relisten = null;
-    if (!this.listening) return;
-    // Kept alive as the store's pool is (Store.connect): an idle listener is what a NAT drops first.
-    const client = new pg.Client({ connectionString: this.storeUrl, application_name: 'washtrace-checks', keepAlive: true, keepAliveInitialDelayMillis: 30_000 });
-    this.listener = client;
-    const lose = (err: unknown) => {
-      // Only the current listener retries: one ended by `stop`, or already lost, does not.
-      if (this.listener !== client) return;
-      this.listener = null;
-      client.end().catch(() => {});
-      if (!this.listening) return;
-      this.listenFailures += 1;
-      const wait = Math.min(RELISTEN_MAX_MS, RELISTEN_MS * this.listenFailures);
-      // A long outage is a line at its start and one every tenth retry, as for the store at startup.
-      if (this.listenFailures % 10 === 1) {
-        console.warn('[washtrace] check requests not heard (%s); listening again in %ds', this.scrubbed(err), wait / 1000);
-      }
-      this.relisten = setTimeout(() => { void this.connectListener(); }, wait);
-      this.relisten.unref?.();
-    };
-    client.on('error', lose);
-    client.on('end', () => lose(new Error('connection ended')));
-    client.on('notification', (n) => {
-      if (n.channel === PREVIEWS_CHANNEL) this.lensSoon();
-      else void this.checksSoon();
-    });
-    try {
-      await client.connect();
-      // One round trip for both: the checks', and the previews' (P5).
-      await client.query(`LISTEN ${CHECKS_CHANNEL}; LISTEN ${PREVIEWS_CHANNEL}`);
-    } catch (err) {
-      lose(err);
-      return;
-    }
-    if (this.listener !== client) return;
-    this.listenFailures = 0;
-    void this.checksSoon();
-  }
-
-  /**
-   * A preview was asked for: a lens pass now, which takes it first (P5), or
+   * A preview was asked for: a lens pass now, which takes it first, or
    * once more after the pass in flight here. Without this it would wait up to
    * a lens period for the timer while someone watches the editor.
    */
-  private lensSoon(): void {
+  lensSoon(): void {
     if (this.running.has('lens')) this.lensAgain = true;
     else void this.run('lens');
-  }
-
-  /** Run the checks now, or once more after the run in flight. Never two runs at once, and never rejects. */
-  private checksSoon(): Promise<void> {
-    if (this.checking !== null) {
-      this.checkAgain = true;
-      return this.checking;
-    }
-    this.checking = (async () => {
-      try {
-        do {
-          this.checkAgain = false;
-          try {
-            await this.runChecks();
-            this.checksFailed = '';
-          } catch (err) {
-            const message = this.scrubbed(err);
-            if (this.checksFailed !== message) console.error('[washtrace] checks not run: %s', message);
-            this.checksFailed = message;
-          }
-        } while (this.checkAgain && this.listening);
-      } finally {
-        this.checking = null;
-      }
-    })();
-    return this.checking;
-  }
-
-  /**
-   * Finish every check the console asked for, with the settings as saved
-   * this moment, so a URL saved a second ago is the one tested; the settings
-   * read last when the store cannot say. A check older than CHECK_EXPIRY_MS
-   * is finished as expired instead. One replica runs checks at a time; one
-   * that heard the same request skips. Returns how many it finished.
-   */
-  async runChecks(): Promise<number> {
-    const finished = await this.store.locked(LOCKS.checks, false, async () => {
-      const settings = await this.store.settings().catch(() => this.settings);
-      const config = this.resolved(settings);
-      const n = await this.store.expireChecks(CHECK_EXPIRY_MS);
-      // At once, so several Tests asked together do not add up their waits.
-      // All settle before the lock goes: one that cannot be saved does not end the run under the rest.
-      const pending = await this.store.pendingChecks();
-      const settled = await Promise.allSettled(pending.map(async (c) => {
-        const { ok, detail } = await this.runCheck(c, config);
-        await this.store.finishCheck(c.id, ok, detail);
-      }));
-      const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed !== undefined) throw failed.reason;
-      return n + pending.length;
-    });
-    this.checksSkipped = finished === 'skipped';
-    return finished === 'skipped' ? 0 : finished;
-  }
-
-  /**
-   * One check's result: the chain's three answers, Etherscan answering, or
-   * `{ error }`. Never throws, so one bad check cannot hold up the rest. The
-   * console shows the detail, so every URL and key is taken out of an error.
-   */
-  private async runCheck(c: { kind: CheckKind; chainId: number | null }, config: WorkerConfig): Promise<{ ok: boolean; detail: Record<string, unknown> }> {
-    const fail = (error: string) => ({ ok: false, detail: { error } });
-    try {
-      if (c.kind === 'etherscan') {
-        const etherscan = this.etherscanClient(config);
-        if (etherscan === null) return fail('No Etherscan key is set');
-        // One key serves every chain; Ethereum when the console named none.
-        await etherscan.ping(c.chainId ?? 1);
-        return { ok: true, detail: {} };
-      }
-      if (c.kind !== 'rpc') return fail(`Unknown check: ${String(c.kind).slice(0, 40)}`);
-      if (c.chainId === null) return fail('An RPC check needs a chain');
-      const url = config.rpc.get(c.chainId);
-      if (url === undefined) return fail(`No RPC is set for chain ${c.chainId}`);
-      return { ok: true, detail: await this.chain(c.chainId, url).check() };
-    } catch (err) {
-      // Every secret seen, not only this config's: `config` was built by resolved, so its own are among them.
-      return fail(this.scrubbed(err));
-    }
   }
 
   /**
@@ -1031,7 +837,7 @@ export class Worker {
   }
 
   /** The config for `settings`, by default the settings read this pass, its secrets remembered for scrubbed. */
-  private resolved(settings: ReadonlyMap<string, string> = this.settings): WorkerConfig {
+  resolved(settings: ReadonlyMap<string, string> = this.settings): WorkerConfig {
     const config = this.config(settings);
     for (const secret of configSecrets(config)) this.seen.add(secret);
     return config;

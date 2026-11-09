@@ -3,9 +3,9 @@ import { Wallets } from './wallets.js';
 /**
  * Which money kind an edge is, as a byte: ETH payments, ETH sent by a
  * contract, WETH-like tokens, and other tokens (TOKENS, read into
- * token_flows). An other-token edge's `eth` is 0: tokens differ in value and
- * washtrace has no prices, so no floor reads it (T9). `otherOneWay` is an
- * other-token edge whose receiver's own read does not pass T6 (Ruling P10):
+ * token_flows). An other-token edge's `amountEth` is 0: tokens differ in value and
+ * washtrace has no prices, so no floor reads it. `otherOneWay` is an
+ * other-token edge whose receiver's own read is not one washtrace can judge:
  * it is never walked against its arrow, else two traders who paid one DEX
  * pool, or a wallet never read, would read as a way back through it.
  */
@@ -25,11 +25,11 @@ const EMPTY = new Int32Array(0);
 const BLOCK = 1 << 21;
 
 type Column = Int32Array | Uint8Array | Uint32Array | Float32Array;
-type Name = 'from' | 'to' | 'time' | 'block' | 'eth' | 'kind' | 'sale';
+type Name = 'from' | 'to' | 'time' | 'block' | 'amountEth' | 'kind' | 'sale';
 type Ctor = { new (n: number): Column; new (buffer: ArrayBuffer, offset: number, length: number): Column; BYTES_PER_ELEMENT: number };
 /** The 4-byte columns first, so every column in a block is aligned. */
 const COLUMNS: Record<Name, Ctor> = {
-  from: Int32Array, to: Int32Array, time: Uint32Array, block: Int32Array, eth: Float32Array, kind: Uint8Array, sale: Uint8Array,
+  from: Int32Array, to: Int32Array, time: Uint32Array, block: Int32Array, amountEth: Float32Array, kind: Uint8Array, sale: Uint8Array,
 };
 const NAMES = Object.keys(COLUMNS) as Name[];
 type Block = { buffer: ArrayBuffer } & Record<Name, Column>;
@@ -78,8 +78,8 @@ export class Moves {
    * floor, which SQL has already applied exactly, not for exact sums. Half
    * the size of a double, and seven digits are plenty for that.
    */
-  eth: Float32Array = new Float32Array(0);
-  /** 1 for an edge paid in a transaction that moves one of the collection's tokens (Ruling K: an NFT's price). */
+  amountEth: Float32Array = new Float32Array(0);
+  /** 1 for an edge paid in a transaction that moves one of the collection's tokens (an NFT's price). */
   sale: Uint8Array = new Uint8Array(0);
 
   private n = 0;
@@ -117,7 +117,7 @@ export class Moves {
     return this.wallet.name(w);
   }
 
-  add(from: string, to: string, kind: number, time: number, block: number, eth: number, sale: boolean): void {
+  add(from: string, to: string, kind: number, time: number, block: number, amountEth: number, sale: boolean): void {
     if (this.sealed) throw new Error('Moves is sealed: no edge can be added after seal().');
     const at = this.n % BLOCK;
     if (at === 0) this.blocks.push(newBlock());
@@ -127,7 +127,7 @@ export class Moves {
     b.kind[at] = kind;
     b.time[at] = time;
     b.block[at] = block;
-    b.eth[at] = eth;
+    b.amountEth[at] = amountEth;
     b.sale[at] = sale ? 1 : 0;
     if (time < this.last) this.inOrder = false;
     this.last = time;
@@ -170,7 +170,7 @@ export class Moves {
     this.kind = out.kind as Uint8Array;
     this.time = out.time as Uint32Array;
     this.block = out.block as Int32Array;
-    this.eth = out.eth as Float32Array;
+    this.amountEth = out.amountEth as Float32Array;
     this.sale = out.sale as Uint8Array;
     [this.outStart, this.outList] = adjacency(this.from, this.wallets);
     this.inbound = null;

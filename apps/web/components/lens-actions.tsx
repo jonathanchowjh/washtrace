@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LOCAL_ONLY } from '@/lib/auth';
 
-const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
+export const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
 
 /**
  * Sends a lens write to its route, as JSON: the body it answered, parsed (or
@@ -55,7 +55,7 @@ export function DeleteLens({ id, name, writable }: { id: number; name: string; w
  * Queues one of your lenses to run on this collection. Offered for a lens
  * with no run here, or one whose run failed (after three failures in a row it
  * waits to be asked). A queued or running run is on its way already, and the
- * store leaves a running one as it is (Ruling T); a finished one runs again on
+ * store leaves a running one as it is; a finished one runs again on
  * its own after an edit or a newer analysis.
  */
 export function RunHere({ id, chainId, address, writable }: { id: number; chainId: number; address: string; writable: boolean }) {

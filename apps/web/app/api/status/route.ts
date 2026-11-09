@@ -1,7 +1,5 @@
-import { cookies } from 'next/headers';
-import { handle, json } from '@/lib/api';
+import { handle, json, readerZone } from '@/lib/api';
 import { statusReport } from '@/lib/views';
-import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 
 /**
  * GET: is the detector keeping up. Each job's state, each collection's lag,
@@ -12,7 +10,7 @@ import { ZONE_COOKIE, parseZone } from '@/lib/zone';
 export async function GET(): Promise<Response> {
   return handle(async () => {
     // The reader's zone when a browser asks, for the dates in the notices; UTC otherwise.
-    const zone = parseZone((await cookies()).get(ZONE_COOKIE)?.value)?.zone;
+    const zone = await readerZone();
     return json((await statusReport(zone)).report);
   });
 }

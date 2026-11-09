@@ -45,12 +45,15 @@ export function needsRestore(c: CollectionRow, entry: StoredEntry | null, key: s
  * (`onDisk`: both are there, and each matches its sha256 in the manifest),
  * and it is not the trail already loaded. A trail cut again has a new sha,
  * so it loads again. No request is needed: a trail on disk loads as stored
- * data does.
+ * data does. Returns 'import' when the trail is due, null when not.
  */
 export function needsTrail(c: CollectionRow, e: StoredEntry | null, onDisk: boolean): 'import' | null {
   if (c.pausedAt !== null || e?.trail == null || !onDisk) return null;
   return c.trailImportedSha !== e.trail.sha256 ? 'import' : null;
 }
+
+/** The most a progress bar reads while a load or download runs: it never reads done, because the data is not there until the load commits and the progress is then cleared. */
+export const NOT_DONE = 0.99;
 
 /** Why a money trail on disk was not loaded, in the words the console shows. The full error goes to the log. */
 export const TRAIL_NOTES = {
@@ -121,7 +124,7 @@ export class StoredSync {
    */
   private readonly shas = new Map<string, { file: string; sha: string }>();
   /** Trails that could not be read, by the path of their flows file and their trailOnDisk key: not tried again until either file changes. */
-  private readonly trailsFailed = new Map<string, string>();
+  private readonly trailsUnreadable = new Map<string, string>();
   /**
    * Loads of stored data the store failed, by collection, timed as the store
    * times them: kept here too, since the write that records a back-off can
@@ -144,9 +147,9 @@ export class StoredSync {
   /** The trail import running in this process, outside every pass (see startTrailImport). One at a time. */
   private importing: { id: number; sha: string; abort: AbortController; done: Promise<void> } | null = null;
   /** Trail imports the store failed, by collection, timed as a failed load is. In memory only: the note says it failed, and a restart tries again. */
-  private readonly trailsBackoff = new Map<number, { failures: number; retryAt: number }>();
+  private readonly trailsRetry = new Map<number, { failures: number; retryAt: number }>();
   /** Collections whose progress an import could not clear (the store itself failing, usually). The value is this process's own, as it held the lock; each pass tries again (see trails). */
-  private readonly clearFailed = new Set<number>();
+  private readonly progressUncleared = new Set<number>();
 
   /** `stored` is the stored-data folder, which holds manifest.json. */
   constructor(
@@ -246,17 +249,19 @@ export class StoredSync {
 
   /**
    * Load the stored data of the first collection that needs it (see
-   * needsRestore), and say how many loaded and which others wait their turn.
-   * One a pass that goes through (one that fails lets the next try): this runs in the ingest pass, under its lock, so no span is
-   * read into a collection while it loads, and every other collection's
-   * reading waits for it; with six to load, they would wait for all six. A load that fails has said why on the collection, and
-   * its chain is read as if there were no stored data. A note about stored
+   * needsRestore), and say how many loaded and which others are deferred to
+   * a later pass. Loads at most one collection per pass; a failed load does
+   * not use up the pass. This runs in the ingest pass, under its lock, so no
+   * span is read into a collection while it loads, and every other
+   * collection's reading waits for it; with six to load, they would wait for
+   * all six. A load that fails has said why on the collection, and its chain
+   * is read as if there were no stored data. A note about stored
    * data the collection no longer reaches for says nothing true, and goes.
    */
-  async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<{ loaded: number; waiting: Set<number> }> {
+  async restore(collections: readonly CollectionRow[], manifest: Manifest): Promise<{ loaded: number; deferred: Set<number> }> {
     let loaded = 0;
-    let tried = false;
-    const waiting = new Set<number>();
+    let loadedOne = false;
+    const deferred = new Set<number>();
     for (const c of collections) {
       if (c.pausedAt !== null) continue;
       const entry = entryFor(manifest, c.chainId, c.address);
@@ -272,8 +277,8 @@ export class StoredSync {
       if (!this.restoreDue(c, entry, noted, Date.now())) continue;
       // Not on disk yet, and the Hub has it: it is downloaded first (see downloads). Loaded now, it would only be noted missing.
       if (await this.fetchable(manifest, join(this.stored, entry.transfers.file), entry.transfers.sha256)) continue;
-      if (tried) {
-        waiting.add(c.id);
+      if (loadedOne) {
+        deferred.add(c.id);
         continue;
       }
       // Taken before the load, so a file replaced while it runs is tried again.
@@ -284,7 +289,7 @@ export class StoredSync {
         this.restoreFailed.delete(c.id);
         loaded += 1;
         // Only a load that went through spends the pass: one that failed leaves the next to go now.
-        tried = true;
+        loadedOne = true;
       } catch (err) {
         console.error('[washtrace] collection %d: stored data not loaded: %s', c.id, this.worker.scrubbed(err));
         // Bad stored data is keyed on the file, not timed.
@@ -295,7 +300,7 @@ export class StoredSync {
         }
       }
     }
-    return { loaded, waiting };
+    return { loaded, deferred };
   }
 
   /** Whether to load a collection's stored data now: needsRestore, and no back-off held here (restoreFailed) still running. */
@@ -337,11 +342,11 @@ export class StoredSync {
   async trails(collections: readonly CollectionRow[], manifest: Manifest): Promise<void> {
     const now = Date.now();
     // A clear that failed left progress the console shows as loading. Tried again, never for the import that runs: its progress is true.
-    for (const id of [...this.clearFailed]) {
+    for (const id of [...this.progressUncleared]) {
       if (this.importing?.id === id) continue;
       try {
         await this.store.setTrailProgress(id, null);
-        this.clearFailed.delete(id);
+        this.progressUncleared.delete(id);
       } catch (err) {
         console.error('[washtrace] collection %d: money trail progress not cleared: %s', id, this.worker.scrubbed(err));
       }
@@ -386,10 +391,10 @@ export class StoredSync {
         }
         continue;
       }
-      if (needsTrail(c, entry, disk !== null) !== 'import' || this.trailsFailed.get(trailPaths(this.stored, entry).flows) === disk!.key) continue;
+      if (needsTrail(c, entry, disk !== null) !== 'import' || this.trailsUnreadable.get(trailPaths(this.stored, entry).flows) === disk!.key) continue;
       // One at a time; the first due goes.
       if (this.importing !== null || next !== null) continue;
-      if (now < (this.trailsBackoff.get(c.id)?.retryAt ?? 0)) continue;
+      if (now < (this.trailsRetry.get(c.id)?.retryAt ?? 0)) continue;
       if (needsRestore(c, entry, await this.noteKey(c, entry), now)) continue;
       next = { c, entry, key: disk!.key };
     }
@@ -440,7 +445,7 @@ export class StoredSync {
     const run = new LockedRun(client, abort, (share) => this.store.setTrailProgress(c.id, share),
       (err) => console.warn('[washtrace] collection %d: money trail progress not written: %s', c.id, this.worker.scrubbed(err)));
     const rows = Math.max(1, entry.trail!.rows);
-    const onFlows = (flows: number) => run.progress(Math.min(0.99, flows / rows));
+    const onFlows = (flows: number) => run.progress(Math.min(NOT_DONE, flows / rows));
     let movedAt = Date.now();
     const watch = setInterval(() => { if (Date.now() - movedAt >= TRAIL_STALL_MS) abort.abort('stalled' satisfies Halt); }, STALL_CHECK_MS);
     watch.unref?.();
@@ -469,26 +474,26 @@ export class StoredSync {
     })();
     try {
       const { wallets, flows } = await this.store.importTrail(c.id, c.chainId, sha, open, { onFlows, signal: abort.signal });
-      this.trailsBackoff.delete(c.id);
+      this.trailsRetry.delete(c.id);
       console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
     } catch (err) {
       await run.writes;
-      await this.store.setTrailProgress(c.id, null).catch((e) => { this.clearFailed.add(c.id); this.logged(c.id, 'money trail progress not cleared')(e); });
+      await this.store.setTrailProgress(c.id, null).catch((e) => { this.progressUncleared.add(c.id); this.logged(c.id, 'money trail progress not cleared')(e); });
       const halt: Halt | null = abort.signal.aborted ? abort.signal.reason : null;
       if (halt === 'stopped') return;
       if (halt === null && err instanceof StoredDataError) {
         // Bad stored data is keyed on the files, not timed.
         console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, this.worker.scrubbed(err));
-        this.trailsBackoff.delete(c.id);
-        this.trailsFailed.set(trailPaths(this.stored, entry).flows, key);
+        this.trailsRetry.delete(c.id);
+        this.trailsUnreadable.set(trailPaths(this.stored, entry).flows, key);
         await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
         return;
       }
       const why = halt === 'stalled' ? `nothing was written for ${TRAIL_STALL_MS / 60_000} minutes`
         : halt === 'lost' ? `the connection holding its lock was lost (${this.worker.scrubbed(run.lost)})` : this.worker.scrubbed(err);
       console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, why);
-      const failures = (this.trailsBackoff.get(c.id)?.failures ?? 0) + 1;
-      this.trailsBackoff.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
+      const failures = (this.trailsRetry.get(c.id)?.failures ?? 0) + 1;
+      this.trailsRetry.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
       await this.noteTrail(c.id, TRAIL_NOTES.failed);
     } finally {
       clearInterval(watch);

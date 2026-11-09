@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ZERO } from '../src/graph.js';
 import { SEARCH_CAP, runLens } from '../src/lens.js';
-import { COPIES, DEFAULT_RULE, depthNeeded, moneyReason, moneyShort, readThrough, tokensReason, type EdgeKind, type LensRule } from '../src/lens-rule.js';
+import { COPIES, DEFAULT_RULE, depthNeeded, type EdgeKind, type LensRule } from '../src/lens-rule.js';
+import { moneyReason, moneyShort, readThrough, tokensReason } from '../src/lens-reads.js';
 import { contractsFor } from '../src/marketplaces.js';
 import { analyze } from '../src/methods.js';
 import { MOVE_KIND, Moves } from '../src/moves.js';
@@ -14,7 +15,7 @@ import { LAB, LAB_MIXED, MONEY, USDC, WETH, chain, flow, input, transfer, w } fr
  * A lens input built the way `Store.lensInput` builds one, less its SQL
  * filters by kind and floor: every flow is loaded, so these tests see the
  * engine drop what a rule leaves out on its own. `tokens` are other-token
- * edges, loaded as though every sender passed T6, which only SQL judges.
+ * edges, loaded as though every sender is one washtrace can judge, which only SQL judges.
  */
 function lensInputOf(
   transfers: Transfer[], flows: Flow[] = [], more: Partial<Pick<LensInput, 'contracts' | 'custodians' | 'money' | 'truncated'>> = {}, tokens: TokenFlow[] = [],
@@ -32,7 +33,7 @@ function lensInputOf(
     if (kind < 0) continue;
     moves.add(f.from, f.to, kind, f.blockTime, f.blockNumber, Number(f.valueWei) / 1e18, tradeAt.has(f.txHash));
   }
-  // A receiver named in `oneWay` failed T6 (Ruling P10), which SQL judges too.
+  // A receiver named in `oneWay` is not one washtrace can judge, which SQL judges too.
   for (const t of tokens) moves.add(t.from, t.to, oneWay.has(t.to) ? MOVE_KIND.otherOneWay : MOVE_KIND.other, t.blockTime, t.blockNumber, 0, tradeAt.has(t.txHash));
   moves.seal();
   return { transfers, through: null, moves, contracts: new Set(), custodians: new Set(), money, truncated: new Set(), tradeTxs, tokensRead: null, ...more };
@@ -146,7 +147,7 @@ describe('Round trips copies exactly', () => {
   });
 });
 
-/** Review Focus 1's rule: every available money row on, either way, hops 0–6, closing at a funder, no window, no never. */
+/** A rule with every available money row on, either way, hops 0–6, closing at a funder, no window, no never. */
 function everyMoneyRow(): LensRule {
   const r = structuredClone(DEFAULT_RULE);
   for (const k of ['eth', 'internal', 'weth'] as const) r.edges[k] = { use: true, direction: 'either', max: null, minWei: null, repeats: 'each' };
@@ -191,7 +192,7 @@ describe('an honest sale is never caught', () => {
     expect(r.flags[0]!.wallets).toEqual([a, b]);
   });
 
-  it("on two sales into the same buyer's WETH offers: neither sale's payment closes the other (Ruling K)", () => {
+  it("on two sales into the same buyer's WETH offers: neither sale's payment closes the other", () => {
     const ts = [
       transfer('1', ZERO, a, { blockTime: T0 - 10 * DAY }), transfer('2', ZERO, a, { blockTime: T0 - 10 * DAY }),
       transfer('1', a, b, { marketplace: 'seaport-1.6', priceWei: '1000', currency: WETH, blockTime: T0 }),
@@ -204,7 +205,7 @@ describe('an honest sale is never caught', () => {
     expect(caught(everyMoneyRow(), ts, offers, { money: MONEY })).toBe(0);
   });
 
-  describe('when a marketplace once paid the seller and the buyer once paid it (Ruling J)', () => {
+  describe('when a marketplace once paid the seller and the buyer once paid it', () => {
     const SEAPORT = '0x0000000000000068f116a894984e2db1123eb395';
     const ts = () => sale({ marketplace: 'seaport-1.6' });
     const valueWei = '20000000000000000'; // 0.02 ETH: over DEFAULT_RULE's floor
@@ -223,10 +224,10 @@ describe('an honest sale is never caught', () => {
     it('not with marketplaces barred', () => {
       expect(judge(withNever({ marketplaces: true, over: null, addresses: [] }))).toBe(0);
     });
-    it('not when hand-listed', () => {
+    it('is not a funder when never.addresses lists it', () => {
       expect(judge(withNever({ marketplaces: false, over: null, addresses: [SEAPORT] }))).toBe(0);
     });
-    it('not past over', () => {
+    it('is not a funder when its degree exceeds never.over', () => {
       expect(judge(withNever({ marketplaces: false, over: 0, addresses: [] }))).toBe(0);
     });
     it('not under DEFAULT_RULE closing at a funder', () => {
@@ -234,7 +235,7 @@ describe('an honest sale is never caught', () => {
     });
   });
 
-  it("in a ring of priced sales of three tokens, under DEFAULT_RULE; tokens handed on for free still close it (I4, Ruling CC)", () => {
+  it("in a ring of priced sales of three tokens, under DEFAULT_RULE; tokens handed on for free still close it", () => {
     const priced = (tokenId: string, from: string, to: string, at: number) =>
       transfer(tokenId, from, to, { marketplace: 'blur', priceWei: '500000000000000000', currency: '', blockTime: at });
     const mints = () => ['1', '2', '3'].map((t, i) => transfer(t, ZERO, [a, b, c][i]!, { blockTime: T0 - 60 * DAY }));
@@ -246,7 +247,7 @@ describe('an honest sale is never caught', () => {
     expect(r.flags.map((x) => legs(x.path))).toEqual([[[a, b, 'nft-token'], [b, c, 'nft-collection'], [c, a, 'nft-collection']]]);
   });
 
-  describe("under DEFAULT_RULE, when buyer and seller use one exchange that pays many of this collection's wallets (C2, Ruling BB)", () => {
+  describe("under DEFAULT_RULE, when buyer and seller use one exchange that pays many of this collection's wallets", () => {
     const X = w('c0ffee');
     const eth = (n: number) => String(BigInt(Math.round(n * 100)) * 10n ** 16n);
     // The 200 others traded this collection's tokens too (a mint alone is no trade): to this collection, that is what makes X an exchange.
@@ -354,7 +355,7 @@ describe('each rule field', () => {
     expect(caught(ethOnly((r) => { r.never.marketplaces = false; }), sale(), through(), { contracts })).toBe(1);
 
     // M is linked by money to three of this collection's wallets, B, A and X, however many payments: Y holds none of its tokens,
-    // and the payment inside one of its sales (Ruling K) links no one.
+    // and the payment inside one of its sales links no one.
     const judged = (over: number) => {
       const ts = [...sale(), ...chain('9', m, x), ...chain('8', c, d)];
       const flows = [...through(), flow(m, x), flow(m, x), flow(x, m), flow(y, m), flow(m, c, { txHash: ts.at(-1)!.txHash })];
@@ -401,7 +402,7 @@ describe('each rule field', () => {
     expect(caught(rule, chain('1', a, b, a), [flow(b, a)])).toBeGreaterThan(0);
   });
 
-  describe('closes at a funder (D12)', () => {
+  describe('closes at a funder', () => {
     // At most one ETH edge back, so B → F → A by ETH alone is not a loop: only F's funding of A can close it.
     const oneEth = (closes: LensRule['closes']) => ethOnly((r) => { r.edges.eth.max = 1; r.closes = closes; });
 
@@ -420,7 +421,7 @@ describe('each rule field', () => {
       expect(caught(oneEth('seller-or-funder'), sale(), flows)).toBe(0);
     });
 
-    describe('the buyer is a funder too, with no wallet between (Ruling MM)', () => {
+    describe('the buyer is a funder too, with no wallet between', () => {
       // Loop order, so a payment before the trade is no way back: only the buyer's funding of the seller can close it.
       const inOrder = (change: (r: LensRule) => void = () => {}) => ethOnly((r) => { r.order = 'loop'; r.closes = 'seller-or-funder'; change(r); });
       const paidFirst = () => [flow(b, a, { blockTime: T0 - DAY })];
@@ -440,7 +441,7 @@ describe('each rule field', () => {
         expect(caught(inOrder((r) => { r.hops = { min: 1, max: 6 }; }), sale(), paidFirst())).toBe(0);
       });
 
-      it("not by a payment inside one of this collection's transactions (Ruling K)", () => {
+      it("not by a payment inside one of this collection's transactions", () => {
         const ts = sale();
         // The mint's transaction: no sale, but it moves one of the collection's tokens.
         expect(caught(inOrder(), ts, [flow(b, a, { blockTime: T0 - DAY, txHash: ts[0]!.txHash })])).toBe(0);
@@ -476,7 +477,7 @@ describe('each rule field', () => {
         expect(r.flags.map((f) => legs(f.path))).toEqual([[[a, b, 'nft-token'], [b, x, 'eth'], [x, a, 'eth']]]);
       });
 
-      it('never as a middle would: the buyer is not checked against never (Ruling J)', () => {
+      it('never as a middle would: the buyer is not checked against never', () => {
         const barred = inOrder((r) => { r.never = { marketplaces: true, over: 0, addresses: [b] }; });
         expect(caught(barred, sale(), paidFirst(), { contracts: new Set([b]) })).toBe(1);
       });
@@ -484,7 +485,7 @@ describe('each rule field', () => {
   });
 });
 
-describe('other tokens (T8)', () => {
+describe('other tokens', () => {
   let n = 0;
   /** A USDC payment, 1,250.5 by default, a day after the sale unless told. */
   const usdc = (from: string, to: string, more: Partial<TokenFlow> = {}): TokenFlow =>
@@ -508,7 +509,7 @@ describe('other tokens (T8)', () => {
     expect(caught(structuredClone(DEFAULT_RULE), sale(), [], {}, [back])).toBe(0);
   });
 
-  it("a USDC-priced sale's own payment is no way back (Ruling K, R4); the same payment in another transaction is", () => {
+  it("a USDC-priced sale's own payment is no way back; the same payment in another transaction is", () => {
     const ts = sale();
     expect(caught(tokensOnly(), ts, [], {}, [usdc(b, a, { txHash: ts[1]!.txHash, blockTime: T0, blockNumber: ts[1]!.blockNumber })])).toBe(0);
     expect(caught(tokensOnly(), ts, [], {}, [usdc(b, a, { blockTime: T0 })])).toBe(1);
@@ -520,7 +521,7 @@ describe('other tokens (T8)', () => {
     expect(caught(mixed, sale(), [], {}, [usdc(b, m), usdc(m, a)])).toBe(0);
   });
 
-  it('the never contracts and addresses apply to token edges, and never.over counts them (T6)', () => {
+  it('the never contracts and addresses apply to token edges, and never.over counts them', () => {
     const through = [usdc(b, m), usdc(m, a)];
     const rule = tokensOnly((r) => { r.hops = { min: 1, max: 1 }; });
     expect(caught(rule, sale(), [], {}, through)).toBe(1);
@@ -535,7 +536,7 @@ describe('other tokens (T8)', () => {
     expect(caught(hub(3), ts, [], {}, [...through, usdc(c, m)])).toBe(1);
   });
 
-  it('under either, a token edge is walked against its arrow only when its receiver passed T6 (Ruling P10); along, nothing changes', () => {
+  it('under either, a token edge is walked against its arrow only when its receiver is a sender washtrace can judge; along, nothing changes', () => {
     // Buyer and seller both paid one pool: buyer -> p, then p <- seller walked backwards.
     const paid = [usdc(b, m), usdc(a, m)];
     const back = tokensOnly((r) => { r.edges['other-tokens'].direction = 'either'; r.hops = { min: 1, max: 1 }; });
@@ -545,7 +546,7 @@ describe('other tokens (T8)', () => {
     expect(found.moneyEdges.map((e) => e.kind)).toEqual(['other-tokens', 'other-tokens']);
     expect(runLens(back, lensInputOf(sale(), [], {}, paid, new Set([m]))).flags).toEqual([]);
     expect(runLens(along, lensInputOf(sale(), [], {}, paid)).flags).toEqual([]);
-    // Along its arrow a one-way edge counts as any other: buyer -> m -> seller, m's receivers failing T6 or not.
+    // Along its arrow a one-way edge counts as any other: buyer -> m -> seller, m's receivers judgeable or not.
     const through = [usdc(b, m), usdc(m, a)];
     expect(runLens(along, lensInputOf(sale(), [], {}, through, new Set([m, a]))).flags).toHaveLength(1);
     expect(runLens(back, lensInputOf(sale(), [], {}, through, new Set([m, a]))).flags).toHaveLength(1);
@@ -561,7 +562,7 @@ describe('other tokens (T8)', () => {
   });
 });
 
-describe('who funded the seller (D12), read through runLens', () => {
+describe('who funded the seller, read through runLens', () => {
   // A third transfer: another sale of this collection, by another seller, in a transaction of its own.
   const ts = [...sale(), transfer('7', c, d, { marketplace: 'blur', blockTime: T0 - 2 * DAY })];
   const candidates = [f, ...['f1', 'f2', 'f3', 'f4'].map(w)];
@@ -587,7 +588,7 @@ describe('who funded the seller (D12), read through runLens', () => {
     expect(funders([flow(f, a, { blockTime: T0 - DAY, valueWei: '10' })], (r) => { r.edges.eth.minWei = '11'; })).toEqual([]);
   });
 
-  it("never counts a payment in the trade's own transaction, nor in any other of this collection's sales (Ruling K)", () => {
+  it("never counts a payment in the trade's own transaction, nor in any other of this collection's sales", () => {
     expect(funders([flow(f, a, { blockTime: T0 - DAY, txHash: ts[1]!.txHash })])).toEqual([]);
     expect(funders([flow(f, a, { blockTime: T0 - DAY, txHash: ts[2]!.txHash })])).toEqual([]);
   });
@@ -620,7 +621,7 @@ describe('the search cap', () => {
     expect(r.totals.truncated).toBe(1);
   });
 
-  it('counts every edge it examines, so a wide middle cannot run on uncounted (Ruling L)', () => {
+  it('counts every edge it examines, so a wide middle cannot run on uncounted', () => {
     // 100 middles of 100 dead ends each: 100 wallets reached, but 10,100 edges read.
     const xs = Array.from({ length: 100 }, (_, i) => w(`x${i}`));
     const flows = xs.flatMap((p, i) => [flow(b, p), ...Array.from({ length: 100 }, (_, j) => flow(p, w(`z${i}_${j}`)))]);
@@ -805,7 +806,7 @@ describe('depthNeeded, how far out a rule needs money read', () => {
     }
   });
 
-  it("ignores other tokens (T12): their read is the tokens row's, not the money walk's", () => {
+  it("ignores other tokens: their read is the tokens row's, not the money walk's", () => {
     const tokens = ethOnly((r) => { r.edges.eth.use = false; r.edges['other-tokens'].use = true; r.hops.max = 4; });
     expect(depthNeeded(tokens)).toBe(0);
     expect(moneyReason(tokens, { limit: 0, pendingByDepth: {}, seeding: true }, 0, true)).toBeNull();
@@ -853,7 +854,7 @@ describe('depthNeeded, how far out a rule needs money read', () => {
   });
 });
 
-describe('moneyShort, whether the money is read as far as a rule needs (Rulings S25, S31)', () => {
+describe('moneyShort, whether the money is read as far as a rule needs', () => {
   const needs = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
   const read = (over: Partial<{ limit: number; pendingByDepth: Record<number, number>; seeding: boolean }> = {}) => ({ limit: 3, pendingByDepth: {}, seeding: false, ...over });
 
@@ -892,7 +893,7 @@ describe('moneyReason, the one decision the editor row and the share both read',
     }
   });
 
-  it('a run behind the collection holds back only a lens that needs more than the global limit (Ruling S36)', () => {
+  it('a run behind the collection holds back only a lens that needs more than the global limit', () => {
     const rule = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
     const read = { limit: 5, pendingByDepth: {}, seeding: false };
     expect(moneyReason(rule(4), read, 3, true)).toBe('behind');
@@ -902,7 +903,7 @@ describe('moneyReason, the one decision the editor row and the share both read',
   });
 });
 
-describe('readThrough, the depth the money is read through (Ruling S37)', () => {
+describe('readThrough, the depth the money is read through', () => {
   const read = (over: Partial<{ limit: number; pendingByDepth: Record<number, number>; seeding: boolean }> = {}) => ({ limit: 3, pendingByDepth: {}, seeding: false, ...over });
 
   it('is the limit once nothing is pending or being found', () => {
@@ -920,8 +921,8 @@ describe('readThrough, the depth the money is read through (Ruling S37)', () => 
   });
 });
 
-describe('tokensReason, the one decision the Other tokens row and the share both read (T11)', () => {
-  /** Other tokens only, along, never through a marketplace or known contract: the one case where payees reach a one-middle loop (Ruling P13). */
+describe('tokensReason, the one decision the Other tokens row and the share both read', () => {
+  /** Other tokens only, along, never through a marketplace or known contract: the one case where payees reach a one-middle loop. */
   const rule = (max: number | null, use = true, edit: (r: LensRule) => void = () => {}) => ethOnly((r) => {
     r.edges.eth.use = false;
     r.edges['other-tokens'].use = use;
@@ -954,7 +955,7 @@ describe('tokensReason, the one decision the Other tokens row and the share both
     expect([0, 1, 2, 3, null].map((m) => at(m, true))).toEqual([null, null, 'unreached', 'unreached', 'unreached']);
   });
 
-  // Ruling P13: payees close a one-middle loop only when every one of these holds; each that fails opens one they can't see.
+  // Payees close a one-middle loop only when every one of these holds; each that fails opens one they can't see.
   it.each<[string, (r: LensRule) => void]>([
     // A middle that paid both traders is a payer, in no set, never read.
     ["other tokens followed 'either' way", (r) => { r.edges['other-tokens'].direction = 'either'; }],

@@ -20,7 +20,10 @@
 // and holds the timer for its length, so a sample inside it is missed; the peak is
 // then what the load and the search's edges reached, and a lower bound on it.
 import { readFileSync } from 'node:fs';
-import { Store, previewStored, storeUrl, COPIES, DEFAULT_RULE, checkRule, PREVIEW_SAMPLE } from '../packages/detect/dist/index.js';
+import { Store, storeUrl } from '../packages/detect/dist/index.js';
+import { previewStored } from '../packages/detect/dist/lens-thread.js';
+import { COPIES, DEFAULT_RULE, checkRule } from '../packages/detect/dist/lens-rule.js';
+import { PREVIEW_SAMPLE } from '../packages/detect/dist/store.js';
 
 const SEED = 1;
 

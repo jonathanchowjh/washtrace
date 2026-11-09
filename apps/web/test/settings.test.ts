@@ -14,7 +14,7 @@ const fake = {
   check: vi.fn(async (_id: number) => ({ finished: true, ok: true, detail: { finalized: 26_253_624 } }) as unknown),
   addCollection: vi.fn(async () => ({ id: 7, created: true })),
   collections: vi.fn(async () => [] as { id: number; trailImportedSha: string | null }[]),
-  importedFunding: vi.fn(async (_id: number) => true),
+  importedMoney: vi.fn(async (_id: number) => true),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 // handle() opts into dynamic rendering with connection(), which only works inside a Next request.
@@ -294,8 +294,8 @@ describe('GET /api/settings', () => {
     fake.collections.mockResolvedValueOnce([{ id: 3, trailImportedSha: null }, { id: 4, trailImportedSha: 'feed' }]);
     const body = await (await settingsRoute.GET(get())).json();
     expect(body.trailFunded).toBe(true);
-    expect(fake.importedFunding).toHaveBeenCalledWith(4);
-    expect(fake.importedFunding).not.toHaveBeenCalledWith(3);
+    expect(fake.importedMoney).toHaveBeenCalledWith(4);
+    expect(fake.importedMoney).not.toHaveBeenCalledWith(3);
   });
 
   it('is not writable from another host while basic auth is off', async () => {

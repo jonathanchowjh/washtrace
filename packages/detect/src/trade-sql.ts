@@ -1,4 +1,5 @@
 import { HEADLINE, METHODS, type Method, type Transfer, type Witness } from './types.js';
+import { UINT256_DIGITS } from './lens-rule.js';
 import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
 
 /**
@@ -11,8 +12,8 @@ export interface TradeRow extends Transfer { lenses: LensKey[]; judged: boolean;
 /**
  * One Group by row: its key ('-' for unknown), its trades, and how many each
  * lens that ran caught. `judged` is, for each lens of yours that ran, how many
- * of `trades` it judged, its share's denominator: those through its run's block
- * (Ruling FF). Absent when none of yours ran; a built-in's denominator is `trades`.
+ * of `trades` it judged, its share's denominator: those through its run's block.
+ * Absent when none of yours ran; a built-in's denominator is `trades`.
  */
 export interface TradeGroup { key: string; trades: number; caught: Partial<Record<LensKey, number>>; judged?: Partial<Record<LensKey, number>> }
 
@@ -177,7 +178,7 @@ const flaggedBy = (m: LensKey, params: unknown[]) => {
 };
 
 /**
- * Ruling FF: the condition on transfer `t` that keeps lens `m` to the trades
+ * The condition on transfer `t` that keeps lens `m` to the trades
  * its run judged, its block bound into `params`, or null for a built-in or a
  * lens that read them all (see TradeContext.through).
  */
@@ -187,7 +188,7 @@ export function judgedThrough(m: LensKey, ctx: TradeContext, params: unknown[]):
 }
 
 /** A whole number as Postgres numeric takes it: a wei amount or a token id. */
-const WHOLE = /^\d{1,78}$/;
+const WHOLE = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
 
 /**
  * A lens's caught trades: its flags `f` (the lens is `$2`, bound by flagSource
@@ -242,8 +243,7 @@ export function loopsOf(self: string | null): string {
 /**
  * Your lens's list row `c`, counted from its stored paths as loopsOf counts
  * witnesses, so a reader meets one form for every lens: `loops` its flags,
- * `closed` those whose path has a money edge, other tokens included (Ruling
- * P11), or `funds`, `middles` those
+ * `closed` those whose path has a money edge, other tokens included), or `funds`, `middles` those
  * with a wallet that is neither seller nor buyer (a flag's wallets always hold
  * both), `laps` as many as loops, `pairs` none, and `wallets` the distinct
  * wallets in them, other than `self`. A token row reads the flags on its token;
@@ -283,7 +283,7 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
   if (q.caught.some((m) => !ran(m))) none();
   for (const m of q.caught.filter(ran)) where.push(flaggedBy(m, params));
   // Not caught is judged and clean. A lens that did not run is ignored here, and the page says so. A lens of yours
-  // judged only through its run's block: a trade past it is not judged yet, so not clean (Ruling FF).
+  // judged only through its run's block: a trade past it is not judged yet, so not clean.
   const clean = q.notCaught.filter(ran);
   if (clean.length) where.push('x.tx_hash IS NOT NULL');
   for (const m of clean) {
@@ -405,8 +405,8 @@ export function lensesColumn(ctx: TradeContext, params: unknown[]): string {
 /**
  * The keys that judged trade `t`, as a column: the lenses of `ctx.ran` that a
  * `notCaught` clause would count it clean for. Built from the same pieces as
- * that clause (the analysis has facts for it, and a lens of yours' bound,
- * Ruling FF), so Compare's "not" counts cannot drift from the link's.
+ * that clause (the analysis has facts for it, and a lens of yours' bound),
+ * so Compare's "not" counts cannot drift from the link's.
  */
 export function judgedColumn(ctx: TradeContext, params: unknown[]): string {
   const cases = ctx.ran.map((k) => {

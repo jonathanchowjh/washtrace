@@ -5,17 +5,18 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS, ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
-import { Answer, Ext, Head, MoreLink, Section } from '@/components/head';
+import { Answer, Ext, Head, MoreLink, Section } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { LoopFigure } from '@/components/token-graph';
 import { Transfers, because, ownBecause } from '@/components/transfers';
-import { chainOf, txOf } from '@/lib/api';
+import { chainOf, txOf } from '@/lib/params';
 import { chainName } from '@/lib/chains';
-import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEFORE_EDIT, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, runStateWords, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
+import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx } from '@/lib/links';
-import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, behindOf, judged, ownRan } from '@/lib/metrics';
-import { inEscrow, txView, type TokenGraph, type TxCollection } from '@/lib/views';
+import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
+import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
+import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 
 type Props = { params: Promise<{ chain: string; hash: string }> };
 
@@ -36,7 +37,7 @@ export default async function TxPage({ params }: Props) {
   const unread = transfers.length === 0;
   const ownByRow = new Map<string, LensKey[]>();
   for (const f of own) ownByRow.set(`${f.txHash}:${f.logIndex}`, [...(ownByRow.get(`${f.txHash}:${f.logIndex}`) ?? []), `L${f.lensId}`]);
-  // Your lenses' catches, said apart: the verdict and its title stay the built-ins' (P8), as on the token page.
+  // Your lenses' catches, said apart: the verdict and its title stay the built-ins', as on the token page.
   const ownNames = [...new Set(own.map((f): LensKey => `L${f.lensId}`))].flatMap((k) => lensInfo(k, ownLenses)?.name ?? []);
   const ownLine = ownNames.length === 0 ? ''
     : ` Your lenses ${washTrade === true || apartOnly ? 'also ' : ''}catch ${transfers.length === 1 ? 'it' : `${ownByRow.size} of its ${transfers.length} transfers`}: ${andList(ownNames)}.`;
@@ -52,8 +53,8 @@ export default async function TxPage({ params }: Props) {
   const collection = home === null ? null : transfers.find((t) => t.collection)!.collection!;
   const notRunLine = notRun.length === 0 ? '' : homes.size > 1 ? notRunAcross(notRun, Object.values(collections)) : notRunAll(notRun);
   // One drawing per token, however many of its transfers the transaction moved.
-  const drawings = new Map<TokenGraph, Drawing>();
-  const drawingOf = (g: TokenGraph): Drawing => {
+  const drawings = new Map<TokenDrawing, Drawing>();
+  const drawingOf = (g: TokenDrawing): Drawing => {
     const known = drawings.get(g);
     if (known !== undefined) return known;
     const d = layout(g.transfers, g.flows, g.middles, g.own, ownLenses);
@@ -139,8 +140,8 @@ const ALONE = {
 };
 
 /**
- * The answer's not-run line for a transaction across several collections
- * (Ruling S17): a lens may have run and flagged in one, so each is said with
+ * The answer's not-run line for a transaction across several collections:
+ * a lens may have run and flagged in one, so each is said with
  * the collections whose latest analysis missed it, lenses that missed the
  * same ones together. verdict's notRun is any collection's, as its title needs.
  */
@@ -167,7 +168,7 @@ interface Card { key: LensKey; line: ReactNode; caught: boolean; loop: DrawnLoop
  * the token page finds it: a built-in's is its reason's (`r<i>`, of the
  * reasons holding this row), yours is its flag's (`o<j>`, after them).
  */
-function lensCards(t: FlaggedTransfer, c: TxCollection, g: { graph: TokenGraph; drawing: Drawing } | null, own: readonly OwnFlag[], chainId: number): Card[] {
+function lensCards(t: FlaggedTransfer, c: TxCollection, g: { graph: TokenDrawing; drawing: Drawing } | null, own: readonly OwnFlag[], chainId: number): Card[] {
   const same = (x: { txHash: string; logIndex: number }) => x.txHash === t.txHash && x.logIndex === t.logIndex;
   const row = g === null ? 0 : g.graph.transfers.findIndex(same) + 1;
   const why = g === null ? [] : reasons(g.graph.transfers);
@@ -192,7 +193,7 @@ function lensCards(t: FlaggedTransfer, c: TxCollection, g: { graph: TokenGraph; 
     const capped = (run.totals?.truncated ?? 0) > 0 ? CAPPED : '';
     // Its flags are another rule's until the new run saves, so the rule it has now says nothing of what that run judged.
     if (f === undefined && behindOf(run, lens, c.latest) === 'edit') return { key, line: `${OWN_BEFORE_EDIT}${capped}`, caught: false, loop: null };
-    // What runLens never judges (lens.ts `judges` and R5), so its miss line would be false: a non-sale under a sales-only rule, and an untimed trade under a window or loop order.
+    // What runLens never judges (lens.ts `judges`), so its miss line would be false: a non-sale under a sales-only rule, and an untimed trade under a window or loop order.
     if (f === undefined && lens.rule.judges === 'sales' && t.marketplace === null) return { key, line: salesOnlyLine(lens.name), caught: false, loop: null };
     if (f === undefined && t.blockTime === null && (lens.rule.window !== null || lens.rule.order === 'loop')) return { key, line: untimedLine(lens.name, lens.rule), caught: false, loop: null };
     if (f === undefined) return { key, line: `${OWN_NOT_CAUGHT}${capped}`, caught: false, loop: null };

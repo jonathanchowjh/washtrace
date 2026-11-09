@@ -46,7 +46,7 @@ describe('why a row is in a lens list', () => {
 });
 
 describe('why a lens of yours flagged one transfer (ownBecause)', () => {
-  it('counts an other-token step of the way back as money, as an ETH one (Ruling P11)', () => {
+  it('counts an other-token step of the way back as money, as an ETH one', () => {
     const [a, b, m] = ['a', 'b', 'd'].map((c) => '0x' + c.repeat(40)) as [string, string, string];
     const step = (from: string, to: string, kind: LoopEdge['kind'], token: string | null = null): LoopEdge =>
       ({ from, to, kind, tx: null, time: null, amountWei: null, tokenId: null, token });

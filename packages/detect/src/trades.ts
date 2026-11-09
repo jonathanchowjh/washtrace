@@ -5,7 +5,7 @@
  * so the client can take it without the engine.
  */
 
-import { INT4_MAX } from './lens-rule.js';
+import { INT4_MAX, UINT256_DIGITS } from './lens-rule.js';
 import { METHODS, type Method } from './types.js';
 
 /**
@@ -14,6 +14,7 @@ import { METHODS, type Method } from './types.js';
  */
 export type LensKey = Method | `L${number}`;
 
+const TOKEN_ID = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
 const OWN_KEY = /^L[1-9]\d{0,9}$/;
 
 const ownId = (s: string): number | null => (OWN_KEY.test(s) && Number(s.slice(1)) <= INT4_MAX ? Number(s.slice(1)) : null);
@@ -114,7 +115,7 @@ export const NO_FILTER: TradeQuery = {
  * `through` is, for each lens of yours in `ran`, the block its run read
  * through (`LensRun.throughBlock`): it judged nothing past it, so a trade past
  * it is "not judged yet" by that lens, neither caught nor "not flagged by",
- * and no denominator of it counts the trade (Ruling FF). A lens with no entry,
+ * and no denominator of it counts the trade. A lens with no entry,
  * or a null one, read every trade. Built-ins take none: their flags and facts
  * are written together.
  */
@@ -144,6 +145,6 @@ export function findOf(raw: string): Find {
     if (hex.length === 42) return { kind: 'address', address: hex };
     if (hex.length >= 6 && hex.length < 42) return { kind: 'prefix', prefix: hex };
   }
-  if (/^\d{1,78}$/.test(text)) return { kind: 'token', tokenId: BigInt(text).toString() };
+  if (TOKEN_ID.test(text)) return { kind: 'token', tokenId: BigInt(text).toString() };
   return { kind: 'none' };
 }

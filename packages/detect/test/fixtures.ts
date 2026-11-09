@@ -39,7 +39,7 @@ export function input(transfers: Transfer[], flows: Flow[] = [], more: Partial<I
   };
 }
 
-// ---- the Cycle lab fixtures -------------------------------------------------
+// ---- the lab fixtures ------------------------------------------------------
 
 const DAY = 86_400;
 const ETH = 10n ** 18n;

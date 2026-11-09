@@ -1,4 +1,5 @@
-import { bad, chainOf, handle, json, txOf } from '@/lib/api';
+import { bad, handle, json } from '@/lib/api';
+import { chainOf, txOf } from '@/lib/params';
 import { verdictFields } from '@/lib/metrics';
 import { txVerdict } from '@/lib/views';
 

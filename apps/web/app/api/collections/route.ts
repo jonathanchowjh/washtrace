@@ -1,4 +1,5 @@
-import { addressOf, bad, chainIdOf, handle, json, writeBody } from '@/lib/api';
+import { bad, handle, json, writeBody } from '@/lib/api';
+import { addressOf, chainIdOf } from '@/lib/params';
 import { FIELDS } from '@/lib/settings';
 import { store } from '@/lib/store';
 

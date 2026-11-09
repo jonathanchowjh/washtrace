@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { CollectionRow as Collection } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
-import { Warn } from '@/components/head';
+import { Warn } from '@/components/ui';
 import { RangeBar, RangeFigure, VolumeDetail } from '@/components/methods';
 import { Time } from '@/components/time';
 import { CollectionControls } from '@/components/watch';

@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { checkRule, depthNeeded, estimateTo, moneyShort, nameError, tokensReason, type LensRule } from '@washtrace/detect/lens-rule';
+import { checkRule, depthNeeded, nameError, type LensRule } from '@washtrace/detect/lens-rule';
+import { estimateTo, moneyShort, tokensReason } from '@washtrace/detect/lens-reads';
 import { LOCAL_ONLY } from '@/lib/auth';
 import type { Method } from '@washtrace/detect';
 import { LENSES } from '@/lib/format';
@@ -87,7 +88,7 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
       {/* The estimate is cut to the unsaved rule here, so it follows each edit to the hops. */}
       <DataNeeds rule={rule} estimate={estimateTo(needs.money.estimate, depthNeeded(rule))} writable={writable} chainId={chainId} address={address} {...needs} />
 
-      {/* A preview reads the money as it is now, so no run of it is behind what was fetched: no 'behind' (Ruling S36). */}
+      {/* A preview reads the money as it is now, so no run of it is behind what was fetched: no 'behind'. */}
       <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} moneyShort={moneyShort(rule, needs.money, needs.followHops, false)}
         tokens={{ reason: tokensReason(rule, needs.tokens.started, needs.tokens.counts, needs.tokens.counts?.read ?? null), payees: needs.tokens.counts?.payees ?? needs.tokens.payees }} writable={writable} />
 

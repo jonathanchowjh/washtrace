@@ -54,7 +54,7 @@ describe('the layout', () => {
     expect(within(c).getAllByRole('button').map((b) => b.textContent)).toEqual(['Preview', 'Cancel', 'Save and run']);
   });
 
-  it('says what never.over counts: wallets linked to more than N of this collection\'s wallets (Ruling BB)', async () => {
+  it('says what never.over counts: wallets linked to more than N of this collection\'s wallets', async () => {
     const c = editor({ name: 'Mine' });
     const over = within(c).getByLabelText("Wallets linked to more than this many of this collection's wallets are never passed through") as HTMLInputElement;
     expect(over.value).toBe('20');
@@ -233,7 +233,7 @@ describe('editing a lens', () => {
     const { url, method, body } = sent(fetchMock);
     expect(url).toBe('/api/lenses/7');
     expect(method).toBe('PATCH');
-    // The collection it was opened from goes too, so Save and run queues its run there, as the button says (M2).
+    // The collection it was opened from goes too, so Save and run queues its run there, as the button says.
     expect(body).toEqual({ name: 'Blur 3-hop', rule: { ...DEFAULT_RULE, window: { days: 14, side: 'either' } }, chainId: 1, address: ADDR });
     expect(button(c, 'Save and run').title).toBe('Save this lens, then queue its run on this collection');
   });

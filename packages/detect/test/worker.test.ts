@@ -784,7 +784,7 @@ describe('Worker.ingest loading a money trail', () => {
     await settle();
     expect(events).toContain('progress 1 null');
     expect(events).toContain(`note 1 ${TRAIL_NOTES.failed}`);
-    expect((w.sync as any).trailsBackoff.has(1)).toBe(true);
+    expect((w.sync as any).trailsRetry.has(1)).toBe(true);
     expect(logged.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('nothing was written for 15 minutes');
   });
 
@@ -1173,7 +1173,7 @@ describe('Worker downloading stored data', () => {
       heartbeat: async () => {}, setHead: async () => {}, setStart: async () => {}, ingest: async () => {},
       clearRestoreNote: async () => {}, setTrailNote: async () => {},
       stale: async () => rows.map((r) => ({ id: r.id, chainId: 1, version: 1, rules: {}, name: r.name, ranAt: null, tookMs: null, rulesAt: null, retryAt: null })),
-      importedFunding: async () => false, saveAnalysis: async () => {},
+      importedMoney: async () => false, saveAnalysis: async () => {},
     };
     const w = new Worker(store, () => ({ rpc, etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: hub.repo }), '', dir);
     /** Waits for the download and the trail import running in the background, if any, to end. */
@@ -1865,10 +1865,10 @@ describe('Worker.fund', () => {
     const store: any = {
       collections: async () => [row({ id: 1, name: 'BAYC' }), row({ id: 2, name: 'Doodles', priority: true })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }, { collectionId: 2, wallets: ['c'] }, { collectionId: null, wallets: ['f'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }, { collectionId: 2, wallets: ['c'] }, { collectionId: null, wallets: ['f'] }] }),
       heartbeat: async (_job: string, doing: string | null) => { beats.push(doing); },
-      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
-      fundingFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      moneyFailed: async () => {},
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -1882,7 +1882,7 @@ describe('Worker.fund', () => {
     const store: any = {
       collections: async () => [row({ id: 1 })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async (_chain: number, _perLane: number, hops: number) => { asked.push(hops); return { lanes: [] }; },
+      moneyLanes: async (_chain: number, _perLane: number, hops: number) => { asked.push(hops); return { lanes: [] }; },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 1, tokensPayees: false, storedRepo: 'u/d', sources: {} }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -1895,8 +1895,8 @@ describe('Worker.fund', () => {
     const store: any = {
       collections: async () => [row({ id: 1 })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['0xa'] }] }),
-      fund: async () => {},
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['0xa'] }] }),
+      saveMoney: async () => {},
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, storedRepo: 'u/d', sources: {} }), '');
     (w as any).etherscanClient = () => ({ flows: async (_c: number, _w: string, budgetMs?: number) => { budgets.push(budgetMs); return { flows: [], truncated: false }; } });
@@ -1925,10 +1925,10 @@ describe('Worker.fund following a collection further, and counting its next hop'
       nextCount: async () => null,
       // Each chunk takes four seconds, and there is always more.
       seedReach: async (chainId: number, hops: number, limit: number) => { calls.push(`seed ${chainId} ${hops} ${limit}`); t.now += 4_000; return 2_000; },
-      fundingLanes: async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; },
+      moneyLanes: async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; },
       heartbeat: async (_job: string, doing: string | null) => { beats.push(doing); },
-      fund: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); },
-      fundingFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); },
+      moneyFailed: async () => {},
     };
     const w = new Worker(store, config, '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -1941,13 +1941,13 @@ describe('Worker.fund following a collection further, and counting its next hop'
     // Each chain has its own SEED_MS: a long walk on the first leaves the second its turn.
     calls.length = 0;
     store.collections = async () => [row({ id: 1, name: 'BAYC' }), row({ id: 2, chainId: 8453, name: 'Base one' })];
-    store.fundingLanes = async (chainId: number) => { calls.push(`lanes ${chainId}`); return { lanes: [] }; };
+    store.moneyLanes = async (chainId: number) => { calls.push(`lanes ${chainId}`); return { lanes: [] }; };
     await w.fund();
     expect(calls).toEqual([...Array(3).fill('seed 1 3 2000'), 'lanes 1', ...Array(3).fill('seed 8453 3 2000'), 'lanes 8453']);
 
     // Nothing left to walk: one call says so, and the checking starts.
     store.collections = async () => [row({ id: 1, name: 'BAYC' })];
-    store.fundingLanes = async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; };
+    store.moneyLanes = async () => { calls.push('lanes'); return { lanes: [{ collectionId: 1, wallets: ['a'] }] }; };
     calls.length = 0;
     store.seedReach = async () => { calls.push('seed'); return 0; };
     await w.fund();
@@ -1962,11 +1962,11 @@ describe('Worker.fund following a collection further, and counting its next hop'
       collections: async () => [row({ id: 1, name: 'BAYC' }), row({ id: 7, name: 'Doodles' })],
       nextCount: async (hops: number) => { calls.push(`next ${hops}`); return 7; },
       seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b', 'c', 'd', 'e', 'f'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b', 'c', 'd', 'e', 'f'] }] }),
       heartbeat: async (_job: string, doing: string | null, id: number | null) => { beats.push([doing, id]); },
       // Each wallet takes ten seconds.
-      fund: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); t.now += 10_000; },
-      fundingFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { calls.push(`fund ${wallet}`); t.now += 10_000; },
+      moneyFailed: async () => {},
       countNext: async (id: number, hops: number, timeoutMs: number) => { calls.push(`count ${id} ${hops} ${timeoutMs}`); return 'counted'; },
     };
     const w = new Worker(store, config, '');
@@ -1992,9 +1992,9 @@ describe('Worker.fund following a collection further, and counting its next hop'
       collections: async () => [row({ id: 1 })],
       nextCount: async () => 1,
       seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a'] }] }),
-      heartbeat: async () => {}, fundingFailed: async () => {},
-      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a'] }] }),
+      heartbeat: async () => {}, moneyFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { funded.push(wallet); },
       countNext: async () => { throw new Error('canceling statement due to statement timeout (key k-SECRET)'); },
     };
     const w = new Worker(store, () => ({ ...config(), etherscanKey: 'k-SECRET' }), '');
@@ -2025,10 +2025,10 @@ describe('Worker.fund reading tokens', () => {
       nextCount: async () => null,
       seedReach: async (_c: number, hops: number) => { calls.push(`seed ${hops}`); return 0; },
       tokenLanes: async (chain: number, perLane: number, hops: number, payees: boolean) => { calls.push(`lanes ${chain} ${perLane} ${hops} ${payees}`); return { lanes: [{ collectionId: 1, wallets: pending.slice(0, perLane) }] }; },
-      fundingLanes: async () => { calls.push('fundingLanes'); return { lanes: [{ collectionId: 1, wallets: checking.splice(0) }] }; },
+      moneyLanes: async () => { calls.push('moneyLanes'); return { lanes: [{ collectionId: 1, wallets: checking.splice(0) }] }; },
       heartbeat: async (_j: string, doing: string | null) => { calls.push(`beat ${doing}`); },
-      fund: async (_c: number, wallet: string) => { calls.push(`check ${wallet}`); if (t) t.now += 1_000; },
-      fundingFailed: async () => {},
+      saveMoney: async (_c: number, wallet: string) => { calls.push(`check ${wallet}`); if (t) t.now += 1_000; },
+      moneyFailed: async () => {},
       saveTokens: async (_c: number, wallet: string, _f: unknown, truncated: boolean) => { calls.push(`save ${wallet} ${truncated}`); pending.splice(pending.indexOf(wallet), 1); if (t) t.now += readMs; },
       tokensFailed: async (_c: number, wallet: string) => { calls.push(`tokfail ${wallet}`); pending.splice(pending.indexOf(wallet), 1); },
       countTokens: async (chain: number, hops: number, payees: boolean) => { calls.push(`count ${chain} ${hops} ${payees}`); },
@@ -2044,7 +2044,7 @@ describe('Worker.fund reading tokens', () => {
     expect(await w.fund()).toBe('2 wallets read, 0 failed');
     expect(calls.filter((c) => !c.startsWith('beat'))).toEqual([
       'seed 3', 'lanes 1 20 3 true', 'read t1 360000', 'save t1 false', 'read t2 360000', 'save t2 true', 'lanes 1 20 3 true',
-      'fundingLanes', 'check m1', 'check m2', 'lanes 1 20 3 true', 'count 1 3 true',
+      'moneyLanes', 'check m1', 'check m2', 'lanes 1 20 3 true', 'count 1 3 true',
     ]);
     expect(calls).toContain('beat Reading other tokens for BAYC');
   });
@@ -2060,7 +2060,7 @@ describe('Worker.fund reading tokens', () => {
     await w.fund();
     // Reads start at 0, 4 and 8 seconds in; the next would start past TOKENS_MS. Then checking has nothing, so the unused time reads on.
     expect(TOKENS_MS).toBe(10_000);
-    const firstSlice = calls.indexOf('fundingLanes');
+    const firstSlice = calls.indexOf('moneyLanes');
     expect(calls.slice(0, firstSlice).filter((c) => c.startsWith('save'))).toHaveLength(3);
     // Reads stop at BUDGET_MS - TOKEN_COUNT_MS: the last starts at 36 seconds, ends at 40.
     expect(calls.filter((c) => c.startsWith('save'))).toHaveLength(10);
@@ -2119,7 +2119,7 @@ describe('Worker.fund reading tokens', () => {
     const calls: string[] = [];
     const store = setup(calls, []);
     store.collections = async () => [row({ id: 1, readTokens: true }), row({ id: 2, chainId: 8453, name: 'Base one' })];
-    store.fundingLanes = async () => ({ lanes: [] });
+    store.moneyLanes = async () => ({ lanes: [] });
     const w = new Worker(store, () => config(), '');
     (w as any).etherscanClient = () => ({ tokenFlows: async () => { throw new Error('not called'); } });
     await w.fund();
@@ -2151,10 +2151,10 @@ describe('Worker.fund reading tokens', () => {
       collections: async () => [row({ id: 1, name: 'BAYC', readTokens: true }), row({ id: 2, chainId: 8453, name: 'Base one', readTokens: true })],
       nextCount: async () => null, seedReach: async () => 0,
       tokenLanes: async (chain: number) => { calls.push(`lanes ${chain}`); return { lanes: [{ collectionId: chain === 1 ? 1 : 2, wallets: pending[chain]!.slice() }] }; },
-      fundingLanes: async (chain: number) => ({ lanes: [{ collectionId: chain === 1 ? 1 : 2, wallets: money[chain]!.splice(0) }] }),
+      moneyLanes: async (chain: number) => ({ lanes: [{ collectionId: chain === 1 ? 1 : 2, wallets: money[chain]!.splice(0) }] }),
       heartbeat: async () => {},
-      fund: async (chain: number, wallet: string) => { calls.push(`check ${chain} ${wallet}`); t.now += checkMs; },
-      fundingFailed: async () => {},
+      saveMoney: async (chain: number, wallet: string) => { calls.push(`check ${chain} ${wallet}`); t.now += checkMs; },
+      moneyFailed: async () => {},
       saveTokens: async (chain: number, wallet: string) => { calls.push(`save ${chain} ${wallet}`); pending[chain]!.splice(pending[chain]!.indexOf(wallet), 1); t.now += chain === 1 ? 4_000 : 1_000; },
       tokensFailed: async () => {},
       countTokens: async (chain: number, _h: number, _p: boolean, until: number) => { calls.push(`count ${chain} ${until}`); t.now += Math.max(0, Math.min(TOKEN_COUNT_MS, until - t.now)); },
@@ -2204,7 +2204,7 @@ describe('Worker.fund reading tokens', () => {
     expect(untils.at(-1)).toBe(begun + BUDGET_MS - (due ? COUNT_MS : 0));
   });
 
-  it('gives each chain an equal share of the counting time left, so a count that always runs out cannot starve the next chain (Ruling P14)', async () => {
+  it('gives each chain an equal share of the counting time left, so a count that always runs out cannot starve the next chain', async () => {
     const t = clock();
     const calls: string[] = [];
     const store = twoChains(calls, t, { 1: Array.from({ length: 100 }, (_, i) => `m${i}`), 8453: [] }, 1_000);
@@ -2249,9 +2249,9 @@ describe('Worker.fund reading tokens', () => {
     const store: any = {
       collections: async () => [row({ id: 1 })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: Array.from({ length: 100 }, (_, i) => `m${i}`) }] }),
-      heartbeat: async () => {}, fundingFailed: async () => {},
-      fund: async () => { calls.push('check'); t.now += 1_000; },
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: Array.from({ length: 100 }, (_, i) => `m${i}`) }] }),
+      heartbeat: async () => {}, moneyFailed: async () => {},
+      saveMoney: async () => { calls.push('check'); t.now += 1_000; },
       tokenLanes: async () => { calls.push('tokenLanes'); return { lanes: [] }; },
       countTokens: async () => { calls.push('countTokens'); },
     };
@@ -2275,9 +2275,9 @@ describe('Worker.fund priority', () => {
       // The earliest prioritised is on Base: Doodles, on Ethereum, still gets its priority turns there.
       collections: async () => [row({ id: 1, chainId: 8453, name: 'Base one', priority: true }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async (chainId: number) => ({ lanes: lanes[chainId] }),
-      heartbeat: async () => {}, fundingFailed: async () => {},
-      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      moneyLanes: async (chainId: number) => ({ lanes: lanes[chainId] }),
+      heartbeat: async () => {}, moneyFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { funded.push(wallet); },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -2291,9 +2291,9 @@ describe('Worker.fund priority', () => {
       // Two prioritised, the first paused: its lane is not served (the store leaves it out), so its priority must not hide the other's.
       collections: async () => [row({ id: 1, name: 'BAYC', priority: true, pausedAt: 5 }), row({ id: 2, name: 'Doodles', priority: true }), row({ id: 3, name: 'Azuki' })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 3, wallets: ['x1', 'x2'] }, { collectionId: 2, wallets: ['c1', 'c2'] }] }),
-      heartbeat: async () => {}, fundingFailed: async () => {},
-      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      moneyLanes: async () => ({ lanes: [{ collectionId: 3, wallets: ['x1', 'x2'] }, { collectionId: 2, wallets: ['c1', 'c2'] }] }),
+      heartbeat: async () => {}, moneyFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { funded.push(wallet); },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -2313,10 +2313,10 @@ describe('Worker heartbeat', () => {
     const store: any = {
       collections: async () => [row({ id: 1, name: 'BAYC' })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => { throw new Error('db down'); },
-      fund: async (_chain: number, wallet: string) => { funded.push(wallet); },
-      fundingFailed: async () => {},
+      saveMoney: async (_chain: number, wallet: string) => { funded.push(wallet); },
+      moneyFailed: async () => {},
     };
     const w = new Worker(store, config, '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
@@ -2435,7 +2435,7 @@ describe('Worker settings', () => {
     const w = new Worker(store, (s) => workerConfig({ WASHTRACE_ETHERSCAN_KEY: 'ENVKEY0123456789' }, s), '');
     const urls: string[] = [];
     w.etherscanClient = (config) => { urls.push(config!.etherscanUrl); return { ping: async () => {} } as unknown as Etherscan; };
-    expect(await w.runChecks()).toBe(1);
+    expect(await w.checks.runChecks()).toBe(1);
     expect(urls).toEqual([ETHERSCAN_V2]);
   });
 
@@ -2515,7 +2515,7 @@ describe('Worker.analyze', () => {
       ],
       heartbeat: async (_job: string, doing: string | null, subjectId: number | null) => { beats.push([doing, subjectId]); },
       saveAnalysis: async (id: number) => { saved.push(id); },
-      importedFunding: async () => false,
+      importedMoney: async () => false,
       collections: async () => [],
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
@@ -2536,7 +2536,7 @@ describe('Worker.analyze', () => {
     const store: any = {
       stale: async () => [{ id: 2, chainId: 1, version: 5, rules: {}, name: 'Doodles', ranAt: null, tookMs: null, rulesAt: null }],
       heartbeat: async () => {}, saveAnalysis: async () => {},
-      importedFunding: async (id: number) => { asked.push(id); return imported; },
+      importedMoney: async (id: number) => { asked.push(id); return imported; },
       collections: async () => [],
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
@@ -2592,7 +2592,7 @@ describe('Worker.analyze when an analysis fails', () => {
     const store: any = {
       stale: async () => [...waiting.values()],
       collections: async () => [row({ id: 1 }), row({ id: 2, address: '0xd00d' })],
-      heartbeat: async () => {}, importedFunding: async () => false,
+      heartbeat: async () => {}, importedMoney: async () => false,
       saveAnalysis: async (id: number) => { waiting.delete(id); },
       analysisFailed: async (id: number, error: string) => {
         failed.push([id, error]);
@@ -2740,7 +2740,7 @@ describe('an analysis that never ends', () => {
     const failed: [number, string][] = [];
     const store: any = {
       stale: async () => [{ id: 1, chainId: 1, version: 1, rules: {}, name: 'Terraforms', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }],
-      collections: async () => [], heartbeat: async () => {}, importedFunding: async () => false, saveAnalysis: async () => {},
+      collections: async () => [], heartbeat: async () => {}, importedMoney: async () => false, saveAnalysis: async () => {},
       analysisFailed: async (id: number, error: string) => { failed.push([id, error]); },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
@@ -2768,7 +2768,7 @@ describe('Worker checks with no notification', () => {
     (w as any).chain = () => ({ check: async () => ({ finalized: 1, archive: true, logs: true }) });
     const connects = { n: 0 };
     // Connected, and hearing nothing: as a socket a NAT dropped without a word.
-    (w as any).connectListener = async () => { connects.n += 1; (w as any).listener = { end: async () => {} }; };
+    (w as any).checks.connectListener = async () => { connects.n += 1; (w as any).checks.listener = { end: async () => {} }; };
     return { w, finished, connects, store };
   }
 
@@ -2778,8 +2778,8 @@ describe('Worker checks with no notification', () => {
     const { w, connects, store } = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 25_000 }]);
     // Another replica is on a slow check: this one heard the request, and skips.
     store.locked = async () => 'skipped';
-    await w.listen();
-    expect(await w.runChecks()).toBe(0);
+    await w.checks.listen();
+    expect(await w.checks.runChecks()).toBe(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(connects.n).toBe(1);
     expect(warn).not.toHaveBeenCalled();
@@ -2796,7 +2796,7 @@ describe('Worker checks with no notification', () => {
     store.pendingChecks = async () => { await held; return pending(); };
     let runs = 0;
     store.locked = async (_key: number, _wait: boolean, fn: () => Promise<number>) => { runs += 1; return fn(); };
-    await w.listen();
+    await w.checks.listen();
     await vi.advanceTimersByTimeAsync(30_000);
     w.stop();
     release();
@@ -2807,7 +2807,7 @@ describe('Worker checks with no notification', () => {
   it('answers a pending check every 30 seconds, though no request was heard', async () => {
     vi.useFakeTimers();
     const { w, finished } = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 2_000 }]);
-    await w.listen();
+    await w.checks.listen();
     expect(finished).toEqual([]);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(finished).toEqual([1]);
@@ -2818,12 +2818,12 @@ describe('Worker checks with no notification', () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fresh = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 2_000 }]);
-    await fresh.w.listen();
+    await fresh.w.checks.listen();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fresh.connects.n).toBe(1);
     fresh.w.stop();
     const deaf = setup([{ id: 1, kind: 'rpc', chainId: 1, ageMs: 25_000 }]);
-    await deaf.w.listen();
+    await deaf.w.checks.listen();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(deaf.connects.n).toBe(2);
     expect(deaf.finished).toEqual([1]);
@@ -2898,9 +2898,9 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     const store: any = {
       collections: async () => [row({ id: 1 })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => {},
-      fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
+      moneyFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
     };
     const w = new Worker(store, config, '');
     const etherscan = new Etherscan(ES_KEY, 1_000, ES_URL);
@@ -2922,9 +2922,9 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     const store: any = {
       collections: async () => [row({ id: 1 })],
       nextCount: async () => null, seedReach: async () => 0,
-      fundingLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b'] }] }),
       heartbeat: async () => {},
-      fundingFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
+      moneyFailed: async (_chain: number, _wallet: string, message: string) => { failed.push(message); },
     };
     const w = new Worker(store, () => ({ ...config(), etherscanUrl: ETHERSCAN_V2 }), '');
     const etherscan = new Etherscan(ES_KEY, 1_000, ETHERSCAN_V2);
@@ -2970,7 +2970,7 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     expect(said).toContain('no such key');
     expect(said).not.toContain('OLDKEY0123456789');
     (w as any).chain = () => ({ check: async () => { throw echo(); } });
-    const { detail } = await (w as any).runCheck({ kind: 'rpc', chainId: 1 }, workerConfig({}, await store.settings()));
+    const { detail } = await (w as any).checks.runCheck({ kind: 'rpc', chainId: 1 }, workerConfig({}, await store.settings()));
     expect(detail.error).toContain('no such key');
     expect(detail.error).not.toContain('OLDKEY0123456789');
   });
@@ -3014,7 +3014,7 @@ describe('Worker.lens', () => {
     expect(calls).toEqual([]);
   });
 
-  it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long (Ruling KK)', async () => {
+  it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long', async () => {
     const now = 2_000_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
     const fresh = setup({ ...analysisDue, nextLensRun: async () => ({ ...due, dueAt: now - LENS_WAIT_MS + 1 }) });
@@ -3030,7 +3030,7 @@ describe('Worker.lens', () => {
     expect(await setup({ nextLensRun: async () => ({ ...due, dueAt: now }) }).w.lens()).toBe('Ran Blur 3-hop on Terraforms');
   });
 
-  it('after a pass that ran a run, gives way to a due analysis whatever the wait; a pass that gave way or found nothing clears that (Ruling RR)', async () => {
+  it('after a pass that ran a run, gives way to a due analysis whatever the wait; a pass that gave way or found nothing clears that', async () => {
     let next: unknown = { ...due, dueAt: Date.now() - LENS_WAIT_MS };
     let analysis = true;
     const { w } = setup({ nextLensRun: async () => next, stale: async () => (analysis ? (await analysisDue.stale()) : []) });
@@ -3055,7 +3055,7 @@ describe('Worker.lens', () => {
     expect(names(calls)).toEqual(['next', 'started', 'beat', 'off', 'saved']);
     expect(sent).toEqual([{ storeUrl: 'postgres://washtrace:hunter2@db:5432/washtrace', lensId: 7, collectionId: 4, chainId: 1, rule: { marker: 'rule' }, through: 99, followHops: 0, payees: false }]);
     expect(calls.find((c) => c[0] === 'started')).toEqual(['started', 7, 4]);
-    // Saved at the version it read, on the analysis it read, with the token reads it took in (T11).
+    // Saved at the version it read, on the analysis it read, with the token reads it took in.
     expect(calls.find((c) => c[0] === 'saved')!.slice(1, 6)).toEqual([7, 4, 2, 11, 99]);
     expect(calls.find((c) => c[0] === 'saved')!.at(-1)).toBe(12);
   });
@@ -3119,7 +3119,7 @@ describe('Worker.lens', () => {
     expect(off).toHaveBeenCalledTimes(1);
   });
 
-  describe('a preview (P2)', () => {
+  describe('a preview', () => {
     const queuedPreview = { id: 31, collectionId: 4, chainId: 1, name: 'Terraforms', rule: { marker: 'preview' }, through: 99 };
     const result = { sampled: 2_000, judged: 1_900, hops: 1_900, ofSales: 9_000, caught: 12, atLeast: false, roundTrips: { caught: 3 }, topMarket: { name: 'Blur', caught: 9 }, truncated: 0, untimed: 0, tookMs: 5 };
 
@@ -3140,7 +3140,7 @@ describe('Worker.lens', () => {
       return { ...s, sent };
     }
 
-    it('a queued preview runs before a due lens run, even with an analysis due, and leaves lensRanLast as it was; the pass after it gives way to that analysis (Ruling S12)', async () => {
+    it('a queued preview runs before a due lens run, even with an analysis due, and leaves lensRanLast as it was; the pass after it gives way to that analysis', async () => {
       for (const ranLast of [false, true]) {
         const { w, calls, sent } = withPreview();
         (w as any).lensRanLast = ranLast;
@@ -3231,7 +3231,7 @@ describe('Worker.lens', () => {
   });
 });
 
-describe('Worker hears preview requests (P5)', () => {
+describe('Worker hears preview requests', () => {
   afterEach(() => vi.restoreAllMocks());
 
   /** A worker whose listener is a pg.Client that connects to nothing, and records what it was asked. */
@@ -3254,7 +3254,7 @@ describe('Worker hears preview requests (P5)', () => {
 
   it('listens on washtrace_previews beside the checks', async () => {
     const { w, asked } = listening();
-    await w.listen();
+    await w.checks.listen();
     expect(asked.join(' ')).toContain('LISTEN washtrace_checks');
     expect(asked.join(' ')).toContain('LISTEN washtrace_previews');
     w.stop();
@@ -3262,16 +3262,16 @@ describe('Worker hears preview requests (P5)', () => {
 
   it('a notify on washtrace_previews runs a lens pass now', async () => {
     const { w, passes } = listening();
-    await w.listen();
+    await w.checks.listen();
     await settle();
     expect(passes).toEqual([]);
     const lens = vi.spyOn(w, 'lens');
-    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
+    (w as any).checks.listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
     await settle();
     expect(passes).toEqual([LOCKS.analyze]);
     expect(lens).toHaveBeenCalledTimes(1);
     // A check's notify runs the checks, not a lens pass.
-    (w as any).listener.emit('notification', { channel: 'washtrace_checks', payload: '5' });
+    (w as any).checks.listener.emit('notification', { channel: 'washtrace_checks', payload: '5' });
     await settle();
     expect(lens).toHaveBeenCalledTimes(1);
     w.stop();
@@ -3283,23 +3283,23 @@ describe('Worker hears preview requests (P5)', () => {
     const held = new Promise<void>((r) => { release = r; });
     let n = 0;
     const lens = vi.spyOn(w, 'lens').mockImplementation(async () => { n += 1; if (n === 1) await held; return 'done'; });
-    await w.listen();
+    await w.checks.listen();
     const first = w.run('lens');
     await settle();
-    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
-    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
+    (w as any).checks.listener.emit('notification', { channel: 'washtrace_previews', payload: '31' });
+    (w as any).checks.listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
     await settle();
     expect(lens).toHaveBeenCalledTimes(1);
     release();
     await first;
     for (let i = 0; i < 5; i++) await settle();
-    // Once more, not once per notify: a pass takes one preview, so a due analysis waits one at a time (P2); any more wait for a later notify or the timer.
+    // Once more, not once per notify: a pass takes one preview, so a due analysis waits one at a time; any more wait for a later notify or the timer.
     expect(lens).toHaveBeenCalledTimes(2);
     w.stop();
   });
 });
 
-describe('Worker: a due analysis waits at most one preview (Ruling S12)', () => {
+describe('Worker: a due analysis waits at most one preview', () => {
   afterEach(() => vi.restoreAllMocks());
 
   /**
@@ -3332,7 +3332,7 @@ describe('Worker: a due analysis waits at most one preview (Ruling S12)', () => 
       nextLensRun: async () => null,
       stale: async () => (due ? [{ id: 1, chainId: 1, version: 2, rules: {}, name: 'Lab', ranAt: null, tookMs: null, rulesAt: null, retryAt: null }] : []),
       collections: async () => [],
-      importedFunding: async () => false,
+      importedMoney: async () => false,
       saveAnalysis: async () => { due = false; },
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '', '/nonexistent');
@@ -3344,7 +3344,7 @@ describe('Worker: a due analysis waits at most one preview (Ruling S12)', () => 
       return result;
     };
     w.analyzeOff = async (request) => { order.push(`analysis ${request.id}`); return { analysis: {} as Analysis, through: 7 }; };
-    await w.listen();
+    await w.checks.listen();
     return { w, order };
   }
   const settled = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0)); };
@@ -3379,7 +3379,7 @@ describe('Worker: a due analysis waits at most one preview (Ruling S12)', () => 
     const { w, order } = await queuedBackToBack(true, new Promise<void>((r) => { release = r; }));
     const first = w.run('lens');
     await settled();
-    (w as any).listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
+    (w as any).checks.listener.emit('notification', { channel: 'washtrace_previews', payload: '32' });
     await settled();
     release();
     await first;
@@ -3467,7 +3467,7 @@ describe('Worker.start: the lens and analyze passes share the analysis lock', ()
     expect(new Set(lens.finished)).toEqual(new Set(['an analysis is due first']));
   });
 
-  it('runs a queued lens run within LENS_WAIT_MS and one period, though an analysis is always due (Ruling KK)', async () => {
+  it('runs a queued lens run within LENS_WAIT_MS and one period, though an analysis is always due', async () => {
     const { w, lens } = started(() => true, queued);
     await vi.advanceTimersByTimeAsync(LENS_WAIT_MS + EVERY.lens);
     w.stop();
@@ -3480,7 +3480,7 @@ describe('Worker.start: the lens and analyze passes share the analysis lock', ()
     expect(lens.finished.length).toBeGreaterThanOrEqual(9);
   });
 
-  it('after a lens run, gives the lock to the due analysis next, though a backlog of runs has each waited LENS_WAIT_MS (Ruling RR)', async () => {
+  it('after a lens run, gives the lock to the due analysis next, though a backlog of runs has each waited LENS_WAIT_MS', async () => {
     // Every run has waited already; a run takes 100 s, so it ends before a lens tick, which then comes before analyze's.
     const waited = (startedAt: number) => ({ ...queued(startedAt), dueAt: startedAt - LENS_WAIT_MS });
     const { w, lens } = started(() => true, waited, { analysisMs: 20_000, runMs: 100_000 });
