@@ -597,4 +597,20 @@ CREATE TABLE IF NOT EXISTS washtrace.token_payees (
   // When an analysis began and has not ended: a worker killed during one leaves it set, which the next worker counts as a failed try.
   `ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_started_at timestamptz;
 `,
+  `
+-- Reading a trader again (follow.reread): its money (wallets) and its other
+-- tokens (token_reads) keep status 'done' while due a read again, so every
+-- reader of a done wallet (the analysis, the reach walk, the token set) still
+-- counts it. read_block: the highest block its reads reached, so the next read
+-- starts after it; null for a read with no rows, which starts again at 0.
+-- stale_at: set when a trade comes in a while after its last read (Store.ingest),
+-- the lanes serve it once it has passed, and a re-read that failed puts it an
+-- hour on. Null for every wallet not due one, so the indexes stay small.
+ALTER TABLE washtrace.wallets ADD COLUMN IF NOT EXISTS read_block bigint;
+ALTER TABLE washtrace.wallets ADD COLUMN IF NOT EXISTS stale_at timestamptz;
+ALTER TABLE washtrace.token_reads ADD COLUMN IF NOT EXISTS read_block bigint;
+ALTER TABLE washtrace.token_reads ADD COLUMN IF NOT EXISTS stale_at timestamptz;
+CREATE INDEX IF NOT EXISTS wallets_stale_idx ON washtrace.wallets (chain_id, stale_at) WHERE stale_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS token_reads_stale_idx ON washtrace.token_reads (chain_id, stale_at) WHERE stale_at IS NOT NULL;
+`,
 ];

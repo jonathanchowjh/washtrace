@@ -129,9 +129,10 @@ export const servedWallet = (globalHops: string) =>
  * them: one row each, `p.address`, but itself and `exclude`, and none at all
  * when it paid more than `fanout`. Read by flows_moves_idx in payee order,
  * no further than one past the fanout, so a wallet paying thousands costs
- * what one paying 26 does. The one rule walkOut and seedReach step by.
+ * what one paying 26 does. The one rule walkOut and seedReach step by, and
+ * a re-read follows by (Store.saveMoney), judged on every flow stored.
  */
-const paidBy = (chain: string, exclude: string, fanout: string) => `
+export const paidBy = (chain: string, exclude: string, fanout: string) => `
   CROSS JOIN LATERAL (
     SELECT array_agg(s.to_address) AS paid FROM (
       SELECT DISTINCT f.to_address FROM washtrace.flows f

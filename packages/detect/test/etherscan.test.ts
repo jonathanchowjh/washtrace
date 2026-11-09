@@ -120,6 +120,22 @@ describe('Etherscan', () => {
     }
   });
 
+  it('starts every list at `from` when given one, and sends no startblock otherwise', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [] }));
+    await e.flows(1, '0xa', Infinity, 1234);
+    expect(urls).toHaveLength(4);
+    expect(urls.map((u) => u.searchParams.get('startblock'))).toEqual(['1234', '1234', '1234', '1234']);
+    urls.length = 0;
+    await e.flows(1, '0xa');
+    expect(urls.map((u) => u.searchParams.has('startblock'))).toEqual([false, false, false, false]);
+  });
+
+  it('reports through as the highest block of every row paged, filtered or not, and null for none', async () => {
+    const { e } = fake((q) => ({ status: '1', message: 'OK', result: q.get('action') === 'txlist' ? [row(5), row(9, { value: '0' })] : q.get('action') === 'txlistinternal' ? [row(7, { isError: '1' })] : [] }));
+    expect(await e.flows(1, '0xa')).toMatchObject({ through: 9 });
+    expect((await fake(() => ({ status: '0', message: 'No transactions found', result: [] })).e.flows(1, '0xa')).through).toBeNull();
+  });
+
   it('waits two minutes for a page, and reading one wallet ends inside the fund pass stuck ceiling', () => {
     expect(REQUEST_TIMEOUT_MS).toBe(120_000);
     // The pass checks its budget between wallets; the last wallet's last page can start just before its deadline.
@@ -150,12 +166,22 @@ describe('Etherscan.tokenFlows', () => {
     expect(await e.tokenFlows(1, '0xa')).toEqual({
       flows: [{ txHash: '0xh1', from: '0xa', to: '0xb', token: USDC, valueRaw: '5', blockNumber: 1, blockTime: 1 }],
       truncated: false,
+      through: 3,
     });
+  });
+
+  it('sends startblock only with `from`, and reports through over dropped rows too', async () => {
+    const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [tokenRow(1), tokenRow(8, { contractAddress: '0xdeadbeef00000000000000000000000000000000' })] }));
+    expect(await e.tokenFlows(1, '0xa', Infinity, 77)).toMatchObject({ through: 8 });
+    expect(urls[0]!.searchParams.get('startblock')).toBe('77');
+    await e.tokenFlows(1, '0xa');
+    expect(urls[1]!.searchParams.has('startblock')).toBe(false);
+    expect((await fake(() => ({ status: '0', message: 'No transactions found', result: [] })).e.tokenFlows(1, '0xa')).through).toBeNull();
   });
 
   it('makes no call for a chain with no TOKENS', async () => {
     const { e, urls } = fake(() => ({ status: '1', message: 'OK', result: [] }));
-    expect(await e.tokenFlows(999, '0xa')).toEqual({ flows: [], truncated: false });
+    expect(await e.tokenFlows(999, '0xa')).toEqual({ flows: [], truncated: false, through: null });
     expect(urls).toHaveLength(0);
   });
 

@@ -92,7 +92,7 @@ export default async function WorkerPage() {
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{num(b.done)} of {num(all)} wallets on this chain checked</span></p>
                           <Bar share={all === 0 ? 0 : b.done / all} className="mt-1" />
-                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the follow limit · ` : ''}{b.truncated} too large to page · {num(b.followed)} followed from traders</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the follow limit · ` : ''}{b.truncated} too large to page · {num(b.followed)} followed from traders{b.stale > 0 ? ` · ${num(b.stale)} to read again` : ''}</p>
                         </div>
                       );
                     })}

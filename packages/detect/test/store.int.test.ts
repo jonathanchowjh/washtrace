@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
 import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, SECRET_KEYS, Store, TOKEN_COUNT_MS, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
@@ -1075,7 +1075,9 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
     await at(31);
     expect(await store.migrate()).toBe(MIGRATIONS.length);
     const keys = (await store.pool.query(
-      `SELECT tablename, indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename IN ('token_flows', 'token_reads', 'token_payees') ORDER BY tablename`,
+      // #34's index on token_reads aside: the latest store has it, and #32 never made it.
+      `SELECT tablename, indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename IN ('token_flows', 'token_reads', 'token_payees')
+         AND indexname <> 'token_reads_stale_idx' ORDER BY tablename`,
     )).rows;
     expect(keys).toEqual([
       { tablename: 'token_flows', indexdef: 'CREATE UNIQUE INDEX token_flows_pkey ON washtrace.token_flows USING btree (chain_id, from_address, to_address, block_number, tx_hash, token, value_raw)' },
@@ -1350,6 +1352,134 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
     } finally {
       await drop(C, s.n('cc'));
     }
+  });
+
+  describe('a token read again from the block its last read reached', () => {
+    type Row = { status: string; truncated: boolean; fanout: number; stale: boolean; staleIn: number | null; read_block: string | null; error: string | null };
+    const tokenRow = async (C: number, address: string): Promise<Row> => (await store.pool.query<Row>(
+      `SELECT status, truncated, fanout, stale_at IS NOT NULL AS stale, extract(epoch FROM stale_at - now())::float8 AS "staleIn", read_block, error
+       FROM washtrace.token_reads WHERE chain_id = $1 AND address = $2`, [C, address])).rows[0]!;
+    const aged = (C: number, address: string, days: number) => store.pool.query(
+      'UPDATE washtrace.token_reads SET read_at = now() - make_interval(days => $3) WHERE chain_id = $1 AND address = $2', [C, address, days]);
+    const trader = (who: string, block: number) => trade('1', ZERO, who, block);
+    const payeesOf = async (C: number, payer: string) => (await store.pool.query(
+      'SELECT payee FROM washtrace.token_payees WHERE chain_id = $1 AND payer = $2 ORDER BY payee', [C, payer])).rows.map((r) => r.payee);
+
+    it('ingest with rereadDays marks the done, untruncated token reads older than that, and the lanes serve never-read, then stale, then retries', async () => {
+      const C = 3470;
+      const s = await line(C, '5a');
+      const wanted = async () => (await store.tokenLanes(C, 10, 3, false, Date.now() + 60_000)).lanes[0]!.wallets;
+      try {
+        await store.startTokens(s.id);
+        await seedAll(C, 3);
+        await store.saveTokens(C, s.t1, [], false, 90);
+        await store.saveTokens(C, s.t2, [], true, 90);
+        await store.saveTokens(C, s.a1, [], false, 90);
+        await store.tokensFailed(C, s.b1, 'rate limited');
+        for (const a of [s.t1, s.t2, s.a1]) await aged(C, a, 8);
+        await store.pool.query("UPDATE washtrace.token_reads SET read_at = now() - interval '2 hours' WHERE chain_id = $1 AND address = $2", [C, s.b1]);
+        // Off: nothing marked, and the lane is what it was.
+        await store.ingest(s.id, C, [trader(s.t1, 60)], 60, [s.t1, s.t2, s.a1, s.b1], 0);
+        expect((await tokenRow(C, s.t1)).stale).toBe(false);
+        expect(await wanted()).toEqual([s.c1, s.b1]);
+        // t1 and a1 are done, whole and read 8 days ago; t2 was cut short; b1 never finished; c1 was never read.
+        await store.ingest(s.id, C, [trader(s.t1, 61)], 61, [s.t1, s.t2, s.a1, s.b1, s.c1], 7);
+        expect(await tokenRow(C, s.t1)).toMatchObject({ status: 'done', stale: true });
+        expect(await tokenRow(C, s.a1)).toMatchObject({ status: 'done', stale: true });
+        for (const a of [s.t2, s.b1, s.c1]) expect((await tokenRow(C, a))?.stale ?? false).toBe(false);
+        expect(await wanted()).toEqual([s.c1, s.t1, s.a1, s.b1]);
+        // A read of 6 days ago is not due for 7.
+        await store.saveTokens(C, s.t1, [], false, 90, true);
+        await aged(C, s.t1, 6);
+        await store.ingest(s.id, C, [trader(s.t1, 62)], 62, [s.t1], 7);
+        expect((await tokenRow(C, s.t1)).stale).toBe(false);
+      } finally {
+        await drop(C, s.n('cc'));
+      }
+    });
+
+    it('rereadFrom gives the block after the last read for a marked token read, 0 for one that had no rows, and null for a full read', async () => {
+      const C = 3471;
+      const s = await line(C, '5b');
+      try {
+        await store.startTokens(s.id);
+        await seedAll(C, 3);
+        await store.saveTokens(C, s.t1, [usdc(s.t1, w('5bp1'))], false, 120);
+        await store.saveTokens(C, s.t2, [], false, null);
+        expect(await store.rereadFrom(C, s.t1, 'tokens')).toBeNull();
+        expect(await store.rereadFrom(C, s.a1, 'tokens')).toBeNull();
+        await aged(C, s.t1, 8);
+        await aged(C, s.t2, 8);
+        await store.ingest(s.id, C, [trader(s.t1, 60)], 60, [s.t1, s.t2], 7);
+        expect(await store.rereadFrom(C, s.t1, 'tokens')).toBe(121);
+        expect(await store.rereadFrom(C, s.t2, 'tokens')).toBe(0);
+        // The money read of the same wallet is its own: this one was never marked.
+        expect(await store.rereadFrom(C, s.t1, 'money')).toBeNull();
+      } finally {
+        await drop(C, s.n('cc'));
+      }
+    });
+
+    it('a re-read adds its flows, sets the fanout from every payee stored (capped at 26), keeps the old token_payees, clears the mark and stays done', async () => {
+      const C = 3472;
+      const s = await line(C, '5c');
+      const ps = Array.from({ length: 30 }, (_, i) => w(`5cp${String(i).padStart(2, '0')}`));
+      try {
+        await store.startTokens(s.id);
+        await seedAll(C, 3);
+        const first = [usdc(s.t1, ps[0]!), usdc(s.t1, ps[1]!)];
+        await store.saveTokens(C, s.t1, first, false, 100);
+        await store.saveTokens(C, s.t2, ps.slice(0, 20).map((p) => usdc(s.t2, p)), false, 100);
+        for (const a of [s.t1, s.t2]) await aged(C, a, 8);
+        await store.ingest(s.id, C, [trader(s.t1, 60)], 60, [s.t1, s.t2], 7);
+        // The boundary flow again, as an inclusive startblock gives it, and one new payee.
+        await store.saveTokens(C, s.t1, [first[1]!, usdc(s.t1, ps[2]!)], false, 140, true);
+        expect(await tokenRow(C, s.t1)).toMatchObject({ status: 'done', stale: false, read_block: '140', fanout: 3, error: null });
+        expect(await payeesOf(C, s.t1)).toEqual([ps[0], ps[1], ps[2]]);
+        expect((await store.pool.query('SELECT count(*)::int AS n FROM washtrace.token_flows WHERE chain_id = $1 AND from_address = $2', [C, s.t1])).rows[0].n).toBe(3);
+        // 20 paid already, and 6 more: past the fanout, so a mass sender, with the 20 it was kept for.
+        await store.saveTokens(C, s.t2, ps.slice(20, 26).map((p) => usdc(s.t2, p)), false, 150, true);
+        expect(await tokenRow(C, s.t2)).toMatchObject({ status: 'done', stale: false, read_block: '150', fanout: 26 });
+        expect(await payeesOf(C, s.t2)).toEqual(ps.slice(0, 20));
+        // A read with no rows leaves the block where it was, and the fanout on what is stored.
+        await store.saveTokens(C, s.t2, [], false, null, true);
+        expect(await tokenRow(C, s.t2)).toMatchObject({ read_block: '150', fanout: 26 });
+      } finally {
+        await drop(C, s.n('cc'));
+      }
+    });
+
+    it('a failed re-read keeps the old read: still done, the error noted, tried again in an hour; an unmarked done read and a first read fail as before', async () => {
+      const C = 3473;
+      const s = await line(C, '5d');
+      try {
+        await store.startTokens(s.id);
+        await seedAll(C, 3);
+        await store.saveTokens(C, s.t1, [usdc(s.t1, w('5dp1'))], false, 70);
+        await store.saveTokens(C, s.t2, [], false, 70);
+        await aged(C, s.t1, 8);
+        await store.ingest(s.id, C, [trader(s.t1, 60)], 60, [s.t1], 7);
+        const before = (await store.pool.query('SELECT read_at::text AS at FROM washtrace.token_reads WHERE chain_id = $1 AND address = $2', [C, s.t1])).rows[0].at;
+        await store.tokensFailed(C, s.t1, 'timeout');
+        const after = await tokenRow(C, s.t1);
+        expect(after).toMatchObject({ status: 'done', truncated: false, fanout: 1, read_block: '70', error: 'timeout', stale: true });
+        expect(after.staleIn!).toBeGreaterThan(3590);
+        expect(after.staleIn!).toBeLessThanOrEqual(3600);
+        expect((await store.pool.query('SELECT read_at::text AS at FROM washtrace.token_reads WHERE chain_id = $1 AND address = $2', [C, s.t1])).rows[0].at).toBe(before);
+        // Not served while it waits, and its read still counts: the flows are there.
+        expect((await store.tokenLanes(C, 10, 3, false, Date.now() + 60_000)).lanes[0]!.wallets).toEqual([s.a1, s.b1, s.c1]);
+        await store.pool.query("UPDATE washtrace.token_reads SET stale_at = now() - interval '1 minute' WHERE chain_id = $1 AND address = $2", [C, s.t1]);
+        expect((await store.tokenLanes(C, 10, 3, false, Date.now() + 60_000)).lanes[0]!.wallets).toEqual([s.a1, s.b1, s.c1, s.t1]);
+        // Done and not marked: as today, it stays done and takes no error.
+        await store.tokensFailed(C, s.t2, 'late');
+        expect(await tokenRow(C, s.t2)).toMatchObject({ status: 'done', error: null, stale: false });
+        // A first read fails as ever.
+        await store.tokensFailed(C, s.a1, 'timeout');
+        expect(await tokenRow(C, s.a1)).toMatchObject({ status: 'failed', error: 'timeout', stale: false });
+      } finally {
+        await drop(C, s.n('cc'));
+      }
+    });
   });
 
   it('countTokens writes each started collection\'s counts, and none for one not started', async () => {
@@ -1783,6 +1913,245 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
       store.walkCap = WALK_CAP;
       await drop(C, w('4lc1'));
     }
+  });
+});
+
+describe('migration #34: a trader\'s money read again from the block its last read reached', () => {
+  // A chain of its own: wallets outlive their collections, and these would turn up in others' lanes.
+  const C = 3434;
+  const coll = w('34c1');
+  type Row = { status: string; truncated: boolean; fetched: string | null; stale: boolean; staleIn: number | null; read_block: string | null; error: string | null };
+  const row = async (address: string): Promise<Row> => (await store.pool.query<Row>(
+    `SELECT status, truncated, fetched_at::text AS fetched, stale_at IS NOT NULL AS stale,
+            extract(epoch FROM stale_at - now())::float8 AS "staleIn", read_block, error
+     FROM washtrace.wallets WHERE chain_id = $1 AND address = $2`, [C, address])).rows[0]!;
+  /** Its money read `days` ago: done as saveMoney leaves it, then aged. */
+  const readAgo = async (address: string, days: number, truncated = false) => {
+    await store.saveMoney(C, address, [], truncated);
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - make_interval(days => $3) WHERE chain_id = $1 AND address = $2`, [C, address, days]);
+  };
+  const flowsOf = async (address: string) => Number((await store.pool.query(
+    'SELECT count(*) FROM washtrace.flows WHERE chain_id = $1 AND (from_address = $2 OR to_address = $2)', [C, address])).rows[0].count);
+  const depthOf = async (address: string) => (await store.pool.query('SELECT depth FROM washtrace.wallets WHERE chain_id = $1 AND address = $2', [C, address])).rows[0]?.depth ?? null;
+  const lane = async () => (await store.moneyLanes(C, 10, 2)).lanes.find((l) => l.collectionId === id)?.wallets;
+  let id: number;
+
+  beforeAll(async () => {
+    await store.migrate();
+  });
+
+  beforeEach(async () => {
+    id = (await store.addCollection(C, coll, 'Reread', 1)).id;
+  });
+
+  afterEach(async () => {
+    await drop(C, coll);
+    await store.pool.query('DELETE FROM washtrace.wallets WHERE chain_id = $1', [C]);
+    await store.pool.query('DELETE FROM washtrace.flows WHERE chain_id = $1', [C]);
+  });
+
+  it('#34 is one plain step: two nullable columns on each of wallets and token_reads, and a partial index each; running it again changes nothing', async () => {
+    expect(typeof MIGRATIONS[33]).toBe('string');
+    for (let i = 0; i < 2; i++) {
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (33)');
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
+    }
+    const columns = (await store.pool.query(
+      `SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns
+       WHERE table_schema = 'washtrace' AND table_name IN ('wallets', 'token_reads') AND column_name IN ('read_block', 'stale_at')
+       ORDER BY table_name, column_name`,
+    )).rows;
+    expect(columns).toEqual([
+      { table_name: 'token_reads', column_name: 'read_block', data_type: 'bigint', is_nullable: 'YES' },
+      { table_name: 'token_reads', column_name: 'stale_at', data_type: 'timestamp with time zone', is_nullable: 'YES' },
+      { table_name: 'wallets', column_name: 'read_block', data_type: 'bigint', is_nullable: 'YES' },
+      { table_name: 'wallets', column_name: 'stale_at', data_type: 'timestamp with time zone', is_nullable: 'YES' },
+    ]);
+    const { rows } = await store.pool.query(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND indexname IN ('wallets_stale_idx', 'token_reads_stale_idx') ORDER BY indexname`,
+    );
+    expect(rows.map((r) => r.indexdef)).toEqual([
+      'CREATE INDEX token_reads_stale_idx ON washtrace.token_reads USING btree (chain_id, stale_at) WHERE (stale_at IS NOT NULL)',
+      'CREATE INDEX wallets_stale_idx ON washtrace.wallets USING btree (chain_id, stale_at) WHERE (stale_at IS NOT NULL)',
+    ]);
+  });
+
+  it('ingest with rereadDays marks the done, untruncated traders it saw read longer ago, and no other', async () => {
+    const old = w('34a1'), recent = w('34a2'), cut = w('34a3'), trail = w('34a4'), pending = w('34a5'), unseen = w('34a6');
+    await store.ingest(id, C, chain('1', old, recent, cut, trail, pending, unseen), 10, [old, recent, cut, trail, pending, unseen]);
+    await readAgo(old, 8);
+    await readAgo(recent, 6);
+    await readAgo(cut, 8, true);
+    await readAgo(unseen, 8);
+    // As a loaded trail leaves a wallet: done, never read here.
+    await store.pool.query(`UPDATE washtrace.wallets SET status = 'done', fetched_at = NULL WHERE chain_id = $1 AND address = $2`, [C, trail]);
+    await store.ingest(id, C, chain('2', old, recent), 20, [old, recent, cut, trail, pending], 7);
+    expect((await row(old)).stale).toBe(true);
+    for (const a of [recent, cut, trail, pending, unseen]) expect((await row(a)).stale).toBe(false);
+    // Still done, so everything that reads a done wallet reads it as before.
+    expect(await row(old)).toMatchObject({ status: 'done', error: null });
+  });
+
+  it('ingest marks nothing with rereadDays 0, given or left out', async () => {
+    const old = w('34b1');
+    await store.ingest(id, C, chain('1', old), 10, [old]);
+    await readAgo(old, 400);
+    await store.ingest(id, C, chain('2', old), 20, [old]);
+    await store.ingest(id, C, chain('3', old), 30, [old], 0);
+    expect((await row(old)).stale).toBe(false);
+  });
+
+  it('a load of stored data marks nothing, however long ago its traders were read', async () => {
+    const old = w('34b2');
+    await store.ingest(id, C, chain('1', old), 10, [old]);
+    await readAgo(old, 400);
+    const ts = chain('4', old).map((t) => ({ ...t, blockNumber: 50, blockTime: 1_700_000_000 }));
+    const entry: StoredEntry = {
+      chainId: C, address: coll, name: 'Reread', startBlock: 5, throughBlock: 300, throughTime: 1_700_000_100_000,
+      transfers: { file: `${C}-${coll}.transfers.csv.zst`, rows: 1, bytes: 0, sha256: '' }, trail: null,
+    };
+    await store.restore(id, C, entry, (async function* () { yield ts; })(), 'abc:1:1:1');
+    expect((await store.collection(C, coll))!.cursorBlock).toBe(300);
+    expect((await row(old)).stale).toBe(false);
+  });
+
+  it('the lanes serve a stale trader after every pending one and before a failed retry, and not while its failed re-read waits', async () => {
+    const p = w('34d1'), s = w('34d2'), f = w('34d3');
+    // s the busiest: by transfers alone it would come first.
+    await store.ingest(id, C, chain('1', p, s, f), 10, [p, s, s, s, f]);
+    await readAgo(s, 8);
+    await store.moneyFailed(C, f, 'timeout');
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '2 hours' WHERE chain_id = $1 AND address = $2`, [C, f]);
+    expect(await lane()).toEqual([p, f]);
+    await store.ingest(id, C, chain('2', s), 20, [s], 7);
+    expect(await lane()).toEqual([p, s, f]);
+    await store.moneyFailed(C, s, 'timeout');
+    expect(await lane()).toEqual([p, f]);
+  });
+
+  it('with nothing stale the lanes are what they were: rereadDays 0 leaves a long-read trader unserved', async () => {
+    const p = w('34e1'), q = w('34e2'), d = w('34e3'), f = w('34e4');
+    await store.ingest(id, C, chain('1', p, q, d, f), 10, [p, q, q, d, f]);
+    await readAgo(d, 400);
+    await store.moneyFailed(C, f, 'timeout');
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '2 hours' WHERE chain_id = $1 AND address = $2`, [C, f]);
+    const before = await store.moneyLanes(C, 10, 2);
+    expect(before.lanes).toEqual([{ collectionId: id, wallets: [q, p, f] }]);
+    await store.ingest(id, C, chain('2', d), 20, [d]);
+    expect(await store.moneyLanes(C, 10, 2)).toEqual(before);
+  });
+
+  it('rereadFrom gives the block after the last read\'s for a stale wallet, 0 for one whose read had no rows, and null for a full read', async () => {
+    const s = w('34f1'), empty = w('34f2'), fresh = w('34f3');
+    await store.ingest(id, C, chain('1', s, empty, fresh), 10, [s, empty, fresh]);
+    await store.saveMoney(C, s, [flow(s, w('34f9'), { blockNumber: 120 })], false, undefined, 120);
+    await store.saveMoney(C, empty, [], false, undefined, null);
+    expect(await store.rereadFrom(C, fresh, 'money')).toBeNull();
+    expect(await store.rereadFrom(C, s, 'money')).toBeNull();
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = ANY($2)`, [C, [s, empty]]);
+    await store.ingest(id, C, chain('2', s, empty), 20, [s, empty], 7);
+    expect(await store.rereadFrom(C, s, 'money')).toBe(121);
+    expect(await store.rereadFrom(C, empty, 'money')).toBe(0);
+    expect(await store.rereadFrom(C, w('34f8'), 'money')).toBeNull();
+  });
+
+  it('saveMoney keeps the highest block read, and a re-read adds only its new flows, clears the mark and stays done', async () => {
+    const t = w('34g1'), m = w('34g2'), n = w('34g3');
+    await store.ingest(id, C, chain('1', t), 10, [t]);
+    const first = [flow(t, m, { blockNumber: 100 }), flow(m, t, { blockNumber: 100 })];
+    await store.saveMoney(C, t, first, false, undefined, 100);
+    expect((await row(t)).read_block).toBe('100');
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = $2`, [C, t]);
+    await store.ingest(id, C, chain('2', t), 20, [t], 7);
+    // The read from the block after gives the boundary flow again, as an inclusive startblock would, and one new one.
+    await store.saveMoney(C, t, [first[1]!, flow(t, n, { blockNumber: 140 })], false, undefined, 140, true);
+    expect(await row(t)).toMatchObject({ status: 'done', stale: false, read_block: '140', error: null });
+    expect(await flowsOf(t)).toBe(3);
+    // A read with no rows (through null) leaves the block where it was.
+    await store.saveMoney(C, t, [], false, undefined, null, true);
+    expect((await row(t)).read_block).toBe('140');
+  });
+
+  it('a re-read judges the fanout on the whole history: a wallet that paid 30 already is not followed for 1 more', async () => {
+    const follow = { hops: 2, fanout: FOLLOW_FANOUT, exclude: [] };
+    const big = w('34h1'), small = w('34h2'), late = w('34h3'), later = w('34h4');
+    await store.ingest(id, C, chain('1', big, small), 10, [big, small]);
+    await store.saveMoney(C, big, Array.from({ length: 30 }, (_, i) => flow(big, w(`34h9${i}`))), false, follow, 50);
+    expect(await depthOf(w('34h90'))).toBeNull();
+    await store.saveMoney(C, small, [flow(small, w('34h80')), flow(small, w('34h81'))], false, follow, 50);
+    expect(await depthOf(w('34h80'))).toBe(1);
+    await store.saveMoney(C, big, [flow(big, late)], false, follow, 60, true);
+    expect(await depthOf(late)).toBeNull();
+    // Within the fanout, history and all: the new payee is followed as a first read's would be.
+    await store.saveMoney(C, small, [flow(small, later)], false, follow, 60, true);
+    expect(await depthOf(later)).toBe(1);
+  });
+
+  it('a re-read unmarks the wallet\'s reach rows as stepped only when it brought a new outgoing flow', async () => {
+    const t = w('34i1'), o = w('34i2'), in1 = w('34i3'), out1 = w('34i4');
+    await store.ingest(id, C, chain('1', t, o), 10, [t, o]);
+    const old = flow(t, o, { blockNumber: 30 });
+    await store.saveMoney(C, t, [old], false, undefined, 30);
+    await store.saveMoney(C, o, [], false);
+    await store.pool.query('INSERT INTO washtrace.reach (collection_id, chain_id, address, depth, stepped) VALUES ($1, $2, $3, 0, true), ($1, $2, $4, 0, true)', [id, C, t, o]);
+    const stepped = async () => Object.fromEntries((await store.pool.query(
+      'SELECT address, stepped FROM washtrace.reach WHERE collection_id = $1 ORDER BY address', [id])).rows.map((r) => [r.address, r.stepped]));
+    // Money in, and the boundary flow out again: nothing new to walk from.
+    await store.saveMoney(C, t, [old, flow(in1, t, { blockNumber: 40 })], false, undefined, 40, true);
+    expect(await stepped()).toEqual({ [t]: true, [o]: true });
+    await store.saveMoney(C, t, [flow(t, out1, { blockNumber: 50 })], false, undefined, 50, true);
+    expect(await stepped()).toEqual({ [t]: false, [o]: true });
+  });
+
+  it('a failed re-read keeps the old read: still done, its flows and fetched_at kept, the error noted, tried again in an hour', async () => {
+    const t = w('34j1'), m = w('34j2'), first = w('34j3');
+    // The cursor past the fixtures' blocks, so the analysis reads these traders.
+    await store.ingest(id, C, chain('1', t, first), 1_000_000, [t, first]);
+    await store.saveMoney(C, t, [flow(t, m, { blockNumber: 70 })], false, undefined, 70);
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = $2`, [C, t]);
+    await store.ingest(id, C, chain('2', t), 1_000_001, [t], 7);
+    const before = await row(t);
+    await store.moneyFailed(C, t, 'timeout');
+    const after = await row(t);
+    expect(after).toMatchObject({ status: 'done', truncated: false, fetched: before.fetched, read_block: '70', error: 'timeout', stale: true });
+    expect(after.staleIn!).toBeGreaterThan(3590);
+    expect(after.staleIn!).toBeLessThanOrEqual(3600);
+    expect(await flowsOf(t)).toBe(1);
+    expect((await store.analysisInput(id, C, 2)).funded.has(t)).toBe(true);
+    // A first read fails as ever.
+    await store.moneyFailed(C, first, 'timeout');
+    expect(await row(first)).toMatchObject({ status: 'failed', error: 'timeout', stale: false });
+  });
+
+  it('only a marked re-read keeps done when it fails: a done wallet with no mark fails as a first read does', async () => {
+    const trail = w('34l1'), marked = w('34l2');
+    await store.ingest(id, C, chain('1', trail, marked), 10, [trail, marked]);
+    // As a trail loaded while its first read ran leaves it: done, never read here.
+    await store.pool.query(`UPDATE washtrace.wallets SET status = 'done', fetched_at = NULL WHERE chain_id = $1 AND address = $2`, [C, trail]);
+    await readAgo(marked, 8);
+    await store.ingest(id, C, chain('2', marked), 20, [marked], 7);
+    await store.moneyFailed(C, trail, 'timeout');
+    await store.moneyFailed(C, marked, 'timeout');
+    const failed = await row(trail);
+    expect(failed).toMatchObject({ status: 'failed', error: 'timeout', stale: false });
+    const ago = Number((await store.pool.query('SELECT extract(epoch FROM now() - fetched_at)::float8 AS s FROM washtrace.wallets WHERE chain_id = $1 AND address = $2', [C, trail])).rows[0].s);
+    expect(ago).toBeLessThan(60);
+    expect(await row(marked)).toMatchObject({ status: 'done', error: 'timeout', stale: true });
+  });
+
+  it('moneyBacklog counts the stale wallets a lane serves apart, and pending, failed and stranded as before', async () => {
+    const backlog = async () => (await store.moneyBacklog(2)).find((r) => r.chainId === C)!;
+    const s1 = w('34k1'), s2 = w('34k2'), p = w('34k3');
+    await store.ingest(id, C, chain('1', s1, s2, p), 10, [s1, s2, p]);
+    await readAgo(s1, 8);
+    await readAgo(s2, 8);
+    expect(await backlog()).toMatchObject({ pending: 1, failed: 0, stranded: 0, stale: 0, done: 2 });
+    await store.ingest(id, C, chain('2', s1, s2), 20, [s1, s2], 7);
+    expect(await backlog()).toMatchObject({ pending: 1, failed: 0, stranded: 0, stale: 2, done: 2 });
+    // Held back with the paused collection, as a pending one is: counted in neither.
+    await store.pause(C, coll);
+    expect(await backlog()).toMatchObject({ pending: 0, failed: 0, stranded: 1, stale: 0, done: 2 });
   });
 });
 
@@ -3515,6 +3884,26 @@ describe('Store', () => {
       // With the lock free, it goes through, on the five minutes as the worker runs it.
       await store.importTrail(id, 27, 'feed', trailOf(...trail));
       expect(await store.collection(27, w('27c1'))).toMatchObject({ trailImportedSha: 'feed' });
+    });
+
+    it('importTrail\'s version bump skips a paused collection: it is not bumped, and a lock held on it does not hold the import', async () => {
+      const id = await before(28, w('28c1'));
+      const paused = (await store.addCollection(28, w('28c2'), null, 10)).id;
+      await store.pool.query('UPDATE washtrace.collections SET paused_at = now() WHERE id = $1', [paused]);
+      const [mine, theirs] = [await version(id), await version(paused)];
+      const blocker = await store.pool.connect();
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT id FROM washtrace.collections WHERE id = $1 FOR UPDATE', [paused]);
+      store.trailLockTimeout = () => '200ms';
+      try {
+        await store.importTrail(id, 28, 'feed', trailOf(...trail));
+      } finally {
+        delete (store as any).trailLockTimeout;
+        await blocker.query('ROLLBACK');
+        blocker.release();
+      }
+      expect(await version(id)).toBe(mine + 1);
+      expect(await version(paused)).toBe(theirs);
     });
 
     it('importTrail\'s final statement clears the collection\'s trail progress', async () => {

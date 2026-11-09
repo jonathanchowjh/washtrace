@@ -525,4 +525,14 @@ describe('the worker page\'s wallet count', () => {
     expect(text).toContain('about 40 min left');
     expect(text).not.toMatch(/\bhops?\b/i);
   });
+
+  it('says how many wallets wait to be read again, only when some do', async () => {
+    const job = { job: 'fund', state: 'ok', startedAt: null, finishedAt: null, tookMs: null, detail: null, outcome: null };
+    const backlog = (stale: number) => [{ chainId: 1, done: 3, pending: 2, failed: 0, stranded: 0, stale, truncated: 0, followed: 1, etaMs: null }];
+    Object.assign(view, { funding: null, trailFunded: false, jobs: [job], backlog: backlog(3) });
+    expect(render(await WorkerPage()).container.textContent).toContain('1 followed from traders · 3 to read again');
+    cleanup();
+    Object.assign(view, { backlog: backlog(0) });
+    expect(render(await WorkerPage()).container.textContent).not.toContain('to read again');
+  });
 });

@@ -18,6 +18,8 @@ export interface WorkerConfig {
   etherscanUrl: string;
   /** Hops of money to follow out of a trader for SCC AU. 0 reads traders only, as the paper did. */
   followHops: number;
+  /** Days before a trader's money and tokens are read again when it trades. 0 (or unset) is off. */
+  followReread?: number;
   /**
    * Whether the token read (Start reading) also reads every wallet a trader
    * paid in the listed tokens: one middle, all a one-middle loop needs, at up
@@ -87,6 +89,7 @@ export function workerConfig(env: Env, settings: ReadonlyMap<string, string> = n
     etherscanPerSecond: Number.isFinite(perSecond) && perSecond > 0 ? perSecond : 4,
     etherscanUrl: pick('etherscan.url', 'WASHTRACE_ETHERSCAN_URL', sources['etherscan.key']?.source === 'env') ?? ETHERSCAN_V2,
     followHops: hops(pick('follow.hops', 'WASHTRACE_FOLLOW_HOPS')),
+    followReread: reread(pick('follow.reread', 'WASHTRACE_FOLLOW_REREAD')),
     // Only 'on' turns it on: a typo reads as the default, which reads fewer wallets.
     tokensPayees: pick('tokens.payees', 'WASHTRACE_TOKENS_PAYEES') === 'on',
     storedRepo: pick('stored.repo', 'WASHTRACE_STORED_REPO') ?? STORED_REPO,
@@ -207,4 +210,10 @@ export function urlSecrets(url: string, credentialsOnly = false): string[] {
  */
 export function configSecrets(config: WorkerConfig): string[] {
   return [...[...config.rpc.values()].flatMap((u) => urlSecrets(u)), ...urlSecrets(config.etherscanUrl, true), config.etherscanKey ?? ''];
+}
+
+/** Default 0 (off). A whole number of days up to a year; anything else is off. */
+function reread(raw: string | undefined): number {
+  const n = Number(raw ?? '0');
+  return Number.isInteger(n) && n >= 0 && n <= 365 ? n : 0;
 }

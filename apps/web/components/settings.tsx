@@ -24,6 +24,7 @@ const HINTS: Record<string, string> = {
   'etherscan.rps': 'How many Etherscan calls the worker makes a second. Higher checks wallets sooner; above your plan\'s limit, Etherscan refuses calls.',
   'etherscan.url': 'Where the worker sends its Etherscan calls. Change it only for a proxy or an Etherscan-compatible API.',
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls. Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".`,
+  'follow.reread': "Read a trader's money and other tokens again when it trades, at most once every this many days. 0 is off. Each re-read is about 4 Etherscan calls, and the token read about 1 more. Turning it off stops new re-reads; any already due are read once.",
   // What it buys, what it costs, and what it never reads, with the fan-out the worker follows by.
   'tokens.payees': `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
     + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`,

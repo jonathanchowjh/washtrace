@@ -1,4 +1,4 @@
-import { MAX_STREAMS, METHODS, moneyFor, type TradeRow } from '@washtrace/detect';
+import { DOWNLOAD_STALL_MS, DOWNLOAD_TOO_LONG, MAX_STREAMS, METHODS, STREAM_MAX_MS, moneyFor, type TradeRow } from '@washtrace/detect';
 import { venueOf, VENUES, type LensKey, type TradeContext } from '@washtrace/detect/trades';
 import { bad, collectionFrom, handle, json, readerZone } from '@/lib/api';
 import { LENSES, NOT_RUN, weiToEth, type Lenses } from '@/lib/format';
@@ -35,31 +35,59 @@ function csvLine(r: TradeRow, ctx: Pick<TradeContext, 'ran' | 'through'>, cols: 
   ].map(cell).join(',') + '\n';
 }
 
-/** The rows of an iterator as a CSV body, one per pull, so a slow reader holds one row and a cancelled download closes the cursor. */
+/**
+ * The rows of an iterator as a CSV body, one per pull, so a slow reader holds
+ * one row and a cancelled download closes the cursor. A reader that stops
+ * pulling without cancelling (a stranger's network gone quiet) or a body open
+ * past STREAM_MAX_MS would hold the store's connection and its slot: a timer
+ * closes the iterator, which releases both, and errors the body.
+ */
 function csvBody(it: AsyncGenerator<TradeRow>, ctx: TradeContext, own: Lenses): ReadableStream<Uint8Array> {
   const cols = [...METHODS, ...Object.keys(own) as LensKey[]];
   const header = headerOf(own).map(cell).join(',') + '\n';
   const enc = new TextEncoder();
   let head = true;
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  let cap: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const clear = () => { clearTimeout(stall); clearTimeout(cap); };
+  // controller.error does not call cancel, so every error path closes the iterator itself.
+  const stop = async (controller: ReadableStreamDefaultController<Uint8Array>, err: unknown) => {
+    stopped = true;
+    clear();
+    await it.return(undefined).catch(() => {});
+    controller.error(err);
+  };
+  const waiting = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (stopped) return;
+    stall = setTimeout(() => void stop(controller, new Error('The download was stopped: nothing was reading it.')), DOWNLOAD_STALL_MS);
+  };
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      cap = setTimeout(() => void stop(controller, new Error(DOWNLOAD_TOO_LONG)), STREAM_MAX_MS);
+      waiting(controller);
+    },
     async pull(controller) {
+      clearTimeout(stall);
       try {
         const next = await it.next();
+        // A timer stopped the download while this row was read: the body is errored already.
+        if (stopped) return;
         const lead = head ? header : '';
         head = false;
         if (next.done) {
           if (lead) controller.enqueue(enc.encode(lead));
+          clear();
           controller.close();
         } else {
           controller.enqueue(enc.encode(lead + csvLine(next.value, ctx, cols, ctx.money)));
+          waiting(controller);
         }
       } catch (err) {
-        // controller.error does not call cancel, so a failed row would leave the cursor's connection held.
-        await it.return(undefined).catch(() => {});
-        controller.error(err);
+        if (!stopped) await stop(controller, err);
       }
     },
-    cancel: async () => { await it.return(undefined); },
+    cancel: async () => { clear(); await it.return(undefined); },
   }, { highWaterMark: 0 });
 }
 

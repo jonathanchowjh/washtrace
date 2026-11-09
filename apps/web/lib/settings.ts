@@ -139,6 +139,15 @@ export const FIELDS: readonly Field[] = [
     fallback: 'off',
   },
   {
+    key: 'follow.reread',
+    label: 'Read traders again (days)',
+    secret: false,
+    validate: (v) => (/^\d+$/.test(v) && Number(v) <= 365 ? null : 'Read traders again (days) must be a whole number from 0 to 365.'),
+    // reread() in env.ts: '30.0' and '1e2' pass; outside 0–365 the worker uses 0.
+    used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 365,
+    fallback: '0',
+  },
+  {
     key: 'stored.repo',
     label: 'Stored data dataset',
     secret: false,

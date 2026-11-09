@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
+import { DOWNLOAD_STALL_MS, STREAM_MAX_MS } from '@washtrace/detect';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const SELLER = '0x' + '1'.repeat(40);
@@ -117,6 +118,66 @@ describe('GET trades', () => {
     await reader.read();
     await reader.cancel();
     expect(closed).toBe(true);
+  });
+
+  describe('a download nobody is reading', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('is closed after DOWNLOAD_STALL_MS without a pull, and its body errors', async () => {
+      vi.useFakeTimers();
+      let closed = false;
+      state.stream = async function* () { try { for (;;) yield row(0); } finally { closed = true; } };
+      const reader = (await get('format=csv')).body!.getReader();
+      await reader.read();
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS - 1);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(closed).toBe(true);
+      await expect(reader.read()).rejects.toThrow('nothing was reading it');
+    });
+
+    it('is not stalled while the reader keeps pulling, and its timer goes with the end', async () => {
+      vi.useFakeTimers();
+      state.stream = async function* () { yield row(1); yield row(2); yield row(3); };
+      const reader = (await get('format=csv')).body!.getReader();
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS - 1);
+        expect((await reader.read()).done).toBe(false);
+      }
+      expect((await reader.read()).done).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('is stopped once when the cap fires while a row is being read: no stall timer is armed after it', async () => {
+      vi.useFakeTimers();
+      let release = () => {};
+      let returns = 0;
+      state.stream = async function* () {
+        try { yield row(0); await new Promise<void>((r) => { release = r; }); yield row(1); } finally { returns++; }
+      };
+      const reader = (await get('format=csv')).body!.getReader();
+      await reader.read();
+      const second = reader.read().catch((e) => e);
+      await vi.advanceTimersByTimeAsync(STREAM_MAX_MS);
+      release();
+      expect(String(await second)).toContain('ran too long');
+      expect(returns).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('is closed past STREAM_MAX_MS even when read steadily, and its body errors', async () => {
+      vi.useFakeTimers();
+      let closed = false;
+      state.stream = async function* () { try { for (;;) yield row(0); } finally { closed = true; } };
+      const reader = (await get('format=csv')).body!.getReader();
+      let failure: unknown = null;
+      for (let elapsed = 0; elapsed <= STREAM_MAX_MS && failure === null; elapsed += DOWNLOAD_STALL_MS - 1) {
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS - 1);
+        await reader.read().catch((e) => { failure = e; });
+      }
+      expect(closed).toBe(true);
+      expect(String(failure)).toContain('ran too long');
+    });
   });
 
   it('a generator that throws on its second row errors the body instead of hanging', async () => {

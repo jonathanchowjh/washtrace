@@ -82,6 +82,13 @@ describe('Settings, each field', () => {
       + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`);
   });
 
+  it('says what follow.reread is for, what it costs and how to turn it off', () => {
+    const reread: FieldView = { key: 'follow.reread', label: 'Read traders again (days)', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
+    render(<Settings writable fields={[...fields(), reread]} />);
+    expect(box('follow.reread').querySelector('[data-hint]')?.textContent).toBe(
+      "Read a trader's money and other tokens again when it trades, at most once every this many days. 0 is off. Each re-read is about 4 Etherscan calls, and the token read about 1 more. Turning it off stops new re-reads; any already due are read once.");
+  });
+
   it('gives each field an anchor by its key', () => {
     render(<Settings writable fields={fields()} />);
     for (const f of fields()) expect(box(f.key)).toBeTruthy();

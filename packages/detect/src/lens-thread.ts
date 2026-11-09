@@ -129,24 +129,36 @@ export async function previewStored(store: Store, request: PreviewRequest, onPro
  * that dies after some progress still rejects. It runs this file from `dist`,
  * so it only works compiled: in tests `Worker.lensOff` is overridden instead.
  */
-export function runLensInThread(request: LensRequest, onProgress: (share: number) => void): Promise<Lensed> {
-  return inThread({ [REQUEST]: request }, 'The lens run', onProgress) as Promise<Lensed>;
+export function runLensInThread(request: LensRequest, onProgress: (share: number) => void, signal?: AbortSignal): Promise<Lensed> {
+  return inThread({ [REQUEST]: request }, 'The lens run', onProgress, signal) as Promise<Lensed>;
 }
 
 /** Run `previewStored` on the lens thread, as `runLensInThread` runs a lens. In tests `Worker.previewOff` is overridden instead. */
-export function runPreviewInThread(request: PreviewRequest, onProgress: (share: number) => void): Promise<PreviewResult> {
-  return inThread({ [PREVIEW]: request }, 'The preview', onProgress) as Promise<PreviewResult>;
+export function runPreviewInThread(request: PreviewRequest, onProgress: (share: number) => void, signal?: AbortSignal): Promise<PreviewResult> {
+  return inThread({ [PREVIEW]: request }, 'The preview', onProgress, signal) as Promise<PreviewResult>;
 }
 
-/** This file on a thread of its own with `data`, stopped after LENS_TIMEOUT_MS; `what` names it in the errors. */
-function inThread(data: Record<string, unknown>, what: string, onProgress: (share: number) => void): Promise<Lensed | PreviewResult> {
+/**
+ * This file on a thread of its own with `data`, stopped after LENS_TIMEOUT_MS
+ * or when `signal` aborts (the worker's lock was lost); `what` names it in the
+ * errors. An aborted signal starts no thread.
+ */
+function inThread(data: Record<string, unknown>, what: string, onProgress: (share: number) => void, signal?: AbortSignal): Promise<Lensed | PreviewResult> {
   return new Promise((resolve, reject) => {
+    const lost = () => new Error(`${what} was stopped: the lock held for it was lost.`);
+    if (signal?.aborted) {
+      reject(lost());
+      return;
+    }
     const thread = new Thread(new URL('./lens-thread.js', import.meta.url), { workerData: data });
-    const ceiling = setTimeout(() => {
-      reject(new Error(`${what} took longer than ${LENS_TIMEOUT_MS / 60_000} min and was stopped.`));
+    const end = (err: Error) => {
+      reject(err);
       void thread.terminate();
-    }, LENS_TIMEOUT_MS);
+    };
+    const ceiling = setTimeout(() => end(new Error(`${what} took longer than ${LENS_TIMEOUT_MS / 60_000} min and was stopped.`)), LENS_TIMEOUT_MS);
     ceiling.unref?.();
+    const stop = () => end(lost());
+    signal?.addEventListener('abort', stop, { once: true });
     thread.on('message', (m: Message) => {
       if ('progress' in m) {
         onProgress(m.progress);
@@ -155,13 +167,11 @@ function inThread(data: Record<string, unknown>, what: string, onProgress: (shar
       resolve(m.result);
       void thread.terminate();
     });
-    thread.once('error', (err) => {
-      reject(err);
-      void thread.terminate();
-    });
+    thread.once('error', end);
     // After an answer this is a no-op; before one, the thread died without saying why.
     thread.once('exit', (code) => {
       clearTimeout(ceiling);
+      signal?.removeEventListener('abort', stop);
       reject(new Error(`The lens thread exited with code ${code} before it answered.`));
     });
   });

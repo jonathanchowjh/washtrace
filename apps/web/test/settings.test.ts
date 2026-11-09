@@ -217,7 +217,7 @@ describe('configFromSources', () => {
 
 describe('variableOf', () => {
   it('names the environment variable that pins each setting', () => {
-    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS', 'WASHTRACE_TOKENS_PAYEES', 'WASHTRACE_STORED_REPO']);
+    expect(FIELDS.map((f) => variableOf(f.key))).toEqual(['WASHTRACE_RPC_1', 'WASHTRACE_ETHERSCAN_KEY', 'WASHTRACE_ETHERSCAN_RPS', 'WASHTRACE_ETHERSCAN_URL', 'WASHTRACE_FOLLOW_HOPS', 'WASHTRACE_TOKENS_PAYEES', 'WASHTRACE_FOLLOW_REREAD', 'WASHTRACE_STORED_REPO']);
   });
 });
 
@@ -238,6 +238,20 @@ describe('tokens.payees', () => {
     expect(payees.used('off')).toBe(true);
     expect(payees.used('ON')).toBe(false);
     expect(field(fieldViews(new Map(), { 'tokens.payees': src('env', 'yes', 'yes') }, true), 'tokens.payees').invalid).toBe('Read tokens of wallets paid in tokens is on or off.');
+  });
+});
+
+describe('follow.reread', () => {
+  const f = FIELDS.find((x) => x.key === 'follow.reread')!;
+
+  it('is a field with its own label and variable, off by default', () => {
+    expect(f).toMatchObject({ label: 'Read traders again (days)', secret: false, fallback: '0' });
+    expect(variableOf('follow.reread')).toBe('WASHTRACE_FOLLOW_REREAD');
+  });
+
+  it('takes a whole number of days from 0 to 365', () => {
+    for (const v of ['0', '1', '30', '365']) expect(f.validate(v)).toBeNull();
+    for (const v of ['', '-1', '366', '1.5', 'abc', '1e2']) expect(f.validate(v)).toBe('Read traders again (days) must be a whole number from 0 to 365.');
   });
 });
 

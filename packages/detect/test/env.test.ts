@@ -98,6 +98,16 @@ describe('workerConfig', () => {
     expect(c.sources['stored.repo']).toEqual({ source: 'console', value: 'me/data', env: 'env/data' });
   });
 
+  it('reads follow.reread as whole days from 0 to 365, from the console first, and 0 when invalid', () => {
+    expect(workerConfig({}).followReread).toBe(0);
+    expect(workerConfig({ WASHTRACE_FOLLOW_REREAD: '30' }).followReread).toBe(30);
+    expect(workerConfig({ WASHTRACE_FOLLOW_REREAD: '365' }).followReread).toBe(365);
+    for (const v of ['366', '-1', '1.5', 'abc', '1e9']) expect(workerConfig({ WASHTRACE_FOLLOW_REREAD: v }).followReread).toBe(0);
+    const c = workerConfig({ WASHTRACE_FOLLOW_REREAD: '30' }, new Map([['follow.reread', '7']]));
+    expect(c.followReread).toBe(7);
+    expect(c.sources['follow.reread']).toEqual({ source: 'console', value: '7', env: '30' });
+  });
+
   it('reads tokens.payees as off unless it is set to on, from the console first, then the environment', () => {
     expect(workerConfig({}).tokensPayees).toBe(false);
     expect(workerConfig({ WASHTRACE_TOKENS_PAYEES: 'on' }).tokensPayees).toBe(true);

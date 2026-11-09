@@ -612,7 +612,7 @@ export class Worker {
     while (cursor! < head && Date.now() < deadline && !this.lockLost('ingest')) {
       await this.beat('ingest', `Reading ${c.name ?? c.address}, blocks ${cursor! + 1}–${head}`, c.id);
       const { transfers, through } = await chain.transfers(c.address, cursor! + 1, head);
-      await this.store.ingest(c.id, c.chainId, transfers, through, traders(c.chainId, transfers));
+      await this.store.ingest(c.id, c.chainId, transfers, through, traders(c.chainId, transfers), this.resolved().followReread ?? 0);
       cursor = through;
       got.spans += 1;
       got.read += transfers.length;
@@ -699,9 +699,11 @@ export class Worker {
         if (Date.now() > checkUntil || this.lockLost('fund')) break chains;
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
-          const { flows, truncated } = await etherscan.flows(chainId, wallet, WALLET_MS);
+          // A wallet due a re-read is read from the block after the last read, and a first read in full.
+          const from = await this.store.rereadFrom(chainId, wallet, 'money');
+          const { flows, truncated, through } = await etherscan.flows(chainId, wallet, WALLET_MS, from ?? undefined);
           const follow = globalHops > 0 ? followOf(chainId, globalHops) : undefined;
-          await this.store.saveMoney(chainId, wallet, flows, truncated, follow);
+          await this.store.saveMoney(chainId, wallet, flows, truncated, follow, through, from !== null);
           done += 1;
         } catch (err) {
           if (this.noteOutage(err)) throw this.outageError();
@@ -771,8 +773,9 @@ export class Worker {
           await this.beat('fund', `Reading other tokens for ${owner?.name ?? owner?.address ?? 'followed wallets'}`, null);
           tried += 1;
           try {
-            const { flows, truncated } = await etherscan.tokenFlows(chainId, wallet, WALLET_MS);
-            await this.store.saveTokens(chainId, wallet, flows, truncated);
+            const from = await this.store.rereadFrom(chainId, wallet, 'tokens');
+            const { flows, truncated, through } = await etherscan.tokenFlows(chainId, wallet, WALLET_MS, from ?? undefined);
+            await this.store.saveTokens(chainId, wallet, flows, truncated, through, from !== null);
           } catch (err) {
             if (this.noteOutage(err)) return tried;
             await this.store.tokensFailed(chainId, wallet, this.scrubbed(err));
@@ -819,7 +822,7 @@ export class Worker {
         custodians: new Set(CUSTODIANS),
         contracts: contractsFor(c.chainId),
         money,
-      });
+      }, this.locks.get('analyze')?.abort.signal);
       const lost = this.lockLost('analyze');
       if (lost !== null) throw lost;
       await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through, money);
@@ -882,8 +885,8 @@ export class Worker {
    * and /health go on meanwhile, and the flows are never held here. Tests
    * override it on the instance.
    */
-  analyzeOff(request: AnalysisRequest): Promise<Analysed> {
-    return analyzeInThread(request);
+  analyzeOff(request: AnalysisRequest, signal?: AbortSignal): Promise<Analysed> {
+    return analyzeInThread(request, signal);
   }
 
   /**
@@ -901,7 +904,7 @@ export class Worker {
     const { progress, written } = this.progressWriter(`Running ${where}`, collectionId, (share) => this.store.lensRunProgress(lens.id, collectionId, share));
     try {
       const { followHops: globalHops, tokensPayees } = this.resolved();
-      const { totals, flags, tokensRead } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops: globalHops, payees: tokensPayees }, progress);
+      const { totals, flags, tokensRead } = await this.lensOff({ storeUrl: this.storeUrl, lensId: lens.id, collectionId, chainId, rule: lens.rule, through, followHops: globalHops, payees: tokensPayees }, progress, this.locks.get('lens')?.abort.signal);
       await written();
       const lost = this.lockLost('lens');
       if (lost !== null) throw lost;
@@ -933,7 +936,7 @@ export class Worker {
       // Inside the try: a throw here fails this preview with its own error, not as a swept "worker stopped".
       await this.beat('lens', `Previewing ${where}`, p.collectionId);
       const { followHops: globalHops, tokensPayees } = this.resolved();
-      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops: globalHops, payees: tokensPayees }, progress);
+      const result = await this.previewOff({ storeUrl: this.storeUrl, previewId: p.id, collectionId: p.collectionId, chainId: p.chainId, rule: p.rule, through: p.through, followHops: globalHops, payees: tokensPayees }, progress, this.locks.get('lens')?.abort.signal);
       await written();
       const lost = this.lockLost('lens');
       if (lost !== null) throw lost;
@@ -974,13 +977,13 @@ export class Worker {
   }
 
   /** Run the lens off the main thread, as `analyzeOff` does the analysis. Tests override it on the instance. */
-  lensOff(request: LensRequest, onProgress: (share: number) => void): Promise<Lensed> {
-    return runLensInThread(request, onProgress);
+  lensOff(request: LensRequest, onProgress: (share: number) => void, signal?: AbortSignal): Promise<Lensed> {
+    return runLensInThread(request, onProgress, signal);
   }
 
   /** Run a preview off the main thread, on the lens thread. Tests override it on the instance, as `lensOff`. */
-  previewOff(request: PreviewRequest, onProgress: (share: number) => void): Promise<PreviewResult> {
-    return runPreviewInThread(request, onProgress);
+  previewOff(request: PreviewRequest, onProgress: (share: number) => void, signal?: AbortSignal): Promise<PreviewResult> {
+    return runPreviewInThread(request, onProgress, signal);
   }
 
   /**

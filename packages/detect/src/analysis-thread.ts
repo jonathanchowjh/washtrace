@@ -71,27 +71,35 @@ export const ANALYZE_TIMEOUT_MS = 60 * 60_000;
  * The thread runs this same file from `dist`, so it only works compiled: in
  * tests, `Worker.analyzeOff` is overridden instead. A throw or a crash in the
  * thread rejects, and so does running past ANALYZE_TIMEOUT_MS; the thread is
- * ended either way.
+ * ended either way. So does `signal` aborting (the worker's lock was lost,
+ * and another replica may run the same analysis): at once, and with no thread
+ * started if it is aborted already.
  */
-export function analyzeInThread(request: AnalysisRequest): Promise<Analysed> {
+export function analyzeInThread(request: AnalysisRequest, signal?: AbortSignal): Promise<Analysed> {
   return new Promise((resolve, reject) => {
+    const lost = () => new Error('The analysis was stopped: the lock held for it was lost.');
+    if (signal?.aborted) {
+      reject(lost());
+      return;
+    }
     const thread = new Thread(new URL('./analysis-thread.js', import.meta.url), { workerData: { [REQUEST]: request } });
-    const ceiling = setTimeout(() => {
-      reject(new Error(`Analysis took longer than ${ANALYZE_TIMEOUT_MS / 60_000} min and was stopped.`));
+    const end = (err: Error) => {
+      reject(err);
       void thread.terminate();
-    }, ANALYZE_TIMEOUT_MS);
+    };
+    const ceiling = setTimeout(() => end(new Error(`Analysis took longer than ${ANALYZE_TIMEOUT_MS / 60_000} min and was stopped.`)), ANALYZE_TIMEOUT_MS);
     ceiling.unref?.();
+    const stop = () => end(lost());
+    signal?.addEventListener('abort', stop, { once: true });
     thread.once('message', (analysed: Analysed) => {
       resolve(analysed);
       void thread.terminate();
     });
-    thread.once('error', (err) => {
-      reject(err);
-      void thread.terminate();
-    });
+    thread.once('error', end);
     // After an answer this is a no-op; before one, the thread died without saying why.
     thread.once('exit', (code) => {
       clearTimeout(ceiling);
+      signal?.removeEventListener('abort', stop);
       reject(new Error(`The analysis thread exited with code ${code} before it answered.`));
     });
   });
