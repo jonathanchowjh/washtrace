@@ -1398,21 +1398,24 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
       }
     });
 
-    it('rereadFrom gives the block after the last read for a marked token read, 0 for one that had no rows, and null for a full read', async () => {
+    it('rereadFrom gives a marked token read a day of blocks before the one after its last read, floored at 0, 0 for one that had no rows, and null for a full read', async () => {
       const C = 3471;
       const s = await line(C, '5b');
       try {
         await store.startTokens(s.id);
         await seedAll(C, 3);
-        await store.saveTokens(C, s.t1, [usdc(s.t1, w('5bp1'))], false, 120);
+        await store.saveTokens(C, s.t1, [usdc(s.t1, w('5bp1'))], false, 10_000);
         await store.saveTokens(C, s.t2, [], false, null);
         expect(await store.rereadFrom(C, s.t1, 'tokens')).toBeNull();
         expect(await store.rereadFrom(C, s.a1, 'tokens')).toBeNull();
         await aged(C, s.t1, 8);
         await aged(C, s.t2, 8);
         await store.ingest(s.id, C, [trader(s.t1, 60)], 60, [s.t1, s.t2], 7);
-        expect(await store.rereadFrom(C, s.t1, 'tokens')).toBe(121);
+        expect(await store.rereadFrom(C, s.t1, 'tokens')).toBe(10_000 + 1 - 7200);
         expect(await store.rereadFrom(C, s.t2, 'tokens')).toBe(0);
+        // Read no further than block 100: the day before it starts before block 0.
+        await store.pool.query('UPDATE washtrace.token_reads SET read_block = 100 WHERE chain_id = $1 AND address = $2', [C, s.t1]);
+        expect(await store.rereadFrom(C, s.t1, 'tokens')).toBe(0);
         // The money read of the same wallet is its own: this one was never marked.
         expect(await store.rereadFrom(C, s.t1, 'money')).toBeNull();
       } finally {
@@ -2042,16 +2045,18 @@ describe('migration #34: a trader\'s money read again from the block its last re
     expect(await store.moneyLanes(C, 10, 2)).toEqual(before);
   });
 
-  it('rereadFrom gives the block after the last read\'s for a stale wallet, 0 for one whose read had no rows, and null for a full read', async () => {
-    const s = w('34f1'), empty = w('34f2'), fresh = w('34f3');
-    await store.ingest(id, C, chain('1', s, empty, fresh), 10, [s, empty, fresh]);
-    await store.saveMoney(C, s, [flow(s, w('34f9'), { blockNumber: 120 })], false, undefined, 120);
+  it('rereadFrom gives a stale wallet a day of blocks before the one after its last read\'s, floored at 0, 0 for one whose read had no rows, and null for a full read', async () => {
+    const s = w('34f1'), empty = w('34f2'), fresh = w('34f3'), low = w('34f4');
+    await store.ingest(id, C, chain('1', s, empty, fresh, low), 10, [s, empty, fresh, low]);
+    await store.saveMoney(C, s, [flow(s, w('34f9'), { blockNumber: 10_000 })], false, undefined, 10_000);
+    await store.saveMoney(C, low, [flow(low, w('34f9'), { blockNumber: 100 })], false, undefined, 100);
     await store.saveMoney(C, empty, [], false, undefined, null);
     expect(await store.rereadFrom(C, fresh, 'money')).toBeNull();
     expect(await store.rereadFrom(C, s, 'money')).toBeNull();
-    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = ANY($2)`, [C, [s, empty]]);
-    await store.ingest(id, C, chain('2', s, empty), 20, [s, empty], 7);
-    expect(await store.rereadFrom(C, s, 'money')).toBe(121);
+    await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = ANY($2)`, [C, [s, empty, low]]);
+    await store.ingest(id, C, chain('2', s, empty, low), 20, [s, empty, low], 7);
+    expect(await store.rereadFrom(C, s, 'money')).toBe(10_000 + 1 - 7200);
+    expect(await store.rereadFrom(C, low, 'money')).toBe(0);
     expect(await store.rereadFrom(C, empty, 'money')).toBe(0);
     expect(await store.rereadFrom(C, w('34f8'), 'money')).toBeNull();
   });
@@ -2088,8 +2093,8 @@ describe('migration #34: a trader\'s money read again from the block its last re
     expect(await depthOf(later)).toBe(1);
   });
 
-  it('a re-read unmarks the wallet\'s reach rows as stepped only when it brought a new outgoing flow', async () => {
-    const t = w('34i1'), o = w('34i2'), in1 = w('34i3'), out1 = w('34i4');
+  it('a re-read unmarks the wallet\'s reach rows as stepped only when it stored a new flow and read a flow out of the wallet', async () => {
+    const t = w('34i1'), o = w('34i2'), in1 = w('34i3'), in2 = w('34i5');
     await store.ingest(id, C, chain('1', t, o), 10, [t, o]);
     const old = flow(t, o, { blockNumber: 30 });
     await store.saveMoney(C, t, [old], false, undefined, 30);
@@ -2097,11 +2102,54 @@ describe('migration #34: a trader\'s money read again from the block its last re
     await store.pool.query('INSERT INTO washtrace.reach (collection_id, chain_id, address, depth, stepped) VALUES ($1, $2, $3, 0, true), ($1, $2, $4, 0, true)', [id, C, t, o]);
     const stepped = async () => Object.fromEntries((await store.pool.query(
       'SELECT address, stepped FROM washtrace.reach WHERE collection_id = $1 ORDER BY address', [id])).rows.map((r) => [r.address, r.stepped]));
-    // Money in, and the boundary flow out again: nothing new to walk from.
-    await store.saveMoney(C, t, [old, flow(in1, t, { blockNumber: 40 })], false, undefined, 40, true);
+    // Money in only: nothing out of it to walk from.
+    await store.saveMoney(C, t, [flow(in1, t, { blockNumber: 40 })], false, undefined, 40, true);
     expect(await stepped()).toEqual({ [t]: true, [o]: true });
-    await store.saveMoney(C, t, [flow(t, out1, { blockNumber: 50 })], false, undefined, 50, true);
+    // Money in, and the overlap's flow out again: something new, and the read went out, so the walk steps from it again.
+    await store.saveMoney(C, t, [old, flow(in2, t, { blockNumber: 50 })], false, undefined, 50, true);
     expect(await stepped()).toEqual({ [t]: false, [o]: true });
+  });
+
+  describe('a re-read and its collections\' versions', () => {
+    const t = w('34m1'), m = w('34m2'), n = w('34m3'), far = w('34m9');
+    let other: number;
+    const versions = async () => (await store.pool.query(
+      'SELECT id, version FROM washtrace.collections WHERE id = ANY($1) ORDER BY id', [[id, other]])).rows.map((r) => [r.id, Number(r.version)]);
+    const stepped = async () => (await store.pool.query(
+      'SELECT collection_id, stepped FROM washtrace.reach WHERE chain_id = $1 AND address = $2 ORDER BY collection_id', [C, t])).rows.map((r) => [r.collection_id, r.stepped]);
+    const old = flow(t, m, { blockNumber: 100 }), back = flow(n, t, { blockNumber: 90 });
+
+    beforeEach(async () => {
+      // id names t in its transfers; other holds it in its reach past the global limit. Both are bumped by a read that adds flows.
+      other = (await store.addCollection(C, far, 'Reread far', 1)).id;
+      await store.ingest(id, C, chain('1', t), 10, [t]);
+      await store.saveMoney(C, t, [old, back], false, undefined, 100);
+      await store.pool.query('INSERT INTO washtrace.reach (collection_id, chain_id, address, depth, stepped) VALUES ($1, $3, $4, 0, true), ($2, $3, $4, 1, true)', [id, other, C, t]);
+      await store.pool.query(`UPDATE washtrace.wallets SET fetched_at = now() - interval '8 days' WHERE chain_id = $1 AND address = $2`, [C, t]);
+      await store.ingest(id, C, chain('2', t), 20, [t], 7);
+      expect((await row(t)).stale).toBe(true);
+    });
+
+    afterEach(async () => {
+      await drop(C, far);
+    });
+
+    it('one whose flows are all stored already bumps no collection and leaves its reach rows stepped, but clears the mark and raises the block', async () => {
+      const before = await versions();
+      // The overlap gives back what the last read stored, and a later block it read past (a row the read filtered out).
+      await store.saveMoney(C, t, [old, back], false, undefined, 130, true);
+      expect(await versions()).toEqual(before);
+      expect(await stepped()).toEqual([[id, true], [other, true]]);
+      expect(await row(t)).toMatchObject({ status: 'done', stale: false, read_block: '130', error: null });
+    });
+
+    it('one with a new flow out of the wallet unmarks its reach rows as stepped and bumps its collections', async () => {
+      const before = await versions();
+      await store.saveMoney(C, t, [old, flow(t, w('34m4'), { blockNumber: 140 })], false, undefined, 140, true);
+      expect(await versions()).toEqual(before.map(([c, v]) => [c, v + 1]));
+      expect(await stepped()).toEqual([[id, false], [other, false]]);
+      expect(await row(t)).toMatchObject({ status: 'done', stale: false, read_block: '140', error: null });
+    });
   });
 
   it('a failed re-read keeps the old read: still done, its flows and fetched_at kept, the error noted, tried again in an hour', async () => {

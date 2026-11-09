@@ -6,138 +6,65 @@ traded them. It flags wash trades by three graph methods and says why each one
 was flagged. It runs as two services over one Postgres: a polling **worker**
 and a JSON **API** with a console.
 
-washtrace is the paper [*Detecting and quantifying wash trading of
-non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
-(Chow, 2023) rebuilt on the systems that exist in 2026. The three methods are
-the paper's. The data sources, the marketplaces and three corrections are new:
-see [From the paper to now](#from-the-paper-to-now).
+It is the 2023 paper [*Detecting and quantifying wash trading of non-fungible
+tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf) (Chow)
+rebuilt on today's systems: the methods are the paper's, the data sources,
+marketplaces and three corrections are new.
 
 - **Status:** v0.1.0. Tested against Postgres 17 and anvil 1.5.1; verified on
   Ethereum mainnet against the paper's own example sale.
 - **Paper:** [PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf),
-  7 pages, with its [slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf).
+  [slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf),
+  and [the work it builds on](#the-work-it-builds-on).
 - **Data:** [jonathanmiro97/washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
   on Hugging Face: six Ethereum collections read from the chain, CC-BY-4.0.
-- **Sources:** the five works the paper builds on are in
-  [What it builds on](#what-it-builds-on).
-
-## Contents
-
-- [The paper](#the-paper)
-- [Architecture](#architecture)
-- [Quick start](#quick-start)
-- [The methods](#the-methods)
-- [Configuration](#configuration)
-- [Deploying](#deploying)
-- [Upgrading](#upgrading)
-- [Stored data](#stored-data)
-- [API](#api)
-- [Pages](#pages)
-- [From the paper to now](#from-the-paper-to-now)
-- [Known limits](#known-limits)
-- [Citing](#citing)
-
-How it is built and why, and how to work on it, is in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+- **Reference:** [see below](#reference). How it is built, and how to work on it,
+  is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## The paper
 
-[*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)
-(Chow, 2023) starts from an observation: the top NFT collections by market cap
-show far less wash trading than the rest, which points to wash trades hidden
-from the usual detector. That detector looks for strongly connected components
-in a token's own transfers, and a wash trader beats it by paying through
+**[*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)**
+by Jonathan Chow, Singapore Management University, 2023
+([PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf), [slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf)).
+
+The paper starts from an observation: the top NFT collections by market cap
+show far less wash trading than the rest. That points to wash trades the usual
+detector cannot see. The usual detector finds strongly connected components
+(SCCs) in a token's own transfers, and a trader beats it by paying through
 wallets that never touch the token. The paper adds the graph of money between
-wallets to the token's transfers, which gives the three methods washtrace runs.
+wallets to the token's transfers, and from the two builds the three methods
+washtrace runs (see [The methods](#the-methods)).
 
-### Resources
+### The work it builds on
 
-| Resource | What it is |
-|---|---|
-| [Paper](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf) (PDF, 7 pages) | The three methods, the 2023 data from the top 20 ERC-721 collections by trading volume, and the wash trade shares in its Tables 3 and 4. |
-| [Slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf) (PDF, 25 slides) | The paper as presented: the background on SCC detection, open source filters and DEX studies, then the approach, the evaluation and the conclusion. |
-| [washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data) (Hugging Face) | Transfers and the money trail of six collections, read from the chain, so an install need not read them from their deploy blocks. See [Stored data](#stored-data). |
-| [Demo](#quick-start) | A local chain with a scripted market that hides each kind of wash trade among honest trades, with no keys needed. |
+- Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM: SCC detection on each token's transfer graph, flagged by cycle count: the basis of SCC A.
+- Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543): SCC detection over sales as well as transfers.
+- hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune: a buyer and seller first funded by the same wallet, which SCC AC generalises.
+- Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001): SCC detection over the user transaction graph, here applied to money between NFT traders.
+- Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451): wash trades as cycles in a directed graph; its volume matching does not carry over, as NFTs are not fungible.
 
-### What it builds on
+### Further resources
 
-| Work | What washtrace takes from it |
-|---|---|
-| Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM | SCC detection on each token's transfer graph, flagging a component by its cycle count: the basis of SCC A. |
-| Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543), arXiv:2305.01543 | SCC detection over sales as well as transfers, so a sale fills an edge the transfers miss. |
-| hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune | Five filters, one of them buyer and seller first funded by the same wallet: the shared funder that SCC AC generalises. |
-| Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001), arXiv:2102.07001 | SCC detection over the user transaction graph to find colluding traders, here applied to money between NFT traders. |
-| Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451), IEEE TNNLS 27(11) | Wash trades as cycles in a directed graph of trades. Its volume matching does not carry over: NFTs are not fungible. |
-
-### Further reading
-
-- [ERC-721](https://eips.ethereum.org/EIPS/eip-721), the token standard
-  washtrace reads.
-- [Seaport](https://github.com/ProjectOpenSea/seaport), the marketplace
-  protocol whose sales washtrace prices.
+- [ERC-721](https://eips.ethereum.org/EIPS/eip-721), the token standard washtrace reads.
+- [Seaport](https://github.com/ProjectOpenSea/seaport), the marketplace protocol whose sales washtrace prices.
 - [Etherscan API V2](https://docs.etherscan.io/), the source of who paid whom.
-
-## Architecture
-
-```
-            ┌──────────────────────────┐        ┌──────────────────────────┐
- JSON-RPC ─▶│  worker   (apps/worker)  │        │  api   (apps/web)        │◀─ HTTP :8080
-Etherscan ─▶│  plain Node, no HTTP     │        │  JSON API + console      │   /api/…  and pages
-            │  but /health on :8081    │        │  reads only; never calls │
-            │                          │        │  a chain                 │
-            │  ingest   every 60 s     │        │                          │
-            │  fund     every 5 s      │        │                          │
-            │  analyze  every 60 s     │        │                          │
-            └────────────┬─────────────┘        └────────────┬─────────────┘
-                         │  writes                     reads  │
-                         ▼                                    ▼
-                    ┌────────────────────────────────────────────┐
-                    │  Postgres: schema washtrace                │
-                    │  collections · transfers · wallets · flows │
-                    │  analyses · flags · passes                 │
-                    └────────────────────────────────────────────┘
-```
-
-- **worker** ([apps/worker/src/main.ts](apps/worker/src/main.ts)) runs the
-  four jobs of [`Worker`](packages/detect/src/worker.ts) on timers. **ingest**
-  reads finalized ERC-721 transfers and their receipts for every watched
-  collection. **fund** reads who paid whom for each wallet that traded, then
-  follows money out of them. **analyze** reruns the three methods over every
-  collection that changed. **lens** runs each lens of yours over the collections
-  it was asked on, after their latest analysis, and the editor's previews.
-  Analyze and lens share one timer: each pass runs one analysis, preview or
-  lens run, by one rule ([`pickWork`](packages/detect/src/worker.ts)). A pass
-  that comes due while the last one is still running is skipped, not queued.
-- **api** ([apps/web](apps/web)) is Next.js: the JSON API under `/api` and the
-  console pages, both reading the store. Adding a collection writes one row;
-  the worker picks it up on its next ingest pass.
-- **They share nothing but the store.** Each scales or restarts on its own.
-  Each worker pass takes its job's advisory lock without waiting, so two
-  worker replicas still do one worker's work, and one carries on when the
-  other dies.
-
-Both are built from one [Dockerfile](Dockerfile) as `--target worker` and
-`--target api`. The domain code (chains, Etherscan, the graph methods, the
-store) lives in [packages/detect](packages/detect), which both import.
+- [washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data) on Hugging Face: six Ethereum collections read from the chain, to rerun the methods without reading the chain yourself.
+- The paper's [slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf) (25 slides): background, approach, evaluation and conclusion.
 
 ## Quick start
 
 Requires Docker with Compose 2.24 or later.
 
 **The demo needs no keys.** It runs a local chain with a scripted market, wash
-trading of each kind hidden among honest trades, and an Etherscan-shaped API
-over it:
+trading of each kind hidden among honest trades:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 ```
 
-`docker compose ps` shows the services: `worker`, `api`, `db`, and the demo's
-`anvil`, `explorer` and `seed`. Open http://localhost:8080. The worker reads
-the collection on its next ingest pass and analyzes it on the pass after that,
-which takes about two minutes. `docker compose logs -f worker` shows the
-passes as they run. The
-seeder's log says which tokens should be flagged and by which method.
+Open http://localhost:8080. The worker reads the collection on its next ingest
+pass and analyzes it on the one after, about two minutes. The seeder's log says
+which tokens should be flagged and by which method.
 
 **Against a real chain**, give it an RPC endpoint and an Etherscan key:
 
@@ -146,41 +73,57 @@ cp .env.example .env    # set WASHTRACE_RPC_1 and WASHTRACE_ETHERSCAN_KEY
 docker compose up --build
 ```
 
-Then watch a collection from the console, or:
+Then watch a collection from the console, or `POST /api/collections`. The worker
+reads it forward to the finalized head, then the funding of every wallet that
+traded it, busiest first.
 
-```sh
-curl -X POST localhost:8080/api/collections -H 'content-type: application/json' \
-  -d '{"chainId": 1, "address": "0x4e1f41613c9084fdb9e34e11fae9412427480e56", "name": "Terraforms"}'
-```
+**With no keys**, skip the `cp` and watch one of the six collections in [the
+dataset](#the-dataset). The worker downloads it and warns that no RPC is set, so
+only stored data is read until one is set in Settings.
 
-The worker finds the contract's deployment block and reads forward to the
-finalized head. Then it reads the funding of every wallet that traded the
-collection, busiest wallets first.
+The console and API are on port 8080 of this machine only.
 
-**With no keys at all**, skip `cp .env.example .env`: Compose starts without
-it, and `docker compose up -d --build` works on a fresh clone (the first build
-takes a few minutes). Watch one of the six collections in
-[Stored data](#stored-data), Terraforms for example. The answer carries a
-warning that no RPC is set for the chain, so only its stored data is read.
-The worker downloads the collection from Hugging Face and loads it. The console
-shows Round trips first, and Linked wallets once the money trail is downloaded
-and loaded (about an hour for Terraforms), marked "Stored data · stops <date>".
-Terraforms took about 40 seconds for its transfers, then about
-25 minutes to download its 621.8 MB money trail and about 35 to load it, on
-one home connection. Nothing newer than the stored data is read until an RPC
-URL is set in Settings, and wallets newer than the stored trail go unchecked
-until an Etherscan key is.
+## Concepts
 
-The console and API are published on port 8080 of this machine only. To use
-another port, set `WASHTRACE_PORT` in `.env` (for example `WASHTRACE_PORT=8081`)
-before `docker compose up`, and open that port instead of 8080.
+The console's own words.
+
+- **Lens.** One rule for what counts as a wash trade: the three methods, and
+  [yours](#your-own-lenses).
+- **Share.** The part of the trades a lens judged that it flags. The collection
+  page leads with sales; the analysis also gives changes of owner and volume.
+- **So far / at least.** "So far": reads still running can move the share. "At
+  least": waiting will not close it (a search cap, a missing Etherscan key, a
+  limit).
+- **Judged.** Looked at by a lens. "Not judged yet" is a trade past the block the
+  latest analysis or run read to, never shown as clean. Burns and moves into or
+  out of custody are not trades and are never judged.
+- **Money read.** How many traders are checked, and how many wallets out the
+  worker follows.
+- **Wallets out.** Hops of money followed out of a trader (`follow.hops`, "Follow
+  money (wallets out)"), so a payment can return through wallets that never
+  traded the collection.
+- **Wallets between.** The wallets on a loop between seller and buyer.
+- **Reach.** The wallets a collection's money has been walked to. The console
+  says "Finding the wallets up to N wallets out".
+- **Other tokens.** An edge type for payments in a fixed list of tokens (USDC,
+  USDT, DAI and APE on Ethereum; USDC and DAI on Base; none elsewhere), with no
+  smallest amount: washtrace has no prices.
+- **Payees.** The wallets a trader paid in those tokens; reading their tokens too
+  is off by default (`tokens.payees`).
+- **Bridge.** The paper's fix for missing transfers: an unobserved edge from a
+  token's last holder to the next sender. Never flagged or counted; the console
+  does not name it.
+- **Custody.** A contract holding a token without owning it, such as a Blur Blend
+  loan. A → escrow → B is one hop A → B; A → escrow → A is none.
+- **Read again.** Reading a trader's money and other tokens a second time after
+  it trades again (`follow.reread`, off by default).
 
 ## The methods
 
 Each method flags transfers. A collection's **wash trade share** is the flagged
-share of its changes of owner, as in the paper's Tables 3 and 4. It is also
-stated for sales alone and for sale volume. The console names them Round trips
-(SCC A), Money loops back (SCC AU) and Linked wallets (SCC AC).
+share of its changes of owner, as in the paper's Tables 3 and 4. The console names
+the methods Round trips (SCC A), Money loops back (SCC AU) and Linked wallets
+(SCC AC).
 
 | Method | Flags a transfer when | Needs funding |
 |---|---|---|
@@ -188,125 +131,91 @@ stated for sales alone and for sale volume. The console names them Round trips
 | **SCC AU** | It lies in a component of the token's transfers joined with the directed graph of money between its holders, where the money can run up to 30 wallets deep. A component closed by money counts on one cycle. | Yes |
 | **SCC AC** | SCC A flags it, or its two wallets are joined by money within two hops in either direction: one paid the other, or both share a funder, a sink or a middle. | Yes |
 
-Every flag carries a witness: the wallets in the component and its cycle
-count, or the pair and the wallet or transaction that joins them. The console
-shows the witness as a sentence, and the API returns it as data.
+Every flag carries a witness (the component and its cycle count, or the pair and
+what joins them), shown as a sentence and returned as data. A method that needs
+funding and has none reports itself **not run**, never 0%.
 
-A method that needs funding and has none reports itself **not run**, never
-0%.
+**The headline range is Round trips to Linked wallets.** Money loops back still
+runs and keeps its card, but is not counted. In a placebo test on Terraforms and
+dotdotdot, with buyers relabelled at random among wallets of similar activity,
+it flagged as many sales as with the real buyers (Terraforms 71.7% against
+74–75%, dotdotdot 59.5% against 58–59%), and its share follows `hubDegree` and
+`visitCap` more than the data. Linked wallets clears the same test, though
+between a third and a half of what it adds over Round trips is chance.
 
-**The headline range is Round trips to Linked wallets.** Money loops back still runs and keeps its card, but it is not counted. In a placebo test on Terraforms and dotdotdot, with buyers relabelled at random among wallets of similar activity, it flagged as many sales as with the real buyers (Terraforms 71.7% against 74–75%, dotdotdot 59.5% against 58–59%), and its share follows `hubDegree` and `visitCap` more than the data. Linked wallets clears the same test, though between a third and a half of what it adds over Round trips is chance.
+## Your own lenses
+
+A lens of yours sits beside the three methods on a collection's page; **Copy to
+new lens** starts from one of them. The editor sets which edges may carry the way
+back to the seller (NFT transfers, ETH, internal ETH, WETH including Blur Pool,
+Other tokens), the wallets between seller and buyer, a time window, and which
+trades it judges (sales, or every change of owner). **Advanced** shows the rest:
+each edge's direction, limit, smallest payment and repeat rule, where the loop
+closes, the order in time, how many loops a trade needs, and wallets a loop never
+passes through.
+
+**Data this lens needs** says which reads the rule is short of, money that many
+wallets out or Other tokens; a button asks the worker for them, and the share
+reads "so far" meanwhile. **Preview** tries the unsaved rule on a sample of 2,000
+sales (`PREVIEW_SAMPLE`) and compares its catch with Round trips. **Save and
+run** queues the lens's run. The lens routes are in [doc/api.md](doc/api.md).
 
 ## Configuration
 
-Both services read the same variables. In Compose they share one `.env`.
+Both services read the same variables; in Compose they share one `.env`. A
+setting saved in the console wins over `.env` and applies from the worker's next
+pass.
 
-| Variable | Purpose |
-|---|---|
-| `WASHTRACE_STORE_URL` | Postgres that washtrace creates its `washtrace` schema in. Required. `DATABASE_URL` is read if this is unset. |
-| `WASHTRACE_RPC_<chainId>` | JSON-RPC URL per chain, such as `WASHTRACE_RPC_1` or `WASHTRACE_RPC_8453`. Any provider, or a node of your own. Finding a deployment block needs archive state; otherwise pass `fromBlock`. |
-| `WASHTRACE_ETHERSCAN_KEY` | Etherscan API V2 key: one key for every chain. Without it, SCC AU and AC do not run. |
-| `WASHTRACE_ETHERSCAN_RPS` | Calls per second. Default 4; the free plan allows 5. |
-| `WASHTRACE_ETHERSCAN_URL` | Any API that answers Etherscan's account actions, such as a Blockscout instance. Defaults to Etherscan V2. While the Etherscan key comes from `.env` and none is saved in the console, only this variable sets the URL: a URL saved in the console is ignored, so it can't receive that key. |
-| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | HTTP basic auth over every route except `/api/health`. Set both or neither; setting only one returns 503 on every request. Without them, every write (settings, Tests, watching, pausing, resuming, deleting and a collection's rules) is accepted only from the machine itself (`Host` localhost, no proxy headers). Behind a reverse proxy, set basic auth. |
-| `WASHTRACE_FOLLOW_HOPS` | Hops of money the worker follows out of a trader, so SCC AU sees a payment routed back through wallets that never traded. Default 3; 0 reads traders only, as the paper did. |
-| `WASHTRACE_STORED_REPO` | The Hugging Face dataset the worker downloads stored data from, as `owner/name`. Defaults to `jonathanmiro97/washtrace-data`. A `stored.repo` value saved in the console wins over it. |
-| `WASHTRACE_STORED_DIR` | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
-| `WASHTRACE_PORT` | The port Compose publishes the console and API on, on this machine only. Defaults to `8080`. |
-| `PORT` | The api's listen port. `8080` in the image. |
-| `WASHTRACE_WORKER_PORT` | The worker's health check port. `8081`. |
+| Variable | Console setting | Purpose |
+|---|---|---|
+| `WASHTRACE_STORE_URL` | | Postgres for the `washtrace` schema. Required; `DATABASE_URL` is read if unset. |
+| `WASHTRACE_RPC_<chainId>` | `rpc.1` (Ethereum only) | JSON-RPC URL per chain, such as `WASHTRACE_RPC_8453`. Finding a deployment block needs archive state; otherwise pass `fromBlock`. |
+| `WASHTRACE_ETHERSCAN_KEY` | `etherscan.key` | Etherscan API V2 key, one for every chain. Without it, SCC AU and AC use only a stored money trail. |
+| `WASHTRACE_ETHERSCAN_RPS` | `etherscan.rps` | Calls per second. Default 4; the free plan allows 5. |
+| `WASHTRACE_ETHERSCAN_URL` | `etherscan.url` | Any API that answers Etherscan's account actions, such as Blockscout. Defaults to Etherscan V2. While the key comes from `.env` and none is saved in the console, a console URL is ignored, so it can't receive that key. |
+| `WASHTRACE_FOLLOW_HOPS` | `follow.hops` | Hops of money followed out of a trader. Default 3, at most 10; 0 reads traders only, as the paper did. |
+| `WASHTRACE_FOLLOW_REREAD` | `follow.reread` | "Read traders again (days)", a whole number from 0 to 365. Default 0, which is off. Read a trader's money and other tokens again when it trades, at most once every this many days. Each re-read is about 4 Etherscan calls, and the token read about 1 more. Turning it off stops new re-reads; any already due are read once. See [Known limits](#known-limits). |
+| `WASHTRACE_TOKENS_PAYEES` | `tokens.payees` | "Read tokens of wallets paid in tokens". `on` also reads the tokens of wallets traders paid in them, up to 25 more reads per trader. Anything but `on` is off. |
+| `WASHTRACE_STORED_REPO` | `stored.repo` | Hugging Face dataset to download stored data from, `owner/name`. Default `jonathanmiro97/washtrace-data`. |
+| `WASHTRACE_STORED_DIR` | | Where stored data is kept. Defaults to `data/stored`; `/app/data/stored` in the images. |
+| `WASHTRACE_USERNAME`, `WASHTRACE_PASSWORD` | | Basic auth on every route but `/api/health`. Set both or neither; one alone gives 503. |
+| `WASHTRACE_PORT` | | Port Compose publishes the console and API on. Default 8080. |
+| `PORT` | | The api's listen port. 8080 in the image. |
+| `WASHTRACE_WORKER_PORT` | | The worker's health check port. Default 8081. |
 
 ## Deploying
 
-The [Dockerfile](Dockerfile) builds two images, and
-[docker-compose.yml](docker-compose.yml) runs them over Postgres 17:
+The [Dockerfile](Dockerfile) builds two images (`--target worker` and
+`--target api`), and [docker-compose.yml](docker-compose.yml) runs them over
+Postgres 17.
 
-```sh
-docker build --target worker -t washtrace-worker .
-docker build --target api    -t washtrace-api .
-```
+- **Schema.** Both services migrate the `washtrace` schema on boot, so there is
+  no separate migration step.
+- **Health.** `GET :8081/health` on the worker, `GET /api/health` on the api.
+- **Auth.** On a public host, set `WASHTRACE_USERNAME` and `WASHTRACE_PASSWORD`.
+  Without them the console is open to read, and every write is accepted only from
+  the machine itself. Compose publishes the port to 127.0.0.1 only; publish it
+  wider once basic auth is on.
+- **Project name.** Compose names its volumes after the folder; renaming it
+  starts an empty project. Set `COMPOSE_PROJECT_NAME` to the old name, or pass `-p`.
+- **Stored data.** Give the worker a writable volume at `WASHTRACE_STORED_DIR`
+  and mount it read only into the api.
+- **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds, then
+  exits; Postgres rolls back an unfinished pass.
+- **Scaling.** `docker compose up --scale api=3 --scale worker=2`. Each worker
+  pass takes its job's advisory lock without waiting, so a second worker gives
+  failover, not double reads.
 
-- **Schema.** Both services migrate the `washtrace` schema on boot, so there
-  is no separate migration step. Point `WASHTRACE_STORE_URL` at any Postgres
-  you run. The Compose file's own database and password are for a single
-  host, not for production.
-- **Health.** The worker answers `GET :8081/health` and the api
-  `GET /api/health`, and both images declare a `HEALTHCHECK`. Only the api
-  needs a public port; Compose publishes it on 127.0.0.1 only.
-- **Auth.** On a public host, set `WASHTRACE_USERNAME` and
-  `WASHTRACE_PASSWORD`. Without them the console is open to anyone to read, and
-  every write (settings, Tests, watching, pausing, resuming, deleting and a
-  collection's rules) is accepted only from the machine itself (`Host`
-  localhost, no proxy). Behind a reverse proxy, set basic auth. Compose publishes the port
-  to 127.0.0.1 only; publish it wider once basic auth is on.
-- **Project name.** Compose names the project after this folder, and its
-  volumes after the project. Renaming or moving the folder starts a new, empty
-  project: set COMPOSE_PROJECT_NAME in .env to the old name, or pass -p.
-- **Stored data.** Give the worker a writable volume at
-  `WASHTRACE_STORED_DIR` and mount the same volume read only into the api.
-- **Shutdown.** On `SIGTERM` the worker gives passes in flight 8 seconds to
-  finish, then exits. Postgres rolls back a pass that did not finish and frees
-  its lock, so `docker stop`'s 10-second grace is enough.
-- **Scaling.** `docker compose up --scale api=3 --scale worker=2`. API replicas
-  are stateless. Worker replicas share each job through an advisory lock, so a
-  second worker gives failover, not double reads.
+The worker runs four jobs on timers: **ingest** (transfers, every 60 s), **fund**
+(who paid whom, every 5 s), **analyze** (the methods, every 60 s) and **lens**
+(your lenses and previews, on the analyze timer).
 
-## Upgrading
+### The dataset
 
-Both services migrate the schema when they start, under one lock, and this
-release's migrations build indexes on the two biggest tables,
-`washtrace.transfers` and `washtrace.wallets`, as part of it. A plain
-`CREATE INDEX` holds a SHARE lock on its table until it is done: reads go on,
-but anything that writes those tables waits for it, such as ingest, a load of
-stored data, or deleting a collection.
-
-- **The worker does nothing until they finish.** No pass starts before its
-  migrate returns, and at tens of millions of transfers the indexes take
-  minutes to build.
-- **The console's collection pages error until the `analyses.loops` column
-  exists.** The api serves while the migrations run, and those pages read the
-  column one of them adds.
-- **Every analyzed collection is analyzed once more.** An analysis saved
-  before this release wrote no trade facts and no loops, so its trades read
-  "not judged yet" until the worker has analyzed the collection again.
-
-To skip the wait, build those indexes beforehand, with the services running.
-Postgres builds an index `CONCURRENTLY` while writes carry on, though not
-inside a transaction, so run each statement on its own in `psql`:
-
-```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS wallets_address_prefix_idx ON washtrace.wallets (chain_id, address text_pattern_ops);
-CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_from_prefix_idx ON washtrace.transfers (collection_id, from_address text_pattern_ops);
-CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_to_prefix_idx ON washtrace.transfers (collection_id, to_address text_pattern_ops);
-CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_coll_time_desc_idx ON washtrace.transfers (collection_id, block_time DESC NULLS LAST);
-```
-
-The names and definitions are the ones in
-[migrations.ts](packages/detect/src/migrations.ts), so the migrations find
-them there and skip them. The index on the flags' loops,
-`flags_witness_idx`, needs a column the migrations add first, so it is built
-during the upgrade. A `CONCURRENTLY` build that fails leaves an invalid index
-behind under its name: drop it and run the statement again, or the migration
-skips it.
-
-## Stored data
-
-Reading a big collection from the chain takes days, so its chain data is cut
-once and published to a Hugging Face dataset,
-[`jonathanmiro97/washtrace-data`](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
-by default. When you watch a collection that the dataset holds, the worker
-downloads its files in the background and loads them, then reads on from the
-chain where they stop. The console shows the download as it runs ("Downloading
-stored data · 41%") and the Watch panel lists each collection's size before you
-watch it, such as `stored data: 12.3 MB transfers + 3.4 GB money trail`. The
-transfers come first; the money trail follows and feeds Money loops back and
-Linked wallets without an Etherscan key. A large money trail loads into the
-database in the background (over an hour for the biggest collections); the
-console shows how far it has got ("Money trail loading from stored data · 41%"),
-and the analysis runs again once it is in.
-
-The default dataset holds six Ethereum collections, read through block
-26299951 (October 2026):
+Reading a big collection from the chain takes days, so its data is cut once and
+published to Hugging Face. When you watch a collection the dataset holds, the
+worker downloads it, loads it, then reads on from the chain. The default dataset
+holds six Ethereum collections, read through block 26299951 (October 2026):
 
 | Collection | Address | Transfers | Money trail |
 |---|---|---|---|
@@ -317,169 +226,95 @@ The default dataset holds six Ethereum collections, read through block
 | BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.8 MB |
 | dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.8 MB |
 
-Each file is zstd-compressed CSV, so the data reads without washtrace too. A
-money trail is two files, the checked wallets and the flows, and the table's
-Money trail column is their sizes added. The dataset opens in the Hub's viewer
-as three tables (transfers, wallets and flows), with one split per collection.
-The [dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
-gives the columns and a pandas example.
-
-A worker reads only a version 3 manifest, which names a trail's two files. Until
-the dataset is published again in that form, an upgraded install reads the chain
-instead of the stored data; an install that is not upgraded keeps its cached
-version 2 manifest and its files. After that publish each upgraded install
-downloads and loads its trails once more, and deletes the old single trail
-files itself.
-
-- **Where it is kept.** `data/stored/` (`WASHTRACE_STORED_DIR`), never in the
-  repo or the image. Under Compose it is the named volume `stored`, written by
-  the worker and mounted read only into the api. Under Compose,
-  `WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or
-  the worker and the api look in different places.
-- **Which dataset.** `WASHTRACE_STORED_REPO` or the console's `stored.repo`
-  setting (a value saved in the console wins over the environment). The worker
-  fetches the dataset's manifest about hourly, and at once when a collection is
-  newly watched, and keeps the last one, so an unreachable Hub only means the
-  chain is read instead.
-- **If the worker stops.** A download picks up from the bytes it already has,
-  and a money trail that was loading picks up from the last batch it wrote, so
-  a restart does not start either over. Half-downloaded files the
-  manifest no longer names are deleted. A file that does not match its
-  checksum is not downloaded again, by any worker or after a restart, before
-  the dataset is published again; the chain is read meanwhile. One that was
-  resumed is downloaded again from its start, as the bytes kept may be what
-  broke.
-- **What is published.** Chain data only: transfers, the money trail's flows,
-  the checked wallets' addresses, and each collection's address, chain and
-  contract name. Never a wallet's status or errors, a label you gave a
-  collection, or any setting or key.
-- **Cleaning up.** Delete `data/stored/`, or under Compose
-  `docker volume rm <project>_stored` with the services stopped.
-- **Cutting your own.** `npm run stored` writes a local manifest and files into
-  `data/stored/`. The worker's hourly fetch replaces that manifest, so a local
-  cut is for publishing, not for serving. The maintainer's
-  `npm run publish:hub -- --from <dir>` uploads a folder a dry run wrote; over a
-  Hub manifest that is still version 2, add `--replace`, which makes the folder's
-  manifest the Hub's and deletes the files of collections not in the folder.
-
-## API
-
-JSON throughout. Every route except `/api/health` sits behind basic auth when
-auth is configured. A write needs `Content-Type: application/json` and gets 415
-without it, which closes the CSRF path basic auth would otherwise open. Every
-write (settings, Tests, watching, pausing, resuming, deleting and a
-collection's rules) answers 403 while basic auth is off, unless it comes from
-the machine itself.
-
-| Method and route | Returns |
-|---|---|
-| `GET /api/collections` | Every watched collection: ingest cursor, finalized head, funding coverage, latest analysis, `priority` and `pausedAt`. `restoreNote` and `analysisError` say why its stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`, `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress` (0 to 1) say what is downloading from the Hub and how far, with a null progress for a collection waiting its turn; `downloadNote` says why a download failed and `downloadRetryAt` when it is tried again, both null when nothing failed; `downloadMismatch` is the URL of the last download whose bytes did not match the manifest, not downloaded again while the Hub serves it. `trailProgress` (0 to 1) says how far that collection's downloaded money trail has loaded into the database; null when none is loading. |
-| `POST /api/collections` | Watches `{chainId, address, name?, fromBlock?}`. 201 when new, 200 when already watched, with a `warning` when its chain has no RPC. |
-| `GET /api/collections/{chain}/{address}?method=AC` | The latest analysis, its history, and the 50 tokens and wallets with the most trades caught under the chosen method, as `tokens` and `wallets`, each `{rows, total}`. A row counts its caught trades of its counted trades (no mints or custody moves), their volume in wei, and the loops and linked pairs behind them; a wallet's `partners` are the other wallets in those. A method that did not run lists none. |
-| `POST /api/collections/{chain}/{address}/pause` | The worker stops serving it, its data kept. `{paused: true}`, and again if already paused. |
-| `POST /api/collections/{chain}/{address}/resume` | The worker serves it again. `{paused: false}`, and again if not paused. |
-| `DELETE /api/collections/{chain}/{address}` | Stops watching and drops its transfers and analyses: `{removed: true}`. 409 unless paused first. Funding read for its wallets is kept, as it is per chain. |
-| `GET`, `POST /api/collections/{chain}/{address}/config` | Per-collection settings: `{name?, rules?: {minCycles?, reachDepth?, hubDegree?, visitCap?}, priority?}`. A rule set to `null` returns to the default, and a changed rule queues the collection for analysis again. `priority: true` checks its wallets' funding first, sharing those turns with any other prioritised collection. |
-| `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | One token's transfers in chain order, each with its flags and witnesses (only the lenses that ran), and the money among its wallets. It carries `washTrade`, `judged`, `methods`, `apartOnly` and `notRun`, as the transaction route does. A token with no transfers is 404. |
-| `GET /api/collections/{chain}/{address}/trades?<filters>` | The collection's trades under the same filters as the Trades page (`caught`, `not`, `market`, `pmin`, `pmax`, `from`, `to`, `wallet`, `token`, `q`, `sort`, `dir`, `all`, and the rest of its address bar). JSON is one page of 50: `{total, unjudged, page, pages, ran, rows}`, with lens codes, `ran` the lenses that ran, and `unjudged` the trades newer than the latest analysis. `format=csv` streams every trade the filters hold as `<address>-trades.csv`, read one row at a time and stopped when the download is cancelled. A lens that did not run holds no trades; an unwatched collection is 404. |
-| `GET /api/wallets/{chain}/{address}?<params>` | A wallet's funding state, a page of 50 of its money partners and a page of 100 of its trades in every watched collection, newest first, with the wallet page's params: `trades`, `partners` and `flows` (page numbers), `collection` (one collection's address), `flagged=1` (only trades a counted lens flags, where it ran), `q` (a token number, or the other side of a trade by its address or the start of it), `psort` (`flows`, `sent`, `received` or `watched`), and `with` (another wallet) with `dir` (`sent` or `received`; both when left out). `pages` gives each list's `{page, pages, total}`, a page past the last read as the last; `counts` every trade it has and those counted flagged; `collections` the collections it traded in; `cut` which list has more than one page; and with `with`, `between` holds the trades between the two (`trades`, the latest 100, of `tradesTotal`) and a page of 50 of the payments in `dir` (`flows` of `flowsTotal`). The verdict fields are the token route's, over the trades shown. A wallet with no trades answers `washTrade: null, judged: false`: no watched collection holds a trade of it, so nothing has judged it. |
-| `GET /api/search?q=&kind=&page=` | What the console's search finds for `q`: a collection name, a token number (`#1234`), a wallet address or its start (`0x` and at least 4 hex), or a transaction hash. Answers `collections`, `tokens`, `wallets` and `trades`, each at most 20, and `more` saying which kind had another. `kind` (one of those four) with `page` reads that kind alone, 20 a page. Text that is not understood finds nothing, never an error. |
-| `GET /api/transfers/{chain}/{txHash}` | "Is this sale a wash trade?" Answers `washTrade`, `judged`, the `methods` that flagged it, `apartOnly` (only Money loops back flags it, so it is shown but not counted), `notRun` (the lenses that did not run in some transfer's analysis), and the transfers. `washTrade` is true when Round trips or Linked wallets flags it; Money loops back is listed in `methods` but not counted, and a lens that did not run is never listed. `washTrade: null` with `judged: false` is a transaction that is read but that no analysis has covered yet: not the same as clean. A transaction washtrace has not read is 404, never `false`. |
-| `GET /api/settings` | Each setting the console offers (`rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow.hops`), where its value came from, and whether it can be changed here. A secret answers as `••••` and at most its last 4 (an RPC URL also keeps its scheme and host). Each field also answers `env`, what `.env` holds for it (masked the same way), and the response says `open` when saving needs no login. |
-| `POST /api/settings` | Saves `{key, value}`, or clears it with `value: null`, so `.env` applies, else the default; clearing is always allowed. 409 for a non-null `etherscan.url` while its key comes from `.env`, 400 for one the worker could not use. |
-| `POST /api/settings/check` | Asks the worker to Test `{kind: 'rpc', chainId}` or `{kind: 'etherscan'}`. 201 `{id}`. |
-| `GET /api/settings/check/{id}` | That Test: `{finished, ok, detail}`. Poll until `finished`. |
-| `GET /api/worker` | Each job's last pass, the funding backlog per chain, which sources are configured (never their values), and `notices` as in `/api/status`. `funding` is null while there is no Etherscan key. Its `perSecond`, and `followHops`, are null while the worker runs on its defaults. Each collection also carries `stages`: its six stages, each with a `state` and a `share`. |
-| `GET /api/status` | Each job's state (`never`, `running`, `ok`, `failed`, `stalled`) and last `outcome`, each collection's `turn` and lag, the funding backlog, and `notices` in plain sentences. |
-| `GET /api/health` | `{ok}`: whether the store answers. Unauthenticated, for the container's health check. |
-
-A notice is `{severity, text}`, its severity `needs-you`, `working` or `info`.
-A `needs-you` one also says what to do (`doThis`, maybe with an `href`); the
-others may carry an `action: {label, href}`. Working and info notices are there
-while all is well, so a monitor alerts on
-`notices.some(n => n.severity === 'needs-you')`. An empty `needs-you` list
-does not mean the worker is reading: a missing RPC or Etherscan key is an
-`info` notice, a limit to lift and not a failure, so a monitor that wants to
-know the reading is moving looks at the other notices and at `stages` too. In the funding backlog,
-`pending` and `failed` count the wallets the worker will check, `etaMs` is how
-long the pending ones take at the last hour's rate (null until known), and
-`stranded` counts the ones held back while their collections are paused or
-removed.
+Each file is zstd-compressed CSV; a money trail is two files, and the table adds
+their sizes. The [dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+gives the columns and a pandas example. How the worker loads it is in
+[doc/stored-data.md](doc/stored-data.md).
 
 ## Pages
 
 | Route | Content | Refresh |
 |---|---|---|
-| `/` | One row per watched collection: the share of its sales and of its volume that looks washed, as a range from Round trips to Linked wallets, and how complete the reading under it is. A form to watch another. | 15 s |
-| `/c/{chain}/{address}` | One collection, top down: how far it has been read, in one line; the answer as that range; the three methods as cards, each a tab over the ten tokens and wallets it flags most; each method's share of sales month by month (or week or day) across the collection's life, with history not yet read shaded; then the reading as six stages, with how the answer settled at each analysis. | 15 s |
-| `/c/{chain}/{address}/flagged` | Every token or wallet one method flags, most flagged first, 50 a page. `?method=AU&kind=wallets&page=2`. | On open |
-| `/c/{chain}/{address}/t/{tokenId}` | One token: whether its trades look washed and by which methods, the reason for each pattern once with the transfers it covers, the graph as in the paper's Figure 8 (transfers solid and coloured by verdict, money dashed, a pair traded more than six times drawn as one counted arrow each way), and every transfer. | On open |
-| `/w/{chain}/{address}` | One wallet: how many of its trades are flagged and whether its money has been read, its transfers in every watched collection, and who it moved money with. | On open |
-| `/tx/{chain}/{hash}` | One transaction's verdict: the console form of `/api/transfers`. | On open |
-| `/worker` | What needs a person, from the same reading as `/api/status`; the four jobs as the pipeline they form, each with what it feeds; the sources configured; every collection's six stages in one table. | 5 s |
+| `/` | Watched collections, each with the share of its sales and volume that looks washed (Round trips to Linked wallets) and how complete the reading is. A form to watch another. | 15 s |
+| `/c/{chain}/{address}` | One collection: how far it has been read, the answer as that range, a tab per lens, each lens's share over time, and the six stages of the reading. | 15 s |
+| `/c/{chain}/{address}/flagged` | Every token or wallet one lens flags, most flagged first. `?method=AU&kind=wallets&page=2`. | On open |
+| `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
+| `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |
+| `/w/{chain}/{address}` | One wallet: how many of its trades are flagged, whether its money has been read, and who it moved money with. | On open |
+| `/tx/{chain}/{hash}` | One transaction's verdict. | On open |
+| `/search?q=` | A collection name, token number (`#1234`), wallet address or transaction hash. The sidebar search goes to the one thing it finds (via `/go`), else here. | On open |
+| `/settings` | The console settings in the [table above](#configuration), where each value came from, and a Test for the RPC and Etherscan. | On open |
+| `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
 
-The console names the methods by what they catch: **Round trips**,
-**Money loops back** and **Linked wallets**. The sidebar search takes a wallet, a collection or
-a transaction hash. Times are clock times, never "ago", in the reader's time zone: detected in the
-browser and changeable at the foot of the sidebar. The server buckets a
-collection's history by that zone's calendar, so a month is the reader's month. Light or dark
-follows the operating system.
-
-## From the paper to now
-
-| 2023 | Now | Why |
-|---|---|---|
-| Moralis and Footprint Analytics APIs | Any JSON-RPC endpoint for transfers and receipts; Etherscan API V2 for funding | The paper's conclusion was that a node of your own is the way forward. Reservoir's NFT API shut down in October 2025, and Etherscan V1 was switched off in August 2025. |
-| Seaport 1.4 and 1.5 | Seaport 1.1 to 1.6, Blur v1 and v2, LooksRare v2, X2Y2 | OpenSea moved to Seaport 1.6. Blur took most of Ethereum's NFT volume, much of it wash trading for points. |
-| ETH only, as the user transaction graph | Native ETH, internal transfers, WETH and Blur Pool | Bids are paid in WETH, and Blur bids are held in Blur Pool. A wash trader funding a second wallet in WETH was invisible in 2023. |
-| Head of chain | Finalized blocks only | Since the Merge, a finalized block cannot be reorganized away, so a stored transfer is never retracted. |
-| Funding read for traders only | Funding followed out of traders, through low fan-out wallets | So SCC AU's depth 30 reaches outside the collection, as the method intends. |
-| Ethereum | Any EVM chain, one RPC variable each | NFT trading spread to Base, ApeChain and others. Seaport has the same address on every chain. |
-| One shape for every source, backfilled with dummy fields | Each source keeps its own shape, and an unread field is `null` | A placeholder cannot be told apart from a reading. |
-
-Three corrections, each with a test:
-
-- **The payment leg of a sale is not money closing a cycle.** In a WETH bid, the
-  buyer's WETH goes directly to the seller in the sale's own transaction. Left
-  in, it would close a cycle on every honest bid sale. Flows that share a
-  transaction with a transfer are excluded.
-- **Custody is not a change of owner.** A Blend loan moves a token
-  A → Blend → A, which the 2023 method reads as a back-and-forth trade.
-  Custody is collapsed, so A → escrow → B is one hop A → B and a round trip is
-  no hop at all.
-- **An exchange is not a common funder.** A wallet joined by money to more than
-  20 of the collection's wallets cannot be the middle of an SCC AC path.
-  Neither can a known contract or a wallet with more history than Etherscan
-  pages through. Without this rule, every customer of one exchange would be
-  joined to every other.
+Times are clock times in the reader's time zone, changeable at the foot of the
+sidebar.
 
 ## Known limits
 
-- **SCC AU sees as far as the worker follows money.** The paper read funding
-  only for wallets that traded the collection (its dataset 3), so AU's 30 hops
-  could only travel through other traders. That plausibly explains why the
-  paper found AC catching more than AU. The worker now follows money out of
-  each trader, `WASHTRACE_FOLLOW_HOPS` deep, but only through wallets that
-  paid at most 25 others; an exchange or a busy trader is not followed. A
-  path back through a busy wallet stays unseen. Demo token #113 is the case
-  this exists for: AU flags it, AC cannot.
-- **Blur sales are marked as sales but not priced.** Blur v2 packs the price
-  into bit fields of its own events, which washtrace does not decode yet. A
-  guessed price would be counted in volume as though it had been read.
-- **ERC-1155 is not read.** The method depends on non-fungibility: one token,
-  one holder, one path. With 1155, a "cycle" can be different units of the
-  same id.
-- **Funding is slow on purpose.** It takes four Etherscan calls per wallet at
-  four calls per second, so a collection with 30,000 wallets needs about eight
-  hours. Until every wallet is checked, the money lenses' shares are not final.
-  Checking more wallets can move them either way, since a wallet can turn out to
-  be a hub. The console states the share of wallets checked so far.
-- **A wallet's money is checked once.** A payment it makes after its check is
-  not seen until the wallet is checked again, which the worker does not yet do.
-- **Money loops back is not in the headline range.** In a placebo test, with
-  buyers relabelled at random among wallets of similar activity, it flagged as
-  many sales as with the real buyers (Terraforms 71.7% against 74–75%,
-  dotdotdot 59.5% against 58–59%).
+- **Money is followed one way.** The worker follows money out of each trader,
+  `follow.hops` deep, only through wallets that paid at most 25 others
+  (`FOLLOW_FANOUT`). An exchange or a busy trader is not followed, so a path back
+  through one stays unseen. Demo token #113 is the case this exists for: AU flags
+  it, AC cannot.
+- **Hop caps.** A lens allows at most 6 wallets between seller and buyer
+  (`MAX_HOPS`); `follow.hops` is at most 10 (`MAX_FOLLOW_HOPS`).
+- **Reads are a snapshot unless read again is on.** A wallet's money and Other
+  tokens are read once; a later payment is not seen. With `follow.reread` at a
+  number of days, a trader that trades again after being read more than that long
+  ago is read again from 7,200 blocks (about a day on Ethereum) before the block
+  its last read reached, so rows the last read missed are read too, adding only
+  what is new. A wallet last read before migration #34 has no block recorded, so its
+  first re-read reads it in full.
+  A re-read costs about 4 Etherscan calls, plus about 1 more for the token read.
+  At 0, the default, nothing is read again. Turning it off stops new re-reads;
+  any already due are read once.
+- **Trail-imported wallets are never read again.** Only ingest marks a wallet to
+  be read again, and it skips one with no read time, as every wallet a stored
+  money trail loaded has. A load of stored data never marks one either.
+- **A truncated read stays truncated.** Etherscan pages 10,000 rows at most per
+  wallet. A wallet that hit it, or a re-read that hits it, stops being followed.
+- **Other tokens are a fixed list** in the code, not the settings.
+- **Payees are off by default.** Without `tokens.payees`, a loop whose middle
+  wallet was only paid in tokens can be missed.
+- **A trade's money search stops at 5,000 edges** (`SEARCH_CAP`). The trade is
+  never called clean for it, and the share reads "at least".
+- **A lens run holds at most 40 million money edges** (`MONEY_EDGE_CEILING`);
+  past it the run fails, saying so. Terraforms' 37 million fit.
+- **Reads have no Stop.** A wallet's Etherscan read already in flight can't be
+  cancelled. Pause keeps the collection's data, stops its stored-data download
+  and import, and stops the worker serving its wallets; a read that ends after
+  it does not queue the collection for analysis.
+- **CSV downloads run three at once** (`MAX_STREAMS`); a fourth gets 429. One
+  ends after 65 seconds unread, or 15 minutes open.
+- **Funding is slow on purpose:** four Etherscan calls per wallet at four a
+  second, so 30,000 wallets take about eight hours.
+- **Blur sales are marked as sales but not priced.** Blur v2 packs the price into
+  bit fields washtrace does not decode; a guess would count as read volume.
+- **ERC-1155 is not read.** The method depends on one token, one holder.
+
+## Reference
+
+- [API reference](doc/api.md): every route, its methods, status codes and keys.
+- [Upgrading: what each migration does at boot](doc/upgrading.md)
+- [Stored data](doc/stored-data.md): the files, the manifest, how a collection
+  loads, and publishing.
+
+## From the paper to now
+
+Any JSON-RPC endpoint and Etherscan API V2 replace Moralis and Footprint
+Analytics; Seaport 1.1 to 1.6, Blur, LooksRare v2 and X2Y2 replace Seaport 1.4 and
+1.5; any EVM chain replaces Ethereum alone. ETH, internal transfers, WETH and
+Blur Pool replace ETH alone, and funding is followed out of traders so SCC AU's
+depth 30 reaches outside the collection. Only finalized blocks are read, so a
+stored transfer is never retracted.
+
+Three corrections, each with a test: the payment leg of a sale is not money
+closing a cycle (flows sharing a transaction with a transfer are excluded);
+custody is not a change of owner (a Blend loan A → Blend → A is not a round
+trip); and an exchange is not a common funder (a wallet joined by money to more
+than 20 of the collection's wallets, `hubDegree`, a known contract, or a wallet
+with more history than Etherscan pages through cannot be the middle of an SCC AC
+path).
 
 ## Citing
 

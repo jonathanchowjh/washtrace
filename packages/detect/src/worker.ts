@@ -699,7 +699,7 @@ export class Worker {
         if (Date.now() > checkUntil || this.lockLost('fund')) break chains;
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
-          // A wallet due a re-read is read from the block after the last read, and a first read in full.
+          // A wallet due a re-read is read from a day of blocks before where the last read ended, and a first read in full.
           const from = await this.store.rereadFrom(chainId, wallet, 'money');
           const { flows, truncated, through } = await etherscan.flows(chainId, wallet, WALLET_MS, from ?? undefined);
           const follow = globalHops > 0 ? followOf(chainId, globalHops) : undefined;

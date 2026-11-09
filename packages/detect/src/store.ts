@@ -324,6 +324,17 @@ export const TOKEN_COUNT_MS = 5_000;
 const TOKEN_LANES_MS = 5_000;
 
 /**
+ * How far before the block after its last read a re-read starts
+ * (Store.rereadFrom): about a day of Ethereum blocks, less wall time on
+ * faster chains. The last read's `through` is the highest block across lists
+ * read one after another, Etherscan indexes internal transactions late, and
+ * the blocks it serves can still reorg, so a read from just past it could
+ * skip rows the last read never saw. What the overlap reads again is dropped
+ * by ON CONFLICT DO NOTHING.
+ */
+const REREAD_OVERLAP_BLOCKS = 7200;
+
+/**
  * How far one collection's other tokens are read (Start reading), as the
  * worker last counted it (Store.countTokens), so a page only reads it.
  * `wallets`: its token set (tokenSetSql), with its traders' payees when
@@ -780,7 +791,7 @@ export class Store {
    *
    * With `rereadDays` (follow.reread), a trader in `queue` whose money was
    * read to the end longer ago than that is marked to be read again
-   * (stale_at), from the block its last read reached. Only here: a load of
+   * (stale_at), from about where its last read ended. Only here: a load of
    * stored data, a money trail and queueWallets never mark one, a wallet a
    * trail loaded (fetched_at null) was never read here to start from, and a
    * truncated read cannot go on past Etherscan's cap. The same goes for a
@@ -1193,11 +1204,11 @@ export class Store {
 
   /**
    * The wallets to read money for next, in lanes so one big collection cannot
-   * crowd out the rest: one lane per collection on the chain that is not paused (its traders),
-   * and a last lane for followed wallets (depth > 0), which trade in no collection,
-   * there only while some collection is in sync to read them for, and only
-   * those within `globalHops`: ones queued while following went further out wait,
-   * and 0 reads traders only.
+   * crowd out the rest: one lane per collection on the chain that is not
+   * paused (its traders), and a last lane for followed wallets (depth > 0),
+   * which trade in no collection, there only while some collection is in sync
+   * to read them for, and only those within `globalHops`: ones queued while
+   * following went further out wait, and 0 reads traders only.
    * A collection following its money past `globalHops` (follow_hops) has its
    * reach wallets past `globalHops` out from it (see seedReach) in its own lane,
    * after its traders and within the same perLane, so it takes one turn a
@@ -1249,7 +1260,9 @@ export class Store {
     // Asked only when some collection follows further: otherwise the lanes are what they always were.
     const reaching = [...new Set(rows.filter((r) => (r.follow_hops ?? 0) > globalHops).map((r) => r.id))];
     if (reaching.length > 0) {
-      // A wallet still to check is never stepped (seedReach), so reach_unstepped_idx holds every one.
+      // A pending or failed wallet is never stepped (seedReach steps only from done ones), so reach_unstepped_idx holds
+      // every one. One marked to be read again may be stepped already, but only traders are marked, and the traders'
+      // lane above serves them.
       const reach = await this.pool.query<{ id: number; address: string }>(
         `SELECT id, address FROM (
            SELECT r.collection_id AS id, r.address,
@@ -1275,14 +1288,17 @@ export class Store {
    * it as it was). With `follow`, queue the wallets it sent money to, one hop
    * further out: see Follow.
    *
-   * A `reread`, from the block after its last read (rereadFrom), clears its
-   * mark and leaves it done. Its fanout is judged on every wallet it ever
-   * paid, stored flows and all, not only the ones this read found: a wallet
-   * that paid 30 already is not followed for paying 1 more. Its reach rows
-   * are unmarked as stepped, so the walk steps from it again, only when the
-   * read brought a flow out of it not stored before: unmarked, moneyRead
-   * reads its collections as seeding. It takes the wallet, then its reach
-   * rows, then the collections, the order every write here takes them in.
+   * A `reread`, from a day of blocks before where its last read ended
+   * (rereadFrom), clears its mark and leaves it done. Its fanout is judged
+   * on every wallet it ever paid, stored flows and all, not only the ones
+   * this read found: a wallet that paid 30 already is not followed for
+   * paying 1 more. A re-read that stored no new flow (the overlap reads
+   * some again every time) changes nothing a collection reads, so it bumps
+   * none. One that did unmarks its reach rows as stepped, so the walk steps
+   * from it again, when any flow it read went out of the wallet:
+   * unmarked, moneyRead reads its collections as seeding. It takes the
+   * wallet, then its reach rows, then the collections, the order every write
+   * here takes them in.
    */
   async saveMoney(
     chainId: number, wallet: string, flows: readonly Flow[], truncated: boolean, follow?: Follow, through: number | null = null, reread = false,
@@ -1319,7 +1335,8 @@ export class Store {
           );
         }
       }
-      if (reread && added.some((f) => f.from === wallet && f.to !== wallet)) {
+      if (reread && added === 0) return;
+      if (reread && flows.some((f) => f.from === wallet && f.to !== wallet)) {
         await c.query('UPDATE washtrace.reach SET stepped = false WHERE chain_id = $1 AND address = $2 AND stepped', [chainId, wallet]);
       }
       // Every collection this wallet or any counterparty traded in reads it
@@ -1368,16 +1385,17 @@ export class Store {
   }
 
   /**
-   * The block a read of `address` starts from: the one after its last read
-   * reached when it is marked to be read again (stale_at), 0 when that read
-   * had no rows, and null for a full read. `kind` is which read: its money
-   * (wallets) or its other tokens (token_reads).
+   * The block a read of `address` starts from when it is marked to be read
+   * again (stale_at): REREAD_OVERLAP_BLOCKS before the one after its last
+   * read reached, floored at 0, and 0 when that read had no rows. Null for a
+   * full read. `kind` is which read: its money (wallets) or its other tokens
+   * (token_reads).
    */
   async rereadFrom(chainId: number, address: string, kind: 'money' | 'tokens'): Promise<number | null> {
     const { rows } = await this.pool.query<{ from: string }>(
-      `SELECT coalesce(read_block + 1, 0) AS "from" FROM washtrace.${kind === 'money' ? 'wallets' : 'token_reads'}
+      `SELECT GREATEST(coalesce(read_block + 1 - $3, 0), 0) AS "from" FROM washtrace.${kind === 'money' ? 'wallets' : 'token_reads'}
        WHERE chain_id = $1 AND address = $2 AND stale_at IS NOT NULL`,
-      [chainId, address],
+      [chainId, address, REREAD_OVERLAP_BLOCKS],
     );
     return rows[0] === undefined ? null : Number(rows[0].from);
   }
@@ -1780,8 +1798,8 @@ export class Store {
    * yet, shallowest first, a trader's payees (with `payees`, tokens.payees)
    * after the walk's, then one marked to be read again (stale_at, once due),
    * then one whose read failed over an hour ago. Each lane at most `perLane`
-   * long. A wallet in two sets is in both lanes, and read
-   * once (`interleave`); a read is chain-wide, so neither serves it again.
+   * long. A wallet in two sets is in both lanes, and read once (`interleave`);
+   * a read is chain-wide, so neither serves it again.
    *
    * Each call scans every set, so it stops by `tokenLanesMs`, or by `until`
    * (the token slice's deadline) when that is sooner, so a call made just
@@ -1837,9 +1855,10 @@ export class Store {
    * instead. So it writes no collection's row, and takes no lock beside its
    * own tables'.
    *
-   * A `reread`, from the block after its last read (rereadFrom), clears its
-   * mark and leaves it done, with `through` (the highest block its read
-   * reached; null leaves it as it was) kept as the highest. Its fanout and
+   * A `reread`, from a day of blocks before where its last read ended
+   * (rereadFrom), clears its mark and leaves it done, with `through` (the
+   * highest block its read reached; null leaves it as it was) kept as the
+   * highest. Its fanout and
    * payees are judged on every wallet it ever paid, stored flows and all, as
    * saveMoney judges a re-read. That is a count of its own, not paidBy's:
    * paidBy reads `flows` and excludes, and a token read's fanout never did.

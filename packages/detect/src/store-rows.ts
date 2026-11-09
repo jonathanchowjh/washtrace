@@ -123,24 +123,24 @@ export async function insertTransfers(c: pg.PoolClient, id: number, transfers: r
 /**
  * Insert flows, keeping any already stored: a flow between two checked
  * wallets is read from both sides, and is one edge. Funding and a loaded
- * money trail share it. Gives the ends of the ones new here, so a re-read
- * knows whether it found anything (Store.saveMoney).
+ * money trail share it. Gives how many are new here, so a re-read knows
+ * whether it found anything (Store.saveMoney); a count, not the rows, as a
+ * trail loads millions of flows and needs neither.
  */
-export async function insertFlows(c: pg.Pool | pg.PoolClient, chainId: number, flows: readonly Flow[]): Promise<{ from: string; to: string }[]> {
-  if (flows.length === 0) return [];
-  const { rows } = await c.query<{ from: string; to: string }>(
+export async function insertFlows(c: pg.Pool | pg.PoolClient, chainId: number, flows: readonly Flow[]): Promise<number> {
+  if (flows.length === 0) return 0;
+  const { rowCount } = await c.query(
     `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
      SELECT $1, tx, k, fr, too, v, tok, bn, to_timestamp(bt)
      FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::text[], $8::bigint[], $9::float8[])
        AS u(tx, k, fr, too, v, tok, bn, bt)
-     ON CONFLICT DO NOTHING
-     RETURNING from_address AS "from", to_address AS "to"`,
+     ON CONFLICT DO NOTHING`,
     [
       chainId, flows.map((f) => f.txHash), flows.map((f) => f.kind), flows.map((f) => f.from), flows.map((f) => f.to),
       flows.map((f) => f.valueWei), flows.map((f) => f.token), flows.map((f) => f.blockNumber), flows.map((f) => f.blockTime),
     ],
   );
-  return rows;
+  return rowCount ?? 0;
 }
 
 /** The Postgres error code an error carries, or undefined for one that has none (or is no error object). */
