@@ -20,7 +20,7 @@ export interface Follow {
 }
 
 /**
- * How money is followed on `chainId`, `hops` out: what the fund job hands
+ * How money is followed on `chainId`, `globalHops` out: what the fund job hands
  * `fund`, and what walkOut walks the stored flows by, so a collection's
  * count of wallets further out is of the ones `fund` would queue.
  */

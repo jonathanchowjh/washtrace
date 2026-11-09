@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PublicClient } from 'viem';
+import { HttpRequestError, LimitExceededRpcError, RpcRequestError, TimeoutError, UnknownRpcError, WebSocketRequestError, type PublicClient } from 'viem';
 import { Chain, CHECK_TIMEOUT_MS, TERRAFORMS, TRANSFER } from '../src/chain.js';
 
 /** A Chain whose node answers from these functions; nothing reaches a network. */
@@ -87,5 +87,86 @@ describe('Chain.check against a node that never answers', () => {
     await settled;
     expect(result).toEqual({ finalized: 2_000_000, archive: false, logs: false });
     expect(bodies.map((b) => (Array.isArray(b) ? 'batch' : b.method)).sort()).toEqual(['eth_getBalance', 'eth_getBlockByNumber', 'eth_getLogs']);
+  });
+});
+
+describe('Chain.transfers when a log read fails', () => {
+  /** A Chain whose log reads throw `errors` in turn, then answer empty. Returns how many reads were made. */
+  function failing(...errors: unknown[]): { c: Chain; reads: () => number; span: () => number; spans: number[] } {
+    const c = new Chain(1, 'https://rpc.example/key');
+    let reads = 0;
+    const spans: number[] = [];
+    (c as unknown as { client: { request: () => unknown } }).client.request = async () => {
+      spans.push((c as unknown as { span: number }).span);
+      const err = errors[reads++];
+      if (err !== undefined) throw err;
+      return [];
+    };
+    return { c, reads: () => reads, span: () => (c as unknown as { span: number }).span, spans };
+  }
+  const url = 'https://rpc.example/key';
+
+  it('rethrows a 429 at once and keeps the span', async () => {
+    const { c, reads, span } = failing(new HttpRequestError({ url, status: 429 }));
+    const before = span();
+    await expect(c.transfers(TERRAFORMS, 1, 100_000)).rejects.toBeInstanceOf(HttpRequestError);
+    expect(reads()).toBe(1);
+    expect(span()).toBe(before);
+  });
+
+  it('rethrows a dropped connection (no HTTP status) without shrinking the span', async () => {
+    const err = new HttpRequestError({ url, cause: new TypeError('fetch failed') });
+    const { c, reads, span } = failing(err);
+    const before = span();
+    await expect(c.transfers(TERRAFORMS, 1, 100_000)).rejects.toBe(err);
+    expect(reads()).toBe(1);
+    expect(span()).toBe(before);
+  });
+
+  it('halves on a timeout and on a 503, as before: a range too heavy often looks like either', async () => {
+    for (const err of [new TimeoutError({ body: {}, url }), new HttpRequestError({ url, status: 503 })]) {
+      const { c, reads, spans } = failing(err);
+      await c.transfers(TERRAFORMS, 1, 100_000);
+      expect(reads()).toBe(2);
+      expect(spans).toEqual([2_000, 1_000]);
+    }
+  });
+
+  it('keeps the span on a JSON-RPC rate limit, found in the error or in its cause', async () => {
+    const rpc = (code: number) => new RpcRequestError({ body: {}, url, error: { code, message: 'rate limited' } });
+    for (const err of [
+      rpc(429),
+      rpc(-32007),
+      new UnknownRpcError(rpc(429)),
+      new UnknownRpcError(new HttpRequestError({ url, status: 429 })),
+      new WebSocketRequestError({ url }),
+    ]) {
+      const { c, reads, span } = failing(err);
+      await expect(c.transfers(TERRAFORMS, 1, 100_000)).rejects.toBe(err);
+      expect(reads()).toBe(1);
+      expect(span()).toBe(2_000);
+    }
+  });
+
+  it('halves on a 200 whose body was not JSON: no status, but not a lost connection', async () => {
+    const { c, spans } = failing(new HttpRequestError({ url, cause: new SyntaxError('Unexpected token <') }));
+    await c.transfers(TERRAFORMS, 1, 100_000);
+    expect(spans).toEqual([2_000, 1_000]);
+  });
+
+  it('halves the span on a range refusal, as before', async () => {
+    const limit = new LimitExceededRpcError(new RpcRequestError({ body: {}, url, error: { code: -32005, message: 'query returned more than 10000 results' } }));
+    const { c, reads, spans } = failing(limit);
+    await c.transfers(TERRAFORMS, 1, 100_000);
+    expect(reads()).toBe(2);
+    expect(spans).toEqual([2_000, 1_000]);
+  });
+
+  it('halves the span on an error it does not recognise, as before', async () => {
+    const { c, reads, span } = failing(new Error('block range is too wide'), new HttpRequestError({ url, status: 400 }));
+    await c.transfers(TERRAFORMS, 1, 100_000);
+    expect(reads()).toBe(3);
+    // Halved twice, then doubled by the empty read that followed.
+    expect(span()).toBe(1_000);
   });
 });

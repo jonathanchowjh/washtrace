@@ -59,7 +59,7 @@ export const UINT256_DIGITS = 78;
 const WEI_FLOOR = '10000000000000000'; // 0.01 ETH
 const MAX_HOPS = 6;
 /** The most hops the follow.hops setting allows (env.ts hops()): the console's Settings check, a collection's own limit (follow route) and a lens's need (data-needs) are all bounded by it. Here, not in env.ts, so the console's client components can import it. */
-export const MOST_HOPS = 10;
+export const MAX_FOLLOW_HOPS = 10;
 // The routes take rules from anyone who may write, so every number and list is bounded.
 const MAX_DAYS = 3650;
 const MAX_PER_LOOP = 100;

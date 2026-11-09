@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Etherscan, REQUEST_TIMEOUT_MS, WALLET_MS } from '../src/etherscan.js';
+import { Etherscan, REQUEST_TIMEOUT_MS, isServiceFailure, WALLET_MS } from '../src/etherscan.js';
 import { TOKENS, WRAPPED } from '../src/marketplaces.js';
 import { BUDGET_MS, STUCK_MS } from '../src/worker.js';
 
@@ -42,7 +42,16 @@ describe('Etherscan', () => {
     const e = new Etherscan('KEY', 10);
     const sent: number[] = [];
     e.fetch = async () => { sent.push(Date.now()); return new Response(JSON.stringify({ status: '1', message: 'OK', result: [] })); };
-    await Promise.all([e.creation(1, '0xa'), e.creation(1, '0xb'), e.creation(1, '0xc')]);
+    // Fake time, so the gap is read off a clock that load cannot stretch or shrink.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const all = Promise.all([e.creation(1, '0xa'), e.creation(1, '0xb'), e.creation(1, '0xc')]);
+      await vi.advanceTimersByTimeAsync(1000);
+      await all;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(sent).toHaveLength(3);
     expect(sent[1]! - sent[0]!).toBeGreaterThanOrEqual(95);
     expect(sent[2]! - sent[1]!).toBeGreaterThanOrEqual(95);
   });
@@ -179,5 +188,25 @@ describe('Etherscan.tokenFlows', () => {
         expect(WRAPPED[Number(chain)] ?? []).not.toContain(t.address);
       }
     }
+  });
+});
+
+describe('isServiceFailure', () => {
+  it.each([
+    ['Etherscan refused txlist: Invalid API Key', true],
+    ['Etherscan refused txlist: Missing/Invalid API Key, rate limit', true],
+    ['Etherscan refused txlist: Max daily rate limit reached. Limit is 100000 calls per day', true],
+    ['Etherscan refused txlist: Max rate limit reached', true],
+    ['Etherscan refused txlist: Max calls per sec rate limit reached (5/sec)', true],
+    ['Etherscan answered HTTP 429', true],
+    ['Etherscan answered HTTP 502', false],
+    ['Etherscan answered HTTP 503', false],
+    ['Etherscan answered HTTP 504', false],
+    ['Etherscan refused txlist: Error! Invalid address format', false],
+    ['Etherscan refused txlist: Query Timeout occured. Please select a smaller result dataset', false],
+    ['Etherscan refused txlist: Result window is too large, PageNo x Offset size must be less than or equal to 10000', false],
+    ['Etherscan refused txlist: daily summary unavailable', false],
+  ])('%s -> %s', (message, expected) => {
+    expect(isServiceFailure(new Error(message))).toBe(expected);
   });
 });

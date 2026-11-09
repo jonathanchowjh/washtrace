@@ -1,4 +1,4 @@
-import { MOST_HOPS } from '@washtrace/detect/lens-rule';
+import { MAX_FOLLOW_HOPS } from '@washtrace/detect/lens-rule';
 import { bad, collectionFrom, handle, json, writeBody } from '@/lib/api';
 import { configFromSources, hopsFollowed } from '@/lib/settings';
 
@@ -17,7 +17,7 @@ export async function POST(req: Request, { params }: Ctx): Promise<Response> {
     const written = await writeBody(req);
     if (written instanceof Response) return written;
     const { hops } = written.body;
-    if (typeof hops !== 'number' || !Number.isInteger(hops) || hops < 1 || hops > MOST_HOPS) return bad(`hops is a whole number from 1 to ${MOST_HOPS}.`);
+    if (typeof hops !== 'number' || !Number.isInteger(hops) || hops < 1 || hops > MAX_FOLLOW_HOPS) return bad(`hops is a whole number from 1 to ${MAX_FOLLOW_HOPS}.`);
     const found = await collectionFrom(params);
     if (found instanceof Response) return found;
     const { s, chainId, address, collection: c } = found;

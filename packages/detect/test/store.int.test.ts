@@ -30,6 +30,8 @@ import type { Payments } from '../src/payments.js';
 let pg: StartedPostgreSqlContainer;
 let store: Store;
 const collection = w('c011');
+// This test's own advisory-lock key, not one of the store's LOCKS.
+const LOCKS_TEST_KEY = 987_654;
 const a = w('a'), b = w('b'), x = w('x');
 
 beforeAll(async () => {
@@ -45,6 +47,28 @@ afterAll(async () => {
 describe('Store.connect', () => {
   it('keeps its connections alive, so a dropped one errors instead of waiting forever', () => {
     expect(store.pool.options).toMatchObject({ keepAlive: true });
+  });
+
+  it('rejects the query on a checked-out connection that is dropped, instead of ending the process', async () => {
+    const killer = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+    await killer.connect();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const held = store.locked(LOCKS_TEST_KEY, false, async (c) => {
+        const { rows } = await c.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+        const sleeping = c.query('SELECT pg_sleep(30)');
+        sleeping.catch(() => {}); // may reject before the kill call returns; the awaiting caller still sees it
+        await killer.query('SELECT pg_terminate_backend($1)', [rows[0]!.pid]);
+        return sleeping;
+      });
+      await expect(held).rejects.toThrow();
+      expect(logged).toHaveBeenCalledWith('[washtrace] store connection lost: %s', expect.any(String));
+      // The pool is still usable: the dead client was discarded on release.
+      expect((await store.pool.query('SELECT 1 AS one')).rows[0]).toEqual({ one: 1 });
+    } finally {
+      logged.mockRestore();
+      await killer.end();
+    }
   });
 });
 
@@ -4463,6 +4487,29 @@ describe('lenses', () => {
     }
   });
 
+  it('requeueLensRun puts a running run back to queued with its failures unchanged, and touches nothing else', async () => {
+    const lens = await store.createLens('Deploy', DEFAULT_RULE);
+    const { id } = await analysed(w('1e5c'));
+    const row = async () => (await store.pool.query('SELECT status, failures, progress FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rows[0];
+    try {
+      await store.requestLensRun(lens.id, id);
+      await store.lensRunStarted(lens.id, id);
+      await store.lensRunFailed(lens.id, id, 'earlier');
+      await store.pool.query(`UPDATE washtrace.lens_runs SET status = 'running', progress = 0.4 WHERE lens_id = $1`, [lens.id]);
+      await store.requeueLensRun(lens.id, id);
+      expect(await row()).toEqual({ status: 'queued', failures: 1, progress: null });
+      // The next worker takes it as an ordinary queued run, not as one a crash left.
+      expect(await store.nextLensRun(Date.now())).toMatchObject({ lens: { id: lens.id }, collectionId: id });
+      // Only while it runs: a run that has since finished or failed is not queued again.
+      await store.pool.query(`UPDATE washtrace.lens_runs SET status = 'failed' WHERE lens_id = $1`, [lens.id]);
+      await store.requeueLensRun(lens.id, id);
+      expect((await row()).status).toBe('failed');
+    } finally {
+      await store.deleteLens(lens.id);
+      await drop(1, w('1e5c'));
+    }
+  });
+
   it('counts a run a stopped worker left running as a failed try, backs it off, and after three waits to be asked again', async () => {
     const lens = await store.createLens('Orphan', DEFAULT_RULE);
     const { id } = await analysed(w('1e5b'));
@@ -5132,6 +5179,24 @@ describe('previews', () => {
       await drop(1, w('1b11'));
       await drop(1, w('1b12'));
       await drop(1, w('1b13'));
+    }
+  });
+
+  it('requeuePreview puts a running preview back to queued, and only one that is running', async () => {
+    const lab = await analysed(w('1b22'));
+    try {
+      const p = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
+      await store.pool.query(`UPDATE washtrace.lens_previews SET status = 'running', progress = 0.3 WHERE id = $1`, [p.id]);
+      await store.requeuePreview(p.id);
+      expect(await store.preview(p.id)).toMatchObject({ status: 'queued', progress: null });
+      await store.requeuePreview(p.id);
+      expect(await store.preview(p.id)).toMatchObject({ status: 'queued' });
+      await store.previewFailed(p.id, 'x');
+      await store.pool.query(`UPDATE washtrace.lens_previews SET status = 'done' WHERE id = $1`, [p.id]);
+      await store.requeuePreview(p.id);
+      expect(await store.preview(p.id)).toMatchObject({ status: 'done' });
+    } finally {
+      await drop(1, w('1b22'));
     }
   });
 

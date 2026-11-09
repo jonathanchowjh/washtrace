@@ -487,7 +487,11 @@ export class Store {
     // query on it errors instead of waiting forever. Probed after 30 seconds idle, not the OS's two hours.
     const pool = new pg.Pool({ connectionString: url, max: 10, application_name: 'washtrace', keepAlive: true, keepAliveInitialDelayMillis: 30_000 });
     // An idle client's dropped connection is reported here; unheard, it ends the process.
-    pool.on('error', (err) => console.error('[washtrace] store connection lost: %s', err.message));
+    const lost = (err: Error) => console.error('[washtrace] store connection lost: %s', err.message);
+    pool.on('error', lost);
+    // The pool drops its own listener while a client is checked out, so a connection that dies then would
+    // emit an unheard 'error' and end the process. The in-flight query still rejects; release() discards the client.
+    pool.on('connect', (c) => c.on('error', lost));
     return new Store(pool);
   }
 
@@ -1254,392 +1258,392 @@ export class Store {
     // probes is far above JIT's threshold, and compiling cost twice the query
     // itself (430 ms against 150 at 26k stranded wallets), so JIT is off.
     const rows = await this.tx(async (c) => {
-        await c.query('SET LOCAL jit = off');
-        return (await c.query(
-          `WITH waiting AS MATERIALIZED (
-             SELECT w.chain_id, w.status, ${servedWallet('$1')} AS served FROM washtrace.wallets w WHERE w.status IN ('pending', 'failed')
-           ), unchecked AS (
-             SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending,
-                    count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE NOT served)::int AS stranded
-             FROM waiting GROUP BY chain_id
-           )
-           SELECT w.chain_id, coalesce(u.pending, 0) AS pending, coalesce(u.failed, 0) AS failed, coalesce(u.stranded, 0) AS stranded,
-                  count(*) FILTER (WHERE w.status = 'done')::int AS done,
-                  count(*) FILTER (WHERE w.status = 'done' AND w.fetched_at > now() - interval '1 hour')::int AS done_last_hour,
-                  count(*) FILTER (WHERE w.truncated)::int AS truncated, count(*) FILTER (WHERE w.depth > 0)::int AS followed
-           FROM washtrace.wallets w LEFT JOIN unchecked u ON u.chain_id = w.chain_id
-           GROUP BY w.chain_id, u.pending, u.failed, u.stranded ORDER BY w.chain_id`,
-          [globalHops],
-        )).rows;
-      });
-      return rows.map((r) => ({
-        chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, stranded: r.stranded, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour,
-      }));
-    }
-
-    /**
-     * Fetch them (Data this lens needs): follow this collection's money out to
-     * `ownHops`, past follow.hops, from the next fund pass on. Only ever raised: a
-     * second press, or one asking for less than is set, is 'already' and
-     * changes nothing. 'gone' when the collection is. Its reach is not seeded
-     * out to the new limit until a walk finds nothing more to step (moneyRead's
-     * `seeding`). The wallets read at the old limit, marked stepped without
-     * being followed (stepReach), are unmarked by the walk itself, not here
-     * (raiseReach): it finds the limit past the reach_hops it last walked
-     * to, whichever limit rose, this one or follow.hops.
-     *
-     * The row is taken FOR UPDATE, the one lock mode that waits
-     * for a seedReach chunk's FOR KEY SHARE. So a press waits for a chunk to
-     * commit, and a chunk starting meanwhile waits, then reads the new limit:
-     * no chunk marks at a limit a press has already moved.
-     *
-     * It waits on more than a chunk: on every write that holds the row's KEY
-     * SHARE for its foreign keys (an ingest span's transfers, saveAnalysis,
-     * saveLensRun) and on the NO KEY UPDATE of a version bump (fund, ingest).
-     * Each is short, a span or a save, so a press waits for it rather than
-     * failing on a lock_timeout the reader would have to retry.
-     */
-    async followFurther(collectionId: number, ownHops: number): Promise<'set' | 'already' | 'gone'> {
-      return this.tx(async (c) => {
-        const own = (await c.query<{ follow_hops: number | null }>(
-          'SELECT follow_hops FROM washtrace.collections WHERE id = $1 FOR UPDATE', [collectionId])).rows[0];
-        if (own === undefined || (own.follow_hops ?? 0) >= ownHops) return own === undefined ? 'gone' : 'already';
-        await c.query('UPDATE washtrace.collections SET follow_hops = $2, reach_seeded_at = NULL WHERE id = $1', [collectionId, ownHops]);
-        return 'set';
-      });
-    }
-
-    /**
-     * How far this collection's money is read, against `globalHops`, the
-     * follow.hops the caller runs with: see MoneyRead. A reach wallet with no
-     * wallet row is counted unread, so a share can never read complete on it.
-     */
-    async moneyRead(collectionId: number, globalHops: number): Promise<MoneyRead> {
-      // A truncated trader counts as checked, as coverage counts it: it is never read again, so
-      // counting it unchecked would keep the traders' check "still running" for good on any collection with a busy trader.
-      // Seeded, walked to the limit itself, and no reach wallet left that is checked but not yet stepped from
-      // short of its limit: one is walk work left, as what it paid is not in the reach yet, so moneyRead reads it
-      // as seeding.
-      const { rows } = await this.pool.query<{ follow_hops: number | null; follow_estimate: FollowEstimate | null; seeded: boolean; checked: number; of: number }>(
-        `SELECT c.follow_hops, c.follow_estimate, t.checked, t.of,
-                c.reach_seeded_at IS NOT NULL AND coalesce(c.reach_hops, 0) = ${REACH_LIMIT('$2', 'c.')} AND NOT EXISTS (
-                  SELECT 1 FROM washtrace.reach r JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
-                  WHERE r.collection_id = c.id AND NOT r.stepped AND r.depth < ${REACH_LIMIT('$2', 'c.')} AND w.status = 'done' AND NOT w.truncated
-                ) AS seeded
-         FROM washtrace.collections c
-         CROSS JOIN LATERAL (
-           SELECT count(*) FILTER (WHERE w.status = 'done')::int AS checked, count(*)::int AS of
-           FROM (SELECT x.from_address AS address FROM washtrace.transfers x WHERE x.collection_id = c.id
-                 UNION SELECT x.to_address FROM washtrace.transfers x WHERE x.collection_id = c.id) t
-           JOIN washtrace.wallets w ON w.chain_id = c.chain_id AND w.address = t.address
-         ) t
-         WHERE c.id = $1`,
-        [collectionId, globalHops],
-      );
-      // A stepped wallet was done when stepped from, so only the unstepped are read (reach_unstepped_idx).
-      // Within the global limit, reach rows are the walk's own, their wallets the followed lane's work.
-      const pending = await this.pool.query<{ depth: number; n: number }>(
-        `SELECT r.depth, count(*)::int AS n FROM washtrace.reach r
-         LEFT JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
-         WHERE r.collection_id = $1 AND NOT r.stepped AND r.depth > $2 AND w.status IS DISTINCT FROM 'done'
-         GROUP BY r.depth`,
-        [collectionId, globalHops],
-      );
-      const ownLimit = rows[0]?.follow_hops ?? null;
-      const limit = Math.max(globalHops, ownLimit ?? 0);
-      const estimate = rows[0]?.follow_estimate ?? null;
-      return {
-        traders: { checked: rows[0]?.checked ?? 0, of: rows[0]?.of ?? 0 },
-        limit,
-        ownLimit,
-        pendingByDepth: Object.fromEntries(pending.rows.map((r) => [r.depth, r.n])),
-        // One counted before `within` was has none: as not counted, so nextCount counts it again.
-        estimate: estimate?.depth === limit + 1 && typeof estimate.within === 'number' ? estimate : null,
-        seeding: ownLimit !== null && ownLimit > globalHops && rows[0]?.seeded === false,
-      };
-    }
-
-    /**
-     * Count what following this collection's money one hop past its limit
-     * would read, and store it as its follow_estimate: the worker
-     * counts, and a page only reads, since the count is a walk of seconds. The
-     * walk steps as its reach is seeded (paidBy), at most `walkCap` wallets, and
-     * a level it cut is scaled up (see walkOut). Counted are the wallets at
-     * that hop not in its reach already nor checked on the chain, since only
-     * those cost Etherscan calls. `growth` is the chain's own, from its
-     * next-deepest depth to its deepest (wallets by depth), or on a chain that
-     * follows nothing yet this walk's last step's. `within` is the walk's
-     * wallets at depths 0 to the limit, scaled as cut: what Start reading would
-     * read tokens for, from the same walk at no extra cost.
-     *
-     * The walk reads in a snapshot of its own and holds no lock. The estimate
-     * is written after it, in a statement of its own that takes the
-     * collection's row and nothing else, as followFurther does: written inside
-     * the snapshot, it would fail on any write to the row since (each funded
-     * wallet bumps it). An estimate counted for a limit raised meanwhile reads
-     * as nothing in moneyRead. 'gone' when the collection is.
-     *
-     * It stops by `timeoutMs` in all (COUNT_TIMEOUT_MS unless the pass has less
-     * left), failing with nothing stored. Every attempt is noted in
-     * count_tried_at first, so one that keeps running out of time waits its
-     * turn behind the rest (nextCount) and never holds the count for itself.
-     */
-    async countNext(collectionId: number, globalHops: number, timeoutMs = this.countTimeoutMs): Promise<'counted' | 'gone'> {
-      // Tried, whether or not it is counted: nextCount gives the next pass's count to another.
-      await this.pool.query('UPDATE washtrace.collections SET count_tried_at = now() WHERE id = $1', [collectionId]);
-      const c = await this.pool.connect();
-      let counted: Omit<FollowEstimate, 'at'>;
-      try {
-        // One snapshot for the walk's statements, so a level never sees flows the one before did not.
-        await c.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-        const until = Date.now() + timeoutMs;
-        await timeLeft(c, until);
-        const own = (await c.query<{ chain_id: number; follow_hops: number | null }>(
-          'SELECT chain_id, follow_hops FROM washtrace.collections WHERE id = $1', [collectionId],
-        )).rows[0];
-        if (own === undefined) {
-          await c.query('COMMIT');
-          return 'gone';
-        }
-        const limit = Math.max(globalHops, own.follow_hops ?? 0);
-        const next = limit + 1;
-        const walk = await walkOut(c, collectionId, own.chain_id, next, followOf(own.chain_id, next), this.walkCap, until);
-        await timeLeft(c, until);
-        const unread = (await c.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM walked k
-         WHERE k.depth = $2
-           AND NOT EXISTS (SELECT 1 FROM washtrace.reach r WHERE r.collection_id = $1 AND r.address = k.address)
-           AND NOT EXISTS (SELECT 1 FROM washtrace.wallets w WHERE w.chain_id = $3 AND w.address = k.address AND w.status = 'done')`,
-          [collectionId, next, own.chain_id],
-        )).rows[0]!.n;
-        await timeLeft(c, until);
-        const byDepth = (await c.query<{ depth: number; n: number }>(
-          'SELECT depth, count(*)::int AS n FROM washtrace.wallets WHERE chain_id = $1 GROUP BY depth ORDER BY depth', [own.chain_id],
-        )).rows;
-        await c.query('COMMIT');
-        const deepest = byDepth.at(-1);
-        const before = byDepth.find((r) => r.depth === (deepest?.depth ?? 0) - 1);
-        const growth = deepest !== undefined && before !== undefined ? deepest.n / before.n
-          : walk.counts[limit]! > 0 ? walk.counts[next]! / walk.counts[limit]! : null;
-        const within = walk.counts.slice(0, limit + 1).reduce((sum, n) => sum + n, 0);
-        counted = { depth: next, wallets: Math.round(unread * walk.scale), growth, cut: walk.cut, within: Math.round(within) };
-      } catch (err) {
-        await c.query('ROLLBACK').catch(() => {});
-        throw err;
-      } finally {
-        c.release();
-      }
-      const { rowCount } = await this.pool.query(
-        // `at` in toISOString's form: jsonb's own rendering of now() has microseconds and +00:00, which a JS Date need not parse.
-        `UPDATE washtrace.collections
-         SET follow_estimate = $2::jsonb || jsonb_build_object('at', ${UTC_ISO_NOW})
-         WHERE id = $1`,
-        [collectionId, JSON.stringify(counted)],
-      );
-      return (rowCount ?? 0) > 0 ? 'counted' : 'gone';
-    }
-
-    /**
-     * The watched collection whose follow_estimate the fund pass counts next,
-     * or null when every one is fresh: not paused, and its
-     * estimate missing, counted for a hop other than the one past its limit
-     * now, or a day old, or counted before it carried `within`. The one tried
-     * longest ago first (count_tried_at), one never tried before
-     * any, so one whose count runs out of time waits its turn; then a missing
-     * estimate before any. One whose last try failed (tried after its estimate
-     * was written, or with none) under an hour ago waits out the hour: as the
-     * only one due, it would otherwise be tried every pass, each costing the
-     * pass COUNT_MS of its checking.
-     */
-    async nextCount(globalHops: number): Promise<number | null> {
-      // A count that succeeds writes its `at` after count_tried_at, truncated to the millisecond, hence the 1 ms.
-      const { rows } = await this.pool.query<{ id: number }>(
-        `SELECT id FROM washtrace.collections
-         WHERE paused_at IS NULL AND (follow_estimate IS NULL OR NOT follow_estimate ? 'within'
-           OR (follow_estimate->>'depth')::int <> ${REACH_LIMIT('$1')} + 1
-           OR (follow_estimate->>'at')::timestamptz < now() - interval '24 hours')
-           AND (count_tried_at IS NULL OR count_tried_at < now() - interval '1 hour'
-                OR count_tried_at <= (follow_estimate->>'at')::timestamptz + interval '1 millisecond')
-         ORDER BY count_tried_at NULLS FIRST, (follow_estimate->>'depth')::int = greatest($1, coalesce(follow_hops, 0)) + 1 NULLS FIRST,
-                  (follow_estimate->>'at')::timestamptz NULLS FIRST, id
-         LIMIT 1`,
+      await c.query('SET LOCAL jit = off');
+      return (await c.query(
+        `WITH waiting AS MATERIALIZED (
+           SELECT w.chain_id, w.status, ${servedWallet('$1')} AS served FROM washtrace.wallets w WHERE w.status IN ('pending', 'failed')
+         ), unchecked AS (
+           SELECT chain_id, count(*) FILTER (WHERE status = 'pending' AND served)::int AS pending,
+                  count(*) FILTER (WHERE status = 'failed' AND served)::int AS failed, count(*) FILTER (WHERE NOT served)::int AS stranded
+           FROM waiting GROUP BY chain_id
+         )
+         SELECT w.chain_id, coalesce(u.pending, 0) AS pending, coalesce(u.failed, 0) AS failed, coalesce(u.stranded, 0) AS stranded,
+                count(*) FILTER (WHERE w.status = 'done')::int AS done,
+                count(*) FILTER (WHERE w.status = 'done' AND w.fetched_at > now() - interval '1 hour')::int AS done_last_hour,
+                count(*) FILTER (WHERE w.truncated)::int AS truncated, count(*) FILTER (WHERE w.depth > 0)::int AS followed
+         FROM washtrace.wallets w LEFT JOIN unchecked u ON u.chain_id = w.chain_id
+         GROUP BY w.chain_id, u.pending, u.failed, u.stranded ORDER BY w.chain_id`,
         [globalHops],
-      );
-      return rows[0]?.id ?? null;
-    }
+      )).rows;
+    });
+    return rows.map((r) => ({
+      chainId: r.chain_id, pending: r.pending, done: r.done, failed: r.failed, stranded: r.stranded, truncated: r.truncated, followed: r.followed, doneLastHour: r.done_last_hour,
+    }));
+  }
 
-    /**
-     * Walk the stored flows out from the traders of a collection following its
-     * money past `globalHops`, or reading its other tokens (Start
-     * reading), into its reach, stepping from at most `limit` wallets a call
-     * (wallets stepped from, not rows written, which may be up to
-     * FOLLOW_FANOUT times as many): what a fund pass can spend, as a walk of a
-     * big collection is minutes cold.
-     *
-     * Its rows are how far the walk has got, so the next call goes on from
-     * them, and a wallet checked since, by any lane, is stepped from next: so
-     * its reach grows past the global limit as reach wallets are checked, and
-     * through the ones already checked on the chain, which no lane hands out
-     * again. Shallowest first, each wallet at its shallowest depth: one found
-     * nearer later is moved in and stepped from again. A step queues what a
-     * wallet sent as `fund` does (paidBy), into wallets as well, at the chain
-     * depth it has by this walk if `fund` gave none nearer, for a lane to
-     * check: the followed lane within `globalHops`, its reach lane past it.
-     * Out to its limit L (REACH_LIMIT) and no further. A collection that only
-     * reads tokens walks to the global limit: its whole set is within it, the
-     * followed lane's to check, so its walk adds no lane and no money of its own.
-     *
-     * Collections take turns, the one stepped from longest ago first
-     * (reach_stepped_at), so one big walk cannot take every call of a pass.
-     * Each turn first catches the walk up with its limit (raiseReach).
-     *
-     * Its traders are added first, and once a day after, for those who
-     * traded since; reach_seeded_at says when a call last found nothing more
-     * to step or add, written only while L, and the reach_hops walked to, are
-     * still the limit the call read, so a press meanwhile leaves it seeding;
-     * and only while no write has added transfers since its traders were read
-     * (traders_at as tradersFrom read it), so a trader
-     * addTraders could not see leaves it unseeded, whether that write moved
-     * the cursor or not.
-     * Unseeded (an ingest or a load), or a day on, its traders are added
-     * again. A paused collection waits. Gives how many wallets it stepped
-     * from, or traders it added, 0 when no collection on the chain has any left.
-     */
-    async seedReach(chainId: number, globalHops: number, limit: number): Promise<number> {
-      const { rows } = await this.pool.query<{ id: number; l: number; walked: number | null; seeded: boolean }>(
-        `SELECT id, ${REACH_LIMIT('$2')} AS l, reach_hops AS walked, coalesce(reach_seeded_at > now() - interval '24 hours', false) AS seeded
-         FROM washtrace.collections
-         WHERE chain_id = $1 AND paused_at IS NULL AND (follow_hops > $2 OR read_tokens_at IS NOT NULL)
-         ORDER BY reach_stepped_at NULLS FIRST, id`,
-        [chainId, globalHops],
-      );
-      for (const own of rows) {
-        // Read again under the lock: only a limit that moved costs a transaction of its own.
-        const raised = own.l === own.walked ? false : await this.reachStatement(own.id, (c) => raiseReach(c, own.id, globalHops));
-        if (raised === null) continue;
-        const step = await this.reachStatement(own.id, (c) => stepReach(c, own.id, chainId, limit, globalHops));
-        const stepped = step?.stepped ?? null;
-        if (stepped !== null && stepped > 0) {
-          await this.tookTurn(own.id, step!.doneFar > 0);
-          return stepped;
-        }
-        if (stepped === null || (own.seeded && !raised)) continue;
-        const from = await this.tradersFrom(own.id);
-        const added = await this.reachStatement(own.id, (c) => addTraders(c, own.id, chainId));
-        if (added === null) continue;
-        if (added > 0) {
-          await this.tookTurn(own.id, false);
-          return added;
-        }
-        await this.pool.query(
-          `UPDATE washtrace.collections SET reach_seeded_at = now()
-           WHERE id = $1 AND ${REACH_LIMIT('$2')} = $3 AND reach_hops = $3 AND traders_at::text IS NOT DISTINCT FROM $4::text`,
-          [own.id, globalHops, own.l, from],
-        );
+  /**
+   * Fetch them (Data this lens needs): follow this collection's money out to
+   * `ownHops`, past follow.hops, from the next fund pass on. Only ever raised: a
+   * second press, or one asking for less than is set, is 'already' and
+   * changes nothing. 'gone' when the collection is. Its reach is not seeded
+   * out to the new limit until a walk finds nothing more to step (moneyRead's
+   * `seeding`). The wallets read at the old limit, marked stepped without
+   * being followed (stepReach), are unmarked by the walk itself, not here
+   * (raiseReach): it finds the limit past the reach_hops it last walked
+   * to, whichever limit rose, this one or follow.hops.
+   *
+   * The row is taken FOR UPDATE, the one lock mode that waits
+   * for a seedReach chunk's FOR KEY SHARE. So a press waits for a chunk to
+   * commit, and a chunk starting meanwhile waits, then reads the new limit:
+   * no chunk marks at a limit a press has already moved.
+   *
+   * It waits on more than a chunk: on every write that holds the row's KEY
+   * SHARE for its foreign keys (an ingest span's transfers, saveAnalysis,
+   * saveLensRun) and on the NO KEY UPDATE of a version bump (fund, ingest).
+   * Each is short, a span or a save, so a press waits for it rather than
+   * failing on a lock_timeout the reader would have to retry.
+   */
+  async followFurther(collectionId: number, ownHops: number): Promise<'set' | 'already' | 'gone'> {
+    return this.tx(async (c) => {
+      const own = (await c.query<{ follow_hops: number | null }>(
+        'SELECT follow_hops FROM washtrace.collections WHERE id = $1 FOR UPDATE', [collectionId])).rows[0];
+      if (own === undefined || (own.follow_hops ?? 0) >= ownHops) return own === undefined ? 'gone' : 'already';
+      await c.query('UPDATE washtrace.collections SET follow_hops = $2, reach_seeded_at = NULL WHERE id = $1', [collectionId, ownHops]);
+      return 'set';
+    });
+  }
+
+  /**
+   * How far this collection's money is read, against `globalHops`, the
+   * follow.hops the caller runs with: see MoneyRead. A reach wallet with no
+   * wallet row is counted unread, so a share can never read complete on it.
+   */
+  async moneyRead(collectionId: number, globalHops: number): Promise<MoneyRead> {
+    // A truncated trader counts as checked, as coverage counts it: it is never read again, so
+    // counting it unchecked would keep the traders' check "still running" for good on any collection with a busy trader.
+    // Seeded, walked to the limit itself, and no reach wallet left that is checked but not yet stepped from
+    // short of its limit: one is walk work left, as what it paid is not in the reach yet, so moneyRead reads it
+    // as seeding.
+    const { rows } = await this.pool.query<{ follow_hops: number | null; follow_estimate: FollowEstimate | null; seeded: boolean; checked: number; of: number }>(
+      `SELECT c.follow_hops, c.follow_estimate, t.checked, t.of,
+              c.reach_seeded_at IS NOT NULL AND coalesce(c.reach_hops, 0) = ${REACH_LIMIT('$2', 'c.')} AND NOT EXISTS (
+                SELECT 1 FROM washtrace.reach r JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
+                WHERE r.collection_id = c.id AND NOT r.stepped AND r.depth < ${REACH_LIMIT('$2', 'c.')} AND w.status = 'done' AND NOT w.truncated
+              ) AS seeded
+       FROM washtrace.collections c
+       CROSS JOIN LATERAL (
+         SELECT count(*) FILTER (WHERE w.status = 'done')::int AS checked, count(*)::int AS of
+         FROM (SELECT x.from_address AS address FROM washtrace.transfers x WHERE x.collection_id = c.id
+               UNION SELECT x.to_address FROM washtrace.transfers x WHERE x.collection_id = c.id) t
+         JOIN washtrace.wallets w ON w.chain_id = c.chain_id AND w.address = t.address
+       ) t
+       WHERE c.id = $1`,
+      [collectionId, globalHops],
+    );
+    // A stepped wallet was done when stepped from, so only the unstepped are read (reach_unstepped_idx).
+    // Within the global limit, reach rows are the walk's own, their wallets the followed lane's work.
+    const pending = await this.pool.query<{ depth: number; n: number }>(
+      `SELECT r.depth, count(*)::int AS n FROM washtrace.reach r
+       LEFT JOIN washtrace.wallets w ON w.chain_id = r.chain_id AND w.address = r.address
+       WHERE r.collection_id = $1 AND NOT r.stepped AND r.depth > $2 AND w.status IS DISTINCT FROM 'done'
+       GROUP BY r.depth`,
+      [collectionId, globalHops],
+    );
+    const ownLimit = rows[0]?.follow_hops ?? null;
+    const limit = Math.max(globalHops, ownLimit ?? 0);
+    const estimate = rows[0]?.follow_estimate ?? null;
+    return {
+      traders: { checked: rows[0]?.checked ?? 0, of: rows[0]?.of ?? 0 },
+      limit,
+      ownLimit,
+      pendingByDepth: Object.fromEntries(pending.rows.map((r) => [r.depth, r.n])),
+      // One counted before `within` was has none: as not counted, so nextCount counts it again.
+      estimate: estimate?.depth === limit + 1 && typeof estimate.within === 'number' ? estimate : null,
+      seeding: ownLimit !== null && ownLimit > globalHops && rows[0]?.seeded === false,
+    };
+  }
+
+  /**
+   * Count what following this collection's money one hop past its limit
+   * would read, and store it as its follow_estimate: the worker
+   * counts, and a page only reads, since the count is a walk of seconds. The
+   * walk steps as its reach is seeded (paidBy), at most `walkCap` wallets, and
+   * a level it cut is scaled up (see walkOut). Counted are the wallets at
+   * that hop not in its reach already nor checked on the chain, since only
+   * those cost Etherscan calls. `growth` is the chain's own, from its
+   * next-deepest depth to its deepest (wallets by depth), or on a chain that
+   * follows nothing yet this walk's last step's. `within` is the walk's
+   * wallets at depths 0 to the limit, scaled as cut: what Start reading would
+   * read tokens for, from the same walk at no extra cost.
+   *
+   * The walk reads in a snapshot of its own and holds no lock. The estimate
+   * is written after it, in a statement of its own that takes the
+   * collection's row and nothing else, as followFurther does: written inside
+   * the snapshot, it would fail on any write to the row since (each funded
+   * wallet bumps it). An estimate counted for a limit raised meanwhile reads
+   * as nothing in moneyRead. 'gone' when the collection is.
+   *
+   * It stops by `timeoutMs` in all (COUNT_TIMEOUT_MS unless the pass has less
+   * left), failing with nothing stored. Every attempt is noted in
+   * count_tried_at first, so one that keeps running out of time waits its
+   * turn behind the rest (nextCount) and never holds the count for itself.
+   */
+  async countNext(collectionId: number, globalHops: number, timeoutMs = this.countTimeoutMs): Promise<'counted' | 'gone'> {
+    // Tried, whether or not it is counted: nextCount gives the next pass's count to another.
+    await this.pool.query('UPDATE washtrace.collections SET count_tried_at = now() WHERE id = $1', [collectionId]);
+    const c = await this.pool.connect();
+    let counted: Omit<FollowEstimate, 'at'>;
+    try {
+      // One snapshot for the walk's statements, so a level never sees flows the one before did not.
+      await c.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      const until = Date.now() + timeoutMs;
+      await timeLeft(c, until);
+      const own = (await c.query<{ chain_id: number; follow_hops: number | null }>(
+        'SELECT chain_id, follow_hops FROM washtrace.collections WHERE id = $1', [collectionId],
+      )).rows[0];
+      if (own === undefined) {
+        await c.query('COMMIT');
+        return 'gone';
       }
-      return 0;
+      const limit = Math.max(globalHops, own.follow_hops ?? 0);
+      const next = limit + 1;
+      const walk = await walkOut(c, collectionId, own.chain_id, next, followOf(own.chain_id, next), this.walkCap, until);
+      await timeLeft(c, until);
+      const unread = (await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM walked k
+       WHERE k.depth = $2
+         AND NOT EXISTS (SELECT 1 FROM washtrace.reach r WHERE r.collection_id = $1 AND r.address = k.address)
+         AND NOT EXISTS (SELECT 1 FROM washtrace.wallets w WHERE w.chain_id = $3 AND w.address = k.address AND w.status = 'done')`,
+        [collectionId, next, own.chain_id],
+      )).rows[0]!.n;
+      await timeLeft(c, until);
+      const byDepth = (await c.query<{ depth: number; n: number }>(
+        'SELECT depth, count(*)::int AS n FROM washtrace.wallets WHERE chain_id = $1 GROUP BY depth ORDER BY depth', [own.chain_id],
+      )).rows;
+      await c.query('COMMIT');
+      const deepest = byDepth.at(-1);
+      const before = byDepth.find((r) => r.depth === (deepest?.depth ?? 0) - 1);
+      const growth = deepest !== undefined && before !== undefined ? deepest.n / before.n
+        : walk.counts[limit]! > 0 ? walk.counts[next]! / walk.counts[limit]! : null;
+      const within = walk.counts.slice(0, limit + 1).reduce((sum, n) => sum + n, 0);
+      counted = { depth: next, wallets: Math.round(unread * walk.scale), growth, cut: walk.cut, within: Math.round(within) };
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      c.release();
     }
+    const { rowCount } = await this.pool.query(
+      // `at` in toISOString's form: jsonb's own rendering of now() has microseconds and +00:00, which a JS Date need not parse.
+      `UPDATE washtrace.collections
+       SET follow_estimate = $2::jsonb || jsonb_build_object('at', ${UTC_ISO_NOW})
+       WHERE id = $1`,
+      [collectionId, JSON.stringify(counted)],
+    );
+    return (rowCount ?? 0) > 0 ? 'counted' : 'gone';
+  }
 
-    /**
-     * A collection's traders_at just before a turn reads its traders
-     * (addTraders), for its seeded write to hold against: the
-     * walk is seeded only while traders_at is still this value. As text, so
-     * its microseconds survive (a JS Date keeps milliseconds). Compared by
-     * value, not by time: a write that adds transfers stamps a new traders_at
-     * (UNSEEDED), so one committed after this read always changes it, while
-     * a time comparison can lose to a stamp the write computed before it
-     * waited on a lock, and committed only after the traders were read. One
-     * committed before this read is seen by addTraders, which reads later.
-     */
-    private async tradersFrom(id: number): Promise<string | null> {
-      return (await this.pool.query<{ at: string | null }>(
-        'SELECT traders_at::text AS at FROM washtrace.collections WHERE id = $1', [id],
-      )).rows[0]?.at ?? null;
-    }
+  /**
+   * The watched collection whose follow_estimate the fund pass counts next,
+   * or null when every one is fresh: not paused, and its
+   * estimate missing, counted for a hop other than the one past its limit
+   * now, or a day old, or counted before it carried `within`. The one tried
+   * longest ago first (count_tried_at), one never tried before
+   * any, so one whose count runs out of time waits its turn; then a missing
+   * estimate before any. One whose last try failed (tried after its estimate
+   * was written, or with none) under an hour ago waits out the hour: as the
+   * only one due, it would otherwise be tried every pass, each costing the
+   * pass COUNT_MS of its checking.
+   */
+  async nextCount(globalHops: number): Promise<number | null> {
+    // A count that succeeds writes its `at` after count_tried_at, truncated to the millisecond, hence the 1 ms.
+    const { rows } = await this.pool.query<{ id: number }>(
+      `SELECT id FROM washtrace.collections
+       WHERE paused_at IS NULL AND (follow_estimate IS NULL OR NOT follow_estimate ? 'within'
+         OR (follow_estimate->>'depth')::int <> ${REACH_LIMIT('$1')} + 1
+         OR (follow_estimate->>'at')::timestamptz < now() - interval '24 hours')
+         AND (count_tried_at IS NULL OR count_tried_at < now() - interval '1 hour'
+              OR count_tried_at <= (follow_estimate->>'at')::timestamptz + interval '1 millisecond')
+       ORDER BY count_tried_at NULLS FIRST, (follow_estimate->>'depth')::int = greatest($1, coalesce(follow_hops, 0)) + 1 NULLS FIRST,
+                (follow_estimate->>'at')::timestamptz NULLS FIRST, id
+       LIMIT 1`,
+      [globalHops],
+    );
+    return rows[0]?.id ?? null;
+  }
 
-    /**
-     * A seedReach turn that did something: stamped, so the next call starts
-     * with another collection. With `bump`, its version moves too: its runs read every reach wallet past the global limit
-     * (followedFor), and one already checked, for another collection or before
-     * a follow.hops was lowered, is never checked again, so no fund call bumps
-     * the version for it. In its own statement after the chunk's commit, so
-     * the write takes the row alone, as fund's bump does, and the chunk's lock
-     * order is unchanged.
-     */
-    private async tookTurn(id: number, bump: boolean): Promise<void> {
+  /**
+   * Walk the stored flows out from the traders of a collection following its
+   * money past `globalHops`, or reading its other tokens (Start
+   * reading), into its reach, stepping from at most `limit` wallets a call
+   * (wallets stepped from, not rows written, which may be up to
+   * FOLLOW_FANOUT times as many): what a fund pass can spend, as a walk of a
+   * big collection is minutes cold.
+   *
+   * Its rows are how far the walk has got, so the next call goes on from
+   * them, and a wallet checked since, by any lane, is stepped from next: so
+   * its reach grows past the global limit as reach wallets are checked, and
+   * through the ones already checked on the chain, which no lane hands out
+   * again. Shallowest first, each wallet at its shallowest depth: one found
+   * nearer later is moved in and stepped from again. A step queues what a
+   * wallet sent as `fund` does (paidBy), into wallets as well, at the chain
+   * depth it has by this walk if `fund` gave none nearer, for a lane to
+   * check: the followed lane within `globalHops`, its reach lane past it.
+   * Out to its limit L (REACH_LIMIT) and no further. A collection that only
+   * reads tokens walks to the global limit: its whole set is within it, the
+   * followed lane's to check, so its walk adds no lane and no money of its own.
+   *
+   * Collections take turns, the one stepped from longest ago first
+   * (reach_stepped_at), so one big walk cannot take every call of a pass.
+   * Each turn first catches the walk up with its limit (raiseReach).
+   *
+   * Its traders are added first, and once a day after, for those who
+   * traded since; reach_seeded_at says when a call last found nothing more
+   * to step or add, written only while L, and the reach_hops walked to, are
+   * still the limit the call read, so a press meanwhile leaves it seeding;
+   * and only while no write has added transfers since its traders were read
+   * (traders_at as tradersFrom read it), so a trader
+   * addTraders could not see leaves it unseeded, whether that write moved
+   * the cursor or not.
+   * Unseeded (an ingest or a load), or a day on, its traders are added
+   * again. A paused collection waits. Gives how many wallets it stepped
+   * from, or traders it added, 0 when no collection on the chain has any left.
+   */
+  async seedReach(chainId: number, globalHops: number, limit: number): Promise<number> {
+    const { rows } = await this.pool.query<{ id: number; l: number; walked: number | null; seeded: boolean }>(
+      `SELECT id, ${REACH_LIMIT('$2')} AS l, reach_hops AS walked, coalesce(reach_seeded_at > now() - interval '24 hours', false) AS seeded
+       FROM washtrace.collections
+       WHERE chain_id = $1 AND paused_at IS NULL AND (follow_hops > $2 OR read_tokens_at IS NOT NULL)
+       ORDER BY reach_stepped_at NULLS FIRST, id`,
+      [chainId, globalHops],
+    );
+    for (const own of rows) {
+      // Read again under the lock: only a limit that moved costs a transaction of its own.
+      const raised = own.l === own.walked ? false : await this.reachStatement(own.id, (c) => raiseReach(c, own.id, globalHops));
+      if (raised === null) continue;
+      const step = await this.reachStatement(own.id, (c) => stepReach(c, own.id, chainId, limit, globalHops));
+      const stepped = step?.stepped ?? null;
+      if (stepped !== null && stepped > 0) {
+        await this.tookTurn(own.id, step!.doneFar > 0);
+        return stepped;
+      }
+      if (stepped === null || (own.seeded && !raised)) continue;
+      const from = await this.tradersFrom(own.id);
+      const added = await this.reachStatement(own.id, (c) => addTraders(c, own.id, chainId));
+      if (added === null) continue;
+      if (added > 0) {
+        await this.tookTurn(own.id, false);
+        return added;
+      }
       await this.pool.query(
-        'UPDATE washtrace.collections SET reach_stepped_at = now(), version = version + $2::int WHERE id = $1', [id, bump ? 1 : 0],
+        `UPDATE washtrace.collections SET reach_seeded_at = now()
+         WHERE id = $1 AND ${REACH_LIMIT('$2')} = $3 AND reach_hops = $3 AND traders_at::text IS NOT DISTINCT FROM $4::text`,
+        [own.id, globalHops, own.l, from],
       );
     }
+    return 0;
+  }
 
-    /**
-     * One of seedReach's writes, in a transaction of its own that takes the
-     * collection's row first, FOR KEY SHARE as the reach rows' own key check
-     * would, then wallets, then reach: the order every write to what a
-     * collection owns takes, so a delete lands before or after, and a fund
-     * bumping the row's version never waits on it. Null when the collection
-     * is gone or paused since.
-     */
-    private async reachStatement<T>(id: number, write: (c: pg.PoolClient) => Promise<T>): Promise<T | null> {
-      return this.tx(async (c) => {
-        const live = await c.query('SELECT 1 FROM washtrace.collections WHERE id = $1 AND paused_at IS NULL FOR KEY SHARE', [id]);
-        return live.rowCount === 0 ? null : await write(c);
-      });
-    }
+  /**
+   * A collection's traders_at just before a turn reads its traders
+   * (addTraders), for its seeded write to hold against: the
+   * walk is seeded only while traders_at is still this value. As text, so
+   * its microseconds survive (a JS Date keeps milliseconds). Compared by
+   * value, not by time: a write that adds transfers stamps a new traders_at
+   * (UNSEEDED), so one committed after this read always changes it, while
+   * a time comparison can lose to a stamp the write computed before it
+   * waited on a lock, and committed only after the traders were read. One
+   * committed before this read is seen by addTraders, which reads later.
+   */
+  private async tradersFrom(id: number): Promise<string | null> {
+    return (await this.pool.query<{ at: string | null }>(
+      'SELECT traders_at::text AS at FROM washtrace.collections WHERE id = $1', [id],
+    )).rows[0]?.at ?? null;
+  }
 
-    // ---- other tokens --------------------------------------------------------
+  /**
+   * A seedReach turn that did something: stamped, so the next call starts
+   * with another collection. With `bump`, its version moves too: its runs read every reach wallet past the global limit
+   * (followedFor), and one already checked, for another collection or before
+   * a follow.hops was lowered, is never checked again, so no fund call bumps
+   * the version for it. In its own statement after the chunk's commit, so
+   * the write takes the row alone, as fund's bump does, and the chunk's lock
+   * order is unchanged.
+   */
+  private async tookTurn(id: number, bump: boolean): Promise<void> {
+    await this.pool.query(
+      'UPDATE washtrace.collections SET reach_stepped_at = now(), version = version + $2::int WHERE id = $1', [id, bump ? 1 : 0],
+    );
+  }
 
-    /**
-     * Start reading them (Data this lens needs): read the listed tokens
-     * (TOKENS) of this collection's token set (tokenSetSql) from the next fund
-     * pass on, and walk its money to its limit for it (seedReach), however far
-     * the set's wallets' money is checked already. 'already' on a second press,
-     * 'gone' when the collection is. Its walk reads as not seeded until a turn
-     * finds nothing more to do, as one pressed for is new to it. The row is
-     * taken FOR UPDATE first, as followFurther takes it, so a
-     * press and a seedReach chunk wait for each other, never interleave.
-     */
-    async startTokens(collectionId: number): Promise<'set' | 'already' | 'gone'> {
-      return this.tx(async (c) => {
-        const own = (await c.query<{ started: boolean }>(
-          'SELECT read_tokens_at IS NOT NULL AS started FROM washtrace.collections WHERE id = $1 FOR UPDATE', [collectionId])).rows[0];
-        if (own === undefined || own.started) return own === undefined ? 'gone' : 'already';
-        await c.query('UPDATE washtrace.collections SET read_tokens_at = now(), reach_seeded_at = NULL WHERE id = $1', [collectionId]);
-        return 'set';
-      });
-    }
+  /**
+   * One of seedReach's writes, in a transaction of its own that takes the
+   * collection's row first, FOR KEY SHARE as the reach rows' own key check
+   * would, then wallets, then reach: the order every write to what a
+   * collection owns takes, so a delete lands before or after, and a fund
+   * bumping the row's version never waits on it. Null when the collection
+   * is gone or paused since.
+   */
+  private async reachStatement<T>(id: number, write: (c: pg.PoolClient) => Promise<T>): Promise<T | null> {
+    return this.tx(async (c) => {
+      const live = await c.query('SELECT 1 FROM washtrace.collections WHERE id = $1 AND paused_at IS NULL FOR KEY SHARE', [id]);
+      return live.rowCount === 0 ? null : await write(c);
+    });
+  }
 
-    /**
-     * How far a collection's other tokens are read, as the worker last counted
-     * it, for the page. Null when never counted: a first count that timed out
-     * stores only `tried` (countTokens), which reads as no count.
-     */
-    async tokenCounts(collectionId: number): Promise<TokenCounts | null> {
-      const { rows } = await this.pool.query<{ token_counts: Partial<TokenCounts> | null }>(
-        'SELECT token_counts FROM washtrace.collections WHERE id = $1', [collectionId]);
-      const t = rows[0]?.token_counts;
-      return t != null && typeof t.wallets === 'number' && typeof t.read === 'number' ? (t as TokenCounts) : null;
-    }
+  // ---- other tokens --------------------------------------------------------
 
-    /**
-     * The wallets to read other tokens for next, a lane per collection on the
-     * chain that pressed Start reading and is not paused, so one big set
-     * cannot crowd out the rest: its token set's wallets with no token read
-     * yet, shallowest first, a trader's payees (with `payees`, tokens.payees)
-     * after the walk's, then one whose read failed over an hour ago. Each lane
-     * at most `perLane` long. A wallet in two sets is in both lanes, and read
-     * once (`interleave`); a read is chain-wide, so neither serves it again.
-     *
-     * Each call scans every set, so it stops by `tokenLanesMs`, or by `until`
-     * (the token slice's deadline) when that is sooner, so a call made just
-     * before the deadline does not run into the counts' reserve: a set too big
-     * to scan in time (a cold cache) gives no lanes this pass, never a failed
-     * pass, and the money check goes on.
-     */
-    async tokenLanes(chainId: number, perLane: number, globalHops: number, payees: boolean, until: number): Promise<{ lanes: { collectionId: number; wallets: string[] }[] }> {
-      let rows: { id: number; address: string | null }[];
-      try {
-        rows = await this.tx(async (c) => {
+  /**
+   * Start reading them (Data this lens needs): read the listed tokens
+   * (TOKENS) of this collection's token set (tokenSetSql) from the next fund
+   * pass on, and walk its money to its limit for it (seedReach), however far
+   * the set's wallets' money is checked already. 'already' on a second press,
+   * 'gone' when the collection is. Its walk reads as not seeded until a turn
+   * finds nothing more to do, as one pressed for is new to it. The row is
+   * taken FOR UPDATE first, as followFurther takes it, so a
+   * press and a seedReach chunk wait for each other, never interleave.
+   */
+  async startTokens(collectionId: number): Promise<'set' | 'already' | 'gone'> {
+    return this.tx(async (c) => {
+      const own = (await c.query<{ started: boolean }>(
+        'SELECT read_tokens_at IS NOT NULL AS started FROM washtrace.collections WHERE id = $1 FOR UPDATE', [collectionId])).rows[0];
+      if (own === undefined || own.started) return own === undefined ? 'gone' : 'already';
+      await c.query('UPDATE washtrace.collections SET read_tokens_at = now(), reach_seeded_at = NULL WHERE id = $1', [collectionId]);
+      return 'set';
+    });
+  }
+
+  /**
+   * How far a collection's other tokens are read, as the worker last counted
+   * it, for the page. Null when never counted: a first count that timed out
+   * stores only `tried` (countTokens), which reads as no count.
+   */
+  async tokenCounts(collectionId: number): Promise<TokenCounts | null> {
+    const { rows } = await this.pool.query<{ token_counts: Partial<TokenCounts> | null }>(
+      'SELECT token_counts FROM washtrace.collections WHERE id = $1', [collectionId]);
+    const t = rows[0]?.token_counts;
+    return t != null && typeof t.wallets === 'number' && typeof t.read === 'number' ? (t as TokenCounts) : null;
+  }
+
+  /**
+   * The wallets to read other tokens for next, a lane per collection on the
+   * chain that pressed Start reading and is not paused, so one big set
+   * cannot crowd out the rest: its token set's wallets with no token read
+   * yet, shallowest first, a trader's payees (with `payees`, tokens.payees)
+   * after the walk's, then one whose read failed over an hour ago. Each lane
+   * at most `perLane` long. A wallet in two sets is in both lanes, and read
+   * once (`interleave`); a read is chain-wide, so neither serves it again.
+   *
+   * Each call scans every set, so it stops by `tokenLanesMs`, or by `until`
+   * (the token slice's deadline) when that is sooner, so a call made just
+   * before the deadline does not run into the counts' reserve: a set too big
+   * to scan in time (a cold cache) gives no lanes this pass, never a failed
+   * pass, and the money check goes on.
+   */
+  async tokenLanes(chainId: number, perLane: number, globalHops: number, payees: boolean, until: number): Promise<{ lanes: { collectionId: number; wallets: string[] }[] }> {
+    let rows: { id: number; address: string | null }[];
+    try {
+      rows = await this.tx(async (c) => {
         await timeLeft(c, Math.min(until, Date.now() + this.tokenLanesMs));
         return (await c.query<{ id: number; address: string | null }>(
           `SELECT c.id, l.address FROM washtrace.collections c
@@ -3206,6 +3210,18 @@ export class Store {
     );
   }
 
+  /**
+   * Give a run this worker stopped on back to the queue, its failures as they
+   * were. Only while it is `running`, and only this run: a finished one, an
+   * edit's fresh queueing and another replica's runs are not touched.
+   */
+  async requeueLensRun(lensId: number, collectionId: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.lens_runs SET status = 'queued', progress = NULL WHERE lens_id = $1 AND collection_id = $2 AND status = 'running'`,
+      [lensId, collectionId],
+    );
+  }
+
   /** Only while it runs: an edit that queued it again leaves nothing to report on. */
   async lensRunProgress(lensId: number, collectionId: number, share: number): Promise<void> {
     await this.pool.query(
@@ -3418,6 +3434,11 @@ export class Store {
     await this.previewEnded(id, 'done', result, null, 'running');
   }
 
+  /** A preview this worker stopped on goes back to the queue; only while it is `running`, as requeueLensRun. */
+  async requeuePreview(id: number): Promise<void> {
+    await this.pool.query(`UPDATE washtrace.lens_previews SET status = 'queued', progress = NULL WHERE id = $1 AND status = 'running'`, [id]);
+  }
+
   /** `error` is shown in the editor, so it comes already scrubbed. */
   async previewFailed(id: number, error: string): Promise<void> {
     await this.previewEnded(id, 'failed', null, error, 'running');
@@ -3480,5 +3501,4 @@ function asDataFault(err: unknown): unknown {
   if (typeof code !== 'string' || code === FOREIGN_KEY_VIOLATION || !(code.startsWith('22') || code.startsWith('23'))) return err;
   return new StoredDataError(`stored data holds a value the store refuses: ${(err as Error).message}`, 'unreadable');
 }
-
 

@@ -562,7 +562,8 @@ class LensSearch {
 
   /**
    * The loop on the path (closed at the funder whose edge is `fundingEdge`, or at
-   * the seller for SELLER), kept if it has the loops. The funding edge counts
+   * the seller for SELLER), kept if it closes at least `rule.minCycles` loops.
+   * The funding edge counts
    * against no row's `max` and is exempt from loop order: it is not a step
    * of the way back but what made F the seller's funder, and it is
    * always before the trade, where loop order (which starts at the trade)

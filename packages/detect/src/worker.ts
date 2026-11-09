@@ -1,7 +1,7 @@
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { Chain } from './chain.js';
 import { Checks } from './checks.js';
-import { Etherscan, WALLET_MS } from './etherscan.js';
+import { Etherscan, WALLET_MS, isServiceFailure } from './etherscan.js';
 import { LENS_TIMEOUT_MS, runLensInThread, runPreviewInThread, type LensRequest, type Lensed, type PreviewRequest } from './lens-thread.js';
 import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
@@ -28,6 +28,9 @@ export const EVERY: Readonly<Record<Job, number>> = { ingest: 60_000, fund: 5_00
  * a lens that has waited ten.
  */
 export const LENS_WAIT_MS = 10 * 60_000;
+
+/** How long drain gives the write that queues a stopped lens run again; main's exit budget is the drain, this, and one second for the pool. */
+const REQUEUE_MS = 500;
 
 /** How often a running pass says it is alive, so a step that takes minutes is not mistaken for a stall. */
 const HEARTBEAT_MS = 30_000;
@@ -186,6 +189,10 @@ export class Worker {
   readonly checks: Checks;
   private readonly timers: ReturnType<typeof setInterval>[] = [];
   private readonly running = new Set<Job>();
+  /** Set by stop(): only a worker that was told to stop hands its lens run back; a drain alone does not. */
+  private stopped = false;
+  /** The lens run or preview this worker has marked `running`, for drain to queue again if a stop outlasts it. One at a time: the analysis lock. */
+  private inFlight: { run: { lensId: number; collectionId: number } } | { preview: number } | null = null;
   private readonly chains = new Map<string, Chain>();
   private etherscan: Etherscan | null = null;
   private etherscanSettings = '';
@@ -193,8 +200,12 @@ export class Worker {
   private readonly logged = new Map<number, string>();
   /** What each running job is doing now, so the keep-alive can say it again while a long step goes on. */
   private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
+  /** The last failure logged per job, so a pass that fails the same way every few seconds is one line until it next succeeds. */
+  private readonly passFailed = new Map<Job, string>();
   /** The last heartbeat error logged, so an outage is one line and not one every 30 seconds. */
   private beatFailed = '';
+  /** Why this fund pass stopped on Etherscan's key or service, or '' while it has not. */
+  private outage = '';
   /** The console's settings as last read, kept when a read fails so a store hiccup changes no setting. */
   settings: ReadonlyMap<string, string> = new Map();
   /**
@@ -273,6 +284,7 @@ export class Worker {
    * so nothing of the worker's keeps the process alive.
    */
   stop(): void {
+    this.stopped = true;
     // clearInterval clears the lens job's starting timeout too: Node's timers are one kind.
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
@@ -291,11 +303,27 @@ export class Worker {
    * its transaction back and redo the span, which is safe but wasted, so it
    * is given the time to commit; a stopped download or import, the time to
    * clear its progress and let its lock go.
+   *
+   * After a stop, a lens run or preview still going when the time is up is
+   * queued again, its failures as they were: a deploy is not a failure, and
+   * three of them in a row would park the run. The write is given
+   * REQUEUE_MS and its failure is only logged, so it never holds the exit
+   * past the drain and half a second. A real crash never gets here, so the next
+   * worker still counts the `running` row it leaves as a failure.
    */
   async drain(ms = 30_000): Promise<void> {
     const until = Date.now() + ms;
     const busy = () => this.running.size > 0 || this.checks.checking !== null || this.sync.inFlight;
     while (busy() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    const left = this.inFlight;
+    if (!this.stopped || left === null) return;
+    const write = 'run' in left ? this.store.requeueLensRun(left.run.lensId, left.run.collectionId) : this.store.requeuePreview(left.preview);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      write.catch((err) => console.error('[washtrace] stop: lens work not queued again: %s', this.scrubbed(err))),
+      new Promise((r) => { timer = setTimeout(r, REQUEUE_MS); }),
+    ]);
+    clearTimeout(timer);
   }
 
   /** One pass of `job`, unless one is in flight here or in another replica. Never rejects: a timer has no caller. */
@@ -318,6 +346,7 @@ export class Worker {
         try {
           const detail = await this[job]();
           await this.store.passFinished(job, Date.now() - started, 'ok', detail);
+          this.passFailed.delete(job);
         } catch (err) {
           await this.store.passFinished(job, Date.now() - started, 'failed', this.scrubbed(err));
           throw err;
@@ -325,7 +354,9 @@ export class Worker {
       });
       return outcome === 'skipped' ? 'skipped' : 'ran';
     } catch (err) {
-      console.error('[washtrace] %s pass failed: %s', job, this.scrubbed(err));
+      const message = this.scrubbed(err);
+      if (this.passFailed.get(job) !== message) console.error('[washtrace] %s pass failed: %s', job, message);
+      this.passFailed.set(job, message);
       return 'ran';
     } finally {
       clearInterval(alive);
@@ -484,13 +515,16 @@ export class Worker {
    * and the chains' token counts follow, each chain with a started
    * collection, the ones checking never reached too, each in an equal share
    * of the time left. The estimate is counted last, in what is
-   * left of the pass.
+   * left of the pass. On an Etherscan key or quota refusal the pass ends at once,
+   * so its remaining store-only steps (seedReach for later chains, countTokens,
+   * countNext) wait for the next pass that gets through, as with no key.
    */
   async fund(): Promise<string> {
     const { followHops: globalHops } = this.resolved();
     const etherscan = this.etherscanClient();
     if (etherscan === null) return 'no funding source configured';
     const started = Date.now();
+    this.outage = '';
     const deadline = started + BUDGET_MS;
     const collections = await this.store.collections();
     const counting = await this.store.nextCount(globalHops);
@@ -507,7 +541,10 @@ export class Worker {
         await this.beat('fund', "Finding watched collections' wallets from the money already read", null);
       }
       const priority = priorityOn(chainId);
-      if (tokenChains.has(chainId)) await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil));
+      if (tokenChains.has(chainId)) {
+        await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil));
+        if (this.outage !== '') throw this.outageError();
+      }
       const { lanes } = await this.store.moneyLanes(chainId, 20, globalHops);
       const whose = (wallet: string) => {
         const lane = lanes.find((l) => l.wallets.includes(wallet))!;
@@ -523,13 +560,17 @@ export class Worker {
           await this.store.saveMoney(chainId, wallet, flows, truncated, follow);
           done += 1;
         } catch (err) {
+          if (this.noteOutage(err)) throw this.outageError();
           await this.store.moneyFailed(chainId, wallet, this.scrubbed(err));
           failed += 1;
         }
       }
     }
     // After every chain has been checked: the time checking left reads more tokens, then every chain's counts, shared within countUntil.
-    for (const chainId of tokenChains) await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil);
+    for (const chainId of tokenChains) {
+      await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil);
+      if (this.outage !== '') throw this.outageError();
+    }
     // Each chain an equal share of what is left, worked out again after each, so a chain whose count always runs out cannot
     // starve the chains after it, and one that finishes early leaves its time to them.
     const toCount = [...tokenChains];
@@ -544,6 +585,22 @@ export class Worker {
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
     return `${done} wallets read, ${failed} failed`;
+  }
+
+  /**
+   * If `err` is about Etherscan's key or quota, remember it (scrubbed) as why
+   * the pass stops, and say so. The wallet in hand is not marked: it did
+   * nothing wrong, and a mark would hold it back an hour after the key is fixed.
+   */
+  private noteOutage(err: unknown): boolean {
+    if (!isServiceFailure(err)) return false;
+    this.outage = this.scrubbed(err);
+    return true;
+  }
+
+  /** Ends the pass as failed, so the console shows it as a problem; `run` logs it. */
+  private outageError(): Error {
+    return new Error(`Etherscan key or quota: ${this.outage}`);
   }
 
   /**
@@ -572,6 +629,7 @@ export class Worker {
             const { flows, truncated } = await etherscan.tokenFlows(chainId, wallet, WALLET_MS);
             await this.store.saveTokens(chainId, wallet, flows, truncated);
           } catch (err) {
+            if (this.noteOutage(err)) return tried;
             await this.store.tokensFailed(chainId, wallet, this.scrubbed(err));
           }
         }
@@ -718,6 +776,7 @@ export class Worker {
     const where = `${lens.name} on ${name}`;
     const started = Date.now();
     await this.store.lensRunStarted(lens.id, collectionId);
+    this.inFlight = { run: { lensId: lens.id, collectionId } };
     await this.beat('lens', `Running ${where}`, collectionId);
     const { progress, written } = this.progressWriter(`Running ${where}`, collectionId, (share) => this.store.lensRunProgress(lens.id, collectionId, share));
     try {
@@ -732,12 +791,15 @@ export class Worker {
       await this.store.lensRunFailed(lens.id, collectionId, this.scrubbed(err))
         .catch((e) => console.error('[washtrace] lens %d: failed run not noted: %s', lens.id, this.scrubbed(e)));
       throw err;
+    } finally {
+      this.inFlight = null;
     }
   }
 
   /** Run the preview `nextPreview` took, in the lens thread, and save what it found; a failure is noted scrubbed, as a run's is. */
   private async preview(p: NonNullable<Awaited<ReturnType<Store['nextPreview']>>>): Promise<string> {
     const where = `a lens on ${p.name}`;
+    this.inFlight = { preview: p.id };
     const { progress, written } = this.progressWriter(`Previewing ${where}`, p.collectionId, (share) => this.store.previewProgress(p.id, share));
     try {
       // Inside the try: a throw here fails this preview with its own error, not as a swept "worker stopped".
@@ -751,6 +813,8 @@ export class Worker {
       await this.store.previewFailed(p.id, this.scrubbed(err))
         .catch((e) => console.error('[washtrace] preview %d: failure not noted: %s', p.id, this.scrubbed(e)));
       throw err;
+    } finally {
+      this.inFlight = null;
     }
   }
 

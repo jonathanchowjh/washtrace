@@ -1,6 +1,6 @@
 import {
   AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
-  createPublicClient, http, parseAbi, type Log, type PublicClient,
+  createPublicClient, http, HttpRequestError, parseAbi, RpcError, RpcRequestError, WebSocketRequestError, type Log, type PublicClient,
 } from 'viem';
 import { ZERO } from './graph.js';
 import { TRANSFER, tagSales } from './marketplaces.js';
@@ -16,7 +16,7 @@ const NO_ANSWER = [ContractFunctionRevertedError, ContractFunctionZeroDataError,
 /**
  * The block span a log query starts at. Providers cap a query by blocks or by
  * results (Alchemy: 10,000 logs), and the cap is not advertised, so the span
- * halves on any refusal and grows back on success.
+ * halves on any failure that is not clearly transient and grows back on success.
  */
 const START_SPAN = 2_000;
 const MAX_SPAN = 50_000;
@@ -139,7 +139,7 @@ export class Chain {
           params: [{ address: collection as `0x${string}`, topics: [TRANSFER], fromBlock: hex(from), toBlock: hex(through) }],
         }) as unknown as RawLog[];
       } catch (err) {
-        if (this.span === 1) throw err;
+        if (this.span === 1 || isTransient(err)) throw err;
         this.span = Math.max(1, Math.floor(this.span / 2));
         continue;
       }
@@ -160,6 +160,29 @@ export class Chain {
     }
     tagSales(transfers, logsByTx, collection);
   }
+}
+
+/**
+ * Whether a failed request says nothing about the block range: a rate limit
+ * (HTTP 429, or a JSON-RPC error coded 429 or -32007, the two codes viem's own
+ * buildRequest shouldRetry treats as rate limits) or a transport failure that
+ * never got an answer (no status and not an unparseable body, or a socket
+ * error). Halving on these walks the shared span to 1. Deliberately the narrow
+ * side: providers word range refusals in many ways (-32005 also means "more
+ * than 10000 results", a bare 400), and a range that is too heavy often shows
+ * up as a timeout or a 5xx, where halving is the cure, so those keep halving.
+ * Mistaking a refusal for a transient would leave a collection stuck at full
+ * span; the reverse only costs a few extra requests.
+ */
+function isTransient(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  return err.walk((e) => {
+    if (e instanceof WebSocketRequestError) return true;
+    if (e instanceof RpcRequestError || e instanceof RpcError) return e.code === 429 || e.code === -32007;
+    if (!(e instanceof HttpRequestError)) return false;
+    // No status and a SyntaxError cause is a 200 whose body was not JSON: a refusal in disguise, not a lost connection.
+    return e.status === 429 || (e.status === undefined && !(e.cause instanceof SyntaxError));
+  }) !== null;
 }
 
 interface RawLog {

@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { MOST_HOPS, WALKED, depthNeeded, type LensRule } from '@washtrace/detect/lens-rule';
+import { MAX_FOLLOW_HOPS, WALKED, depthNeeded, type LensRule } from '@washtrace/detect/lens-rule';
 import { moneyReason, pendingUpTo, readThrough, tokensReason } from '@washtrace/detect/lens-reads';
 import type { MoneyRead, TokenCounts } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
@@ -90,7 +90,7 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
     if (money.traders.checked < money.traders.of) {
       return { text: `The traders' check is still running: ${num(money.traders.checked)} of ${num(money.traders.of)} traders checked. Wallets further out are followed after it.` };
     }
-    if (needed > MOST_HOPS) return { text: `Needs more than washtrace follows (${MOST_HOPS} hops)` };
+    if (needed > MAX_FOLLOW_HOPS) return { text: `Needs more than washtrace follows (${MAX_FOLLOW_HOPS} hops)` };
     // One decision with the share's "at least" (moneyReason): money still being read for this lens is never "Enough".
     const why = moneyReason(rule, money, followHops, behind);
     // seedReach skips a paused collection, so the walk is not running: it goes on once resumed.
@@ -115,7 +115,7 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
         <span className="block text-xs text-muted-foreground">{short}</span>
         <span className="block text-xs text-muted-foreground">Fetch them queues the reads in the worker; the run uses what is read and marks its share &quot;at least&quot;.</span>
       </>,
-      button: needed <= MOST_HOPS,
+      button: needed <= MAX_FOLLOW_HOPS,
     };
   }
 

@@ -192,6 +192,23 @@ export class Etherscan {
   }
 }
 
+/**
+ * Whether `err` is about the key or the quota rather than one wallet: an
+ * invalid or missing key, an exhausted daily or per-second limit (once `call`
+ * has retried it), or HTTP 429. Such a failure meets every wallet the same,
+ * so the caller stops instead of marking each one failed. HTTP 5xx is not
+ * here: it is ambiguous between an outage and one heavy wallet whose query
+ * the gateway cannot answer, and stopping on that wallet would starve every
+ * other read; an hour of degraded reads after a real outage is the lesser harm.
+ * Matches the messages `call` builds.
+ */
+export function isServiceFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : '';
+  return message === 'Etherscan answered HTTP 429'
+    || /^Etherscan refused [^:]*: (Missing\/)?Invalid API Key\b/i.test(message)
+    || /^Etherscan refused [^:]*: Max (daily |calls per sec )?rate limit reached\b/i.test(message);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

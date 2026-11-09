@@ -1905,6 +1905,129 @@ describe('Worker.fund', () => {
   });
 });
 
+describe('Worker.fund when Etherscan fails the key or the service', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  /** A fund pass over wallets a, b, c and a token read of t, with the real Etherscan client answering through `reply`. */
+  const setup = (reply: (url: URL) => Response, readTokens = false) => {
+    const marked: string[] = [];
+    const saved: string[] = [];
+    const store: any = {
+      collections: async () => [row({ id: 1, readTokens })],
+      nextCount: async () => null, seedReach: async () => 0,
+      tokenLanes: async () => ({ lanes: [{ collectionId: 1, wallets: saved.includes('t') ? [] : ['t'] }] }),
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a', 'b', 'c'] }] }),
+      heartbeat: async () => {},
+      saveMoney: async (_c: number, wallet: string) => { saved.push(wallet); },
+      saveTokens: async (_c: number, wallet: string) => { saved.push(wallet); },
+      moneyFailed: async (_c: number, wallet: string) => { marked.push(`money ${wallet}`); },
+      tokensFailed: async (_c: number, wallet: string) => { marked.push(`tokens ${wallet}`); },
+      countTokens: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k-SECRET', etherscanPerSecond: 1_000, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
+    const asked: string[] = [];
+    const etherscan = new Etherscan('k-SECRET', 1_000);
+    etherscan.fetch = async (url: URL) => { asked.push(url.searchParams.get('address') ?? ''); return reply(url); };
+    (w as any).etherscanClient = () => etherscan;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    return { w, marked, saved, asked };
+  };
+  /** The pass, with Etherscan's rate-limit waits skipped; resolves to its result or its error's message. */
+  const pass = async (w: Worker) => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const done = w.fund().catch((err: Error) => `threw ${err.message}`);
+    await vi.advanceTimersByTimeAsync(20_000);
+    return done;
+  };
+
+  it('ends the pass on an invalid key without marking the wallet, and says why', async () => {
+    const { w, marked, asked } = setup(() => answer({ status: '0', message: 'NOTOK', result: 'Invalid API Key k-SECRET' }));
+    const result = await pass(w);
+    expect(marked).toEqual([]);
+    expect(asked).toHaveLength(1);
+    expect(result).toContain('threw Etherscan key or quota: Etherscan refused txlist: Invalid API Key');
+    expect(result).not.toContain('k-SECRET');
+  });
+
+  it('ends the pass on an exhausted daily limit without marking the wallet', async () => {
+    const { w, marked } = setup(() => answer({ status: '0', message: 'NOTOK', result: 'Max daily rate limit reached. Limit is 100000 calls per day' }));
+    expect(await pass(w)).toContain('Max daily rate limit reached');
+    expect(marked).toEqual([]);
+  });
+
+  it('ends the pass on HTTP 429 without marking the wallet', async () => {
+    const { w, marked, asked } = setup(() => answer({}, 429));
+    expect(await pass(w)).toContain('HTTP 429');
+    expect(marked).toEqual([]);
+    expect(asked).toHaveLength(1);
+  });
+
+  it('ends the pass on a key failure met in a token read, without marking that wallet', async () => {
+    const { w, marked, asked } = setup(() => answer({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }), true);
+    expect(await pass(w)).toContain('Invalid API Key');
+    expect(marked).toEqual([]);
+    expect(asked).toHaveLength(1);
+  });
+
+  it('marks a wallet the gateway answers 503 for, as before', async () => {
+    const { w, marked } = setup(() => answer({}, 503));
+    expect(await pass(w)).toBe('0 wallets read, 3 failed');
+    expect(marked).toEqual(['money a', 'money b', 'money c']);
+  });
+
+  it('keeps reading the other wallets when one always draws a 504, pass after pass', async () => {
+    const { w, marked, saved } = setup((url) => url.searchParams.get('address') === 'a'
+      ? answer({}, 504)
+      : answer({ status: '0', message: 'No transactions found', result: [] }));
+    expect(await pass(w)).toBe('2 wallets read, 1 failed');
+    expect(await pass(w)).toBe('2 wallets read, 1 failed');
+    expect(marked).toEqual(['money a', 'money a']);
+    expect(saved).toEqual(['b', 'c', 'b', 'c']);
+  });
+
+  it('logs a pass that fails the same way once until it next succeeds, and records every failure', async () => {
+    let key = false;
+    const outcomes: string[] = [];
+    const store: any = {
+      locked: async (_k: number, _w: boolean, fn: () => Promise<void>) => { await fn(); return 'ran'; },
+      settings: async () => new Map(), reportSources: async () => {},
+      passStarted: async () => {}, passFinished: async (_j: string, _ms: number, outcome: string) => { outcomes.push(outcome); },
+      heartbeat: async () => {},
+      collections: async () => [row({ id: 1 })],
+      nextCount: async () => null, seedReach: async () => 0,
+      moneyLanes: async () => ({ lanes: [{ collectionId: 1, wallets: ['a'] }] }),
+      saveMoney: async () => {},
+    };
+    const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: 'k', etherscanPerSecond: 1_000, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
+    const etherscan = new Etherscan('k', 1_000);
+    etherscan.fetch = async () => key
+      ? new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }))
+      : new Response(JSON.stringify({ status: '0', message: 'No transactions found', result: [] }));
+    (w as any).etherscanClient = () => etherscan;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    key = true;
+    for (let i = 0; i < 3; i++) await w.run('fund');
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(outcomes).toEqual(['failed', 'failed', 'failed']);
+    key = false;
+    await w.run('fund');
+    key = true;
+    await w.run('fund');
+    expect(errors).toHaveBeenCalledTimes(2);
+    expect(outcomes).toEqual(['failed', 'failed', 'failed', 'ok', 'failed']);
+  });
+
+  it('still marks a wallet whose own read is refused, and goes on to the next', async () => {
+    const { w, marked, saved } = setup((url) => url.searchParams.get('address') === 'a'
+      ? answer({ status: '0', message: 'NOTOK', result: 'Error! Invalid address format' })
+      : answer({ status: '0', message: 'No transactions found', result: [] }));
+    expect(await pass(w)).toBe('2 wallets read, 1 failed');
+    expect(marked).toEqual(['money a']);
+    expect(saved).toEqual(['b', 'c']);
+  });
+});
+
 describe('Worker.fund following a collection further, and counting its next hop', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -2908,12 +3031,12 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     // A client that puts the request URL in its error, and an API that echoes the key it was sent.
     etherscan.fetch = async (url: URL) => {
       if (++calls === 1) throw new TypeError(`fetch failed: ${url.toString()}`);
-      return new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Invalid API Key ${ES_KEY}` }));
+      return new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Error! Invalid address format ${ES_KEY}` }));
     };
     (w as any).etherscanClient = () => etherscan;
     expect(await w.fund()).toBe('0 wallets read, 2 failed');
     expect(failed).toHaveLength(2);
-    expect(failed[1]).toContain('Invalid API Key');
+    expect(failed[1]).toContain('Invalid address format');
     for (const leak of ES_LEAKS) expect(failed.join('\n')).not.toContain(leak);
   });
 
@@ -2931,10 +3054,10 @@ describe('Worker keeps secrets out of what it records and logs', () => {
     let calls = 0;
     etherscan.fetch = async () => ++calls === 1
       ? new Response('', { status: 403 })
-      : new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Invalid API Key ${ES_KEY}` }));
+      : new Response(JSON.stringify({ status: '0', message: 'NOTOK', result: `Error! Invalid address format ${ES_KEY}` }));
     (w as any).etherscanClient = () => etherscan;
     await w.fund();
-    expect(failed).toEqual(['Etherscan answered HTTP 403', 'Etherscan refused txlist: Invalid API Key [hidden]']);
+    expect(failed).toEqual(['Etherscan answered HTTP 403', 'Etherscan refused txlist: Error! Invalid address format [hidden]']);
   });
 
   it('records and logs a failed pass without any configured secret', async () => {
@@ -3096,6 +3219,50 @@ describe('Worker.lens', () => {
     expect(names(calls)).not.toContain('saved');
   });
 
+  it('a stop with its run still going queues that run again, not failed; one that finished before the drain ended is left alone', async () => {
+    const requeue = vi.fn(async () => {});
+    const { w, calls } = setup({ requeueLensRun: requeue });
+    w.lensOff = () => new Promise(() => {});
+    void w.lens();
+    await vi.waitFor(() => expect(names(calls)).toContain('beat'));
+    w.stop();
+    await w.drain(20);
+    expect(requeue).toHaveBeenCalledWith(7, 4);
+    expect(names(calls)).not.toContain('failed');
+    // A run that saved before the drain ended is no longer in flight: nothing is requeued for it.
+    const done = vi.fn(async () => {});
+    const finished = setup({ requeueLensRun: done });
+    expect(await finished.w.lens()).toBe('Ran Blur 3-hop on Terraforms');
+    finished.w.stop();
+    await finished.w.drain(20);
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it('a drain without a stop requeues nothing, and a requeue that hangs or fails does not hold the drain', async () => {
+    const requeue = vi.fn(async () => {});
+    const idle = setup({ requeueLensRun: requeue });
+    idle.w.lensOff = () => new Promise(() => {});
+    void idle.w.lens();
+    await vi.waitFor(() => expect(names(idle.calls)).toContain('beat'));
+    await idle.w.drain(20);
+    expect(requeue).not.toHaveBeenCalled();
+    const hung = setup({ requeueLensRun: () => new Promise(() => {}) });
+    hung.w.lensOff = () => new Promise(() => {});
+    void hung.w.lens();
+    await vi.waitFor(() => expect(names(hung.calls)).toContain('beat'));
+    hung.w.stop();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const t = Date.now();
+    await hung.w.drain(20);
+    expect(Date.now() - t).toBeLessThan(2_000);
+    const broken = setup({ requeueLensRun: async () => { throw new Error('db gone'); } });
+    broken.w.lensOff = () => new Promise(() => {});
+    void broken.w.lens();
+    await vi.waitFor(() => expect(names(broken.calls)).toContain('beat'));
+    broken.w.stop();
+    await expect(broken.w.drain(20)).resolves.toBeUndefined();
+  });
+
   it('says a lens edited mid-run was queued again, and one whose lens or collection went mid-run saved nothing', async () => {
     const stale = setup({ saveLensRun: async () => 'stale' });
     expect(await stale.w.lens()).toBe('Blur 3-hop changed while it ran: queued again');
@@ -3201,6 +3368,18 @@ describe('Worker.lens', () => {
       expect(String(failed[2])).toContain('connect failed');
       expect(String(failed[2])).not.toContain('hunter2');
       expect(names(calls)).not.toContain('savePreview');
+    });
+
+    it('a stop with its preview still going queues that preview again, not failed', async () => {
+      const requeue = vi.fn(async () => {});
+      const { w, calls } = withPreview({ requeuePreview: requeue });
+      w.previewOff = () => new Promise(() => {});
+      void w.lens();
+      await vi.waitFor(() => expect(names(calls)).toContain('beat'));
+      w.stop();
+      await w.drain(20);
+      expect(requeue).toHaveBeenCalledWith(31);
+      expect(names(calls)).not.toContain('previewFailed');
     });
 
     it('a throw from beat marks the preview failed with its own error, not "the worker stopped"', async () => {
