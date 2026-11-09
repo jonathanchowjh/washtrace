@@ -11,8 +11,13 @@ describe('Trades in the URL', () => {
   it('round-trips every filter and the view through the URL', () => {
     const q = { ...NO_FILTER, caught: ['A'], notCaught: ['AU'], venues: ['blur'], priceMinWei: '300000000000000000', heldUnderS: 3600, fromMs: Date.UTC(2023, 0, 1), group: { method: 'A', token: '1234' }, sort: 'price', dir: 'asc' } as TradeQuery;
     const href = tradesHref('/c/1/0xabc', q, { by: 'marketplace', page: 3 });
-    expect(href).toBe('/c/1/0xabc/flagged?kind=trades&caught=A&not=AU&market=blur&pmin=0.3&heldunder=1h&from=2023-01-01&group=A.t.1234&sort=price&dir=asc&by=marketplace&page=3');
+    expect(href).toBe('/c/1/0xabc/trades?caught=A&not=AU&market=blur&pmin=0.3&heldunder=1h&from=2023-01-01&group=A.t.1234&sort=price&dir=asc&by=marketplace&page=3');
     expect(roundTrip(href)).toEqual({ q, view: { by: 'marketplace', page: 3 } });
+  });
+
+  it('has its own path, with a query only when something is not the default', () => {
+    expect(tradesHref('/c/1/0xabc', {})).toBe('/c/1/0xabc/trades');
+    expect(tradesHref('/c/1/0xabc', { caught: ['A'] })).toBe('/c/1/0xabc/trades?caught=A');
   });
 
   it('round-trips every remaining filter', () => {
@@ -42,7 +47,7 @@ describe('Trades in the URL', () => {
   it('names lenses in chips, never codes, and a chip keeps the grouping but not the page', () => {
     const c = chips('/c/1/0xabc', { ...NO_FILTER, caught: ['AC'], notCaught: ['AU'] }, { by: 'month', page: 4 }, 'UTC');
     expect(c.map((x) => x.label)).toEqual(['Flagged by Linked wallets', 'Not flagged by Money loops back']);
-    expect(c[0]!.href).toBe('/c/1/0xabc/flagged?kind=trades&not=AU&by=month');
+    expect(c[0]!.href).toBe('/c/1/0xabc/trades?not=AU&by=month');
   });
 
   it('custom lens names replace the built-in ones', () => {
@@ -139,7 +144,7 @@ describe('Trades in the URL', () => {
 
 describe('your lenses in the URL', () => {
   it('round-trips L keys in caught, not, group and sort, built-ins first and yours by id', () => {
-    const href = '/c/1/0xabc/flagged?kind=trades&caught=A,L7&not=L9&group=L7.t.5&sort=lens-L7';
+    const href = '/c/1/0xabc/trades?caught=A,L7&not=L9&group=L7.t.5&sort=lens-L7';
     const { q, view } = roundTrip(href);
     expect(q).toMatchObject({ caught: ['A', 'L7'], notCaught: ['L9'], group: { method: 'L7', token: '5' }, sort: 'lens-L7' });
     expect(tradesHref('/c/1/0xabc', q, view)).toBe(href);

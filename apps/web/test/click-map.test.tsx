@@ -113,7 +113,10 @@ const PAGES: Record<string, Draw> = {
     const { default: P } = await import('@/app/w/[chain]/[address]/page');
     return render(await P({ params: Promise.resolve({ chain: '1', address: SELF }), searchParams: Promise.resolve({}) })).container;
   },
-  'flagged Trades': () => flagged({ kind: 'trades', by: 'marketplace' }),
+  'flagged Trades': async () => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/trades/page');
+    return render(await P({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ by: 'marketplace' }) })).container;
+  },
   'flagged Tokens': () => flagged({ method: 'A', kind: 'tokens' }),
   'flagged Wallets': () => flagged({ method: 'A', kind: 'wallets' }),
 };
@@ -161,13 +164,13 @@ describe('a period opens its trades', () => {
   it('the history table’s first period links to that month’s trades, as instants', async () => {
     const c = await PAGES.collection!();
     const first = [...c.querySelectorAll('details table a')].find((a) => a.textContent === 'Jan 2023');
-    expect(first?.getAttribute('href')).toBe(`${BASE}/flagged?kind=trades&from=2023-01-01&to=2023-02-01`);
+    expect(first?.getAttribute('href')).toBe(`${BASE}/trades?from=2023-01-01&to=2023-02-01`);
     expect(first?.getAttribute('href')).toBe(tradesHref(BASE, { fromMs: JAN, toMs: Date.UTC(2023, 1, 1) }));
   });
 
   it('the last period ends where one more period would start', async () => {
     const c = await PAGES.collection!();
-    expect(hrefs(c)).toContain(`${BASE}/flagged?kind=trades&from=2023-02-01&to=2023-03-01`);
+    expect(hrefs(c)).toContain(`${BASE}/trades?from=2023-02-01&to=2023-03-01`);
   });
 
   it('a click near the right edge pushes the last period’s link, near the left the first', async () => {
@@ -176,9 +179,9 @@ describe('a period opens its trades', () => {
     const c = await PAGES.collection!();
     const overlay = c.querySelector('svg rect[fill=transparent]')!;
     fireEvent.click(overlay, { clientX: 199 });
-    expect(push).toHaveBeenLastCalledWith(`${BASE}/flagged?kind=trades&from=2023-02-01&to=2023-03-01`);
+    expect(push).toHaveBeenLastCalledWith(`${BASE}/trades?from=2023-02-01&to=2023-03-01`);
     fireEvent.click(overlay, { clientX: 1 });
-    expect(push).toHaveBeenLastCalledWith(`${BASE}/flagged?kind=trades&from=2023-01-01&to=2023-02-01`);
+    expect(push).toHaveBeenLastCalledWith(`${BASE}/trades?from=2023-01-01&to=2023-02-01`);
     box.mockRestore();
   });
 
@@ -194,7 +197,7 @@ describe('a period opens its trades', () => {
     const chart = c.querySelector('[role=group][tabindex="0"]')!;
     fireEvent.focus(chart);
     fireEvent.keyDown(chart, { key: 'Enter' });
-    expect(push).toHaveBeenCalledWith(`${BASE}/flagged?kind=trades&from=2023-02-01&to=2023-03-01`);
+    expect(push).toHaveBeenCalledWith(`${BASE}/trades?from=2023-02-01&to=2023-03-01`);
   });
 });
 

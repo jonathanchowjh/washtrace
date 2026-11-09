@@ -122,9 +122,9 @@ export const FIELDS: readonly Field[] = [
   },
   {
     key: 'follow.hops',
-    label: 'Follow hops',
+    label: 'Follow money (wallets out)',
     secret: false,
-    validate: (v) => (/^\d+$/.test(v) && Number(v) <= MAX_FOLLOW_HOPS ? null : `Follow hops must be a whole number from 0 to ${MAX_FOLLOW_HOPS}.`),
+    validate: (v) => (/^\d+$/.test(v) && Number(v) <= MAX_FOLLOW_HOPS ? null : `Follow money (wallets out) must be a whole number from 0 to ${MAX_FOLLOW_HOPS}.`),
     // hops() in env.ts: '5.0' and '1e1' pass; outside 0–MAX_FOLLOW_HOPS the worker uses 3.
     used: (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= MAX_FOLLOW_HOPS,
     fallback: '3',

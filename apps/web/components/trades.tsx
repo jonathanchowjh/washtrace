@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { METHODS, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/ui';
-import { DOT } from '@/components/methods';
+import { DOT, NotCounted } from '@/components/methods';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy } from '@/lib/metrics';
@@ -19,8 +20,7 @@ import { cn } from '@/lib/utils';
 /** `own` is your lenses by key, for their names and hues; the built-ins need no entry. */
 interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: Lenses }
 
-const NOT_COUNTED = ' (not counted)';
-const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : i.name + (i.tone === 'apart' ? NOT_COUNTED : ''); };
+const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <>{i.name}{i.tone === 'apart' ? <NotCounted /> : null}</>; };
 
 /** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
 const withOwn = (ran: readonly LensKey[]) => [...METHODS.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
@@ -106,7 +106,7 @@ export function FilterBar(w: Where) {
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
     <section aria-label="Filters" className="mt-4 space-y-3">
-      <form action={`${base}/flagged`} method="get" role="search" className="flex flex-wrap items-center gap-2">
+      <form action={`${base}/trades`} method="get" role="search" className="flex flex-wrap items-center gap-2">
         {carried(w, (k) => k !== 'q')}
         <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
         <button type="submit" className="btn-secondary text-sm">Find</button>
@@ -120,8 +120,8 @@ export function FilterBar(w: Where) {
         ))}
         <details className="rounded-md border bg-card">
           <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium">+ Filter</summary>
-          <form action={`${base}/flagged`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
-            {carried(w, (k) => ['kind', 'wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
+          <form action={`${base}/trades`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
+            {carried(w, (k) => ['wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}
             <div className="flex flex-wrap gap-x-8 gap-y-4">
               <Checks title="Flagged by" name="caught" options={lenses} on={q.caught} />
@@ -251,7 +251,7 @@ function span(s: number | null): string {
 }
 
 
-function Th({ sort, label, where, tone }: { sort: TradeSort; label: string; where: Where; tone?: LensKey }) {
+function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; where: Where; tone?: LensKey }) {
   const { base, q, view } = where;
   const here = q.sort === sort;
   const dir = here ? (q.dir === 'asc' ? 'desc' : 'asc') : FIRST_ASC.includes(sort) ? 'asc' : 'desc';

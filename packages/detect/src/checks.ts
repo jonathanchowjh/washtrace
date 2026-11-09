@@ -68,8 +68,8 @@ export class Checks {
    * connection is a log line and a retry, 5 seconds later and longer each
    * time it fails in a row, up to a minute. The checks also run every
    * SWEEP_MS, for a request not heard. On the same connection it hears the
-   * editor's Preview requests, and runs a lens pass for each; one not
-   * heard waits for the lens timer. Never rejects; `stop` ends it.
+   * editor's Preview requests, and runs an analyze pass for each (see
+   * Worker.soon); one not heard waits for the timer. Never rejects; `stop` ends it.
    */
   async listen(): Promise<void> {
     if (this.listening) return;
@@ -125,7 +125,7 @@ export class Checks {
     client.on('error', lose);
     client.on('end', () => lose(new Error('connection ended')));
     client.on('notification', (n) => {
-      if (n.channel === PREVIEWS_CHANNEL) this.worker.lensSoon();
+      if (n.channel === PREVIEWS_CHANNEL) this.worker.soon();
       else void this.checksSoon();
     });
     try {

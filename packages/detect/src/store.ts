@@ -77,6 +77,13 @@ const MONEY_EDGE_CEILING = 40_000_000;
  */
 export const ANALYZE_GAP_MS = 5 * 60_000;
 
+/**
+ * How many analyses a collection keeps: its history page and the API read this many,
+ * and a save drops the rest. Nothing reads further back; only the latest feeds a lens run.
+ */
+export const HISTORY_KEEP = 100;
+/** How long a finished check is kept: its page polls for minutes, and nothing reads it after. */
+const CHECK_KEEP_MS = 24 * 60 * 60_000;
 /** Postgres's code for a row whose parent is gone. */
 const FOREIGN_KEY_VIOLATION = '23503';
 /** Postgres's code for a statement its statement_timeout stopped. */
@@ -88,6 +95,19 @@ const TRAIL_LOCK_TIMEOUT = '5min';
 const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
 /** Rows a cursor fetches at a time when stored data is cut. */
 const CURSOR_PAGE = 10_000;
+/** Rows a download fetches at a time: its idle limit counts while a stranger's network drains one fetch, so a fetch is kept small. */
+const DOWNLOAD_PAGE = 1_000;
+/** Downloads (CSV trade streams) that may hold a pool connection at once; the pool has ten, and the API needs the rest. */
+export const MAX_STREAMS = 3;
+/** How long a download's session may wait, between fetches, before Postgres ends it: a client that stopped reading must not hold a transaction (and hold back vacuum). */
+const STREAM_IDLE_S = 60;
+/** The longest a download may stay open. */
+const STREAM_MAX_MS = 15 * 60_000;
+
+/** A download was refused because MAX_STREAMS others hold a connection. */
+export class TooManyStreams extends Error {
+  constructor() { super('Too many downloads at once.'); }
+}
 /** A load of stored data looks up from its work at most this often: Terraforms is a thousand batches. */
 const RESTORE_CHECK_MS = 1_000;
 /**
@@ -402,7 +422,7 @@ export interface LensFlag { txHash: string; logIndex: number; path: LoopEdge[]; 
 /** A stored flag of a lens of yours, with the lens and the collection it belongs to. */
 export type OwnFlag = LensFlag & { lensId: number; collectionId: number };
 
-/** The channel `requestPreview` notifies, so a listening worker starts the preview at once rather than next lens pass. */
+/** The channel `requestPreview` notifies, so a listening worker starts the preview at once rather than next pass. */
 export const PREVIEWS_CHANNEL = 'washtrace_previews';
 /** How many sales a preview judges: the spec's "2,000 random sales". */
 export const PREVIEW_SAMPLE = 2_000;
@@ -472,6 +492,15 @@ export class Store {
 
   /** MONEY_EDGE_CEILING; a field so a test can make it small. */
   moneyEdgeCeiling = MONEY_EDGE_CEILING;
+
+  /** Downloads holding a connection now; the web route answers 429 at MAX_STREAMS. */
+  streaming = 0;
+
+  /** STREAM_IDLE_S; a field so a test can make it small. */
+  streamIdleS = STREAM_IDLE_S;
+
+  /** STREAM_MAX_MS; a field so a test can make it small. */
+  streamMaxMs = STREAM_MAX_MS;
 
   /** WALK_CAP; a field so a test can make it small. */
   walkCap = WALK_CAP;
@@ -591,11 +620,17 @@ export class Store {
 
   // ---- collections ---------------------------------------------------------
 
+  /**
+   * Watch a collection, or watch one already there again. Watching a paused
+   * one again resumes it, and bumps its version as resume does, so the
+   * money and token writes it missed while paused are read again.
+   */
   async addCollection(chainId: number, address: string, name: string | null, startBlock: number | null): Promise<{ id: number; created: boolean }> {
     const { rows } = await this.pool.query<{ id: number; created: boolean }>(
       `INSERT INTO washtrace.collections (chain_id, address, name, start_block, cursor_block)
        VALUES ($1, $2, $3, $4::bigint, $4::bigint - 1)
-       ON CONFLICT (chain_id, address) DO UPDATE SET name = COALESCE(EXCLUDED.name, washtrace.collections.name), paused_at = NULL
+       ON CONFLICT (chain_id, address) DO UPDATE SET name = COALESCE(EXCLUDED.name, washtrace.collections.name), paused_at = NULL,
+         version = washtrace.collections.version + (washtrace.collections.paused_at IS NOT NULL)::int
        RETURNING id, (xmax = 0) AS created`,
       [chainId, address, name, startBlock],
     );
@@ -621,10 +656,14 @@ export class Store {
     return (rowCount ?? 0) > 0;
   }
 
-  /** Let the worker serve a paused collection again. False when it is not there or not paused. */
+  /**
+   * Let the worker serve a paused collection again. False when it is not there or not paused.
+   * Money and token writes skip a paused collection, so it missed their version bumps; bumping
+   * here makes it stale, and the next analysis reads what it missed.
+   */
   async resume(chainId: number, address: string): Promise<boolean> {
     const { rowCount } = await this.pool.query(
-      'UPDATE washtrace.collections SET paused_at = NULL WHERE chain_id = $1 AND address = $2 AND paused_at IS NOT NULL', [chainId, address]);
+      'UPDATE washtrace.collections SET paused_at = NULL, version = version + 1 WHERE chain_id = $1 AND address = $2 AND paused_at IS NOT NULL', [chainId, address]);
     return (rowCount ?? 0) > 0;
   }
 
@@ -1219,6 +1258,11 @@ export class Store {
       // a wallet that far out seldom has a trader among its
       // counterparties, and without the bump no analysis, so no lens run,
       // would ever read what Fetch them fetched.
+      // Paused collections are left out: a delete of one holds its row until its whole cascade commits,
+      // and a bump waiting on that stalls the fund pass. When the pause committed before this statement
+      // began, as a delete's own pause does, the paused row fails `paused_at IS NULL` under its snapshot
+      // and is not locked. resume, or watching it again, bumps the version, so the paused collection is
+      // analyzed again when it comes back.
       const touched = [...new Set([wallet, ...flows.flatMap((f) => [f.from, f.to])])];
       // Locked in id order, as a loaded trail's bump locks them, so two writers never wait on each other in a circle.
       await c.query(
@@ -1227,7 +1271,7 @@ export class Store {
            SELECT id FROM washtrace.collections
            WHERE (id IN (SELECT DISTINCT collection_id FROM washtrace.transfers WHERE from_address = ANY($2) OR to_address = ANY($2))
                   OR id IN (SELECT r.collection_id FROM washtrace.reach r WHERE r.chain_id = $1 AND r.address = $3 AND r.depth > $4))
-             AND chain_id = $1
+             AND chain_id = $1 AND paused_at IS NULL
            ORDER BY id FOR NO KEY UPDATE)`,
         [chainId, touched, wallet, follow?.hops ?? 0],
       );
@@ -1747,11 +1791,13 @@ export class Store {
    * first every pass and starve the chain's other counts; one not reached
    * keeps its place, and goes first next time. Then
    * one statement writes every count made, taking the rows in id order, as
-   * fund's bump takes them.
+   * fund's bump takes them. A paused collection is neither counted nor
+   * written (a delete of it may hold its row for the length of its cascade);
+   * once resumed it is in the list again, and its counts are recomputed.
    */
   async countTokens(chainId: number, globalHops: number, payees: boolean, until: number): Promise<void> {
     const started = (await this.pool.query<{ id: number }>(
-      `SELECT id FROM washtrace.collections WHERE chain_id = $1 AND read_tokens_at IS NOT NULL
+      `SELECT id FROM washtrace.collections WHERE chain_id = $1 AND read_tokens_at IS NOT NULL AND paused_at IS NULL
        ORDER BY greatest(token_counts->>'at', token_counts->>'tried') NULLS FIRST, id`,
       [chainId],
     )).rows.map((r) => r.id);
@@ -1800,7 +1846,7 @@ export class Store {
       await this.pool.query(
         `UPDATE washtrace.collections c
          SET token_counts = coalesce(c.token_counts, '{}'::jsonb) || jsonb_build_object('tried', ${UTC_ISO_NOW})
-         WHERE c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE)`,
+         WHERE c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) AND paused_at IS NULL ORDER BY id FOR NO KEY UPDATE)`,
         [timedOut],
       );
     }
@@ -1810,7 +1856,7 @@ export class Store {
       `UPDATE washtrace.collections c
        SET token_counts = u.counts || jsonb_build_object('at', ${UTC_ISO_NOW})
        FROM unnest($1::int[], $2::jsonb[]) AS u(id, counts)
-       WHERE c.id = u.id AND c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE)`,
+       WHERE c.id = u.id AND c.id IN (SELECT id FROM washtrace.collections WHERE id = ANY($1::int[]) AND paused_at IS NULL ORDER BY id FOR NO KEY UPDATE)`,
       [counted.map((x) => x.id), counted.map((x) => JSON.stringify(x.counts))],
     );
   }
@@ -1825,15 +1871,17 @@ export class Store {
    * worker can space out the reruns of a collection that is always changing,
    * and when its rules last changed, so a rule edit is not made to wait.
    * `retryAt` is when one whose analysis failed may be tried again (see
-   * analysisFailed): null when none failed.
+   * analysisFailed): null when none failed. `startedAt` is when an analysis
+   * began that has not ended (see analysisStarted): null when none is going.
    */
   async stale(): Promise<{
     id: number; chainId: number; version: number; rules: Partial<Rules>; name: string | null;
-    ranAt: number | null; tookMs: number | null; rulesAt: number | null; retryAt: number | null;
+    ranAt: number | null; tookMs: number | null; rulesAt: number | null; retryAt: number | null; startedAt: number | null;
   }[]> {
     const { rows } = await this.pool.query(
       `SELECT c.id, c.chain_id, c.version, c.rules, c.name, a.took_ms, extract(epoch FROM a.ran_at)::float8 AS ran,
-              extract(epoch FROM c.rules_at)::float8 AS rules_changed, extract(epoch FROM c.analysis_retry_at)::float8 AS retry
+              extract(epoch FROM c.rules_at)::float8 AS rules_changed, extract(epoch FROM c.analysis_retry_at)::float8 AS retry,
+              extract(epoch FROM c.analysis_started_at)::float8 AS started
        FROM washtrace.collections c
        LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
        WHERE c.version > c.analyzed_version AND c.paused_at IS NULL ORDER BY c.id`,
@@ -1841,7 +1889,7 @@ export class Store {
     return rows.map((r) => ({
       id: r.id, chainId: r.chain_id, version: Number(r.version), rules: r.rules, name: r.name,
       ranAt: r.ran === null ? null : r.ran * 1000, tookMs: r.took_ms, rulesAt: r.rules_changed === null ? null : r.rules_changed * 1000,
-      retryAt: r.retry === null ? null : r.retry * 1000,
+      retryAt: r.retry === null ? null : r.retry * 1000, startedAt: r.started === null ? null : r.started * 1000,
     }));
   }
 
@@ -2194,6 +2242,12 @@ export class Store {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [id, tookMs, through, JSON.stringify(analysis.totals), analysis.missingData, analysis.fundedWallets, analysis.wallets, analysis.truncatedSearches, JSON.stringify(loops), key],
         );
+        // Walks analyses_collection_idx past the newest HISTORY_KEEP, so a save costs one index probe. The id breaks a tie in ran_at, as the latest-analysis reads do.
+        await c.query(
+          `DELETE FROM washtrace.analyses WHERE id IN
+             (SELECT id FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC, id DESC OFFSET $2)`,
+          [id, HISTORY_KEEP],
+        );
         await c.query('DELETE FROM washtrace.flags WHERE collection_id = $1', [id]);
         await c.query('DELETE FROM washtrace.witnesses WHERE collection_id = $1', [id]);
         // A component's flags share one witness, and the three methods share
@@ -2239,7 +2293,8 @@ export class Store {
         }
         await writeFacts(c, id, analysis.uncounted, through, money, prev);
         await c.query(
-          `UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2), analysis_failures = 0, analysis_error = NULL, analysis_retry_at = NULL
+          `UPDATE washtrace.collections SET analyzed_version = GREATEST(analyzed_version, $2), analysis_failures = 0, analysis_error = NULL, analysis_retry_at = NULL,
+             analysis_started_at = NULL
            WHERE id = $1`,
           [id, version],
         );
@@ -2263,13 +2318,29 @@ export class Store {
     // The old count on the right: the first failure waits five minutes.
     await this.pool.query(
       `UPDATE washtrace.collections SET analysis_error = $2, analysis_failures = analysis_failures + 1,
-         analysis_retry_at = ${backoffSql('analysis_failures')}
+         analysis_retry_at = ${backoffSql('analysis_failures')}, analysis_started_at = NULL
        WHERE id = $1`,
       [id, error],
     );
   }
 
-  async history(id: number, limit = 100): Promise<AnalysisRow[]> {
+  /**
+   * Note that an analysis of this collection began. A worker killed during
+   * one (out of memory, SIGKILL) records no failure, so the next would pick
+   * the same collection first and die again; the mark left behind is how it
+   * knows, and it counts the try as failed (see Worker.dueAnalysis). Cleared
+   * by saveAnalysis, analysisFailed and analysisRequeued.
+   */
+  async analysisStarted(id: number): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET analysis_started_at = now() WHERE id = $1', [id]);
+  }
+
+  /** An analysis that ended without succeeding or failing (a stop, a lost lock): its mark goes and no failure is counted, as requeueLensRun's. */
+  async analysisRequeued(id: number): Promise<void> {
+    await this.pool.query('UPDATE washtrace.collections SET analysis_started_at = NULL WHERE id = $1', [id]);
+  }
+
+  async history(id: number, limit = HISTORY_KEEP): Promise<AnalysisRow[]> {
     const { rows } = await this.pool.query(
       `SELECT *, extract(epoch FROM ran_at)::float8 AS ran FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT $2`,
       [id, limit],
@@ -2376,12 +2447,29 @@ export class Store {
    * millions of them stream rather than land in memory. One read-only
    * transaction, so the rows are one snapshot. Leaving the loop early (a
    * failed write) closes the cursor and gives the connection back.
+   *
+   * A `download` is read at the pace of a stranger's network, so it is held to
+   * MAX_STREAMS at once, its session ends after `streamIdleS` without a fetch,
+   * and it errors once open `streamMaxMs`. The engine's own streams are not.
    */
-  private async *stream<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE): AsyncGenerator<T> {
-    const c = await this.pool.connect();
+  private async *stream<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE, download = false): AsyncGenerator<T> {
+    if (download) {
+      if (this.streaming >= MAX_STREAMS) throw new TooManyStreams();
+      // Taken before the wait for a client, so downloads that start together cannot all pass the check.
+      this.streaming++;
+    }
+    let c: pg.PoolClient;
+    try {
+      c = await this.pool.connect();
+    } catch (err) {
+      if (download) this.streaming--;
+      throw err;
+    }
     let finished = false;
+    const opened = Date.now();
     try {
       await c.query('BEGIN READ ONLY');
+      if (download) await c.query(`SET LOCAL idle_in_transaction_session_timeout = ${Math.round(this.streamIdleS * 1000)}`);
       // A cursor is planned for its first tenth of rows. Every caller reads to
       // the end, so say so: Terraforms' payments planned an index walk at nearly
       // 7x the cost of a scan and sort.
@@ -2391,10 +2479,12 @@ export class Store {
         const { rows } = await c.query(`FETCH ${page} FROM stored`);
         for (const r of rows) yield map(r);
         if (rows.length < page) break;
+        if (download && Date.now() - opened > this.streamMaxMs) throw new Error('The download ran too long and was stopped.');
       }
       await c.query('COMMIT');
       finished = true;
     } finally {
+      if (download) this.streaming--;
       if (!finished) await c.query('ROLLBACK').catch(() => {});
       c.release();
     }
@@ -2810,7 +2900,7 @@ export class Store {
   /** Every trade `q` holds, in its order, streamed: the same rows as every page of `trades` put together. */
   tradeStream(id: number, q: TradeQuery, ctx: TradeContext): AsyncGenerator<TradeRow> {
     const params: unknown[] = [];
-    return this.stream(tradeSelect(id, q, ctx, params), params, toTrade);
+    return this.stream(tradeSelect(id, q, ctx, params), params, toTrade, DOWNLOAD_PAGE, true);
   }
 
   /**
@@ -2934,7 +3024,7 @@ export class Store {
    * value and env are kept only when masked (they contain '••••'), else
    * blanked, whatever the caller passed, so no unmasked secret reaches a table
    * the API reads. Reports are taken one at a time: the
-   * worker's three jobs start together and each reports, and two
+   * worker's four jobs start together and each reports, and two
    * delete-then-insert transactions at once collide on the key. EXCLUSIVE
    * still lets the API read the table meanwhile.
    */
@@ -2989,7 +3079,8 @@ export class Store {
    * Finish, unrun, every check asked for more than `olderThanMs` ago, with
    * `{ error: 'expired' }`. Its page stopped polling long since, and a URL
    * tested now may not be the one it asked about. Aged by the store's clock,
-   * not the worker's. Returns how many.
+   * not the worker's. Also deletes the checks finished more than a day ago,
+   * so the table does not grow for ever. Returns how many it expired.
    */
   async expireChecks(olderThanMs: number): Promise<number> {
     const { rowCount } = await this.pool.query(
@@ -2997,6 +3088,7 @@ export class Store {
        WHERE finished_at IS NULL AND requested_at < now() - make_interval(secs => $1::float8 / 1000)`,
       [olderThanMs],
     );
+    await this.pool.query(`DELETE FROM washtrace.checks WHERE finished_at < now() - make_interval(secs => $1::float8 / 1000)`, [CHECK_KEEP_MS]);
     return rowCount ?? 0;
   }
 
@@ -3139,7 +3231,7 @@ export class Store {
    * queued one never waits: queued runs go first, then the retries and the
    * re-runs, each oldest-requested first, so one asked for is not
    * behind every re-run a newer analysis made due. `dueAt` is when the run
-   * became due, for the lens pass's wait: when it was asked for,
+   * became due, for the worker's LENS_WAIT_MS: when it was asked for,
    * its retry time, the edit, the gap's end when its token reads moved (never
    * the count's time, which every pass rewrites: a dueAt by it would never
    * have waited LENS_WAIT_MS), or else the later of the gap's end and the
@@ -3148,7 +3240,7 @@ export class Store {
    * Two due runs are marked failed (with the usual back-off) instead of
    * returned, and the next due run is taken in the same call, so neither
    * holds the queue: one whose lens's stored rule no longer checks, and one
-   * still `running`. Its only caller, the worker's lens pass, holds the
+   * still `running`. Its only caller, the worker's analyze pass, holds the
    * analysis lock, so nothing else is running one: a `running` row seen
    * here was left by a worker that stopped mid-run, and a run that ran the
    * worker out of memory would stop the next one too. After
@@ -3355,7 +3447,7 @@ export class Store {
   /**
    * Take the oldest queued preview and mark it running, with what its run
    * reads: the latest analysis's through block. `name` is the
-   * collection's name, or its short address. Its only caller, the lens pass,
+   * collection's name, or its short address. Its only caller, the analyze pass,
    * holds the analysis lock, so no other preview is running: one still
    * `running` was left by a worker that stopped, and is failed here rather
    * than tried again, since one that ran the worker out of memory would do it
@@ -3411,7 +3503,7 @@ export class Store {
   /**
    * How many of `keys` (a preview's sample) Round trips flagged, or null when
    * it did not run on the latest analysis. The flags are that analysis's; the
-   * analysis lock the lens pass holds keeps them from being replaced
+   * analysis lock a preview runs under keeps them from being replaced
    * while a preview reads through its block.
    */
   async roundTripsCaught(collectionId: number, keys: readonly string[]): Promise<number | null> {

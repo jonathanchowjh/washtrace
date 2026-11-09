@@ -6,11 +6,8 @@ import { LOCAL_ONLY } from '@/lib/auth';
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
 
-/** DEFAULT_RULE follows two money edges either way, which is a floor of its own: these tests' lens follows money as it was sent, so only the cause under test makes a floor. */
-const ALONG = structuredClone(DEFAULT_RULE);
-for (const k of ['eth', 'internal', 'weth'] as const) ALONG.edges[k].direction = 'along';
-/** ALONG, needing money read this many hops out from the traders (depthNeeded). */
-const needing = (depth: number) => { const r = structuredClone(ALONG); r.hops = { min: 1, max: depth + 1 }; return r; };
+/** DEFAULT_RULE, needing money read this many hops out from the traders (depthNeeded). */
+const needing = (depth: number) => { const r = structuredClone(DEFAULT_RULE); r.hops = { min: 1, max: depth + 1 }; return r; };
 
 const refresh = vi.fn();
 
@@ -23,7 +20,7 @@ const totals = (flaggedSales: number, over: Record<string, unknown> = {}) => ({
 type Status = 'queued' | 'running' | 'done' | 'failed';
 /** A saved lens of yours (Blur 3-hop, L7, version 2) and its run on this collection, from that version on the latest analysis (1); null: it has none here. */
 const run = (status: Status | null, over: Record<string, unknown> = {}, lens: Record<string, unknown> = {}) => ({
-  lens: { id: 7, key: 'L7', name: 'Blur 3-hop', rule: ALONG, version: 2, createdAt: 0, updatedAt: 0, ...lens },
+  lens: { id: 7, key: 'L7', name: 'Blur 3-hop', rule: DEFAULT_RULE, version: 2, createdAt: 0, updatedAt: 0, ...lens },
   run: status === null ? null : {
     lensId: 7, collectionId: 1, status, progress: null, lensVersion: 2, analysisId: 1, throughBlock: 10,
     totals: status === 'done' ? totals(126) : null, error: null, retryAt: null, finishedAt: 1, tookMs: 1, ...over,
@@ -34,7 +31,7 @@ const run = (status: Status | null, over: Record<string, unknown> = {}, lens: Re
 const READ = { traders: { checked: 37, of: 37 }, limit: 3, ownLimit: null as number | null, pendingByDepth: {} as Record<number, number>, estimate: null, seeding: false };
 /** What is read of the collection's other tokens (Store.tokenCounts), and whether Start reading was pressed. */
 const COUNTED = { wallets: 40, read: 40, truncated: 0, failed: 0, moneyFailed: 0, settled: true, payees: false, at: '2026-11-09T00:00:00.000Z' };
-const state = { keyed: false, started: false, counts: null as typeof COUNTED | null, payees: false, money: { ...READ }, runs: [] as ReturnType<typeof run>[], analysed: true, remote: false, notFunded: false, paused: false, points: [] as object[], off: [] as string[] };
+const state = { keyed: false, checked: 37, started: false, counts: null as typeof COUNTED | null, payees: false, money: { ...READ }, runs: [] as ReturnType<typeof run>[], analysed: true, remote: false, notFunded: false, paused: false, points: [] as object[], off: [] as string[] };
 
 const TX = '0x' + 'e'.repeat(64);
 const WHO = '0x' + '1'.repeat(40);
@@ -45,7 +42,7 @@ const sale = {
 };
 
 const collection = () => ({
-  id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 1, cursorBlock: 10, headBlock: 10, transfers: 5000, wallets: 37, fundedWallets: 37,
+  id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 1, cursorBlock: 10, headBlock: 10, transfers: 5000, wallets: 37, fundedWallets: state.checked,
   error: null, stale: false, pausedAt: state.paused ? 1_700_000_000_000 : null, priority: false, trailProgress: null, analysisError: null, storedThroughTime: null, storedThroughBlock: null,
   downloadFile: null, downloadProgress: null, downloadNote: null, restoreProgress: null, restoreNote: null, trailNote: null, trailImportedSha: state.notFunded ? null : 'feed',
   rules: {}, readTokens: state.started, contract: null, addedAt: 0, ingestedAt: 0, servedAt: 0, readRate: null,
@@ -89,7 +86,7 @@ vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found
 
 afterEach(() => {
   cleanup(); refresh.mockClear(); vi.unstubAllGlobals();
-  Object.assign(state, { keyed: false, started: false, counts: null, payees: false, money: { ...READ }, runs: [], analysed: true, remote: false, notFunded: false, paused: false, points: [], off: [] });
+  Object.assign(state, { keyed: false, checked: 37, started: false, counts: null, payees: false, money: { ...READ }, runs: [], analysed: true, remote: false, notFunded: false, paused: false, points: [], off: [] });
 });
 
 async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
@@ -182,11 +179,15 @@ describe("a built-in's panel", () => {
   it('holds its rule read-only, every control disabled', async () => {
     const d = panel(await draw({ method: 'A' })).querySelector('details')!;
     expect(d.querySelector('summary')!.textContent).toBe('Its rule, read-only: NFT only, follows arrows, same token, any length, repeats count each');
-    const controls = [...d.querySelectorAll('input,select,button,textarea')];
+    // Advanced only shows or hides, so it stays usable; the rule's controls are all disabled.
+    const controls = [...d.querySelectorAll('input,select,button,textarea')].filter((x) => x.getAttribute('aria-expanded') === null);
     expect(controls.length).toBeGreaterThan(0);
     expect(controls.every((x) => (x as HTMLInputElement).disabled)).toBe(true);
     expect(d.textContent).toContain('NFT: same token');
-    expect(d.textContent).toContain("Not in this version: a lens reads this collection's transfers.");
+    expect(d.textContent).not.toContain('Not in this version');
+    // Built-in A differs from the default in fields Advanced hides, so it shows them open.
+    expect(within(d).getByRole('button', { name: 'Advanced' }).getAttribute('aria-expanded')).toBe('true');
+    expect(within(d).getByText('Order in time')).toBeTruthy();
   });
 
   it('keeps Money loops back not counted in its stat line', async () => {
@@ -222,8 +223,21 @@ describe("your lens's panel", () => {
     const c = await draw({ method: 'L7' });
     expect(c.querySelector('[aria-label="Blur 3-hop in numbers"]')!.textContent).toContain('at least 12.6% of sales');
     expect(tabs(c)[3]).toBe('Blur 3-hop at least 12.6%');
-    // Its panel says why, in the words the chart's (at least) title uses (floorCauses).
+    // Its panel says why, in the words the chart's (at least) title uses (shareCauses).
     expect(panel(c).textContent).toContain('Its share is at least this, because no funding source is set, so money is not fully read.');
+  });
+
+  it('reads at least on a stored trail with no key, as nothing reads the wallets it left unchecked; so far with a key', async () => {
+    state.runs = [run('done')];
+    state.checked = 30;
+    const c = await draw({ method: 'L7' });
+    expect(tabs(c).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back at least 9.8%', 'Linked wallets at least 17.2%', 'Blur 3-hop at least 12.6%']);
+    expect(panel(c).textContent).toContain('Its share is at least this, because money past the stored trail is not read without an Etherscan key.');
+    cleanup();
+    state.keyed = true;
+    const keyed = await draw({ method: 'L7' });
+    expect(tabs(keyed).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back 9.8% so far', 'Linked wallets 17.2% so far', 'Blur 3-hop 12.6% so far']);
+    expect(panel(keyed).textContent).toContain('Its share can still rise while reads finish: money is not fully read yet.');
   });
 
   it('does not say at least for an NFT-only lens whose money data is not final', async () => {
@@ -234,7 +248,7 @@ describe("your lens's panel", () => {
     expect((await draw({ method: 'L7' })).querySelector('[aria-label="Blur 3-hop in numbers"]')!.textContent).not.toContain('at least');
   });
 
-  it('says how many searches stopped at the cap, and that the share is at least this, in floorCauses\'s words', async () => {
+  it('says how many searches stopped at the cap, and that the share is at least this, in shareCauses\'s words', async () => {
     state.runs = [run('done', { totals: totals(126, { truncated: 3 }) })];
     const c = await draw({ method: 'L7' });
     expect(panel(c).textContent).toContain('Its share is at least this, because some of its searches stopped at the cap before finding a loop (3 searches).');
@@ -559,6 +573,7 @@ describe('the rule table, editable', () => {
     const { RuleTable } = await import('@/components/rule-table');
     const seen: (typeof DEFAULT_RULE)[] = [];
     const t = within(render(<RuleTable rule={structuredClone(DEFAULT_RULE)} onChange={(r) => seen.push(r)} />).container);
+    fireEvent.click(t.getByRole('button', { name: 'Advanced' }));
     const eth = t.getByLabelText('ETH payment: smallest payment counted, in ETH');
     fireEvent.change(eth, { target: { value: '0.5' } });
     expect(seen).toHaveLength(0);
@@ -566,10 +581,10 @@ describe('the rule table, editable', () => {
     expect(seen[0]!.edges.eth.minWei).toBe('500000000000000000');
   });
 
-  it('never lets an unavailable edge type be switched on', async () => {
+  it('draws no row for an unavailable edge type, so it can never be switched on', async () => {
     const { RuleTable } = await import('@/components/rule-table');
     const t = within(render(<RuleTable rule={structuredClone(DEFAULT_RULE)} onChange={() => {}} />).container);
-    expect((t.getByLabelText('Follow NFT: other watched collections') as HTMLInputElement).disabled).toBe(true);
+    expect(t.queryByLabelText('Follow NFT: other watched collections')).toBeNull();
   });
 });
 
@@ -593,10 +608,10 @@ describe('a lens\'s share is at least while the money it needs is not read that 
     expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
   });
 
-  it('after the money is followed further, stays at least while reach wallets at depth 4 or nearer are pending, and not once they are read', async () => {
+  it('after the money is followed further, reads so far while reach wallets at depth 4 or nearer are pending, and exact once they are read', async () => {
     state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 4: 2, 5: 1 } };
     state.runs = [mine(4)];
-    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop at least 12.6%');
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6% so far');
     cleanup();
     // Wallets pending only past the depth it needs do not hold it back.
     state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 5: 1 } };
@@ -606,10 +621,21 @@ describe('a lens\'s share is at least while the money it needs is not read that 
     expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
   });
 
-  it('stays at least while seeding finds the wallets past the global limit, only for a lens that reaches past it', async () => {
+  it('leads its lists with "so far" after the figure\'s noun, as the stat line does', async () => {
+    state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 4: 2, 5: 1 } };
+    state.runs = [mine(4)];
+    expect(panel(await draw({ method: 'L7' })).textContent).toContain('What Blur 3-hop flags most: its 12.6% of sales so far, token by token and wallet by wallet.');
+  });
+
+  it('reads so far while seeding finds the wallets past the global limit, only for a lens that reaches past it', async () => {
     state.money = { ...READ, limit: 5, ownLimit: 5, seeding: true };
     state.runs = [mine(4)];
-    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop at least 12.6%');
+    state.points = [POINT];
+    const c = await draw({ method: 'L7' });
+    expect(tabs(c)[3]).toBe('Blur 3-hop 12.6% so far');
+    expect(panel(c).textContent).toContain(`Its share can still rise while reads finish: ${MORE}.`);
+    expect(c.querySelector('[aria-label="Blur 3-hop in numbers"]')!.textContent).toContain('12.6% of sales so far');
+    expect(c.querySelector(`span[title*="${MORE}"]`)?.textContent).toBe('(so far)');
     cleanup();
     state.runs = [mine(3)];
     expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6%');
@@ -622,8 +648,18 @@ describe('a lens\'s share is at least while the money it needs is not read that 
     expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back 9.8%', 'Linked wallets 17.2%', 'Blur 3-hop 12.6%']);
   });
 
+  it('reads at least, listing both causes in order, when a cap and unread money apply together', async () => {
+    state.money = { ...READ, limit: 5, ownLimit: 5, pendingByDepth: { 4: 2 } };
+    state.runs = [run('done', { totals: totals(126, { truncated: 3 }) }, { rule: needing(4) })];
+    const c = await draw({ method: 'L7' });
+    expect(tabs(c)[3]).toBe('Blur 3-hop at least 12.6%');
+    expect(panel(c).textContent).toContain(`Its share is at least this, because some of its searches stopped at the cap before finding a loop (3 searches); ${MORE}.`);
+  });
+
   it('says a lens that follows money either way is a floor, in its own words', async () => {
-    state.runs = [run('done', {}, { rule: DEFAULT_RULE })];
+    const either = structuredClone(DEFAULT_RULE);
+    either.edges.eth.direction = 'either';
+    state.runs = [run('done', {}, { rule: either })];
     const c = await draw({ method: 'L7' });
     expect(tabs(c)[3]).toBe('Blur 3-hop at least 12.6%');
     expect(panel(c).textContent).toContain('Its share is at least this, because money is followed only the way it was sent, so a loop against it can be missed.');
@@ -637,7 +673,7 @@ describe("a lens's share is at least until its other tokens are read", () => {
   const POINT = { at: 1_700_000_000_000, sales: 10, transfers: 10, flaggedSales: { A: 1, AU: 2, AC: 3 }, lens: { L7: { sales: 10, flaggedSales: 2, untimed: 0 } } };
   /** A lens that follows other tokens only, with this many middle wallets at most. */
   const tokenLens = (max: number, on = true) => {
-    const r = structuredClone(ALONG);
+    const r = structuredClone(DEFAULT_RULE);
     for (const k of ['eth', 'internal', 'weth'] as const) r.edges[k].use = false;
     r.edges['other-tokens'].use = on;
     r.hops = { min: 0, max };
@@ -668,17 +704,18 @@ describe("a lens's share is at least until its other tokens are read", () => {
   it('started and still being read: not all read yet', async () => {
     state.runs = [mineWith(tokenLens(2), 10)];
     Object.assign(state, { started: true, counts: { ...COUNTED, read: 10 } });
-    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`because ${NOT_ALL}.`);
+    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`${NOT_ALL}.`);
+    expect(tabs(await draw({ method: 'L7' }))[3]).toBe('Blur 3-hop 12.6% so far');
     cleanup();
     // No count yet: seeding, the same words.
     state.counts = null;
-    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`because ${NOT_ALL}.`);
+    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`${NOT_ALL}.`);
   });
 
   it('all read but the run took in another count: not all read yet, until the run catches up', async () => {
     Object.assign(state, { started: true, counts: COUNTED });
     state.runs = [mineWith(tokenLens(2), 12)];
-    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`because ${NOT_ALL}.`);
+    expect(panel(await draw({ method: 'L7' })).textContent).toContain(`Its share can still rise while reads finish: ${NOT_ALL}.`);
   });
 
   it('payees off: all read and current still reads at least with one middle wallet or more, not with none', async () => {
@@ -702,15 +739,15 @@ describe("a lens's share is at least until its other tokens are read", () => {
       'because other tokens are read only for wallets reached by ETH, WETH or one token payment, so a loop through tokens can be missed.');
   });
 
-  it("a tokens-only lens's money row reads Not used by this lens, and the editor's row is the tokens one", async () => {
+  it("a tokens-only lens's strip has no money line, and its one line is the tokens one", async () => {
     state.keyed = true;
     state.runs = [mineWith(tokenLens(3))];
     const c = await draw({ method: 'L7', lens: 'edit-L7' });
     const needs = within(c.querySelector('section[aria-labelledby="data-needs"]') as HTMLElement);
-    const tr = (name: string) => needs.getByText(name).closest('tr')!.textContent;
-    expect(tr('ETH, internal ETH, WETH')).toContain('Not used by this lens');
-    expect(tr('Other tokens')).toContain('Not read: washtrace has never fetched them');
-    expect(needs.getByRole('button', { name: 'Start reading them' })).toBeTruthy();
+    // Money is not used, so it has no line: the strip is the tokens one only.
+    expect(needs.getAllByRole('listitem').map((li) => li.textContent)).toHaveLength(1);
+    expect(needs.getByText(/Other tokens .* are not read/)).toBeTruthy();
+    expect(needs.getByRole('button', { name: 'Read other tokens' })).toBeTruthy();
   });
 });
 

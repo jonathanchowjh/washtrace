@@ -3,7 +3,8 @@ import Link from 'next/link';
 import type { LensKey, TradeQuery } from '@washtrace/detect/trades';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
 import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
-import { APART, part, rangeEnds, type Range } from '@/lib/metrics';
+import type { Qualifier } from '@/lib/lens-state';
+import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metrics';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
@@ -11,6 +12,9 @@ import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
 export const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
+
+/** " (not counted)" after the name of a lens the verdict leaves out; the tooltip says why. */
+export const NotCounted = () => <span title={APART_WHY_TITLE}> (not counted)</span>;
 
 /** A lens by its name, with its verdict hue; `href` makes the name open that lens's tab (leave it off inside a link). */
 export function LensName({ m, className, href, own = {} }: { m: string; className?: string; href?: string; own?: Lenses }) {
@@ -119,13 +123,13 @@ const FIGURE = 'font-medium text-foreground tabular-nums hover:underline';
  * a link cannot hold links. `loops` is the lens's own count, null for an
  * analysis saved before loops were counted and for a lens of yours, which
  * counts none; a lens that did not run has no numbers, and its panel says why.
- * `atLeast`: a lens of yours whose share the run could not settle (money not
- * final, or searches cut short), read as "at least" rather than "so far".
+ * `qualifier`: shareQualifier of the lens's causes: "at least" before the
+ * figure, "so far" after it.
  */
-export function LensStats({ m, t, loops, base, notFinal, own = {}, atLeast = false }: {
-  m: LensKey; t: MethodTotals; loops: { loops: number; pairs: number } | null; base: string; notFinal: readonly Method[];
+export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
+  m: LensKey; t: MethodTotals; loops: { loops: number; pairs: number } | null; base: string; qualifier: Qualifier | null;
   /** Your lenses by key, for the name of one of them. */
-  own?: Lenses; atLeast?: boolean;
+  own?: Lenses;
 }) {
   if (!t.available) return null;
   const s = part(t, 'sales'), o = part(t, 'owners');
@@ -135,8 +139,8 @@ export function LensStats({ m, t, loops, base, notFinal, own = {}, atLeast = fal
   return (
     <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>
-        {atLeast ? 'at least ' : null}<Link href={caught} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
-        {(APART as readonly string[]).includes(m) ? ' (not counted)' : ''}{(notFinal as readonly string[]).includes(m) ? ' so far' : ''}
+        {qualifier === 'at least' ? 'at least ' : null}<Link href={caught} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
+        {(APART as readonly string[]).includes(m) ? <NotCounted /> : null}{qualifier === 'so far' ? ' so far' : ''}
         {' · '}<Link href={caught} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{num(t.sales)}</Link>
         {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
@@ -179,10 +183,10 @@ function sales(totals: Record<Method, MethodTotals>, m: Method): { part: number;
  * period they happened in. A lens that did not run in the latest analysis
  * is drawn as not run in every period, never as 0%.
  */
-export function History({ timeline, totals, notFinal, now, zone, base, own = [], ownLeft = [], ownNotRun = [] }: {
-  timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; notFinal: Method[]; now: number; zone: string;
+export function History({ timeline, totals, notFinal, funded, funding, now, zone, base, own = [], ownLeft = [], ownNotRun = [] }: {
+  timeline: { bucket: Bucket; readThrough: number | null; points: TimelinePoint[] }; totals: Record<Method, MethodTotals>; notFinal: Method[]; funded: boolean; funding: boolean; now: number; zone: string;
   /** Your lenses to draw (the page picks at most three; `timeline` was asked for each) and those it left out, which the chart names. */
-  own?: { key: `L${number}`; name: string; atLeast: boolean; floorWhy?: string }[]; ownLeft?: { key: string; name: string }[]; ownNotRun?: { key: string; name: string; why: string }[];
+  own?: { key: `L${number}`; name: string; qualifier: Qualifier | null; floorWhy?: string }[]; ownLeft?: { key: string; name: string }[]; ownNotRun?: { key: string; name: string; why: string }[];
   /** The collection's path: each period opens its trades under it. */
   base: string;
 }) {
@@ -198,7 +202,7 @@ export function History({ timeline, totals, notFinal, now, zone, base, own = [],
   // A lens's share of a period opens what that lens caught in it; a lens that did not run has no share, so no link.
   const linked = [...METHODS.filter((m) => totals[m].available), ...own.map((o) => o.key)] as LensKey[];
   const lensHrefs = spans.map((r) => Object.fromEntries(linked.map((m) => [m, tradesHref(base, { ...r, caught: [m] })])) as Partial<Record<LensKey, string>>);
-  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} own={own} ownLeft={ownLeft} ownNotRun={ownNotRun} />;
+  return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} funded={funded} funding={funding} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} own={own} ownLeft={ownLeft} ownNotRun={ownNotRun} />;
 }
 
 /** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */

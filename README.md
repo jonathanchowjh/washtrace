@@ -99,12 +99,15 @@ Etherscan ─▶│  plain Node, no HTTP     │        │  JSON API + console 
 ```
 
 - **worker** ([apps/worker/src/main.ts](apps/worker/src/main.ts)) runs the
-  three jobs of [`Worker`](packages/detect/src/worker.ts) on timers. **ingest**
+  four jobs of [`Worker`](packages/detect/src/worker.ts) on timers. **ingest**
   reads finalized ERC-721 transfers and their receipts for every watched
   collection. **fund** reads who paid whom for each wallet that traded, then
   follows money out of them. **analyze** reruns the three methods over every
-  collection that changed. A pass that comes due while the last one is still
-  running is skipped, not queued.
+  collection that changed. **lens** runs each lens of yours over the collections
+  it was asked on, after their latest analysis, and the editor's previews.
+  Analyze and lens share one timer: each pass runs one analysis, preview or
+  lens run, by one rule ([`pickWork`](packages/detect/src/worker.ts)). A pass
+  that comes due while the last one is still running is skipped, not queued.
 - **api** ([apps/web](apps/web)) is Next.js: the JSON API under `/api` and the
   console pages, both reading the store. Adding a collection writes one row;
   the worker picks it up on its next ingest pass.
@@ -263,9 +266,9 @@ stored data, or deleting a collection.
 - **The console's collection pages error until the `analyses.loops` column
   exists.** The api serves while the migrations run, and those pages read the
   column one of them adds.
-- **Every analysed collection is analysed once more.** An analysis saved
+- **Every analyzed collection is analyzed once more.** An analysis saved
   before this release wrote no trade facts and no loops, so its trades read
-  "not judged yet" until the worker has analysed the collection again.
+  "not judged yet" until the worker has analyzed the collection again.
 
 To skip the wait, build those indexes beforehand, with the services running.
 Postgres builds an index `CONCURRENTLY` while writes carry on, though not
@@ -413,7 +416,7 @@ removed.
 | `/c/{chain}/{address}/t/{tokenId}` | One token: whether its trades look washed and by which methods, the reason for each pattern once with the transfers it covers, the graph as in the paper's Figure 8 (transfers solid and coloured by verdict, money dashed, a pair traded more than six times drawn as one counted arrow each way), and every transfer. | On open |
 | `/w/{chain}/{address}` | One wallet: how many of its trades are flagged and whether its money has been read, its transfers in every watched collection, and who it moved money with. | On open |
 | `/tx/{chain}/{hash}` | One transaction's verdict: the console form of `/api/transfers`. | On open |
-| `/worker` | What needs a person, from the same reading as `/api/status`; the three jobs as the pipeline they form, each with what it feeds; the sources configured; every collection's six stages in one table. | 5 s |
+| `/worker` | What needs a person, from the same reading as `/api/status`; the four jobs as the pipeline they form, each with what it feeds; the sources configured; every collection's six stages in one table. | 5 s |
 
 The console names the methods by what they catch: **Round trips**,
 **Money loops back** and **Linked wallets**. The sidebar search takes a wallet, a collection or

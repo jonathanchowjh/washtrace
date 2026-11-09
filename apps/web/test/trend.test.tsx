@@ -12,11 +12,11 @@ const frac = (part: number, whole = 10) => ({ part, whole });
 const point = (at: number, own: TimePoint['lens'] = {}): TimePoint => ({
   at, lens: { A: frac(1), AU: frac(2), AC: frac(3), ...own }, sales: 10, transfers: 10,
 });
-const ONE = { key: 'L7', name: 'Quick flips', atLeast: false } as const;
-const TWO = { key: 'L8', name: 'Washed twice', atLeast: true } as const;
-const history = (own: { key: `L${number}`; name: string; atLeast: boolean; floorWhy?: string }[], ownLeft: { key: string; name: string }[] = [], perLens: TimePoint['lens'] = { L7: frac(4), L8: frac(5) }) =>
+const ONE = { key: 'L7', name: 'Quick flips', qualifier: null } as const;
+const TWO = { key: 'L8', name: 'Washed twice', qualifier: 'at least' } as const;
+const history = (own: { key: `L${number}`; name: string; qualifier: 'at least' | 'so far' | null; floorWhy?: string }[], ownLeft: { key: string; name: string }[] = [], perLens: TimePoint['lens'] = { L7: frac(4), L8: frac(5) }) =>
   render(
-    <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} zone="UTC" own={own} ownLeft={ownLeft} ownNotRun={[]}
+    <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} funded funding zone="UTC" own={own} ownLeft={ownLeft} ownNotRun={[]}
       points={[point(0, perLens), point(DAY, perLens)]} lensHrefs={[{ L7: '/c/1/0xabc/trades?caught=L7' }, {}]} />,
   ).container;
 
@@ -70,7 +70,7 @@ describe('the time chart, with lenses of yours', () => {
 
   it('a period past what the lens has judged says "not judged yet", never "no sale"', () => {
     const el = render(
-      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} zone="UTC" own={[ONE]} ownLeft={[]} ownNotRun={[]}
+      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} funded funding zone="UTC" own={[ONE]} ownLeft={[]} ownNotRun={[]}
         points={[point(0, { L7: frac(4, 10) }), point(DAY, { L7: frac(0, 0) })]} />,
     ).container;
     const row = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.startsWith('2 Jan'))!;
@@ -84,7 +84,7 @@ describe('the time chart, with lenses of yours', () => {
 
   it('names a lens of yours with no finished run, beside those left out, in Compare’s words for why', () => {
     const el = render(
-      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} zone="UTC" own={[ONE]} ownLeft={[]}
+      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} funded funding zone="UTC" own={[ONE]} ownLeft={[]}
         ownNotRun={[{ key: 'L12', name: 'Fresh lens', why: 'has no figures: its last run failed.' }, { key: 'L13', name: 'New lens', why: 'has not run on this collection, so it flags nothing yet.' }]}
         points={[point(0), point(DAY)]} />,
     ).container;
@@ -95,7 +95,7 @@ describe('the time chart, with lenses of yours', () => {
 
   it('the hover never reads "not run" with "has not read this far": a lens with no figures has no run to have read', () => {
     const el = render(
-      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} zone="UTC" own={[ONE]} ownLeft={[]} ownNotRun={[]}
+      <TimeChart kind="history" bucket="day" readThrough={null} now={2 * DAY} notFinal={[]} funded funding zone="UTC" own={[ONE]} ownLeft={[]} ownNotRun={[]}
         points={[point(0, { L7: null }), point(DAY, { L7: null })]} />,
     ).container;
     fireEvent.focus(el.querySelector('[role="group"]')!);
@@ -105,7 +105,7 @@ describe('the time chart, with lenses of yours', () => {
   });
 
   it('the (at least) title names why the share is a floor, from the causes it is given', () => {
-    const own = [{ key: 'L8', name: 'Washed twice', atLeast: true, floorWhy: 'some trades have no block time to judge them by' }] as const;
+    const own = [{ key: 'L8', name: 'Washed twice', qualifier: 'at least', floorWhy: 'some trades have no block time to judge them by' }] as const;
     const el = history([...own]);
     expect(el.querySelector('[title^="Washed twice"]')!.getAttribute('title')).toBe("Washed twice's share is a floor: some trades have no block time to judge them by");
     expect(el.innerHTML).not.toContain('not fully read yet');

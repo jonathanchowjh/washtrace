@@ -99,10 +99,10 @@ const list = (c: Element, kind: 'tokens' | 'wallets') => c.querySelector(`[aria-
 describe('the lens lists on the collection page', () => {
   it('every count opens its trades, the loops open the token page lit, and the wallets open their group', async () => {
     const el = list(await collectionPage({ method: 'A' }), 'tokens');
-    expect(named(el, '11')).toEqual([`${BASE}/flagged?kind=trades&caught=A&token=7&all=1`]);
-    expect(named(el, '14')).toEqual([`${BASE}/flagged?kind=trades&token=7&all=1`]);
+    expect(named(el, '11')).toEqual([`${BASE}/trades?caught=A&token=7&all=1`]);
+    expect(named(el, '14')).toEqual([`${BASE}/trades?token=7&all=1`]);
     expect(named(el, '1 loop')).toEqual([`${BASE}/t/7?method=A`]);
-    expect(named(el, '3 wallets')).toEqual([`${BASE}/flagged?kind=trades&group=A.t.7&all=1`]);
+    expect(named(el, '3 wallets')).toEqual([`${BASE}/trades?group=A.t.7&all=1`]);
     expect(linkTo(el, `${BASE}/t/7`)?.textContent).toBe('#7');
     expect(el.textContent).toContain('1 loop among 3 wallets, 2 laps');
     expect(el.textContent).toContain('11 of 14 trades');
@@ -113,10 +113,10 @@ describe('the lens lists on the collection page', () => {
   it('a wallet row says why in its own words, and its counts open its trades', async () => {
     const el = list(await collectionPage({ method: 'A' }), 'wallets');
     expect(el.textContent).toContain('in 2 loops and 1 linked pair with 4 wallets');
-    expect(named(el, '2 loops and 1 linked pair')).toEqual([`${BASE}/flagged?kind=trades&caught=A&wallet=${WAL}&all=1`]);
-    expect(named(el, '4 wallets')).toEqual([`${BASE}/flagged?kind=trades&group=A.w.${WAL}&all=1`]);
-    expect(named(el, '5')).toEqual([`${BASE}/flagged?kind=trades&caught=A&wallet=${WAL}&all=1`]);
-    expect(named(el, '9')).toEqual([`${BASE}/flagged?kind=trades&wallet=${WAL}&all=1`]);
+    expect(named(el, '2 loops and 1 linked pair')).toEqual([`${BASE}/trades?caught=A&wallet=${WAL}&all=1`]);
+    expect(named(el, '4 wallets')).toEqual([`${BASE}/trades?group=A.w.${WAL}&all=1`]);
+    expect(named(el, '5')).toEqual([`${BASE}/trades?caught=A&wallet=${WAL}&all=1`]);
+    expect(named(el, '9')).toEqual([`${BASE}/trades?wallet=${WAL}&all=1`]);
     expect((el.querySelector('input[name=wq]') as HTMLInputElement).placeholder).toBe('Find a wallet (0x…)');
   });
 
@@ -269,7 +269,12 @@ describe('the lens lists on the flagged page', () => {
     const title = async (sp: Record<string, string>) => (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).title;
     expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens flagged by Round trips');
     expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets flagged by Linked wallets');
-    expect(await title({ kind: 'trades' })).toBe('Trades in Coll');
+    const { generateMetadata: tradesTitle } = await import('@/app/c/[chain]/[address]/trades/page');
+    expect((await tradesTitle({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title).toBe('Trades in Coll');
+    // No such collection: each page keeps its own word.
+    const missing = { params: Promise.resolve({ chain: '1', address: 'nope' }), searchParams: Promise.resolve({}) };
+    expect((await tradesTitle(missing)).title).toBe('Trades');
+    expect((await generateMetadata({ ...missing, searchParams: Promise.resolve({ kind: 'tokens' }) })).title).toBe('Flagged');
   });
 });
 
@@ -283,7 +288,7 @@ describe('the list of a lens of yours', () => {
     const section = el.querySelector('section[aria-label="Tokens Blur 3-hop flagged"]')!;
     expect(section.textContent).toContain('Which tokens did Blur 3-hop flag?');
     expect(section.querySelector('.bg-flow')).not.toBeNull();
-    expect(named(section, '11')).toEqual([`${BASE}/flagged?kind=trades&caught=L7&token=7&all=1`]);
+    expect(named(section, '11')).toEqual([`${BASE}/trades?caught=L7&token=7&all=1`]);
     expect(section.textContent).toContain('11 of 14 trades');
     expect(section.textContent).not.toMatch(/loop|0 /);
     expect(reads(el)).not.toMatch(/\bL7\b/);
@@ -313,7 +318,7 @@ describe('the list of a lens of yours', () => {
     state.runs = [ownRun(7, 'Blur 3-hop')];
     state.wallets = { rows: [wallet(WAL, NONE)], total: 1 };
     const el = await flaggedPage({ method: 'L7', kind: 'wallets' });
-    expect(named(el, '5')).toEqual([`${BASE}/flagged?kind=trades&caught=L7&wallet=${WAL}&all=1`]);
+    expect(named(el, '5')).toEqual([`${BASE}/trades?caught=L7&wallet=${WAL}&all=1`]);
     expect(el.querySelector('section[aria-label="Wallets Blur 3-hop flagged"]')?.textContent).not.toMatch(/loop/);
   });
 

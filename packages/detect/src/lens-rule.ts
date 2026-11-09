@@ -57,7 +57,8 @@ const KINDS = EDGE_TYPES.map((e) => e.kind);
 /** The digits of the largest uint256: the most a wei amount or a token id has. */
 export const UINT256_DIGITS = 78;
 const WEI_FLOOR = '10000000000000000'; // 0.01 ETH
-const MAX_HOPS = 6;
+/** The most wallets a loop may have between seller and buyer: checkRule refuses more, and the editor caps its field here. */
+export const MAX_HOPS = 6;
 /** The most hops the follow.hops setting allows (env.ts hops()): the console's Settings check, a collection's own limit (follow route) and a lens's need (data-needs) are all bounded by it. Here, not in env.ts, so the console's client components can import it. */
 export const MAX_FOLLOW_HOPS = 10;
 // The routes take rules from anyone who may write, so every number and list is bounded.
@@ -74,8 +75,8 @@ export const DEFAULT_RULE: LensRule = {
     'nft-token': row(true, 'along', null, null, 'each'),
     'nft-collection': row(true, 'along', 2, null, 'once'),
     'nft-watched': row(false, 'along', null, null, 'each'),
-    eth: row(true, 'either', 2, WEI_FLOOR, 'each'),
-    internal: row(true, 'either', 1, WEI_FLOOR, 'each'),
+    eth: row(true, 'along', 2, WEI_FLOOR, 'each'),
+    internal: row(true, 'along', 1, WEI_FLOOR, 'each'),
     weth: row(true, 'along', 2, WEI_FLOOR, 'each'),
     'other-tokens': row(false, 'along', null, null, 'each'),
   },
@@ -123,10 +124,10 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
 
   const { min, max } = raw.hops;
   if (!isCount(min) || !(max === null || isCount(max))) return { error: 'Not a lens rule.' };
-  if (max !== null && min > max) return { error: 'Hops: "from" is more than "to".' };
+  if (max !== null && min > max) return { error: 'Wallets between: "from" is more than "to".' };
   const onlySameToken = KINDS.every((k) => (k === 'nft-token') === edges[k].use);
   if (min > MAX_HOPS || (max === null ? !onlySameToken : max > MAX_HOPS)) {
-    return { error: 'Hops go from 0 to 6, or "any" when only "NFT: same token" is on.' };
+    return { error: 'Wallets between go from 0 to 6, or "any" when only "NFT: same token" is on.' };
   }
   // "Any" is reachability, judged by the first way back found breadth first: exact only from 0.
   if (max === null && min > 0) return { error: 'With "any" length, the fewest wallets between must be 0.' };

@@ -30,13 +30,13 @@ describe('Compare', () => {
     const { container: c } = render(<Compare {...props} />);
     const num = cell(c, 'A', 'L7').querySelectorAll('a');
     expect(num[0]!.textContent).toBe('25');
-    expect(num[0]!.getAttribute('href')).toBe(`${BASE}/flagged?kind=trades&caught=A,L7`);
+    expect(num[0]!.getAttribute('href')).toBe(`${BASE}/trades?caught=A,L7`);
     expect(num[1]!.textContent).toBe('5 not');
-    expect(num[1]!.getAttribute('href')).toBe(`${BASE}/flagged?kind=trades&caught=A&not=L7`);
+    expect(num[1]!.getAttribute('href')).toBe(`${BASE}/trades?caught=A&not=L7`);
     const diag = cell(c, 'AC', 'AC').querySelectorAll('a');
     expect(diag).toHaveLength(1);
     expect(diag[0]!.textContent).toBe('100');
-    expect(diag[0]!.getAttribute('href')).toBe(`${BASE}/flagged?kind=trades&caught=AC`);
+    expect(diag[0]!.getAttribute('href')).toBe(`${BASE}/trades?caught=AC`);
   });
 
   it('shows not[r][c] for a lens whose run is behind, never the diagonal minus the cell', () => {

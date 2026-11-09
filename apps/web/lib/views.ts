@@ -1,12 +1,12 @@
 import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type Lens, type LensRun, type OwnFlag, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
 import type { LensRule } from '@washtrace/detect/lens-rule';
-import { moneyShort, tokensReason } from '@washtrace/detect/lens-reads';
+import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
 import type { Lenses } from './format';
 import { addressOf, findText, pageOf, pages as pagesOf } from './params';
 import { authConfigured, mayWrite } from './auth';
 import { analyzingOn, storedOnly, unread, type Coverage } from './coverage';
-import { atLeastOf, staleSinceLastWrite, floorCauses, runStateWords, type TokensFloor } from './lens-state';
+import { shareCauses, shareQualifier, staleSinceLastWrite, runStateWords, type TokensFloor } from './lens-state';
 import { lensContext, ownLenses, ranFlags, verdict, type Verdict } from './metrics';
 import { callsPerSecond, configFromSources, fieldViews, hopsFollowed, type SourcesConfig } from './settings';
 import { pipeline } from './pipeline';
@@ -74,13 +74,16 @@ function ownRanIds(latest: AnalysisRow | null, runs: readonly { lens: Lens; run:
   return lensContext(latest, runs).ran.flatMap((k) => lensIdOf(k) ?? []);
 }
 
+/** A watched collection with no read transfer of the token: it is not there, or the history that holds it is not read yet. */
+export type EmptyToken = { empty: true; c: CollectionRow };
+
 /** One token's view, or why there is none: the collection is not watched, or none of the token's transfers is read. */
-export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | 'not-watched' | 'no-transfer'> {
+export async function tokenView(chainId: number, address: string, tokenId: string): Promise<TokenView | EmptyToken | 'not-watched'> {
   const s = store();
   const c = await s.collection(chainId, address);
   if (!c) return 'not-watched';
   const [all, runs] = await Promise.all([s.token(c.id, tokenId), s.lensRuns(c.id)]);
-  if (all.length === 0) return 'no-transfer';
+  if (all.length === 0) return { empty: true, c };
   const graph = await drawingInputs(s, chainId, c, tokenId, all, ownRanIds(c.latest, runs));
   return {
     collection: { id: c.id, chainId, address, name: c.name }, tokenId, ...graph, ownLenses: ownLenses(runs),
@@ -314,7 +317,7 @@ type LensRuns = { lens: Lens; run: LensRun | null }[];
  * What the collection page shapes from the store before it renders: whether
  * money is funded, the lens editor's "Data this lens needs" figures (`needs`,
  * only while the editor is open), and, for each of your lenses, whether its
- * share is "at least" and why. One read of how far money is read, and one
+ * share reads "so far" or "at least" and why. One read of how far money is read, and one
  * count of other tokens, serve the editor's rows and every lens's floor.
  */
 export async function collectionView(s: Store, c: CollectionRow, runs: LensRuns, o: {
@@ -323,15 +326,15 @@ export async function collectionView(s: Store, c: CollectionRow, runs: LensRuns,
   yours: LensRuns[number] | null; chart: { drawn: LensRuns; left: LensRuns; notRun: LensRuns };
 }) {
   const { config, cov, editing, yours } = o;
-  // What the editor's "Data this lens needs" compares its rule with, and the depth moneyRead and each lens's "at least" (moneyShort) are counted to.
+  // What the editor's "Data this lens needs" compares its rule with, and the depth moneyRead and each lens's share qualifier (moneyReason) are counted to.
   const followHops = hopsFollowed(config);
   const funded = config.funding || (c.trailImportedSha !== null && await s.importedMoney(c.id));
-  // One read of how far its money is read serves the editor's rows and every lens's "at least" (moneyShort).
+  // One read of how far its money is read serves the editor's rows and every lens's share qualifier (moneyReason).
   const money = editing || runs.length > 0 ? await s.moneyRead(c.id, followHops) : null;
   // A run behind the collection's version has not read what was fetched since.
   const runBehind = (run: LensRun | null) => staleSinceLastWrite(run, c.latest, c.stale);
-  const shortOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }) => money !== null && moneyShort(lens.rule, money, followHops, runBehind(run));
-  // The same for other tokens: one count, the worker's, serves the editor's row and every lens's "at least" (tokensReason). Each lens compares it with the count its own run took in.
+  const moneyOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }) => money === null ? null : moneyReason(lens.rule, money, followHops, runBehind(run));
+  // The same for other tokens: one count, the worker's, serves the editor's row and every lens's qualifier (tokensReason). Each lens compares it with the count its own run took in.
   const tokenCounts = c.readTokens && (editing || runs.length > 0) ? await s.tokenCounts(c.id) : null;
   const tokensFloorOf = ({ lens, run }: { lens: { rule: LensRule }; run: LensRun | null }): TokensFloor =>
     ({ reason: tokensReason(lens.rule, c.readTokens, tokenCounts, run?.tokensRead ?? null), payees: tokenCounts?.payees ?? config.tokensPayees });
@@ -347,16 +350,17 @@ export async function collectionView(s: Store, c: CollectionRow, runs: LensRuns,
       symbols: (TOKENS[c.chainId] ?? []).map((x) => x.symbol).join(', '),
     },
   } : null;
-  // A share of yours is a floor while what it needs is only partly read; its tab, its stat line and the lead below all say so alike.
-  const atLeast = yours !== null && yours.run?.totals != null && atLeastOf(yours.lens.rule, yours.run.totals, cov.notFinal, funded, shortOf(yours), tokensFloorOf(yours));
+  // A share of yours reads "so far" or "at least" while what it needs is only partly read; its tab, its stat line and the lead below all say so alike.
+  const causesOf = (r: LensRuns[number]) => shareCauses(r.lens.rule, r.run!.totals!, cov.notFinal, funded, config.funding, moneyOf(r), tokensFloorOf(r));
+  const qualifier = yours !== null && yours.run?.totals != null ? shareQualifier(causesOf(yours)) : null;
   return {
-    funded, needs, atLeast,
-    moneyShort: Object.fromEntries(runs.map((r) => [r.lens.key, shortOf(r)])),
+    funded, needs, qualifier,
+    moneyReasons: Object.fromEntries(runs.map((r) => [r.lens.key, moneyOf(r)])),
     tokens: Object.fromEntries(runs.map((r) => [r.lens.key, tokensFloorOf(r)])),
     chartOwn: o.chart.drawn.map((r) => ({
       key: r.lens.key, name: r.lens.name,
-      atLeast: atLeastOf(r.lens.rule, r.run!.totals!, cov.notFinal, funded, shortOf(r), tokensFloorOf(r)),
-      floorWhy: floorCauses(r.lens.rule, r.run!.totals!, cov.notFinal, funded, shortOf(r), tokensFloorOf(r)).join('; '),
+      qualifier: shareQualifier(causesOf(r)),
+      floorWhy: causesOf(r).map((c) => c.text).join('; '),
     })),
     chartLeft: o.chart.left.map((r) => ({ key: r.lens.key, name: r.lens.name })),
     chartNotRun: o.chart.notRun.map((r) => ({ key: r.lens.key, name: r.lens.name, why: runStateWords(r.run)!.full })),

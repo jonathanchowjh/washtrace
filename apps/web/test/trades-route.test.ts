@@ -21,13 +21,14 @@ const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', th
 
 const fresh = () => ({
   runs: [] as ReturnType<typeof ownRun>[], watched: true, moneyRan: true, total: 120, unjudged: 3, rows: [row(1)] as unknown[], calls: [] as unknown[][], streamArgs: [] as unknown[][],
-  stream: async function* () { yield row(1); } as () => AsyncGenerator<unknown>,
+  stream: async function* () { yield row(1); } as () => AsyncGenerator<unknown>, streaming: 0,
 });
 const state = fresh();
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => state.watched ? { id: 1, chainId: 1, address: ADDR, latest: { id: 1, throughBlock: 10, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { available: m === 'A' || state.moneyRan }])) } } : null,
+    get streaming() { return state.streaming; },
     lensRuns: async () => state.runs,
     tradeCount: async () => ({ total: state.total, unjudged: state.unjudged }),
     trades: async (...a: unknown[]) => { state.calls.push(a); return state.rows; },
@@ -97,6 +98,16 @@ describe('GET trades', () => {
     const text = await (await get('format=csv')).text();
     expect(text).toContain(",'=1+1,");
     expect(text).toContain(',"a,""b""",');
+  });
+
+  it('answers 429 before any body while three downloads hold a connection', async () => {
+    state.streaming = 3;
+    const res = await get('format=csv');
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: 'Too many downloads at once; try again in a minute.' });
+    expect(state.streamArgs).toEqual([]);
+    state.streaming = 2;
+    expect((await get('format=csv')).status).toBe(200);
   });
 
   it('cancelling the download closes the generator', async () => {

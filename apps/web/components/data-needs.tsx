@@ -2,22 +2,26 @@
 
 import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { MAX_FOLLOW_HOPS, WALKED, depthNeeded, type LensRule } from '@washtrace/detect/lens-rule';
-import { moneyReason, pendingUpTo, readThrough, tokensReason } from '@washtrace/detect/lens-reads';
+import { WALKED, depthNeeded, type LensRule } from '@washtrace/detect/lens-rule';
+import { moneyReason, pendingUpTo, tokensReason } from '@washtrace/detect/lens-reads';
 import type { MoneyRead, TokenCounts } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { eta, floorPct, floorTime, num, plural } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, about, floorTime, num, plural } from '@/lib/format';
 import { BUTTON, send } from './lens-actions';
 
-const hops = (n: number) => `${n} ${n === 1 ? 'hop' : 'hops'}`;
+/** `asks`: the action is a button that changes this collection, not a link. */
+type Line = { key: string; text: ReactNode; action?: ReactNode; asks?: boolean; error?: string | null };
+
+const keyLink = <a href={ETHERSCAN_HREF} className="underline hover:text-foreground">{ETHERSCAN_CTA}</a>;
 
 /**
- * "Data this lens needs": one row per kind of data a lens reads, what has been
- * read of it, and whether that is enough for this rule. It is how a lens that
- * reaches further than the money read learns it, and how the reader asks the
- * worker for the rest (Fetch them), for this collection only.
+ * The readiness strip: one line for each read this lens is short of (money,
+ * other tokens, this collection's own history), each with the one action that
+ * helps: a button that asks the worker, or the link to add the Etherscan key
+ * the read waits on. A line with no action is a read already running, which
+ * only time closes. When nothing is short the strip renders nothing.
  *
- * `rule` is the editor's unsaved rule, so the rows follow what is being typed.
+ * `rule` is the editor's unsaved rule, so the lines follow what is being typed.
  * `money` is what is read of this collection's money; `estimate` what reading
  * out to the rule's depth would add, from `estimateTo`, or null when the
  * worker has not counted that far. `fanout`, `followHops` (the global limit)
@@ -26,12 +30,12 @@ const hops = (n: number) => `${n} ${n === 1 ? 'hop' : 'hops'}`;
  * edited lens's run is behind the collection's version, so it has not read
  * what was fetched since; false for a lens not run yet.
  * `paused`: the collection is paused, so the worker does not walk it.
- * `tokens`: what the Other tokens row reads (tokensReason): `started` is
- * whether Start reading was pressed, `counts` the worker's last count of that
- * read (null before one), `payees` the worker's tokens.payees, `runTokensRead`
- * the token reads the edited lens's last run took in, and `symbols` the
- * listed tokens' symbols for this chain, which this client component cannot
- * import.
+ * `tokens`: what the Other tokens line reads (tokensReason): `started` is
+ * whether Read other tokens was pressed, `counts` the worker's last count of
+ * that read (null before one), `payees` the worker's tokens.payees,
+ * `runTokensRead` the token reads the edited lens's last run took in, and
+ * `symbols` the listed tokens' symbols for this chain, which this client
+ * component cannot import.
  */
 export function DataNeeds({ rule, transfers, transfersRead, money, estimate, funding, perSecond, watched, writable, chainId, address, followHops, fanout, callsPerWallet, behind, paused, tokens }: {
   rule: LensRule; transfers: number;
@@ -46,182 +50,116 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
   const [error, setError] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const needed = depthNeeded(rule);
-  // The money check's rows (WALKED). Other tokens is a money edge too, but has a read of its own, so it has its own row.
-  const used = WALKED.filter((k) => rule.edges[k].use);
-  // With no hop limit only the token's own hops are read: no money (depthNeeded).
-  const usesMoney = used.length > 0 && rule.hops.max !== null;
+  // The money check's edges (WALKED). Other tokens is a money edge too, but has a read of its own, so it has its own line.
+  const usesMoney = WALKED.some((k) => rule.edges[k].use) && rule.hops.max !== null;
   const usesNft = rule.edges['nft-token'].use || rule.edges['nft-collection'].use;
 
-  async function fetchThem() {
-    setError(null);
+  /** POSTs one of the worker's read requests for this collection, then refreshes so the lines follow it. */
+  async function ask(path: string, body: object, fail: (e: string | null) => void) {
+    fail(null);
     setBusy(true);
-    const said = await send(`/api/collections/${chainId}/${address}/follow`, 'POST', { hops: needed });
+    const said = await send(`/api/collections/${chainId}/${address}/${path}`, 'POST', body);
     setBusy(false);
-    if (said.error !== null) return setError(said.error);
+    if (said.error !== null) return fail(said.error);
     router.refresh();
   }
 
-  const fetchButton = (
-    <button type="button" className={BUTTON} disabled={!writable || busy}
-      title={writable ? `Follow this collection's money out to ${hops(needed)}: the worker reads those wallets, and this lens's share reads "at least" until it has` : LOCAL_ONLY}
-      onClick={() => void fetchThem()}>Fetch them</button>
+  const button = (label: string, title: string, onClick: () => void) => (
+    <button type="button" className={BUTTON} disabled={!writable || busy} title={writable ? title : LOCAL_ONLY} onClick={onClick}>{label}</button>
   );
 
-  async function startTokens() {
-    setTokenError(null);
-    setBusy(true);
-    const said = await send(`/api/collections/${chainId}/${address}/tokens`, 'POST', {});
-    setBusy(false);
-    if (said.error !== null) return setTokenError(said.error);
-    router.refresh();
-  }
-
-  const startButton = (
-    <button type="button" className={BUTTON} disabled={!writable || busy}
-      title={writable ? "Read the listed tokens of this collection's wallets: the worker reads them, and a lens using Other tokens reads \"at least\" until it has" : LOCAL_ONLY}
-      onClick={() => void startTokens()}>Start reading them</button>
-  );
-
-  /** What the money row says for this lens, and the button when reading more would help. */
-  function forMoney(): { text: ReactNode; button?: boolean } {
-    if (!usesMoney) return { text: 'Not used by this lens' };
-    if (!funding) return { text: <a href="/settings#etherscan.key" className="underline hover:text-foreground" title="The money check needs a key to read who paid whom">Needs an Etherscan key → Settings</a> };
+  /** The money line when this lens is short of money, else null. */
+  function moneyLine(): Line | null {
+    if (!usesMoney) return null;
+    const key = 'money';
+    if (!funding) return { key, text: 'Money is not read: with no Etherscan key, the lens runs on the stored money trail only', action: keyLink };
     // Wallets further out are followed from the traders' own, so they wait for the traders' check.
     if (money.traders.checked < money.traders.of) {
-      return { text: `The traders' check is still running: ${num(money.traders.checked)} of ${num(money.traders.of)} traders checked. Wallets further out are followed after it.` };
+      return { key, text: `The traders' check is still running: ${num(money.traders.checked)} of ${num(money.traders.of)} traders checked. Wallets further out are followed after it.` };
     }
-    if (needed > MAX_FOLLOW_HOPS) return { text: `Needs more than washtrace follows (${MAX_FOLLOW_HOPS} hops)` };
-    // One decision with the share's "at least" (moneyReason): money still being read for this lens is never "Enough".
+    // One decision with the share's qualifier (moneyReason): money still being read for this lens is never enough.
     const why = moneyReason(rule, money, followHops, behind);
+    if (why === null) return null;
     // seedReach skips a paused collection, so the walk is not running: it goes on once resumed.
-    if (why === 'seeding' && paused) return { text: 'Paused: finding the wallets continues once this collection is resumed' };
-    if (why === 'seeding') return { text: `Finding the wallets up to ${hops(money.ownLimit ?? money.limit)} out from the money already read` };
-    if (why === 'pending') return { text: `Reading: ${plural(pendingUpTo(money.pendingByDepth, needed), 'wallet')} still to read up to ${hops(needed)}` };
+    if (why === 'seeding' && paused) return { key, text: 'Paused: finding the wallets continues once this collection is resumed' };
+    if (why === 'seeding') return { key, text: `Finding the wallets up to ${money.ownLimit ?? money.limit} wallets out from the money already read` };
+    if (why === 'pending') return { key, text: `Reading: ${plural(pendingUpTo(money.pendingByDepth, needed), 'wallet')} still to read up to ${needed} wallets out` };
     // Behind as written to since the latest analysis, or as run on an older one: the analysis or the lens run is to come.
-    if (why === 'behind') return { text: 'Read: the next analysis or lens run takes it in' };
-    const k = rule.hops.max!;
-    if (why === null) {
-      // Money followed against its direction is not walked back, so a loop that way can be missed.
-      return used.some((e) => rule.edges[e].direction === 'either')
-        ? { text: <>Enough the way money was sent: the loop is at most {hops(k)}<span className="block text-xs text-muted-foreground">money is followed only the way it was sent, so a loop against it can be missed</span></> }
-        : { text: `Enough: the loop is at most ${hops(k)}` };
-    }
+    if (why === 'behind') return { key, text: 'Read: the next analysis or lens run takes it in' };
     const short = estimate === null
       ? 'Not counted yet: washtrace counts how many wallets this means in a coming money check.'
-      : `Needs about ${plural(estimate.wallets, 'more wallet')} checked, ${eta(((estimate.wallets * callsPerWallet) / perSecond) * 1000).replace(/ left$/, '')} at ${num(perSecond)} Etherscan calls a second`;
+      : `needs about ${plural(estimate.wallets, 'more wallet')} checked, ${about(((estimate.wallets * callsPerWallet) / perSecond) * 1000)} at ${num(perSecond)} Etherscan calls a second`;
     return {
-      text: <>
-        {`Not enough: the loop is at most ${hops(k)}, and money is read ${hops(money.limit)} out`}
-        <span className="block text-xs text-muted-foreground">{short}</span>
-        <span className="block text-xs text-muted-foreground">Fetch them queues the reads in the worker; the run uses what is read and marks its share &quot;at least&quot;.</span>
-      </>,
-      button: needed <= MAX_FOLLOW_HOPS,
+      key, error, asks: true,
+      text: `Money is read ${money.limit} wallets out, and this lens needs ${needed}: ${short}`,
+      action: button(`Read money ${needed} wallets out`,
+        `The worker follows this collection's money out to ${needed} wallets out; this lens's share reads "so far" while it does`,
+        () => void ask('follow', { hops: needed }, setError)),
     };
   }
 
-  // The tokens the row reads, from TOKENS: its Read so far cell when it is not used or has no key, and always its last line.
-  const reads = tokens.symbols === '' ? 'Reads no tokens: none are listed for this chain' : `Reads ${tokens.symbols}`;
-
-  /** What the Other tokens row says for this lens: the one decision (tokensReason) in words, and the button when reading would help. */
-  function forTokens(): { read: ReactNode; text: ReactNode; button?: boolean } {
+  /** The Other tokens line when this lens is short of those reads, else null: tokensReason in words. */
+  function tokensLine(): Line | null {
+    if (!rule.edges['other-tokens'].use) return null;
+    const key = 'tokens';
+    if (!funding) return { key, text: 'Other tokens are not read: with no Etherscan key, they cannot be asked for', action: keyLink };
     const why = tokensReason(rule, tokens.started, tokens.counts, tokens.runTokensRead);
-    if (!rule.edges['other-tokens'].use) return { read: reads, text: 'Not used by this lens' };
-    if (!funding) return { read: reads, text: <a href="/settings#etherscan.key" className="underline hover:text-foreground" title="Reading other tokens needs a key to ask who paid whom">Needs an Etherscan key → Settings</a> };
+    if (why === null || why === 'unreached') return null;
     const c = tokens.counts;
     if (why === 'off') {
       const within = money.estimate?.within;
       // The estimate counts how many wallets this means, with one call each; token reads share each pass with the money check, so the time is a floor.
       const payees = tokens.payees ? `; plus up to ${fanout} for each trader paid in these tokens` : '';
+      const reads = tokens.symbols === '' ? 'none are listed for this chain' : tokens.symbols;
       return {
-        read: 'Not read: washtrace has never fetched them',
-        text: typeof within === 'number'
-          ? `Not read: about ${plural(within, 'wallet')}, at least ${floorTime((within / perSecond) * 1000)} at ${num(perSecond)} Etherscan calls a second${payees}`
-          : 'Not counted yet: washtrace counts how many wallets this means in a coming money check.',
-        button: true,
+        key, error: tokenError, asks: true,
+        text: `Other tokens (${reads}) are not read: ${typeof within === 'number'
+          ? `about ${plural(within, 'wallet')}, at least ${floorTime((within / perSecond) * 1000)} at ${num(perSecond)} Etherscan calls a second${payees}`
+          : 'not counted yet, washtrace counts how many wallets this means in a coming money check'}`,
+        action: button('Read other tokens',
+          `The worker reads the listed tokens of this collection's wallets; a lens using Other tokens reads "so far" while it does`,
+          () => void ask('tokens', {}, setTokenError)),
       };
     }
     // seedReach and the token lanes skip a paused collection: it goes on once resumed.
-    if ((why === 'seeding' || why === 'pending') && paused) {
-      return { read: c === null ? 'Started' : `${num(c.read)} of ${num(c.wallets)} wallets read so far`, text: 'Paused: reading continues once this collection is resumed' };
-    }
-    if (c === null) return { read: 'Started', text: 'Reading: the next money check counts the wallets' };
+    if ((why === 'seeding' || why === 'pending') && paused) return { key, text: 'Other tokens: paused, reading continues once this collection is resumed' };
+    if (c === null) return { key, text: 'Other tokens: reading, the next money check counts the wallets' };
     if (why === 'seeding') {
       const moneyFailed = c.moneyFailed > 0 ? `; ${num(c.moneyFailed)} ${c.moneyFailed === 1 ? "wallet's money check" : "wallets' money checks"} failed, tried again hourly` : '';
-      return { read: `${num(c.read)} of ${num(c.wallets)} wallets read so far`, text: `Finding this collection's wallets up to ${hops(Math.max(followHops, money.ownLimit ?? 0))} out${moneyFailed}` };
+      return { key, text: `Other tokens: ${num(c.read)} of ${num(c.wallets)} wallets read so far, finding this collection's wallets up to ${Math.max(followHops, money.ownLimit ?? 0)} wallets out${moneyFailed}` };
     }
     if (why === 'pending') {
       const failed = c.failed > 0 ? `; ${num(c.failed)} failed, tried again hourly` : '';
-      return { read: `${num(c.read)} of ${num(c.wallets)} wallets read`, text: `Reading: ${plural(c.wallets - c.read, 'wallet')} still to read${failed}` };
+      return { key, text: `Other tokens: reading, ${plural(c.wallets - c.read, 'wallet')} still to read${failed}` };
     }
-    const all = `All ${num(c.wallets)} wallets read`;
-    if (why === 'behind') return { read: all, text: 'Read: the next lens run takes it in' };
-    if (why === null) return { read: all, text: 'Enough' };
-    // Reached by ETH or WETH only, or also by one token payment when the count took payees in. The words follow the setting
-    // alone: with payees in, the floor may still be one middle, so the loop missed is not always a longer one;
-    // not "alone" either, as a missed loop may mix ETH and tokens, but always has a token edge.
-    return { read: all, text: c.payees
-      ? 'Enough for wallets reached by ETH, WETH or one token payment: a loop through tokens can be missed'
-      : 'Enough for wallets reached by ETH or WETH: a loop through tokens can be missed' };
+    return { key, text: 'Other tokens: read, the next lens run takes it in' };
   }
 
-  const verdict = forMoney();
-  const tokenVerdict = forTokens();
-  // The depth read through, never the limit just raised and not read yet.
-  const readSoFar = !funding || !usesMoney
-    ? 'What is already stored'
-    : `Wallets up to ${hops(readThrough(money, followHops))} out: ${floorPct(money.traders.checked, money.traders.of)} of ${num(money.traders.of)}`;
+  const collection: Line | null = usesNft && !transfersRead
+    ? { key: 'collection', text: `This collection's transfers are still being read: ${num(transfers)} so far` }
+    : null;
+  const lines = [moneyLine(), tokensLine(), collection].filter((l): l is Line => l !== null);
+  if (lines.length === 0) return null;
+  const buttons = lines.some((l) => l.asks);
+  const reading = lines.some((l) => l.key !== 'collection');
 
   return (
-    <section aria-labelledby="data-needs" className="overflow-x-auto text-sm">
-      <h3 id="data-needs" className="mb-1 font-medium">3 · Data this lens needs</h3>
-      <span className="mb-1 block text-xs text-muted-foreground">how new data gets fetched</span>
-      <table className="w-full min-w-[34rem] text-left">
-        <caption className="mb-1 text-left text-xs text-muted-foreground">What this lens reads, against what washtrace has read, so a share is never shown as complete while its data is partly read</caption>
-        <thead className="text-xs text-muted-foreground">
-          <tr>
-            <th scope="col" className="py-1 pr-3 font-medium">Edge type</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Read so far</th>
-            <th scope="col" className="py-1 pr-3 font-medium">For this lens</th>
-            <th scope="col" className="py-1 font-medium"><span className="sr-only">Action</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr className="border-t align-top">
-            <td className="py-1.5 pr-3">NFT, this collection</td>
-            <td className="py-1.5 pr-3">{transfersRead ? 'All' : 'So far'} {num(transfers)} transfers</td>
-            <td className="py-1.5 pr-3">{!usesNft ? 'Not used by this lens' : transfersRead ? 'Enough' : "Reading history: this collection's transfers are still being read"}</td>
-            <td />
-          </tr>
-          <tr className="border-t align-top">
-            <td className="py-1.5 pr-3">ETH, internal ETH, WETH</td>
-            <td className="py-1.5 pr-3">{readSoFar}</td>
-            <td className="py-1.5 pr-3">
-              {verdict.text}
-              <span className="mt-1 block text-xs text-muted-foreground">washtrace does not follow past a wallet that sent to more than {fanout} others, or whose history was too long to read.</span>
-              {error ? <span role="alert" className="mt-1 block text-xs text-fault">{error}</span> : null}
-            </td>
-            <td className="py-1.5">{verdict.button ? fetchButton : null}</td>
-          </tr>
-          <tr className="border-t align-top text-muted-foreground">
-            <td className="py-1.5 pr-3">NFT, other watched collections</td>
-            <td className="py-1.5 pr-3">{plural(watched, 'collection')} watched</td>
-            <td className="py-1.5 pr-3">Off in this lens</td>
-            <td className="py-1.5"><a href="/" className="underline hover:text-foreground" title="Watching a collection is what lets a lens read its transfers">Watch another collection</a></td>
-          </tr>
-          <tr className="border-t align-top">
-            <td className="py-1.5 pr-3">Other tokens</td>
-            <td className="py-1.5 pr-3">{tokenVerdict.read}</td>
-            <td className="py-1.5 pr-3">
-              {tokenVerdict.text}
-              {/* Every state names the tokens, the ones whose button spends reads included. */}
-              <span className="mt-1 block text-xs text-muted-foreground">{reads}. washtrace does not read past a wallet whose token list was too long to read, and a wallet that sent these tokens to more than {fanout} others is no way back.</span>
-              {tokenError ? <span role="alert" className="mt-1 block text-xs text-fault">{tokenError}</span> : null}
-            </td>
-            <td className="py-1.5">{tokenVerdict.button ? startButton : null}</td>
-          </tr>
-        </tbody>
-      </table>
-      {funding ? null : <p className="mt-1 text-xs text-muted-foreground">With no Etherscan key, the lens runs on the stored money trail only.</p>}
+    <section aria-labelledby="data-needs" className="text-sm">
+      <h3 id="data-needs" className="mb-1 font-medium">Data this lens needs</h3>
+      <ul className="space-y-1.5">
+        {lines.map((l) => (
+          <li key={l.key} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span>{l.text}</span>
+            {l.action}
+            {l.error ? <span role="alert" className="basis-full text-xs text-fault">{l.error}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {buttons ? <p className="mt-1 text-xs text-muted-foreground">Applies to this collection for every lens; Cancel does not undo it.</p> : null}
+      {reading ? <p className="mt-1 text-xs text-muted-foreground">washtrace does not follow past a wallet that sent to more than {fanout} others, or whose history or token list was too long to read.</p> : null}
+      <p className="mt-1 text-xs text-muted-foreground">
+        {plural(watched, 'collection')} watched · <a href="/" className="underline hover:text-foreground" title="Watching a collection is what lets a lens read its transfers">Watch another collection</a>
+      </p>
     </section>
   );
 }

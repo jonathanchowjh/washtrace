@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { ReadingPill, ReadingSummary } from '@/components/coverage';
 import { Pipeline, PipelineErrors, PipelineTable } from '@/components/pipeline';
-import { localTime, short } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, localTime, short } from '@/lib/format';
 import { TRAIL_LOADING, coverage, progress, trust } from '@/lib/coverage';
 import { APART_WHY } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
@@ -17,10 +17,10 @@ afterEach(cleanup);
 
 type Totals = NonNullable<CollectionRow['latest']>['totals'];
 /** The lens tabs of a collection with no lens of yours, the chosen built-in's panel under them. */
-const lensTabs = (totals: Totals, selected: 'A' | 'AU' | 'AC', more: { notFinal?: ('A' | 'AU' | 'AC')[]; trail?: boolean; funded?: boolean; coming?: boolean; silent?: boolean } = {}) =>
+const lensTabs = (totals: Totals, selected: 'A' | 'AU' | 'AC', more: { notFinal?: ('A' | 'AU' | 'AC')[]; trail?: boolean; funded?: boolean; funding?: boolean; coming?: boolean; silent?: boolean } = {}) =>
   render(
-    <LensTabs base="/c/1/0xabc" chainId={1} address="0xabc" selected={selected} totals={totals} latestId={1} paused={false} runs={[]} notFinal={more.notFinal ?? []} moneyShort={{}} tokens={{}}
-      coverage={{ trail: more.trail ?? false, funded: more.funded ?? false, coming: more.coming ?? false, silent: more.silent ?? false }} writable>{null}</LensTabs>,
+    <LensTabs base="/c/1/0xabc" chainId={1} address="0xabc" selected={selected} totals={totals} latestId={1} paused={false} runs={[]} notFinal={more.notFinal ?? []} moneyReasons={{}} tokens={{}}
+      coverage={{ trail: more.trail ?? false, funded: more.funded ?? false, funding: more.funding ?? false, coming: more.coming ?? false, silent: more.silent ?? false }} writable>{null}</LensTabs>,
   ).container;
 
 /** Ethereum has an RPC, so only the stored-data tests see the stored-only reading. */
@@ -341,10 +341,11 @@ describe('a money trail loaded from stored data', () => {
     for (const c of [loaded(), loaded({ latest: analysed(false) })]) {
       const text = panelOf(c, false, { checked: 1_612, of: 11_259 }).textContent!;
       expect(text).not.toMatch(/no funding source/i);
-      expect(text).toContain('Using the stored money trail; add an Etherscan key to check newer wallets');
+      expect(text).toContain(`Using the stored money trail, so newer wallets go unchecked. ${ETHERSCAN_CTA}`);
     }
     const link = [...panelOf(loaded(), false, null).querySelectorAll('a')].find((a) => a.textContent!.includes('Etherscan key'));
-    expect(link?.getAttribute('href')).toBe('/settings#etherscan.key');
+    expect(link?.textContent).toBe(ETHERSCAN_CTA);
+    expect(link?.getAttribute('href')).toBe(ETHERSCAN_HREF);
   });
 
   it('tells the lens cards\' story in stage 5 when the trail checked no wallet and there is no key: not run, not a bar at 0', () => {
@@ -390,10 +391,10 @@ describe('a money trail loaded from stored data', () => {
     const lens = (available: boolean) => ({ available, sales: 10, flaggedSales: 2, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 10, flagged: 2 });
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ latest, wallets: 80, fundedWallets: 20 });
-    const checking = trust(c, coverage(c, ON, 0))!;
+    const checking = trust(c, coverage(c, ON, 0))!.text;
     expect(checking).toBe('25% of wallets that traded it checked for money so far, so Money loops back and Linked wallets are not final: checking the rest can move them either way.');
     expect(checking).not.toMatch(/floors|rise|at least/);
-    const idle = trust(c, coverage(c, ON, 0, 'UTC', false))!;
+    const idle = trust(c, coverage(c, ON, 0, 'UTC', false))!.text;
     expect(idle).toBe('25% of wallets that traded it were checked for money, so Money loops back and Linked wallets are not final: with no Etherscan key the rest go unchecked.');
     expect(idle).not.toMatch(/floors|rise|at least/);
     // The summary names the same set as stage 5.
@@ -404,17 +405,24 @@ describe('a money trail loaded from stored data', () => {
     const lens = (available: boolean) => ({ available, sales: 10, flaggedSales: 2, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 10, flagged: 2 });
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 80, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ latest, wallets: 80, fundedWallets: 80 });
-    expect(trust(c, coverage(c, ON, 0))).toBe("Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet's check is not seen.");
+    expect(trust(c, coverage(c, ON, 0))).toEqual({ chip: null, text: "Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet's check is not seen." });
   });
 
   it('the tabs say shares are so far, and the panel says why Money loops back is not in the range', () => {
     const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
     const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as Totals;
-    const c = lensTabs(all, 'AU', { notFinal: ['AU', 'AC'] });
+    const c = lensTabs(all, 'AU', { notFinal: ['AU', 'AC'], funded: true, funding: true });
     expect(c.textContent).not.toContain('at least');
     const tabs = [...c.querySelector('nav')!.children].map((x) => x.textContent);
     expect(tabs).toEqual(['Round trips 10.0%', 'Money loops back 25.0% so far', 'Linked wallets 30.0% so far', '+ New lens', 'Compare']);
     expect(c.textContent).toContain(`Not in the range above: ${APART_WHY}.`);
+  });
+
+  it('the tabs say "at least" for money lenses whose wallets are unchecked with no funding source, since waiting will not check them', () => {
+    const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
+    const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as Totals;
+    const tabs = [...lensTabs(all, 'AU', { notFinal: ['AU', 'AC'], funded: false }).querySelector('nav')!.children].map((x) => x.textContent);
+    expect(tabs).toEqual(['Round trips 10.0%', 'Money loops back at least 25.0%', 'Linked wallets at least 30.0%', '+ New lens', 'Compare']);
   });
 
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {
@@ -424,7 +432,9 @@ describe('a money trail loaded from stored data', () => {
     expect(cards(true, true)).not.toMatch(/no funding source/i);
     expect(cards(true, true)).toContain('The stored money trail is loaded');
     expect(cards(true, true)).toContain('the next analysis runs this lens');
-    expect(cards(false, false)).toMatch(/it needs a key/i);
+    expect(cards(false, false)).toContain(`Not run. It needs to know who paid whom, and it needs an Etherscan key (WASHTRACE_ETHERSCAN_KEY). ${ETHERSCAN_CTA}`);
+    const link = [...lensTabs(all, 'AU', { trail: false, funded: false }).querySelectorAll('a')].find((a) => a.textContent === ETHERSCAN_CTA);
+    expect(link?.getAttribute('href')).toBe(ETHERSCAN_HREF);
   });
 
   it('promises a money lens a run only when the next analysis will have funding for it, and otherwise says what is missing', () => {
@@ -476,7 +486,7 @@ describe('downloading stored data', () => {
   it('a collection waiting its turn, with an analysis on screen, says its shares can move, not that it has none', () => {
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = down({ downloadProgress: null, latest });
-    const said = trust(c, coverage(c, ON, 0))!;
+    const said = trust(c, coverage(c, ON, 0))!.text;
     expect(said).toContain('every share can move either way');
     expect(said).not.toContain('no numbers');
   });
@@ -564,11 +574,8 @@ describe('downloading stored data', () => {
   });
 });
 
-const TITLES6 = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'];
-
 describe('the six stages', () => {
   const NONE = new Set<number>();
-  const TITLES = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'];
 
   it('shows the six stages in order, each with its state and what it feeds', () => {
     const c = row();
@@ -576,13 +583,13 @@ describe('the six stages', () => {
     const stages = pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false, silent: false });
     expect(lis).toHaveLength(6);
     lis.forEach((li, i) => {
-      expect(li.textContent).toContain(TITLES[i]);
+      expect(li.textContent).toContain(STAGES[i]!.title);
       expect(li.textContent).toContain('Feeds');
       expect(li.textContent).not.toContain('Affects');
       expect(li.textContent).toContain(STATE_WORDS[stages[i]!.state]);
     });
     // Each title sits in its own place: the second stage's is not in the first.
-    expect(lis[0]!.textContent).not.toContain(TITLES[1]);
+    expect(lis[0]!.textContent).not.toContain(STAGES[1].title);
   });
 
   it('a stage missing its key says so and links to Settings, never "Off"', () => {
@@ -590,9 +597,10 @@ describe('the six stages', () => {
     const el = view(c, { rpc: NONE, funding: false });
     const links = [...el.querySelectorAll('a')];
     expect(links.find((a) => a.textContent === 'Add an RPC URL in Settings →')?.getAttribute('href')).toBe('/settings#rpc.1');
-    expect(links.find((a) => a.textContent === 'Add an Etherscan key in Settings →')?.getAttribute('href')).toBe('/settings#etherscan.key');
-    // The chip's word, once per blocked stage, and never repeated by a figure.
-    expect(el.textContent!.split('Needs a key')).toHaveLength(3);
+    expect(links.find((a) => a.textContent === ETHERSCAN_CTA)?.getAttribute('href')).toBe(ETHERSCAN_HREF);
+    // Each blocked stage's chip names what it lacks: an RPC for the chain, a key for the money.
+    expect(el.textContent!.split('Needs a key')).toHaveLength(2);
+    expect(el.querySelectorAll('li')[3]!.textContent).toContain('No RPC');
     expect(el.textContent).not.toMatch(/\bOff\b/);
   });
 
@@ -665,7 +673,7 @@ describe('the six stages', () => {
   it('a missing RPC with no stored data is a limit to lift, never a fault', () => {
     const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.' });
     const li = view(c, { rpc: NONE }).querySelectorAll('li')[3]!;
-    expect(li.textContent).toContain('Needs a key');
+    expect(li.textContent).not.toContain('Needs a key');
     expect(li.textContent).toContain('No RPC is set for Ethereum');
     expect(li.textContent).not.toContain('Last read failed');
     expect(li.textContent).not.toContain('Finding the deployment block');
@@ -811,7 +819,7 @@ describe('the worker page\'s stages', () => {
     expect(el.querySelector('.overflow-x-auto table')).not.toBeNull();
     const heads = [...el.querySelectorAll('thead th')];
     // The first column is the collection; then one per stage, its title on hover.
-    expect(heads.slice(1).map((h) => h.getAttribute('title'))).toEqual(TITLES6);
+    expect(heads.slice(1).map((h) => h.getAttribute('title'))).toEqual(STAGES.map((s) => s.title));
     const body = [...el.querySelectorAll('tbody tr')];
     expect(body).toHaveLength(2);
     body.forEach((tr, i) => {
@@ -853,6 +861,34 @@ describe('the worker page\'s stages', () => {
     expect(items[1]!.textContent).toContain('Paused · last error before the pause: old');
     expect(items[1]!.className).not.toContain('text-fault');
     expect(el.textContent).not.toContain('No RPC is configured');
+  });
+});
+
+describe('the reading summary chip', () => {
+  const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, missingData: 0, fundedWallets: 4, wallets: 4, truncatedSearches: 0,
+    totals: { A: { available: true }, AU: { available: true }, AC: { available: true } } } as unknown as CollectionRow['latest'];
+  const chip = (el: HTMLElement) => el.querySelector('[title]');
+
+  it('catching up shows Shares may move, with the sentence as its title and accessible description', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 4, startBlock: 0, cursorBlock: 50, headBlock: 1000 });
+    const cov = coverage(c, ON, 0);
+    const el = render(<ReadingSummary c={c} cov={cov} href="#reading" />).container;
+    const sentence = trust(c, cov)!.text;
+    expect(chip(el)!.textContent).toBe('Shares may move');
+    expect(chip(el)!.getAttribute('title')).toBe(sentence);
+    expect(el.querySelector(`#${chip(el)!.getAttribute('aria-describedby')}`)!.textContent).toBe(sentence);
+  });
+
+  it('paused shows Not current', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 4, pausedAt: 5 });
+    expect(chip(render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container)!.textContent).toBe('Not current');
+  });
+
+  it('a complete reading shows its sentence as text and no chip', () => {
+    const c = row({ latest, wallets: 4, fundedWallets: 4 });
+    const el = render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container;
+    expect(chip(el)).toBeNull();
+    expect(el.textContent).toContain('Every transfer to the finalized head is read');
   });
 });
 

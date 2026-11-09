@@ -17,12 +17,12 @@ export async function POST(req: Request, { params }: Ctx): Promise<Response> {
     const written = await writeBody(req);
     if (written instanceof Response) return written;
     const { hops } = written.body;
-    if (typeof hops !== 'number' || !Number.isInteger(hops) || hops < 1 || hops > MAX_FOLLOW_HOPS) return bad(`hops is a whole number from 1 to ${MAX_FOLLOW_HOPS}.`);
+    if (typeof hops !== 'number' || !Number.isInteger(hops) || hops < 1 || hops > MAX_FOLLOW_HOPS) return bad(`Wallets out is a whole number from 1 to ${MAX_FOLLOW_HOPS}.`);
     const found = await collectionFrom(params);
     if (found instanceof Response) return found;
     const { s, chainId, address, collection: c } = found;
     const global = hopsFollowed(configFromSources(await s.sources(), await s.settings()));
-    if (hops <= global) return bad(`Every collection is already followed ${global} hops out: ask for more than that.`);
+    if (hops <= global) return bad(`Every collection is already followed ${global} wallets out: ask for more than that.`);
     const set = await s.followFurther(c.id, hops);
     if (set === 'gone') return bad('This collection is not watched.', 404);
     if (set === 'set') console.info('[washtrace] %s follows %d/%s out to %d hops', written.actor, chainId, address, hops);

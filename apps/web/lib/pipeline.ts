@@ -1,5 +1,5 @@
 import { BEHIND_BLOCKS, NOT_DONE, TRAIL_NOTES, reaches, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { LENSES } from './format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES } from './format';
 
 export type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
 export type StageState = 'waiting' | 'running' | 'done' | 'not-needed' | 'blocked' | 'failed' | 'paused' | 'live' | 'silent';
@@ -38,7 +38,9 @@ export const STATE_WORDS: Record<StageState, string> = {
   blocked: 'Needs a key', failed: 'Failed', paused: 'Paused', live: 'Following', silent: 'Worker silent',
 };
 
-export const TITLES = ['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything'] as const;
+/** A blocked chain stage lacks an RPC, not a key (the money stage's blocked word): the chip says which. */
+export const stateWord = (n: Stage['n'], state: StageState): string => (n === 4 && state === 'blocked' ? 'No RPC' : STATE_WORDS[state]);
+
 const FEEDS = [
   'stage 2: the history it holds arrives once it has downloaded.',
   `every lens: the history up to where the stored data stops, and the money trail for ${LENSES.AU.name} and ${LENSES.AC.name}.`,
@@ -137,7 +139,7 @@ export function pipeline({ c, entry, rpcChains, funding, analyzing, silent }: Pi
   }
 
   let money: Part = { state: 'done' };
-  if (!funding) money = { state: 'blocked', needs: { text: 'Add an Etherscan key in Settings →', href: '/settings#etherscan.key' } };
+  if (!funding) money = { state: 'blocked', needs: { text: ETHERSCAN_CTA, href: ETHERSCAN_HREF } };
   else if (c.latest === null) money = { state: 'waiting' };
   else if (c.fundedWallets < c.wallets) money = { state: 'running', share: c.fundedWallets / c.wallets };
 
@@ -152,7 +154,7 @@ export function pipeline({ c, entry, rpcChains, funding, analyzing, silent }: Pi
     return {
       key: KEYS[i]!,
       n: (i + 1) as Stage['n'],
-      title: TITLES[i]!,
+      title: STAGES[i]!.title,
       state: paused ? 'paused' : quiet ? 'silent' : part.state,
       share: paused || quiet ? null : part.share ?? null,
       file: paused || quiet ? null : part.file ?? null,

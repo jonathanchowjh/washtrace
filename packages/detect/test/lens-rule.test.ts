@@ -36,8 +36,8 @@ describe('DEFAULT_RULE', () => {
     const e = DEFAULT_RULE.edges;
     expect(e['nft-token']).toEqual({ use: true, direction: 'along', max: null, minWei: null, repeats: 'each' });
     expect(e['nft-collection']).toEqual({ use: true, direction: 'along', max: 2, minWei: null, repeats: 'once' });
-    expect(e.eth).toEqual({ use: true, direction: 'either', max: 2, minWei: wei, repeats: 'each' });
-    expect(e.internal).toEqual({ use: true, direction: 'either', max: 1, minWei: wei, repeats: 'each' });
+    expect(e.eth).toEqual({ use: true, direction: 'along', max: 2, minWei: wei, repeats: 'each' });
+    expect(e.internal).toEqual({ use: true, direction: 'along', max: 1, minWei: wei, repeats: 'each' });
     expect(e.weth).toEqual({ use: true, direction: 'along', max: 2, minWei: wei, repeats: 'each' });
     expect(e['nft-watched'].use).toBe(false);
     expect(e['other-tokens'].use).toBe(false);
@@ -70,11 +70,11 @@ describe('checkRule errors', () => {
   it('refuses hops that run backwards or out of range', () => {
     const r = clone();
     r.hops = { min: 3, max: 1 };
-    expect(errorOf(r)).toBe('Hops: "from" is more than "to".');
+    expect(errorOf(r)).toBe('Wallets between: "from" is more than "to".');
     r.hops = { min: 0, max: 7 };
-    expect(errorOf(r)).toBe('Hops go from 0 to 6, or "any" when only "NFT: same token" is on.');
+    expect(errorOf(r)).toBe('Wallets between go from 0 to 6, or "any" when only "NFT: same token" is on.');
     r.hops = { min: 0, max: null };
-    expect(errorOf(r)).toBe('Hops go from 0 to 6, or "any" when only "NFT: same token" is on.');
+    expect(errorOf(r)).toBe('Wallets between go from 0 to 6, or "any" when only "NFT: same token" is on.');
   });
 
   it('allows "any" hops when only the same-token row is on', () => {
@@ -191,7 +191,7 @@ describe('ruleLine', () => {
   });
 
   it.each([
-    ['the default rule', DEFAULT_RULE, 'NFT and money, either way where allowed, any token of this collection, 1–3 wallets between, within 30 days either side, repeats once'],
+    ['the default rule', DEFAULT_RULE, 'NFT and money, follows arrows, any token of this collection, 1–3 wallets between, within 30 days either side, repeats once'],
     ["Money loops back's copy", COPIES.AU.rule, 'NFT and money, follows arrows, same token, 0–6 wallets between, repeats once'],
     ["Linked wallets' copy: money only, so no NFT scope", COPIES.AC.rule, 'Money only, either way where allowed, 0–1 wallets between, repeats once'],
     ['a window on one side', { ...COPIES.AC.rule, window: { days: 7, side: 'after' } } satisfies LensRule, 'Money only, either way where allowed, 0–1 wallets between, within 7 days after, repeats once'],

@@ -5,7 +5,7 @@ import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addressOf } from '@/lib/params';
-import { localTime, storedSizes } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, localTime, storedSizes } from '@/lib/format';
 import { analysisWaitText } from '@/lib/coverage';
 import { storedManifest } from '@/lib/store';
 import { AddCollection, CollectionControls, SUGGESTED, Suggested, WatchPanel } from '@/components/watch';
@@ -15,10 +15,10 @@ import { CollectionTabs } from '@/components/tabs';
 import WorkerPage from '@/app/worker/page';
 
 // The worker page reads its view from the store: give it one, with the request-scoped imports it awaits.
-const view = vi.hoisted(() => ({ funding: null as null | { source: string; perSecond: number | null }, trailFunded: false, jobs: [] as unknown[], backlog: [] as unknown[] }));
+const view = vi.hoisted(() => ({ funding: null as null | { source: string; perSecond: number | null }, trailFunded: false, rpcChains: [1] as number[], jobs: [] as unknown[], backlog: [] as unknown[] }));
 vi.mock('@/lib/views', () => ({
   workerView: async () => ({
-    every: { ingest: 1, fund: 1, analyze: 1 }, rpcChains: [1], funding: view.funding, followHops: null, trailFunded: view.trailFunded,
+    every: { ingest: 1, fund: 1, analyze: 1 }, rpcChains: view.rpcChains, funding: view.funding, followHops: null, trailFunded: view.trailFunded,
     passes: [], jobs: view.jobs, notices: [], backlog: view.backlog, collections: [],
   }),
 }));
@@ -266,9 +266,9 @@ describe('CollectionTabs', () => {
     expect(screen.getByRole('link', { name: 'All (4)' }).getAttribute('href')).toBe('/?tab=all');
   });
 
-  it('counts how many are behind', () => {
+  it('counts how many are without an RPC', () => {
     render(<CollectionTabs counts={{ ...counts, behind: 2 }} current="sync" />);
-    expect(screen.getByRole('link', { name: 'In sync (3 · 2 behind)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'In sync (3 · 2 without RPC)' })).toBeTruthy();
   });
 
   it('opens on the remembered tab when none is in the address', () => {
@@ -335,10 +335,10 @@ describe('CollectionRow', () => {
     expect(wrapper.classList.contains('z-10')).toBe(true);
   });
 
-  it('says a missing RPC as a key it needs, not a fault; a chain with an RPC keeps the fault line', () => {
+  it('says a missing RPC as No RPC, not a fault; a chain with an RPC keeps the fault line', () => {
     const err = 'No RPC is configured for chain 1.';
     const { container, unmount } = render(<CollectionRow writable c={{ ...base, error: err }} why="" rpcChains={new Set()} funding silent={false} now={0} />);
-    expect(container.textContent).toContain('Needs a key: no RPC is set for Ethereum.');
+    expect(container.textContent).toContain('No RPC is set for Ethereum.');
     expect(container.textContent).not.toContain(err);
     expect(container.querySelector('.text-fault')).toBeNull();
     unmount();
@@ -488,10 +488,21 @@ describe('the worker page\'s sources', () => {
       expect(line.textContent).toContain('Needs a key:');
       expect(line.querySelector('.text-money')).not.toBeNull();
       expect(line.querySelector('.text-muted-foreground')?.textContent).toBe('→ reading stage 5 (Money)');
-      const link = [...line.querySelectorAll('a')].find((a) => a.textContent === 'Add an Etherscan key in Settings →')!;
-      expect(link.getAttribute('href')).toBe('/settings#etherscan.key');
+      const link = [...line.querySelectorAll('a')].find((a) => a.textContent === ETHERSCAN_CTA)!;
+      expect(link.getAttribute('href')).toBe(ETHERSCAN_HREF);
       cleanup();
     }
+  });
+});
+
+describe('the worker page\'s RPC line', () => {
+  afterEach(() => { cleanup(); view.rpcChains = [1]; });
+
+  it('says No RPC, never a key, when no chain has an RPC', async () => {
+    view.rpcChains = [];
+    const el = render(await WorkerPage()).container;
+    const link = [...el.querySelectorAll('a')].find((a) => a.getAttribute('href') === '/settings#rpc.1' && a.textContent!.startsWith('No RPC'))!;
+    expect(link.textContent).toBe('No RPC. Add an RPC URL in Settings →');
   });
 });
 
@@ -504,5 +515,14 @@ describe('the worker page\'s wallet count', () => {
     Object.assign(view, { funding: null, trailFunded: false, jobs: [job], backlog: [{ chainId: 1, done: 3, pending: 2, failed: 0, stranded: 0, truncated: 0, followed: 1, etaMs: null }] });
     const text = render(await WorkerPage()).container.textContent!;
     expect(text).toContain('3 of 5 wallets on this chain checked');
+  });
+
+  it('counts depth in wallets out and says no hop, with funding on and wallets held back', async () => {
+    const job = { job: 'fund', state: 'ok', startedAt: null, finishedAt: null, tookMs: null, detail: null, outcome: null };
+    Object.assign(view, { funding: { source: 'etherscan', perSecond: null }, trailFunded: true, jobs: [job], backlog: [{ chainId: 1, done: 3, pending: 2, failed: 0, stranded: 4, truncated: 0, followed: 1, etaMs: 40 * 60_000 }] });
+    const text = render(await WorkerPage()).container.textContent!;
+    expect(text).toContain('following money 3 wallets out from traders');
+    expect(text).toContain('about 40 min left');
+    expect(text).not.toMatch(/\bhops?\b/i);
   });
 });

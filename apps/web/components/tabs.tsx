@@ -43,7 +43,7 @@ export function CollectionTabs({ counts, current, find, sort, dir }: { counts: {
   }, [named, router, find, sort, dir]);
 
   const label: Record<Tab, string> = {
-    sync: `In sync (${counts.sync}${counts.behind > 0 ? ` · ${counts.behind} behind` : ''})`,
+    sync: `In sync (${counts.sync}${counts.behind > 0 ? ` · ${counts.behind} without RPC` : ''})`,
     paused: `Paused (${counts.paused})`,
     all: `All (${counts.all})`,
   };

@@ -2,15 +2,16 @@ import type pg from 'pg';
 import type { Halt } from './stored-sync.js';
 
 /**
- * How often a download or a trail import looks that the connection holding
- * its lock is alive. A session that died without a word frees the lock, and
- * another replica could start the same part file.
+ * How often a download, a trail import or a worker pass looks that the
+ * connection holding its lock is alive. A session that died without a word
+ * frees the lock, and another replica could start the same part file or pass.
  */
 const LOCK_CHECK_MS = 60_000;
 
 /**
  * What a download and a trail import share while they run under their lock
- * (StoredSync.fetchStored, StoredSync.importTrail). The client holding the
+ * (StoredSync.fetchStored, StoredSync.importTrail); a worker pass watches its
+ * lock with it too, saying no progress (Worker.run). The client holding the
  * lock is idle for hours, out of the pool: no one hears its errors but this,
  * and an error unheard ends the process. Lost, or found dead by a look once a
  * minute, it stops the run as `lost`, since the lock went with it. The run's

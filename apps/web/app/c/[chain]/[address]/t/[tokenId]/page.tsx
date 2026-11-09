@@ -16,7 +16,12 @@ import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
 import { APART_WHY, FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
-import { tokenView } from '@/lib/views';
+import { coverage, progress, unread } from '@/lib/coverage';
+import { readerZone } from '@/lib/api';
+import { configFromSources } from '@/lib/settings';
+import { workerSilent } from '@/lib/status';
+import { store } from '@/lib/store';
+import { tokenView, type EmptyToken } from '@/lib/views';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -45,7 +50,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const tokenId = tokenIdOf(p.tokenId);
   if (chainId === null || address === null || tokenId === null) notFound();
   const view = await tokenView(chainId, address, tokenId);
-  if (typeof view === 'string') notFound();
+  if (view === 'not-watched') notFound();
+  if ('empty' in view) return noTransfer(view.c, tokenId, `/c/${chainId}/${address}`);
   // tokenView has already dropped the lenses that did not run.
   const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun, own, ownLenses } = view;
   const name = collection.name ?? short(address);
@@ -196,6 +202,22 @@ export default async function TokenPage({ params, searchParams }: Props) {
         {/* The same transfers in the Trades view, to filter, group or download. */}
         <MoreLink href={tradesHref(base, { kind: 'all', token: tokenId })} className="mt-3">Every trade of this token →</MoreLink>
       </Section>
+    </>
+  );
+}
+
+/** A watched collection that has no transfer of this token: still being read, or never had one. */
+async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
+  const s = store();
+  const [passes, sources, settings, zone] = await Promise.all([s.passes(), s.sources(), s.settings(), readerZone()]);
+  const config = configFromSources(sources, settings);
+  const cov = coverage(c, new Set(config.chains), Date.now(), zone, config.funding, workerSilent(passes, Date.now()) !== null);
+  const name = c.name ?? short(c.address);
+  return (
+    <>
+      <Head title={`${name} #${tokenLabel(tokenId)}`} crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]} />
+      <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
+      <MoreLink href={base}>Back to {name}</MoreLink>
     </>
   );
 }

@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, SECRET_KEYS, Store, TOKEN_COUNT_MS, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, SECRET_KEYS, Store, TOKEN_COUNT_MS, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
 import type { ListOpts, TokenSort, WalletSort } from '../src/trade-sql.js';
 import { followOf } from '../src/reach.js';
 import { FACTS_VERSION, FLOOR_DAYS } from '../src/facts.js';
@@ -33,6 +33,9 @@ const collection = w('c011');
 // This test's own advisory-lock key, not one of the store's LOCKS.
 const LOCKS_TEST_KEY = 987_654;
 const a = w('a'), b = w('b'), x = w('x');
+
+/** What the last pass recorded on `job`'s row: a worker's analyze pass records a lens run or a preview on the lens row. */
+const said = async (job: 'analyze' | 'lens') => (await store.passes()).find((p) => p.job === job)?.detail;
 
 beforeAll(async () => {
   pg = await new PostgreSqlContainer('postgres:17-alpine').start();
@@ -107,7 +110,7 @@ describe('migration #28: the money-edge index, built concurrently', () => {
   const DEF = 'CREATE INDEX flows_moves_idx ON washtrace.flows USING btree (chain_id, from_address, to_address, block_number)';
 
   it('is a step the runner runs outside a transaction, and #27 holds the lens tables only', () => {
-    expect(MIGRATIONS).toHaveLength(32);
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(32);
     expect(typeof MIGRATIONS[26]).toBe('string');
     expect(MIGRATIONS[26]).not.toContain('flows_moves_idx');
     const step = MIGRATIONS[27]!;
@@ -123,14 +126,14 @@ describe('migration #28: the money-edge index, built concurrently', () => {
     await store.migrate();
     await store.pool.query('DROP INDEX washtrace.flows_moves_idx');
     await at(27);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     const built = await isValid();
     expect(built).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     await at(27);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     expect(await isValid()).toEqual(built);
-    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: 32 }]);
+    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: MIGRATIONS.length }]);
   });
 
   it('drops an INVALID index a stopped build left under its name, and builds it again', async () => {
@@ -142,7 +145,7 @@ describe('migration #28: the money-edge index, built concurrently', () => {
       await expect(store.pool.query('CREATE UNIQUE INDEX CONCURRENTLY flows_moves_idx ON washtrace.flows (chain_id)')).rejects.toThrow();
       expect(await isValid()).toEqual([expect.objectContaining({ valid: false })]);
       await at(27);
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       expect(await isValid()).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
     } finally {
       await store.pool.query('DELETE FROM washtrace.flows WHERE from_address = $1', [w('1d01')]);
@@ -170,7 +173,7 @@ describe('migration #28: the money-edge index, built concurrently', () => {
         await new Promise((r) => setTimeout(r, 25));
       }
       await holder.query('SELECT pg_advisory_unlock($1, 0)', [0x77617368]);
-      expect(await Promise.all(both)).toEqual([32, 32]);
+      expect(await Promise.all(both)).toEqual([MIGRATIONS.length, MIGRATIONS.length]);
       expect(await isValid()).toEqual([{ valid: true, def: DEF, oid: expect.any(Number) }]);
     } finally {
       await holder.end();
@@ -199,17 +202,17 @@ describe('migration #30: flows_from_idx dropped, flows_moves_idx serves its look
     await store.migrate();
     await store.pool.query('CREATE INDEX IF NOT EXISTS flows_from_idx ON washtrace.flows (chain_id, from_address)');
     await at(29);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     expect(await indexes()).toEqual(['flows_moves_idx']);
   });
 
-  it('on a store without flows_from_idx is a no-op, and the version is 32', async () => {
+  it('on a store without flows_from_idx is a no-op, and the version is the latest', async () => {
     await store.migrate();
     expect(await indexes()).toEqual(['flows_moves_idx']);
     await at(29);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     expect(await indexes()).toEqual(['flows_moves_idx']);
-    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: 32 }]);
+    expect((await store.pool.query('SELECT version FROM washtrace.schema_version')).rows).toEqual([{ version: MIGRATIONS.length }]);
   });
 
   it('a query by (chain_id, from_address) on flows still uses an index: flows_moves_idx', async () => {
@@ -262,9 +265,9 @@ describe('migration #31: a collection\'s own hop limit, and its reach', () => {
     expect(MIGRATIONS[30]).toContain('ADD COLUMN IF NOT EXISTS follow_hops smallint CHECK (follow_hops BETWEEN 1 AND 10)');
     expect(MIGRATIONS[30]).toContain('CREATE TABLE IF NOT EXISTS washtrace.reach');
     await at(30);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     await at(30);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     const { rows } = await store.pool.query(`SELECT indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename = 'reach' ORDER BY indexname`);
     expect(rows.map((r) => r.indexdef)).toEqual([
       'CREATE UNIQUE INDEX reach_pkey ON washtrace.reach USING btree (collection_id, address)',
@@ -1063,14 +1066,14 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
   });
 
   it('#32 is one plain step: three tables and six nullable columns; running it again changes nothing', async () => {
-    expect(MIGRATIONS).toHaveLength(32);
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(32);
     const step = MIGRATIONS[31];
     expect(typeof step).toBe('string');
     for (const t of ['token_flows', 'token_reads', 'token_payees']) expect(step).toContain(`CREATE TABLE IF NOT EXISTS washtrace.${t}`);
     await at(31);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     await at(31);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     const keys = (await store.pool.query(
       `SELECT tablename, indexdef FROM pg_indexes WHERE schemaname = 'washtrace' AND tablename IN ('token_flows', 'token_reads', 'token_payees') ORDER BY tablename`,
     )).rows;
@@ -1103,7 +1106,7 @@ describe('migration #32: other tokens, and a walk safe at any limit', () => {
       await store.followFurther(fetched, 5);
       await store.pool.query('UPDATE washtrace.collections SET reach_hops = NULL WHERE chain_id = $1', [C]);
       await at(31);
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       expect((await own(fetched)).reach_hops).toBe(5);
       expect((await own(not)).reach_hops).toBeNull();
     } finally {
@@ -1789,12 +1792,12 @@ describe('Store', () => {
   const LIST = { sort: 'caught' as const, find: null, limit: 50, offset: 0 };
 
   it('migrates, and migrating again changes nothing', async () => {
-    expect(await store.migrate()).toBe(32);
-    expect(await store.schemaVersion()).toBe(32);
-    expect(await store.migrate()).toBe(32);
-    expect(await store.migrate()).toBe(32);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
+    expect(await store.schemaVersion()).toBe(MIGRATIONS.length);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
     const { rows } = await store.pool.query('SELECT version FROM washtrace.schema_version');
-    expect(rows).toEqual([{ version: 32 }]);
+    expect(rows).toEqual([{ version: MIGRATIONS.length }]);
   });
 
   it('drops "Reading from the chain instead" from notes written before the console said what follows', async () => {
@@ -1803,7 +1806,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (13)');
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       expect(await store.collection(1, w('1ec1'))).toMatchObject({ restoreNote: 'Stored data could not be loaded: its file is missing.', restoreNoteKey: null, restoreRetryAt: null });
     } finally {
       await drop(1, w('1ec1'));
@@ -1817,7 +1820,7 @@ describe('Store', () => {
     try {
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (17)');
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       const { rows } = await store.pool.query("SELECT key, value FROM washtrace.settings WHERE key IN ('follow.hops', 'etherscan.rps') ORDER BY key");
       expect(rows).toEqual([{ key: 'etherscan.rps', value: '2' }]);
     } finally {
@@ -1836,7 +1839,7 @@ describe('Store', () => {
       // Run the newest migration again, as an install upgrading to it would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (12)');
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       expect((await store.collection(1, w('1ea1')))!.error).toBeNull();
       expect((await store.collection(1, w('1ea2')))!.error).toBe('No RPC is configured for chain 1.');
       const { rows } = await store.pool.query('SELECT address, error FROM washtrace.wallets WHERE address = ANY($1) ORDER BY address', [[w('1eb1'), w('1eb2')]]);
@@ -1952,6 +1955,90 @@ describe('Store', () => {
     expect((await store.collection(1, w('9c2')))!.pausedAt).toBeNull();
     await drop(1, w('9c1'));
     await drop(1, w('9c2'));
+  });
+
+  describe('a paused collection that a delete holds locked', () => {
+    const chainId = 41;
+    const version = async (id: number) => Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
+
+    /** Pauses a collection that traded `trader`, then holds its row FOR UPDATE on a second connection, as a delete's cascade does, and runs `body`. */
+    async function whileLocked(n: string, body: (id: number, trader: string) => Promise<void>): Promise<void> {
+      const addr = w(`41${n}`), trader = w(`41${n}a`), other = w(`41${n}b`);
+      const id = (await store.addCollection(chainId, addr, 'Deleting', 1)).id;
+      const holder = new pgClient.Client({ connectionString: pg.getConnectionUri() });
+      await holder.connect();
+      try {
+        await store.ingest(id, chainId, chain(n === 'a' ? '411' : '412', trader, other), 10, [trader, other]);
+        await store.startTokens(id);
+        await store.pause(chainId, addr);
+        await holder.query('BEGIN');
+        await holder.query('SELECT 1 FROM washtrace.collections WHERE id = $1 FOR UPDATE', [id]);
+        await body(id, trader);
+      } finally {
+        await holder.query('ROLLBACK').catch(() => {});
+        await holder.end();
+        await drop(chainId, addr);
+      }
+    }
+
+    /** Fails after 2 s instead of hanging if `run` is waiting on the lock; the holder's rollback in whileLocked then frees the stuck query. */
+    async function within2s(run: () => Promise<void>): Promise<void> {
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('still waiting on the delete\'s lock after 2 s')), 2000); });
+      try { await Promise.race([run(), late]); } finally { clearTimeout(timer); }
+    }
+
+    it('saveMoney for a wallet that traded it does not wait for the delete', async () => {
+      await whileLocked('a', async (id, trader) => {
+        const before = await version(id);
+        await within2s(() => store.saveMoney(chainId, trader, [flow(trader, w('41aff'))], false));
+        // A paused collection is not analyzed, so its version is left alone.
+        expect(await version(id)).toBe(before);
+      });
+    });
+
+    it('countTokens does not wait for the delete either', async () => {
+      await whileLocked('b', async () => {
+        await within2s(() => store.countTokens(chainId, 3, false, Date.now() + TOKEN_COUNT_MS));
+      });
+    });
+  });
+
+  it('resume moves the version, so the collection is analyzed again, and countTokens counts it on its next pass', async () => {
+    const chainId = 42, addr = w('42c');
+    const id = (await store.addCollection(chainId, addr, 'Back', 1)).id;
+    try {
+      await store.ingest(id, chainId, chain('42', w('42a'), w('42b')), 10, [w('42a'), w('42b')]);
+      await store.startTokens(id);
+      await store.pause(chainId, addr);
+      const paused = Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
+      await store.countTokens(chainId, 3, false, Date.now() + TOKEN_COUNT_MS);
+      expect((await store.pool.query('SELECT token_counts FROM washtrace.collections WHERE id = $1', [id])).rows[0].token_counts).toBeNull();
+      await store.resume(chainId, addr);
+      expect(Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version)).toBeGreaterThan(paused);
+      expect((await store.stale()).map((r) => r.id)).toContain(id);
+      await store.countTokens(chainId, 3, false, Date.now() + TOKEN_COUNT_MS);
+      expect((await store.pool.query('SELECT token_counts FROM washtrace.collections WHERE id = $1', [id])).rows[0].token_counts).not.toBeNull();
+    } finally {
+      await drop(chainId, addr);
+    }
+  });
+
+  it('watching a paused collection again moves the version too, so it is analyzed again; watching a live one again does not', async () => {
+    const chainId = 43, addr = w('43c');
+    const id = (await store.addCollection(chainId, addr, 'Again', 1)).id;
+    const version = async () => Number((await store.pool.query('SELECT version FROM washtrace.collections WHERE id = $1', [id])).rows[0].version);
+    try {
+      const live = await version();
+      await store.addCollection(chainId, addr, null, 1);
+      expect(await version()).toBe(live);
+      await store.pause(chainId, addr);
+      const paused = await version();
+      await store.addCollection(chainId, addr, null, 1);
+      expect(await version()).toBeGreaterThan(paused);
+    } finally {
+      await drop(chainId, addr);
+    }
   });
 
   it('counts as waiting only the wallets a lane serves, and the ones a paused collection holds back apart', async () => {
@@ -2218,6 +2305,45 @@ describe('Store', () => {
     await drop(1, coll);
   });
 
+  it('marks an analysis as started, and a save, a failure or a requeue each take the mark off; only a failure counts', async () => {
+    const coll = w('9a2');
+    const { id } = await store.addCollection(1, coll, 'Marked', 1);
+    const marked = async () => (await store.stale()).find((s) => s.id === id)!.startedAt;
+    const failures = async () => (await store.pool.query('SELECT analysis_failures FROM washtrace.collections WHERE id = $1', [id])).rows[0].analysis_failures;
+    try {
+      expect(await marked()).toBeNull();
+      await store.analysisStarted(id);
+      expect(Math.abs((await marked())! - Date.now())).toBeLessThan(5_000);
+      await store.analysisRequeued(id);
+      expect(await marked()).toBeNull();
+      expect(await failures()).toBe(0);
+      await store.analysisStarted(id);
+      await store.analysisFailed(id, 'out of memory');
+      expect(await marked()).toBeNull();
+      expect(await failures()).toBe(1);
+      await store.analysisStarted(id);
+      const due = (await store.stale()).find((s) => s.id === id)!;
+      await store.saveAnalysis(id, due.version, analyze(input([])), 1, null, new Set(['']));
+      const { rows } = await store.pool.query('SELECT analysis_started_at FROM washtrace.collections WHERE id = $1', [id]);
+      expect(rows[0].analysis_started_at).toBeNull();
+    } finally {
+      await drop(1, coll);
+    }
+  });
+
+  it('#33 adds the nullable started-at column, and running it again changes nothing', async () => {
+    const MARK = `SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'washtrace' AND table_name = 'collections' AND column_name = 'analysis_started_at'`;
+    expect(typeof MIGRATIONS[32]).toBe('string');
+    expect(MIGRATIONS[32]).toContain('ADD COLUMN IF NOT EXISTS analysis_started_at timestamptz');
+    await store.migrate();
+    for (let i = 0; i < 2; i++) {
+      await store.pool.query('DELETE FROM washtrace.schema_version');
+      await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (32)');
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
+      expect((await store.pool.query(MARK)).rows).toEqual([{ is_nullable: 'YES' }]);
+    }
+  });
+
   it('runs a job in one session only: a second is skipped, not queued', async () => {
     let release!: () => void;
     const held = store.locked(7, false, () => new Promise<void>((r) => { release = r; }));
@@ -2283,12 +2409,12 @@ describe('Store', () => {
     // The thread's own body, in-process: the TS sources cannot start the thread.
     worker.analyzeOff = (request) => analyzeStored(store, request);
     await store.configure(1, collection, { rules: { minCycles: null, reachDepth: null } });
-    await worker.analyze();
+    await worker.run('analyze');
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(3);
     // Two cycles is the paper's floor; at 99 the same trades are not a pattern.
     // A rule edit runs at once, though the last analysis was moments ago.
     await store.configure(1, collection, { rules: { minCycles: 99 } });
-    await worker.analyze();
+    await worker.run('analyze');
     expect((await store.collection(1, collection))!.latest?.totals.A.flagged).toBe(0);
   });
 
@@ -2707,6 +2833,88 @@ describe('Store', () => {
       expect(out()).toBe(before);
       // And the pool still answers: nothing is left holding a transaction open.
       expect((await store.pool.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE state = $1', ['idle in transaction'])).rows[0].n).toBe(0);
+    });
+
+    describe('downloads', () => {
+      // The private stream, over rows 1..n a page at a time, as a download.
+      const download = (n: number, page = 1) => (store as any).stream(`SELECT g AS n FROM generate_series(1, ${n}) g`, [], (r: any) => r.n, page, true) as AsyncGenerator<number>;
+      const out = () => store.pool.totalCount - store.pool.idleCount;
+      afterEach(() => { store.streamIdleS = 60; store.streamMaxMs = 15 * 60_000; });
+
+      it('holds three at once and refuses a fourth on its first pull', async () => {
+        const before = out();
+        const open = [download(5), download(5), download(5)];
+        for (const d of open) await d.next();
+        expect(store.streaming).toBe(3);
+        await expect(download(5).next()).rejects.toBeInstanceOf(TooManyStreams);
+        for (const d of open) await d.return(undefined);
+        expect(store.streaming).toBe(0);
+        expect(out()).toBe(before);
+        // A slot is free again.
+        const again = download(2);
+        expect((await again.next()).value).toBe(1);
+        await again.return(undefined);
+        expect(store.streaming).toBe(0);
+      });
+
+      it('refuses the fourth of four first pulls at once, never holding more than three clients', async () => {
+        const pool = store.pool as any;
+        const connect = pool.connect;
+        let held = 0, most = 0;
+        // Only the promise form: the pool's own query passes a callback.
+        pool.connect = (cb?: unknown) => (cb ? connect.call(pool, cb) : (async () => {
+          const c = await connect.call(pool);
+          most = Math.max(most, ++held);
+          const release = c.release;
+          c.release = (...a: unknown[]) => { held--; c.release = release; return release.apply(c, a); };
+          return c;
+        })());
+        const four = [download(5), download(5), download(5), download(5)];
+        try {
+          const pulled = await Promise.allSettled(four.map((d) => d.next()));
+          expect(pulled.filter((p) => p.status === 'rejected').map((p) => (p as PromiseRejectedResult).reason))
+            .toEqual([expect.any(TooManyStreams)]);
+          expect(most).toBe(3);
+        } finally {
+          for (const d of four) await d.return(undefined);
+          delete pool.connect;
+        }
+        expect(store.streaming).toBe(0);
+      });
+
+      it('frees its slot when it cannot get a client', async () => {
+        const pool = store.pool as any;
+        const connect = pool.connect;
+        pool.connect = (cb?: unknown) => (cb ? connect.call(pool, cb) : Promise.reject(new Error('no client')));
+        try {
+          await expect(download(5).next()).rejects.toThrow('no client');
+        } finally {
+          delete pool.connect;
+        }
+        expect(store.streaming).toBe(0);
+      });
+
+      it('ends the session of one idle past the limit, rejects its next pull and gives the client back', async () => {
+        const before = out();
+        store.streamIdleS = 1;
+        const d = download(5);
+        await d.next();
+        await new Promise((r) => setTimeout(r, 1500));
+        await expect(d.next()).rejects.toThrow();
+        expect(store.streaming).toBe(0);
+        expect(out()).toBe(before);
+      });
+
+      it('errors a download open past the time cap', async () => {
+        const before = out();
+        store.streamMaxMs = 0;
+        const d = download(5);
+        await d.next();
+        await new Promise((r) => setTimeout(r, 5));
+        await expect(d.next()).rejects.toThrow('ran too long');
+        expect(store.streaming).toBe(0);
+        expect(out()).toBe(before);
+      });
     });
 
     it('has nothing to cut for a collection it does not watch', async () => {
@@ -3465,7 +3673,7 @@ describe('Store', () => {
           const only = Object.assign(Object.create(store), { stale: async () => (await store.stale()).filter((s) => s.id === which) });
           const analyst = new Worker(only, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri(), dir);
           analyst.analyzeOff = (request) => analyzeStored(store, request);
-          await analyst.analyze();
+          await analyst.run('analyze');
         };
         await analyse(id);
         const latest = (await store.collection(14, coll))!.latest!;
@@ -3893,7 +4101,7 @@ describe('loops', () => {
       // Run the re-analysis migration again, and the one after it, as an install upgrading to them would.
       await store.pool.query('DELETE FROM washtrace.schema_version');
       await store.pool.query('INSERT INTO washtrace.schema_version (version) VALUES (24)');
-      expect(await store.migrate()).toBe(32);
+      expect(await store.migrate()).toBe(MIGRATIONS.length);
       const due = (await store.stale()).map((s) => s.id);
       expect(due).toContain(old);
       expect(due).not.toContain(fresh);
@@ -4083,6 +4291,19 @@ describe('trades', () => {
       expect(streamed).toEqual(pages);
       expect(streamed.length).toBe((await store.tradeCount(lab, q, CTX)).total);
     }
+  });
+
+  it('the stream is a download that fetches a thousand rows at a time: a slow reader drains each fetch inside the idle limit', async () => {
+    const s = store as any;
+    const stream = s.stream;
+    const asked: unknown[][] = [];
+    s.stream = function (this: unknown, ...a: unknown[]) { asked.push(a.slice(3)); return stream.apply(this, a); };
+    try {
+      for await (const _ of store.tradeStream(lab, NO_FILTER, CTX)) { /* drain */ }
+    } finally {
+      delete s.stream;
+    }
+    expect(asked).toEqual([[1_000, true]]);
   });
 });
 
@@ -4976,12 +5197,13 @@ describe('lenses', () => {
       const due = (await store.nextLensRun(now))!;
       expect(due).toMatchObject({ lens: { id: lens.id }, collectionId: id });
       expect(Math.abs(due.dueAt - gapEnd)).toBeLessThan(5);
-      // So the lens pass, with an analysis due, runs it rather than giving way again.
+      // So the pass, with an analysis due, runs it rather than giving way again.
       vi.spyOn(Date, 'now').mockReturnValue(now);
       const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 3, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '');
       (worker as unknown as { dueAnalysis: () => Promise<unknown> }).dueAnalysis = async () => ({ id: 0 });
       worker.lensOff = async () => ({ totals: TOTALS, flags: [], tokensRead: 1 });
-      expect(await worker.lens()).toBe('Ran Tokens wait on Lab');
+      expect(await worker.run('analyze')).toBe('ran');
+      expect(await said('lens')).toBe('Ran Tokens wait on Lab');
     } finally {
       vi.restoreAllMocks();
       await store.deleteLens(lens.id);
@@ -5062,7 +5284,7 @@ describe('lenses', () => {
       worker.lensOff = (request, onProgress) => lensStored(store, request, onProgress);
       // Other tests leave collections waiting to be analysed, and a due analysis goes first: this one is about the lens.
       worker.dueAnalysis = async () => null;
-      expect(await worker.run('lens')).toBe('ran');
+      expect(await worker.run('analyze')).toBe('ran');
       const run = (await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run!;
       expect(run).toMatchObject({ status: 'done', error: null, lensVersion: 1 });
       const keys = async (sql: string, params: unknown[]) => (await store.pool.query(sql, params)).rows.map((r) => `${r.tx_hash} ${r.log_index}`).sort();
@@ -5070,8 +5292,9 @@ describe('lenses', () => {
       const theirs = await keys("SELECT tx_hash, log_index FROM washtrace.flags WHERE collection_id = $1 AND method = 'A'", [id]);
       expect(theirs.length).toBeGreaterThan(0);
       expect(mine).toEqual(theirs);
-      // Nothing is due now: the pass ends with nothing to run.
-      expect(await worker.lens()).toBe('nothing to run');
+      // Nothing is due now: the pass ends with nothing to do.
+      expect(await worker.run('analyze')).toBe('ran');
+      expect(await said('lens')).toBe('nothing due');
     } finally {
       await store.deleteLens(lens.id);
       await drop(1, w('1e5b'));
@@ -5281,13 +5504,13 @@ describe('previews', () => {
     }
   });
 
-  it('the worker runs a queued preview end to end in its lens pass, and saves the result', async () => {
+  it('the worker runs a queued preview end to end in its pass, and saves the result', async () => {
     const lab = await analysed(w('1b61'));
     try {
       const { id } = await store.requestPreview(lab, COPIES.A.rule) as { id: number };
       const worker = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), pg.getConnectionUri());
       worker.previewOff = (request, onProgress) => previewStored(store, request, onProgress);
-      expect(await worker.run('lens')).toBe('ran');
+      expect(await worker.run('analyze')).toBe('ran');
       expect(await store.preview(id)).toMatchObject({ status: 'done', error: null, result: { sampled: 7, caught: 4, roundTrips: { caught: 4 } } });
     } finally {
       await drop(1, w('1b61'));
@@ -5925,7 +6148,8 @@ describe('other tokens in a lens run', () => {
       (worker as unknown as { dueAnalysis: () => Promise<null> }).dueAnalysis = async () => null;
       const sent: { payees: boolean }[] = [];
       worker.lensOff = (req, progress) => { sent.push(req); return lensStored(store, req, progress); };
-      expect(await worker.lens()).toBe('Ran Tokens, no key on Tokens lab');
+      expect(await worker.run('analyze')).toBe('ran');
+      expect(await said('lens')).toBe('Ran Tokens, no key on Tokens lab');
       expect(sent.map((r) => r.payees)).toEqual([true]);
       const run = (await store.lensRuns(s.id)).find((r) => r.lens.id === lens.id)!.run!;
       expect(run).toMatchObject({ status: 'done', tokensRead: 5 });
@@ -6308,5 +6532,44 @@ describe('Store.tx', () => {
     })).rejects.toBe(boom);
     expect(await count()).toBe(0);
     expect(store.pool.totalCount - store.pool.idleCount).toBe(0);
+  });
+});
+
+describe('pruning', () => {
+  const empty = () => analyze(input([]));
+  const kept = async (id: number) => (await store.pool.query('SELECT id FROM washtrace.analyses WHERE collection_id = $1 ORDER BY id', [id])).rows.map((r) => Number(r.id));
+
+  it('keeps a collection\'s newest 100 analyses when it saves a 101st and 102nd, and touches no other collection', async () => {
+    const id = (await store.addCollection(1, w('pr01'), null, 1)).id;
+    const other = (await store.addCollection(1, w('pr02'), null, 1)).id;
+    for (let n = 0; n < 3; n++) await store.saveAnalysis(other, 1, empty(), 1, null, new Set(['']));
+    const saved: number[] = [];
+    for (let n = 0; n < 102; n++) {
+      await store.saveAnalysis(id, 1, empty(), 1, null, new Set(['']));
+      saved.push(...(await kept(id)).filter((r) => !saved.includes(r)));
+    }
+    const rows = await kept(id);
+    expect(saved).toHaveLength(102);
+    expect(rows).toHaveLength(HISTORY_KEEP);
+    // The two oldest went and the newest stayed.
+    expect(rows).toEqual(saved.slice(2));
+    expect(await kept(other)).toHaveLength(3);
+    expect(await store.history(id)).toHaveLength(HISTORY_KEEP);
+    const ids = (await store.history(id)).map((r) => r.id);
+    expect(ids).toEqual([...ids].sort((p, q) => p - q));
+    expect(ids).toEqual(rows);
+  });
+
+  it('deletes a check finished more than a day ago when checks expire, and keeps a pending or recent one', async () => {
+    const old = await store.requestCheck('rpc', 1);
+    const recent = await store.requestCheck('rpc', 1);
+    const pending = await store.requestCheck('etherscan', null);
+    await store.finishCheck(old, true, {});
+    await store.finishCheck(recent, true, {});
+    await store.pool.query(`UPDATE washtrace.checks SET finished_at = now() - interval '25 hours' WHERE id = $1`, [old]);
+    await store.expireChecks(5 * 60_000);
+    expect(await store.check(old)).toBeNull();
+    expect(await store.check(recent)).toMatchObject({ finished: true, ok: true });
+    expect(await store.check(pending)).toEqual({ finished: false, ok: null, detail: null });
   });
 });

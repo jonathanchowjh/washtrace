@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ZERO } from '../src/graph.js';
 import { SEARCH_CAP, runLens } from '../src/lens.js';
 import { COPIES, DEFAULT_RULE, depthNeeded, type EdgeKind, type LensRule } from '../src/lens-rule.js';
-import { moneyReason, moneyShort, readThrough, tokensReason } from '../src/lens-reads.js';
+import { moneyReason, readThrough, tokensReason } from '../src/lens-reads.js';
 import { contractsFor } from '../src/marketplaces.js';
 import { analyze } from '../src/methods.js';
 import { MOVE_KIND, Moves } from '../src/moves.js';
@@ -247,15 +247,19 @@ describe('an honest sale is never caught', () => {
     expect(r.flags.map((x) => legs(x.path))).toEqual([[[a, b, 'nft-token'], [b, c, 'nft-collection'], [c, a, 'nft-collection']]]);
   });
 
-  describe("under DEFAULT_RULE, when buyer and seller use one exchange that pays many of this collection's wallets", () => {
+  describe("under DEFAULT_RULE with money followed either way, when buyer and seller use one exchange that pays many of this collection's wallets", () => {
     const X = w('c0ffee');
     const eth = (n: number) => String(BigInt(Math.round(n * 100)) * 10n ** 16n);
     // The 200 others traded this collection's tokens too (a mint alone is no trade): to this collection, that is what makes X an exchange.
     const crowd = Array.from({ length: 200 }, (_, i) => w(`d${i}`));
     const ts = () => [...sale(), ...crowd.flatMap((o, i) => chain(String(100 + i), w('dea1'), o))];
     const paysCrowd = () => crowd.map((o, i) => flow(X, o, { valueWei: eth(0.5), blockTime: T0 - DAY - i }));
+    // DEFAULT_RULE follows money along; these withdrawals are a loop only when it is followed either way.
+    const either = structuredClone(DEFAULT_RULE);
+    either.edges.eth.direction = 'either';
+    either.edges.internal.direction = 'either';
     const judge = (flows: Flow[], more: Parameters<typeof lensInputOf>[2] = {}) =>
-      caught(structuredClone(DEFAULT_RULE), ts(), flows, { contracts: contractsFor(1), ...more });
+      caught(structuredClone(either), ts(), flows, { contracts: contractsFor(1), ...more });
 
     it('two withdrawals from it are not a way back', () => {
       const withdrawals = () => [flow(X, a, { valueWei: eth(1), blockTime: T0 - 5 * DAY }), flow(X, b, { valueWei: eth(2), blockTime: T0 - 3 * DAY })];
@@ -854,39 +858,38 @@ describe('depthNeeded, how far out a rule needs money read', () => {
   });
 });
 
-describe('moneyShort, whether the money is read as far as a rule needs', () => {
+describe('moneyReason, whether the money is read as far as a rule needs', () => {
   const needs = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
   const read = (over: Partial<{ limit: number; pendingByDepth: Record<number, number>; seeding: boolean }> = {}) => ({ limit: 3, pendingByDepth: {}, seeding: false, ...over });
 
   it('is short when the rule needs more hops than the money is followed to', () => {
-    expect(moneyShort(needs(4), read(), 3, false)).toBe(true);
-    expect(moneyShort(needs(3), read(), 3, false)).toBe(false);
+    expect(moneyReason(needs(4), read(), 3, false) !== null).toBe(true);
+    expect(moneyReason(needs(3), read(), 3, false) !== null).toBe(false);
   });
 
   it('is short while wallets at a depth the rule needs, or nearer, are pending', () => {
-    expect(moneyShort(needs(4), read({ limit: 5, pendingByDepth: { 4: 1, 5: 2 } }), 3, false)).toBe(true);
-    expect(moneyShort(needs(4), read({ limit: 5, pendingByDepth: { 5: 2 } }), 3, false)).toBe(false);
+    expect(moneyReason(needs(4), read({ limit: 5, pendingByDepth: { 4: 1, 5: 2 } }), 3, false) !== null).toBe(true);
+    expect(moneyReason(needs(4), read({ limit: 5, pendingByDepth: { 5: 2 } }), 3, false) !== null).toBe(false);
   });
 
   it('is short while seeding only for a rule that needs more than the global limit', () => {
-    expect(moneyShort(needs(4), read({ limit: 5, seeding: true }), 3, false)).toBe(true);
-    expect(moneyShort(needs(3), read({ limit: 5, seeding: true }), 3, false)).toBe(false);
+    expect(moneyReason(needs(4), read({ limit: 5, seeding: true }), 3, false) !== null).toBe(true);
+    expect(moneyReason(needs(3), read({ limit: 5, seeding: true }), 3, false) !== null).toBe(false);
   });
 
   it('is never short for a rule with no money edge', () => {
     const nft = ethOnly((r) => { r.edges.eth.use = false; r.hops.max = 9; });
-    expect(moneyShort(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, false)).toBe(false);
-    expect(moneyShort(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, true)).toBe(false);
+    expect(moneyReason(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, false) !== null).toBe(false);
+    expect(moneyReason(nft, read({ limit: 1, pendingByDepth: { 1: 5 }, seeding: true }), 0, true) !== null).toBe(false);
   });
 });
 
 describe('moneyReason, the one decision the editor row and the share both read', () => {
-  it('agrees with moneyShort over a grid of limit, pending, seeding, behind and need, and orders its reasons seeding, pending, limit, behind', () => {
+  it('orders its reasons over a grid of limit, pending, seeding, behind and need: seeding, pending, limit, behind', () => {
     const rule = (depth: number) => ethOnly((r) => { r.hops = { min: 0, max: depth + 1 }; });
     for (const needed of [0, 2, 3, 4, 6]) for (const limit of [3, 5]) for (const seeding of [false, true]) for (const behind of [false, true]) for (const pendingByDepth of [{}, { 4: 1 }, { 6: 1 }] as Record<number, number>[]) {
       const money = { limit, pendingByDepth, seeding };
       const why = moneyReason(rule(needed), money, 3, behind);
-      expect(moneyShort(rule(needed), money, 3, behind)).toBe(why !== null);
       const expected = seeding && needed > 3 ? 'seeding' : Object.keys(pendingByDepth).some((d) => Number(d) <= needed) ? 'pending' : needed > limit ? 'limit'
         : behind && needed > 3 ? 'behind' : null;
       expect(why).toBe(expected);

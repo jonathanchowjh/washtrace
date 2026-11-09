@@ -4,8 +4,9 @@ import { METHODS, type Lens, type LensRun, type Method, type MethodTotals } from
 import type { LensKey } from '@washtrace/detect/trades';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { LENSES, floorPct, pctTenth, type Lenses } from '@/lib/format';
-import { atLeastOf, behindOf, floorCauses, runStateWords, type Behind, type TokensFloor } from '@/lib/lens-state';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, floorPct, pctTenth, type Lenses } from '@/lib/format';
+import type { MoneyReason } from '@washtrace/detect/lens-reads';
+import { behindOf, builtinCauses, causeSentence, runStateWords, shareCauses, shareQualifier, type Behind, type Qualifier, type TokensFloor } from '@/lib/lens-state';
 import { APART, APART_WHY, ownLenses, part } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
@@ -21,6 +22,8 @@ interface Funding {
   trail: boolean;
   /** The next analysis has funding to run the money lenses on: a key, or this collection's trail with checked wallets. */
   funded: boolean;
+  /** An Etherscan key is set (SourcesConfig.funding): only a key checks the wallets a trail left unchecked. */
+  funding: boolean;
   /** A stored money trail with checked wallets is on its way (trailComing): the money lenses run on it once it has loaded. */
   coming: boolean;
   /** No pass has reported (workerSilent): a trail on its way loads only once the worker reports again. */
@@ -42,14 +45,14 @@ const NO_TOKENS: TokensFloor = { reason: null, payees: false };
  * the latest analysis's, null before the first, and `latestId` its id, which
  * a run of yours is behind when it is not from it.
  */
-export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyShort, tokens, coverage, writable, editor = null, children }: {
+export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyReasons, tokens, coverage, writable, editor = null, children }: {
   base: string; chainId: number; address: string; selected: LensKey | 'compare';
   totals: Record<Method, MethodTotals> | null; latestId: number | null;
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
   paused: boolean;
   runs: Runs; notFinal: readonly Method[];
-  /** By lens key: whether the collection's money is read as far as that lens needs (moneyShort of lens-reads). */
-  moneyShort: Readonly<Record<string, boolean>>;
+  /** By lens key: why the collection's money is not read as far as that lens needs, or null (moneyReason of lens-reads). */
+  moneyReasons: Readonly<Record<string, MoneyReason | null>>;
   /** By lens key: whether the collection's other tokens are read as far as that lens needs (tokensReason of lens-reads), and the setting the count was made under. */
   tokens: Readonly<Record<string, TokensFloor>>;
   coverage: Funding; writable: boolean;
@@ -72,7 +75,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           return (
             <Tab key={m} href={href(m)} on={on} tone={LENSES[m].tone} title={`Show what ${LENSES[m].name} flags`}>
               <LensName m={m} />
-              {t?.available ? <>{' '}<Share t={t} />{notFinal.includes(m) ? <>{' '}<span className="text-xs text-muted-foreground">so far</span></> : null}</> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
+              {t?.available ? <>{' '}<Share t={t} qualifier={shareQualifier(builtinCauses(m, notFinal, coverage.funded, coverage.funding))} /></> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
             </Tab>
           );
         })}
@@ -82,7 +85,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           return (
             <Tab key={lens.key} href={href(lens.key)} on={lens.key === selected} tone="own" title={`Show what ${lens.name} flags`}>
               <LensName m={lens.key} own={own} />
-              {t ? <>{' '}<Share t={t} atLeast={atLeastOf(lens.rule, t, notFinal, coverage.funded, moneyShort[lens.key] ?? false, tokens[lens.key] ?? NO_TOKENS)} /></> : null}
+              {t ? <>{' '}<Share t={t} qualifier={shareQualifier(shareCauses(lens.rule, t, notFinal, coverage.funded, coverage.funding, moneyReasons[lens.key] ?? null, tokens[lens.key] ?? NO_TOKENS))} /></> : null}
               {word ? <>{' '}<span className="text-xs text-muted-foreground">{word}</span></> : null}
             </Tab>
           );
@@ -98,7 +101,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
       >
         {editor ?? (selected === 'compare' ? children : chosen
           ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analysed={totals !== null}
-            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} moneyShort={moneyShort[chosen.lens.key] ?? false} tokens={tokens[chosen.lens.key] ?? NO_TOKENS}>{children}</YourLens>
+            behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} funding={coverage.funding} money={moneyReasons[chosen.lens.key] ?? null} tokens={tokens[chosen.lens.key] ?? NO_TOKENS}>{children}</YourLens>
           : <BuiltIn base={base} m={selected as Method} t={totals?.[selected as Method] ?? null} coverage={coverage} writable={writable}>{children}</BuiltIn>)}
       </section>
     </div>
@@ -115,9 +118,15 @@ function Tab({ href, on, tone, title, children }: { href: string; on: boolean; t
   );
 }
 
-function Share({ t, atLeast = false }: { t: MethodTotals; atLeast?: boolean }) {
+/** A share with its qualifier: "at least" before the figure, "so far" after it. */
+function Share({ t, qualifier }: { t: MethodTotals; qualifier: Qualifier | null }) {
   const s = part(t, 'sales');
-  return <span className="font-semibold tabular-nums text-foreground">{atLeast ? 'at least ' : ''}{pctTenth(s.part, s.whole)}</span>;
+  return (
+    <>
+      <span className="font-semibold tabular-nums text-foreground">{qualifier === 'at least' ? 'at least ' : ''}{pctTenth(s.part, s.whole)}</span>
+      {qualifier === 'so far' ? <>{' '}<span className="text-xs text-muted-foreground">so far</span></> : null}
+    </>
+  );
 }
 
 function Chip({ children }: { children: ReactNode }) {
@@ -155,7 +164,7 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
             ? `Not run yet. A stored money trail is on its way, and the first analysis after it loads runs this lens on it${silent ? ', once the worker reports again' : ''}.`
             : funded
             ? (trail ? 'Not run yet. The stored money trail is loaded, so it says who paid whom, and the next analysis runs this lens on it.' : 'Not run yet. A funding source is set, and the next analysis runs this lens.')
-            : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and it needs a key: add an Etherscan key in Settings (<code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>).</>}
+            : <>Not run. {trail ? 'The stored money trail checked no wallet' : 'It needs to know who paid whom'}, and it needs an Etherscan key (<code className="font-mono text-xs">WASHTRACE_ETHERSCAN_KEY</code>). <Link href={ETHERSCAN_HREF} className="underline">{ETHERSCAN_CTA}</Link></>}
         </p>
       ) : null}
       <details className="mb-4 text-sm">
@@ -169,13 +178,13 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
   );
 }
 
-function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, moneyShort, tokens, children }: {
+function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, funding, money, tokens, children }: {
   base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analysed: boolean;
-  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; moneyShort: boolean; tokens: TokensFloor; children: ReactNode;
+  behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; funding: boolean; money: MoneyReason | null; tokens: TokensFloor; children: ReactNode;
 }) {
   const t = run?.totals ?? null;
-  // Why its share is a floor, in the words the tab, the stat line and the chart's (at least) title go by, with the counts the panel has room for.
-  const floor = t === null ? [] : floorCauses(lens.rule, t, notFinal, funded, moneyShort, tokens, true);
+  // Why its share is weaker than it reads, in the words the tab, the stat line and the chart's title go by, with the counts the panel has room for.
+  const why = t === null ? null : causeSentence(shareCauses(lens.rule, t, notFinal, funded, funding, money, tokens, true));
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -196,7 +205,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
       </div>
       {t ? (
         <>
-          {floor.length > 0 ? <p className="mb-3 text-sm text-muted-foreground">Its share is at least this, because {floor.join('; ')}.</p> : null}
+          {why !== null ? <p className="mb-3 text-sm text-muted-foreground">{why}</p> : null}
           {children}
         </>
       ) : null}

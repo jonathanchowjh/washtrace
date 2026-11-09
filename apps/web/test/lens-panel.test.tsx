@@ -12,8 +12,8 @@ const t = (over: Partial<MethodTotals> = {}): MethodTotals => ({
   wallets: 1207, tokens: 644, available: true, ...over,
 } as MethodTotals);
 
-const draw = (m: 'A' | 'AU' | 'AC', totals: MethodTotals, loops: { loops: number; pairs: number } | null = null, notFinal: ('A' | 'AU' | 'AC')[] = []) =>
-  render(<LensStats m={m} t={totals} loops={loops} base={BASE} notFinal={notFinal} />).container;
+const draw = (m: 'A' | 'AU' | 'AC', totals: MethodTotals, loops: { loops: number; pairs: number } | null = null, qualifier: 'at least' | 'so far' | null = null) =>
+  render(<LensStats m={m} t={totals} loops={loops} base={BASE} qualifier={qualifier} />).container;
 const named = (c: Element, text: string) => [...c.querySelectorAll('a')].filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
 
 describe('the lens stat line', () => {
@@ -43,6 +43,7 @@ describe('the lens stat line', () => {
     expect(text).toContain('4.1% of sales (not counted)');
     expect(text).not.toMatch(/\bAU\b/);
     expect(draw('A', t()).textContent).not.toContain('not counted');
+    expect(draw('AU', t()).querySelector('[title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
   });
 
   it('shows nothing for a lens that did not run', () => {
@@ -50,7 +51,12 @@ describe('the lens stat line', () => {
   });
 
   it('says a share is so far while the lens is not final', () => {
-    expect(draw('AC', t(), null, ['AC']).textContent).toContain('4.1% of sales so far');
+    expect(draw('AC', t(), null, 'so far').textContent).toContain('4.1% of sales so far');
+  });
+
+  it('puts "at least" before the figure, for a built-in or a lens of yours alike', () => {
+    expect(draw('AC', t(), null, 'at least').textContent).toContain('at least 4.1% of sales');
+    expect(draw('AC', t(), null, 'at least').textContent).not.toContain('so far');
   });
 
   it('holds no anchor inside another', () => {

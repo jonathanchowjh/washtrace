@@ -1,13 +1,13 @@
 /**
  * The lens-state decision, shared by server pages and client components (so it
- * imports no store, no `pg`): why a share of yours is only "at least" (floorCauses, atLeastOf),
+ * imports no store, no `pg`): why a share is only "so far" or "at least" (shareCauses, builtinCauses, shareQualifier),
  * where a run stands in words (runStateWords), and whether its figures are
  * behind (behindOf, staleSinceLastWrite, behindLine). Formatting stays in format.ts.
  */
 
 import type { AnalysisRow, Lens, LensRun, Method } from '@washtrace/detect';
 import { WALKED, type LensRule } from '@washtrace/detect/lens-rule';
-import type { TokensReason } from '@washtrace/detect/lens-reads';
+import type { MoneyReason, TokensReason } from '@washtrace/detect/lens-reads';
 import { NOT_RUN_WORDS, floorPct, plural } from './format';
 
 /**
@@ -27,42 +27,81 @@ function tokensCause(reason: TokensReason, payees: boolean): string {
   return `other tokens are read only for wallets reached by ${through}, so a loop through tokens can be missed`;
 }
 
+export type Qualifier = 'at least' | 'so far';
+
+/** One reason a share is weaker than it reads. `bound`: waiting will not close it (a cap, a missing key, a limit). Otherwise reads now running will. */
+export type Cause = { text: string; bound: boolean };
+
 /**
- * Why a share of yours is only a floor, one phrase per cause: it
- * follows money and the money data is not final (wallets still unchecked, or
- * no funding source), some of its searches stopped at the cap, or some trades
- * had no block time for its window or order to judge them by. Two more apply
- * to a money lens: its money is not read as far as it needs (`moneyShort`,
- * named only when the money cause above is not), and a money edge followed
- * either way is a floor always, since money is walked only as it was sent.
- * A lens that
- * follows only NFTs is not held back by money. Empty when the share is exact.
- * `counts` puts how many after a search or trade cause, for the lens panel,
- * which has room for them; every "at least" says why in these words.
- * `moneyShort`: moneyShort() of lens-reads for this rule, the collection's MoneyRead and whether its run is behind.
+ * The one word a share carries, for built-in lenses and yours alike: 'at least'
+ * when any cause is bound, else 'so far' when any is moving, else null (exact).
  */
-export function floorCauses(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor, counts = false): string[] {
-  // The money walk's rows only: other tokens have a read of their own, which `tokens` says.
-  const money = WALKED.some((k) => rule.edges[k].use);
-  const n = (k: number, word: string, many?: string) => (counts ? ` (${plural(k, word, many)})` : '');
-  // Money is followed along the way it was sent, whatever direction a money edge says (depthNeeded), so a loop against it can be missed.
-  const blind = money && rule.hops.max !== null && WALKED.some((k) => rule.edges[k].use && rule.edges[k].direction === 'either');
-  const checking = money && !funded ? 'no funding source is set, so money is not fully read' : money && notFinal.length > 0 ? 'money is not fully read yet' : null;
-  return [
-    t.truncated > 0 ? `some of its searches stopped at the cap before finding a loop${n(t.truncated, 'search', 'searches')}` : null,
-    t.untimed > 0 ? `some trades have no block time to judge them by${n(t.untimed, 'trade')}` : null,
-    checking,
-    // The traders' own check still running is `checking` above; this is money further out than the collection is read.
-    checking === null && money && moneyShort ? 'money is not read as far as this lens needs' : null,
-    blind ? 'money is followed only the way it was sent, so a loop against it can be missed' : null,
-    // A rule that uses no other tokens has reason null (tokensReason), so it never gets this cause.
-    tokens.reason === null ? null : tokensCause(tokens.reason, tokens.payees),
-  ].filter((x) => x !== null);
+export function shareQualifier(causes: readonly Cause[]): Qualifier | null {
+  return causes.some((c) => c.bound) ? 'at least' : causes.length > 0 ? 'so far' : null;
 }
 
-/** Whether a share of yours is a floor (floorCauses names why). Lives here, not in lens-tabs or the server code, so a client component can import it without pulling `pg` into the browser bundle. */
-export function atLeastOf(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, moneyShort: boolean, tokens: TokensFloor): boolean {
-  return floorCauses(rule, t, notFinal, funded, moneyShort, tokens).length > 0;
+/** What a cause list reads as in a panel sentence. */
+export function causeSentence(causes: readonly Cause[]): string | null {
+  const q = shareQualifier(causes);
+  const why = causes.map((c) => c.text).join('; ');
+  return q === 'at least' ? `Its share is at least this, because ${why}.` : q === 'so far' ? `Its share can still rise while reads finish: ${why}.` : null;
+}
+
+const NO_FUNDING = 'no funding source is set, so money is not fully read';
+
+/**
+ * The cause of money not fully read. `funded`: a key, or this collection's
+ * stored trail, feeds the money lenses; `funding`: an Etherscan key is set
+ * (SourcesConfig.funding). Moving only with a key, as the key is what checks
+ * the wallets left. Bound with a stored trail alone, as nothing reads past it,
+ * and with neither, as no funding source is set.
+ */
+function moneyCause(funded: boolean, funding: boolean): Cause {
+  if (!funded) return { text: NO_FUNDING, bound: true };
+  return funding ? { text: 'money is not fully read yet', bound: false } : { text: 'money past the stored trail is not read without an Etherscan key', bound: true };
+}
+
+/**
+ * Why a built-in lens's share is weaker than it reads: wallets that traded the
+ * collection are still unchecked for money (`notFinal` lists the money lenses
+ * that cover), in moneyCause's words.
+ */
+export function builtinCauses(m: Method, notFinal: readonly Method[], funded: boolean, funding: boolean): Cause[] {
+  return notFinal.includes(m) ? [moneyCause(funded, funding)] : [];
+}
+
+/**
+ * Why a share of yours is weaker than it reads, one cause per reason, in this
+ * order: some of its searches stopped at the cap, some trades had no block time
+ * for its window or order to judge them by, it follows money and the money data
+ * is not final (wallets still unchecked, or no funding source: moneyCause of
+ * `funded` and `funding`), its money is not read as far as it needs (`money`,
+ * named only when the cause before is not), a
+ * money edge is followed either way (a floor always, since money is walked only
+ * as it was sent), and other tokens are not read (`tokens`). A lens that follows
+ * only NFTs is not held back by money. Empty when the share is exact.
+ * `counts` puts how many after a search or trade cause, for the lens panel,
+ * which has room for them. `money`: moneyReason() of lens-reads for this rule,
+ * the collection's MoneyRead and whether its run is behind.
+ */
+export function shareCauses(rule: LensRule, t: { truncated: number; untimed: number }, notFinal: readonly Method[], funded: boolean, funding: boolean, money: MoneyReason | null, tokens: TokensFloor, counts = false): Cause[] {
+  // The money walk's rows only: other tokens have a read of their own, which `tokens` says.
+  const walks = WALKED.some((k) => rule.edges[k].use);
+  const n = (k: number, word: string, many?: string) => (counts ? ` (${plural(k, word, many)})` : '');
+  // Money is followed along the way it was sent, whatever direction a money edge says (depthNeeded), so a loop against it can be missed.
+  const blind = walks && rule.hops.max !== null && WALKED.some((k) => rule.edges[k].use && rule.edges[k].direction === 'either');
+  const checking: Cause | null = walks && (!funded || notFinal.length > 0) ? moneyCause(funded, funding) : null;
+  const causes: (Cause | null)[] = [
+    t.truncated > 0 ? { text: `some of its searches stopped at the cap before finding a loop${n(t.truncated, 'search', 'searches')}`, bound: true } : null,
+    t.untimed > 0 ? { text: `some trades have no block time to judge them by${n(t.untimed, 'trade')}`, bound: true } : null,
+    checking,
+    // The traders' own check still running is `checking` above; this is money further out than the collection is read. Only 'limit' stays: no wait closes it.
+    checking === null && walks && money !== null ? { text: 'money is not read as far as this lens needs', bound: money === 'limit' } : null,
+    blind ? { text: 'money is followed only the way it was sent, so a loop against it can be missed', bound: true } : null,
+    // A rule that uses no other tokens has reason null (tokensReason), so it never gets this cause.
+    tokens.reason === null ? null : { text: tokensCause(tokens.reason, tokens.payees), bound: tokens.reason === 'off' || tokens.reason === 'unreached' },
+  ];
+  return causes.filter((x) => x !== null);
 }
 
 /** How a lens of yours can be behind: its figures are from before its latest edit, or from before the latest analysis. */

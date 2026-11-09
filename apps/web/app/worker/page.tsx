@@ -5,7 +5,7 @@ import { messageOf } from '@washtrace/detect';
 import { Bar, Head, Notices, Pill, Problem, STORE_DOWN, Section, type PillTone } from '@/components/ui';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
-import { LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
 import { JOB_STEP, type JobState } from '@/lib/status';
 import { workerView } from '@/lib/views';
@@ -62,7 +62,7 @@ export default async function WorkerPage() {
         {now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')}
       </p>
 
-      <Section title="What it does" lead="Four jobs, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analysed.">
+      <Section title="What it does" lead="Four jobs, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analyzed.">
         <ol className="grid gap-3 lg:grid-cols-4">
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
@@ -92,7 +92,7 @@ export default async function WorkerPage() {
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{num(b.done)} of {num(all)} wallets on this chain checked</span></p>
                           <Bar share={all === 0 ? 0 : b.done / all} className="mt-1" />
-                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the hops followed · ` : ''}{b.truncated} too large to page · {num(b.followed)} followed from traders</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the follow limit · ` : ''}{b.truncated} too large to page · {num(b.followed)} followed from traders</p>
                         </div>
                       );
                     })}
@@ -109,14 +109,14 @@ export default async function WorkerPage() {
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ {stageName(4)}</span></span>
             {v.rpcChains.length === 0
-              ? <Link href="/settings#rpc.1" className="text-money underline">Needs a key. Add an RPC URL in Settings →</Link>
+              ? <Link href="/settings#rpc.1" className="text-money underline">No RPC. Add an RPC URL in Settings →</Link>
               : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ {stageName(5)}</span></span>
             {v.funding === null
-              ? <span className="text-money">Needs a key: {withoutKey(v.trailFunded)}. <Link href="/settings#etherscan.key" className="underline">Add an Etherscan key in Settings →</Link></span>
-              : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'hop')}</Link> out of traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
+              ? <span className="text-money">Needs a key: {withoutKey(v.trailFunded)}. <Link href={ETHERSCAN_HREF} className="underline">{ETHERSCAN_CTA}</Link></span>
+              : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'wallet')} out</Link> from traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>
       </Section>

@@ -12,7 +12,7 @@ import { WALKED, depthNeeded, type LensRule } from './lens-rule.js';
 /**
  * How many of a collection's wallets are still to be read at a depth no
  * deeper than `depth` (MoneyRead.pendingByDepth). The editor's money row and
- * moneyShort both ask it, so they cannot disagree on what is pending.
+ * moneyReason both ask it, so they cannot disagree on what is pending.
  */
 export function pendingUpTo(pendingByDepth: Readonly<Record<number, number>>, depth: number): number {
   return Object.entries(pendingByDepth).reduce((sum, [d, n]) => sum + (Number(d) <= depth ? n : 0), 0);
@@ -31,16 +31,19 @@ export function pendingUpTo(pendingByDepth: Readonly<Record<number, number>>, de
  * the global limit is not held back. The order is the one the editor's row
  * reports them in. `money` is the part of MoneyRead this reads. A rule with
  * no money edge needs depth 0, so it is never short. The money check still
- * running on the traders themselves is not read here: floorCauses' "money is
+ * running on the traders themselves is not read here: shareCauses' "money is
  * not fully read yet" says it.
  */
-export function moneyReason(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): 'seeding' | 'pending' | 'limit' | 'behind' | null {
+export function moneyReason(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): MoneyReason | null {
   const needed = depthNeeded(rule);
   if (money.seeding && needed > globalHops) return 'seeding';
   if (pendingUpTo(money.pendingByDepth, needed) > 0) return 'pending';
   if (needed > money.limit) return 'limit';
   return behind && needed > globalHops ? 'behind' : null;
 }
+
+/** Why a lens's money is not read as far as it needs; the order is moneyReason's. */
+export type MoneyReason = 'seeding' | 'pending' | 'limit' | 'behind';
 
 /** The part of MoneyRead that says how far out its money is read, which moneyReason and readThrough read. */
 type MoneyDepths = { limit: number; pendingByDepth: Readonly<Record<number, number>>; seeding: boolean };
@@ -56,11 +59,6 @@ export function readThrough(money: MoneyDepths, globalHops: number): number {
   if (money.seeding) return globalHops;
   const pending = Object.keys(money.pendingByDepth).map(Number);
   return pending.length > 0 ? Math.min(...pending) - 1 : money.limit;
-}
-
-/** Whether a share is a floor for want of money read: any reason of moneyReason. */
-export function moneyShort(rule: LensRule, money: MoneyDepths, globalHops: number, behind: boolean): boolean {
-  return moneyReason(rule, money, globalHops, behind) !== null;
 }
 
 /** The part of TokenCounts that tokensReason reads (Store.countTokens writes the rest). */

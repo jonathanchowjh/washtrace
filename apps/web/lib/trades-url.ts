@@ -176,7 +176,7 @@ const inOrder = (order: string[], have: readonly string[]) => order.filter((x) =
 
 const enc = (v: string) => encodeURIComponent(v).replace(/%2C/g, ',').replace(/%3A/g, ':');
 
-/** `${base}/flagged?kind=trades…` with only the non-default parameters, in one fixed order so a list has one URL. */
+/** `${base}/trades…` with only the non-default parameters, in one fixed order so a list has one URL. */
 export function tradesHref(base: string, q: Partial<TradeQuery>, view: Partial<View> = {}): string {
   const f = { ...NO_FILTER, ...q };
   const g = f.group;
@@ -194,8 +194,8 @@ export function tradesHref(base: string, q: Partial<TradeQuery>, view: Partial<V
     ['sort', f.sort === NO_FILTER.sort ? null : f.sort], ['dir', f.dir === NO_FILTER.dir ? null : f.dir],
     ['by', view.by ?? null], ['page', view.page !== undefined && view.page > 1 ? String(view.page) : null],
   ];
-  const rest = pairs.filter(([, v]) => v !== null).map(([k, v]) => `&${k}=${enc(v!)}`).join('');
-  return `${base}/flagged?kind=trades${rest}`;
+  const rest = pairs.filter(([, v]) => v !== null).map(([k, v]) => `${k}=${enc(v!)}`).join('&');
+  return rest === '' ? `${base}/trades` : `${base}/trades?${rest}`;
 }
 
 // ---- chips ------------------------------------------------------------------

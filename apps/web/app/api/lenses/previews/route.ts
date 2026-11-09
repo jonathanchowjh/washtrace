@@ -20,7 +20,7 @@ export async function POST(req: Request): Promise<Response> {
     if (collectionId instanceof Response) return collectionId;
     const queued = await s.requestPreview(collectionId, checked.rule);
     if (queued === 'no-sales') return bad('This collection has no sales to preview on.', 409);
-    if (queued === 'not-analysed') return bad('This collection has not been analysed yet, so there is nothing to preview on.', 409);
+    if (queued === 'not-analysed') return bad('This collection has not been analyzed yet, so there is nothing to preview on.', 409);
     return json({ id: queued.id }, 202);
   });
 }

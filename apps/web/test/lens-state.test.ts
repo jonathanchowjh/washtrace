@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
-import { atLeastOf, floorCauses, behindLine, behindOf, staleSinceLastWrite, runStateWords } from '@/lib/lens-state';
+import { builtinCauses, causeSentence, shareCauses, shareQualifier, behindLine, behindOf, staleSinceLastWrite, runStateWords, type Cause } from '@/lib/lens-state';
 
 describe('runStateWords', () => {
   const run = (status: string, totals: object | null, progress: number | null = null) => ({ status, totals, progress }) as never;
@@ -39,105 +39,158 @@ describe('runStateWords', () => {
   });
 });
 
-/** DEFAULT_RULE follows two money edges either way, which is a floor of its own: these tests' lens follows money as it was sent, so only the cause under test makes a floor. */
-const ALONG = structuredClone(DEFAULT_RULE);
-for (const k of ['eth', 'internal', 'weth'] as const) ALONG.edges[k].direction = 'along';
+/** DEFAULT_RULE follows money along; a rule that follows two money edges either way is a floor of its own. */
+const EITHER = structuredClone(DEFAULT_RULE);
+for (const k of ['eth', 'internal'] as const) EITHER.edges[k].direction = 'either';
 
-describe('floorCauses', () => {
+describe('shareCauses', () => {
   const T = { truncated: 0, untimed: 0 };
   const NO_TOKENS = { reason: null, payees: false };
-  // DEFAULT_RULE follows two money edges either way, which is a floor of its own: ALONG follows them as sent.
   const nftOnly = structuredClone(DEFAULT_RULE);
   for (const k of ['eth', 'internal', 'weth'] as const) nftOnly.edges[k].use = false;
-  it('names each cause that makes a share a floor, from the same inputs as atLeastOf', () => {
-    expect(floorCauses(ALONG, { truncated: 2, untimed: 0 }, [], true, false, NO_TOKENS)).toEqual(['some of its searches stopped at the cap before finding a loop']);
-    expect(floorCauses(ALONG, { truncated: 0, untimed: 3 }, [], true, false, NO_TOKENS)).toEqual(['some trades have no block time to judge them by']);
-    expect(floorCauses(ALONG, T, ['AC'], true, false, NO_TOKENS)).toEqual(['money is not fully read yet']);
-    expect(floorCauses(ALONG, T, [], false, false, NO_TOKENS)).toEqual(['no funding source is set, so money is not fully read']);
-    expect(floorCauses(ALONG, { truncated: 1, untimed: 1 }, ['AC'], false, false, NO_TOKENS)).toEqual([
-      'some of its searches stopped at the cap before finding a loop', 'some trades have no block time to judge them by', 'no funding source is set, so money is not fully read']);
+  const texts = (causes: Cause[]) => causes.map((c) => c.text);
+  const CAP = 'some of its searches stopped at the cap before finding a loop';
+  const UNTIMED = 'some trades have no block time to judge them by';
+  const NO_KEY = 'no funding source is set, so money is not fully read';
+  const UNREAD = 'money is not fully read yet';
+  it('names each cause of a weaker share, from the same inputs as the qualifier', () => {
+    expect(texts(shareCauses(DEFAULT_RULE, { truncated: 2, untimed: 0 }, [], true, true, null, NO_TOKENS))).toEqual([CAP]);
+    expect(texts(shareCauses(DEFAULT_RULE, { truncated: 0, untimed: 3 }, [], true, true, null, NO_TOKENS))).toEqual([UNTIMED]);
+    expect(texts(shareCauses(DEFAULT_RULE, T, ['AC'], true, true, null, NO_TOKENS))).toEqual([UNREAD]);
+    expect(texts(shareCauses(DEFAULT_RULE, T, [], false, false, null, NO_TOKENS))).toEqual([NO_KEY]);
+    expect(texts(shareCauses(DEFAULT_RULE, { truncated: 1, untimed: 1 }, ['AC'], false, false, null, NO_TOKENS))).toEqual([CAP, UNTIMED, NO_KEY]);
+  });
+  const TRAIL_ONLY = 'money past the stored trail is not read without an Etherscan key';
+  it('says unchecked wallets are still being read with a key, are not read past a stored trail without one, and with no funding at all that none is set', () => {
+    expect(shareCauses(DEFAULT_RULE, T, ['AC'], true, true, null, NO_TOKENS)).toEqual([{ text: UNREAD, bound: false }]);
+    expect(shareCauses(DEFAULT_RULE, T, ['AC'], true, false, null, NO_TOKENS)).toEqual([{ text: TRAIL_ONLY, bound: true }]);
+    expect(shareCauses(DEFAULT_RULE, T, ['AC'], false, false, null, NO_TOKENS)).toEqual([{ text: NO_KEY, bound: true }]);
+    expect(shareQualifier(shareCauses(DEFAULT_RULE, T, ['AC'], true, false, null, NO_TOKENS))).toBe('at least');
+    // A trail that checked every wallet leaves nothing unchecked: no money cause.
+    expect(shareCauses(DEFAULT_RULE, T, [], true, false, null, NO_TOKENS)).toEqual([]);
   });
   it('names nothing for a share that is exact, and no money cause for a lens that follows no money', () => {
-    expect(floorCauses(ALONG, T, [], true, false, NO_TOKENS)).toEqual([]);
+    expect(shareCauses(DEFAULT_RULE, T, [], true, true, null, NO_TOKENS)).toEqual([]);
     // With counts, for the lens panel: the same words, each count after its cause.
-    expect(floorCauses(ALONG, { truncated: 1, untimed: 4 }, [], false, false, NO_TOKENS, true)).toEqual([
-      'some of its searches stopped at the cap before finding a loop (1 search)', 'some trades have no block time to judge them by (4 trades)', 'no funding source is set, so money is not fully read']);
-    expect(floorCauses(nftOnly, T, ['AC'], false, true, NO_TOKENS)).toEqual([]);
+    expect(texts(shareCauses(DEFAULT_RULE, { truncated: 1, untimed: 4 }, [], false, false, null, NO_TOKENS, true))).toEqual([`${CAP} (1 search)`, `${UNTIMED} (4 trades)`, NO_KEY]);
+    expect(shareCauses(nftOnly, T, ['AC'], false, false, 'pending', NO_TOKENS)).toEqual([]);
   });
   const MORE = 'money is not read as far as this lens needs';
   const BLIND = 'money is followed only the way it was sent, so a loop against it can be missed';
   it('names money not read as far as the lens needs, after the money causes and only when they are not named', () => {
-    expect(floorCauses(ALONG, T, [], true, true, NO_TOKENS)).toEqual([MORE]);
-    expect(floorCauses(ALONG, T, ['AC'], true, true, NO_TOKENS)).toEqual(['money is not fully read yet']);
-    expect(floorCauses(ALONG, T, [], false, true, NO_TOKENS)).toEqual(['no funding source is set, so money is not fully read']);
-    expect(floorCauses(ALONG, { truncated: 1, untimed: 0 }, [], true, true, NO_TOKENS)).toEqual(['some of its searches stopped at the cap before finding a loop', MORE]);
-    expect(atLeastOf(ALONG, T, [], true, true, NO_TOKENS)).toBe(true);
-    expect(atLeastOf(ALONG, T, [], true, false, NO_TOKENS)).toBe(false);
+    expect(texts(shareCauses(DEFAULT_RULE, T, [], true, true, 'pending', NO_TOKENS))).toEqual([MORE]);
+    expect(texts(shareCauses(DEFAULT_RULE, T, ['AC'], true, true, 'pending', NO_TOKENS))).toEqual([UNREAD]);
+    expect(texts(shareCauses(DEFAULT_RULE, T, [], false, false, 'pending', NO_TOKENS))).toEqual([NO_KEY]);
+    expect(texts(shareCauses(DEFAULT_RULE, { truncated: 1, untimed: 0 }, [], true, true, 'pending', NO_TOKENS))).toEqual([CAP, MORE]);
   });
   it('never names unread money for a lens with no money edge', () => {
-    expect(floorCauses(nftOnly, T, [], true, true, NO_TOKENS)).toEqual([]);
-    expect(atLeastOf(nftOnly, T, [], true, true, NO_TOKENS)).toBe(false);
+    expect(shareCauses(nftOnly, T, [], true, true, 'limit', NO_TOKENS)).toEqual([]);
+  });
+  it('marks each cause bound or moving: caps, untimed trades, a missing key, a money limit and either-way money are bound; unread money and money still being read are moving', () => {
+    const bound = (causes: Cause[]) => causes.map((c) => c.bound);
+    expect(bound(shareCauses(DEFAULT_RULE, { truncated: 1, untimed: 1 }, [], false, false, null, NO_TOKENS))).toEqual([true, true, true]);
+    expect(bound(shareCauses(DEFAULT_RULE, T, ['AC'], true, true, null, NO_TOKENS))).toEqual([false]);
+    expect(bound(shareCauses(DEFAULT_RULE, T, [], true, true, 'limit', NO_TOKENS))).toEqual([true]);
+    for (const r of ['seeding', 'pending', 'behind'] as const) expect(bound(shareCauses(DEFAULT_RULE, T, [], true, true, r, NO_TOKENS)), r).toEqual([false]);
+    expect(bound(shareCauses(EITHER, T, [], true, true, null, NO_TOKENS))).toEqual([true]);
   });
   describe('for other tokens', () => {
-    const tokensRule = structuredClone(ALONG);
+    const tokensRule = structuredClone(DEFAULT_RULE);
     for (const k of ['eth', 'internal', 'weth'] as const) tokensRule.edges[k].use = false;
     tokensRule.edges['other-tokens'].use = true;
     const NOT_READ = 'other tokens are not read for this collection';
     const NOT_ALL = 'other tokens are not all read yet for this collection';
-    const cause = (reason: 'off' | 'seeding' | 'pending' | 'behind' | 'unreached' | null, payees = false) => floorCauses(tokensRule, T, [], true, false, { reason, payees });
+    const cause = (reason: 'off' | 'seeding' | 'pending' | 'behind' | 'unreached' | null, payees = false) => shareCauses(tokensRule, T, [], true, true, null, { reason, payees });
 
     it('names a cause for each reason, in the lens\'s words', () => {
-      expect(cause('off')).toEqual([NOT_READ]);
-      for (const r of ['seeding', 'pending', 'behind'] as const) expect(cause(r)).toEqual([NOT_ALL]);
-      expect(cause('unreached')).toEqual(['other tokens are read only for wallets reached by ETH or WETH, so a loop through tokens can be missed']);
-      expect(cause('unreached', true)).toEqual(['other tokens are read only for wallets reached by ETH, WETH or one token payment, so a loop through tokens can be missed']);
+      expect(texts(cause('off'))).toEqual([NOT_READ]);
+      for (const r of ['seeding', 'pending', 'behind'] as const) expect(texts(cause(r))).toEqual([NOT_ALL]);
+      expect(texts(cause('unreached'))).toEqual(['other tokens are read only for wallets reached by ETH or WETH, so a loop through tokens can be missed']);
+      expect(texts(cause('unreached', true))).toEqual(['other tokens are read only for wallets reached by ETH, WETH or one token payment, so a loop through tokens can be missed']);
       expect(cause(null)).toEqual([]);
     });
 
-    it('makes the share a floor exactly when there is a cause, and adds no money cause for a tokens-only lens', () => {
-      expect(atLeastOf(tokensRule, T, [], true, false, { reason: 'off', payees: false })).toBe(true);
-      expect(atLeastOf(tokensRule, T, [], true, false, NO_TOKENS)).toBe(false);
+    it('is bound when tokens are off or unreached (waiting will not read them) and moving while they are seeding, pending or behind', () => {
+      for (const r of ['off', 'unreached'] as const) expect(shareQualifier(cause(r)), r).toBe('at least');
+      for (const r of ['seeding', 'pending', 'behind'] as const) expect(shareQualifier(cause(r)), r).toBe('so far');
+      expect(shareQualifier(cause(null))).toBeNull();
+    });
+
+    it('adds no money cause for a tokens-only lens', () => {
       // The money row has nothing to say about it: no funding source is no cause either, as no money edge is on.
-      expect(floorCauses(tokensRule, T, ['AC'], false, true, NO_TOKENS)).toEqual([]);
+      expect(shareCauses(tokensRule, T, ['AC'], false, false, 'pending', NO_TOKENS)).toEqual([]);
     });
 
     it('comes after the money causes', () => {
-      expect(floorCauses(DEFAULT_RULE, T, [], true, false, { reason: 'off', payees: false })).toEqual([
-        'money is followed only the way it was sent, so a loop against it can be missed', NOT_READ]);
+      expect(texts(shareCauses(EITHER, T, [], true, true, null, { reason: 'off', payees: false }))).toEqual([BLIND, NOT_READ]);
     });
 
     it('never names a token cause in words the lens names would not use (no A, AU or AC)', () => {
-      for (const r of ['off', 'seeding', 'unreached'] as const) expect(cause(r).join(' ')).not.toMatch(/\b(A|AU|AC)\b/);
+      for (const r of ['off', 'seeding', 'unreached'] as const) expect(texts(cause(r)).join(' ')).not.toMatch(/\b(A|AU|AC)\b/);
     });
   });
 
-  it('is always a floor when a money edge follows money either way, with its own cause', () => {
-    expect(floorCauses(DEFAULT_RULE, T, [], true, false, NO_TOKENS)).toEqual([BLIND]);
-    expect(floorCauses(DEFAULT_RULE, T, [], true, true, NO_TOKENS)).toEqual([MORE, BLIND]);
-    expect(atLeastOf(DEFAULT_RULE, T, [], true, false, NO_TOKENS)).toBe(true);
+  it('is always bound when a money edge follows money either way, with its own cause', () => {
+    expect(texts(shareCauses(EITHER, T, [], true, true, null, NO_TOKENS))).toEqual([BLIND]);
+    expect(texts(shareCauses(EITHER, T, [], true, true, 'pending', NO_TOKENS))).toEqual([MORE, BLIND]);
+    expect(shareQualifier(shareCauses(EITHER, T, [], true, true, null, NO_TOKENS))).toBe('at least');
     const noMoneyEither = structuredClone(DEFAULT_RULE);
     noMoneyEither.edges.eth.use = false; noMoneyEither.edges.internal.use = false;
-    expect(floorCauses(noMoneyEither, T, [], true, false, NO_TOKENS)).toEqual([]);
+    expect(shareCauses(noMoneyEither, T, [], true, true, null, NO_TOKENS)).toEqual([]);
   });
 });
 
-describe('atLeastOf', () => {
+describe('shareQualifier', () => {
   const T = { truncated: 0, untimed: 0 };
   const NO_TOKENS = { reason: null, payees: false };
   const nftOnly = structuredClone(DEFAULT_RULE);
   for (const k of ['eth', 'internal', 'weth'] as const) nftOnly.edges[k].use = false;
+  const q = (...args: Parameters<typeof shareCauses>) => shareQualifier(shareCauses(...args));
 
-  it('is a floor for a money lens with no funding source, even when the money data is otherwise final (the !funded branch alone)', () => {
-    expect(atLeastOf(ALONG, T, [], false, false, NO_TOKENS)).toBe(true);
-    expect(atLeastOf(ALONG, T, [], true, false, NO_TOKENS)).toBe(false);
-    expect(atLeastOf(nftOnly, T, [], false, false, NO_TOKENS)).toBe(false);
+  it('is null for an exact share', () => {
+    expect(q(DEFAULT_RULE, T, [], true, true, null, NO_TOKENS)).toBeNull();
+    expect(shareQualifier([])).toBeNull();
   });
+  it('reads "so far" for a lens with only unread money', () => {
+    expect(q(DEFAULT_RULE, T, ['AC'], true, true, null, NO_TOKENS)).toBe('so far');
+    expect(q(DEFAULT_RULE, T, [], true, true, 'pending', NO_TOKENS)).toBe('so far');
+    expect(q(DEFAULT_RULE, T, [], true, true, 'seeding', NO_TOKENS)).toBe('so far');
+    expect(q(DEFAULT_RULE, T, [], true, true, 'behind', NO_TOKENS)).toBe('so far');
+  });
+  it('reads "at least" for a cap, untimed trades, no funding source or a money limit', () => {
+    expect(q(DEFAULT_RULE, { ...T, truncated: 1 }, [], true, true, null, NO_TOKENS)).toBe('at least');
+    expect(q(nftOnly, { ...T, truncated: 1 }, [], true, true, null, NO_TOKENS)).toBe('at least');
+    expect(q(nftOnly, { ...T, untimed: 1 }, [], true, true, null, NO_TOKENS)).toBe('at least');
+    expect(q(DEFAULT_RULE, T, [], false, false, null, NO_TOKENS)).toBe('at least');
+    expect(q(DEFAULT_RULE, T, [], true, true, 'limit', NO_TOKENS)).toBe('at least');
+    expect(q(nftOnly, T, ['AC'], false, false, 'limit', NO_TOKENS)).toBeNull();
+  });
+  it('reads "at least" when a moving cause and a bound one both apply, and the panel lists both in order', () => {
+    const causes = shareCauses(DEFAULT_RULE, { truncated: 2, untimed: 0 }, ['AC'], true, true, null, NO_TOKENS, true);
+    expect(shareQualifier(causes)).toBe('at least');
+    expect(causes.map((c) => c.text)).toEqual(['some of its searches stopped at the cap before finding a loop (2 searches)', 'money is not fully read yet']);
+    expect(causeSentence(causes)).toBe('Its share is at least this, because some of its searches stopped at the cap before finding a loop (2 searches); money is not fully read yet.');
+  });
+  it('words the panel sentence for "so far" as a rise still to come, and says nothing for an exact share', () => {
+    expect(causeSentence(shareCauses(DEFAULT_RULE, T, ['AC'], true, true, null, NO_TOKENS))).toBe('Its share can still rise while reads finish: money is not fully read yet.');
+    expect(causeSentence([])).toBeNull();
+  });
+});
 
-  it('is a floor when money is not final, a search was cut short, or a trade had no block time', () => {
-    expect(atLeastOf(ALONG, T, ['AC'], true, false, NO_TOKENS)).toBe(true);
-    expect(atLeastOf(nftOnly, T, ['AC'], true, false, NO_TOKENS)).toBe(false);
-    expect(atLeastOf(nftOnly, { ...T, truncated: 1 }, [], true, false, NO_TOKENS)).toBe(true);
-    expect(atLeastOf(nftOnly, { ...T, untimed: 1 }, [], true, false, NO_TOKENS)).toBe(true);
+describe('builtinCauses', () => {
+  it('is moving for unchecked wallets with a key, and bound with no funding source', () => {
+    expect(shareQualifier(builtinCauses('AC', ['AU', 'AC'], true, true))).toBe('so far');
+    expect(shareQualifier(builtinCauses('AC', ['AU', 'AC'], false, false))).toBe('at least');
+    expect(builtinCauses('AC', ['AU', 'AC'], false, false).map((c) => c.text)).toEqual(['no funding source is set, so money is not fully read']);
+  });
+  it('is bound for unchecked wallets past a stored trail with no key, as nothing reads them', () => {
+    expect(builtinCauses('AC', ['AU', 'AC'], true, false)).toEqual([{ text: 'money past the stored trail is not read without an Etherscan key', bound: true }]);
+    expect(shareQualifier(builtinCauses('AC', ['AU', 'AC'], true, false))).toBe('at least');
+  });
+  it('has no cause for a lens whose money is not unchecked (Round trips follows none), or when every wallet is checked', () => {
+    expect(builtinCauses('A', ['AU', 'AC'], false, false)).toEqual([]);
+    expect(builtinCauses('AU', [], false, false)).toEqual([]);
+    expect(builtinCauses('AU', [], true, true)).toEqual([]);
   });
 });
 

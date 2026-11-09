@@ -6,6 +6,7 @@ import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseE
 // Types only: the package's values (the store, the chain client) must stay out of the browser bundle.
 import type { Bucket, Method } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
+import { builtinCauses, shareQualifier, type Qualifier } from '@/lib/lens-state';
 import { LENSES as LENS_INFO, NOT_RUN, localTime, pct, num } from '@/lib/format';
 import { dateIn, midnight, offsetAt } from '@/lib/zone';
 import { cn } from '@/lib/utils';
@@ -33,9 +34,9 @@ export interface TimePoint {
  * market. `analyses`: the answer at each run of the worker.
  */
 export type TimeChartProps =
-  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Method[]; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[];
-      /** Up to three of your lenses that ran, drawn beside the built-ins; `atLeast`: its share is a floor, and `floorWhy` says what makes it one (floorCauses). */
-      own: { key: `L${number}`; name: string; atLeast: boolean; floorWhy?: string }[];
+  | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Method[]; funded: boolean; funding: boolean; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[];
+      /** Up to three of your lenses that ran, drawn beside the built-ins; `qualifier`: how its share reads (shareQualifier), and `floorWhy` says what makes it so. */
+      own: { key: `L${number}`; name: string; qualifier: Qualifier | null; floorWhy?: string }[];
       /** Those of yours that ran but did not fit: named under the chart, each opening its tab. */
       ownLeft: { key: string; name: string }[];
       /** Those of yours with no finished run here, each with runStateWords' words: named beside `ownLeft`, never dropped. */
@@ -57,12 +58,18 @@ const OWN_SHAPE = ['triangle', 'cross', 'hexagon'] as const;
 const BUILT_IN_SHAPE = ['circle', 'square', 'diamond'] as const;
 
 /** One line of the chart: how it is named, stroked and marked. Built-ins and yours alike, so the drawing code below has one path. */
-interface Series { key: Lens; name: string; stroke: string; fill: string; dash: string | undefined; cap: 'round' | 'butt'; shape: (typeof BUILT_IN_SHAPE | typeof OWN_SHAPE)[number]; atLeast: boolean; floorWhy?: string }
+interface Series { key: Lens; name: string; stroke: string; fill: string; dash: string | undefined; cap: 'round' | 'butt'; shape: (typeof BUILT_IN_SHAPE | typeof OWN_SHAPE)[number]; qualifier: Qualifier | null; floorWhy?: string }
 
-function seriesOf(own: { key: Lens; name: string; atLeast: boolean; floorWhy?: string }[]): Series[] {
+/** A built-in's qualifier and the words of its causes, from the same function the tabs use. */
+function builtIn(m: Method, notFinal: readonly Method[], funded: boolean, funding: boolean): { qualifier: Qualifier | null; floorWhy?: string } {
+  const causes = builtinCauses(m, notFinal, funded, funding);
+  return { qualifier: shareQualifier(causes), floorWhy: causes.map((c) => c.text).join('; ') || undefined };
+}
+
+function seriesOf(own: { key: Lens; name: string; qualifier: Qualifier | null; floorWhy?: string }[], notFinal: readonly Method[], funded: boolean, funding: boolean): Series[] {
   return [
-    ...BUILT_INS.map((m, i): Series => ({ key: m, name: LENS_INFO[m].name, stroke: STROKE[m], fill: FILL[m], dash: DASH[m], cap: 'round', shape: BUILT_IN_SHAPE[i]!, atLeast: false })),
-    ...own.map((o, i): Series => ({ key: o.key, name: o.name, stroke: 'stroke-flow', fill: 'fill-flow', dash: OWN_DASH[i % 3], cap: 'butt', shape: OWN_SHAPE[i % 3]!, atLeast: o.atLeast, floorWhy: o.floorWhy })),
+    ...BUILT_INS.map((m, i): Series => ({ key: m, name: LENS_INFO[m].name, stroke: STROKE[m], fill: FILL[m], dash: DASH[m], cap: 'round', shape: BUILT_IN_SHAPE[i]!, ...builtIn(m, notFinal, funded, funding) })),
+    ...own.map((o, i): Series => ({ key: o.key, name: o.name, stroke: 'stroke-flow', fill: 'fill-flow', dash: OWN_DASH[i % 3], cap: 'butt', shape: OWN_SHAPE[i % 3]!, qualifier: o.qualifier, floorWhy: o.floorWhy })),
   ];
 }
 
@@ -181,7 +188,7 @@ export function TimeChart(props: TimeChartProps) {
   const { zone } = props;
   const hrefs = props.kind === 'history' ? props.periodHrefs : undefined;
   const lensHrefs = props.kind === 'history' ? props.lensHrefs : undefined;
-  const lenses = seriesOf(props.kind === 'history' ? props.own : []);
+  const lenses = seriesOf(props.kind === 'history' ? props.own : [], props.kind === 'history' ? props.notFinal : [], props.kind === 'history' ? props.funded : true, props.kind === 'history' ? props.funding : true);
   const ownLeft = props.kind === 'history' ? props.ownLeft : [];
   const ownNotRun = props.kind === 'history' ? props.ownNotRun : [];
   const isOwn = (k: Lens) => lenses.some((m) => m.key === k && m.stroke === 'stroke-flow');
@@ -206,7 +213,6 @@ export function TimeChart(props: TimeChartProps) {
   const stripMax = history ? Math.max(1, ...points.map((p) => p.sales)) : 1;
   const sy = (v: number) => ST + (1 - v / stripMax) * (SH - ST - SB);
   const ticks = xTicks(from, to, zone);
-  const notFinal = history ? props.notFinal : [];
 
   function nearest(clientX: number): number {
     const box = svg.current!.getBoundingClientRect();
@@ -308,9 +314,9 @@ export function TimeChart(props: TimeChartProps) {
                   <li key={m.key} className="flex items-start gap-2">
                     <span className="pt-1"><Key s={m} /></span>
                     <span className="min-w-0">
-                      {s !== null && m.atLeast ? <span className="text-muted-foreground">at least </span> : null}
+                      {s !== null && m.qualifier === 'at least' ? <span className="text-muted-foreground">at least </span> : null}
                       <span className="font-semibold text-foreground tabular-nums">{v === null ? NOT_RUN : s === null ? noShare(p, m.key) : pctText(s)}</span>{' '}
-                      {s !== null && (notFinal as Lens[]).includes(m.key) ? <span className="text-muted-foreground">so far </span> : null}
+                      {s !== null && m.qualifier === 'so far' ? <span className="text-muted-foreground">so far </span> : null}
                       <span className="text-muted-foreground">{m.name}</span>
                       {v && v.whole > 0 ? <span className="block text-muted-foreground tabular-nums">{num(v.part)} of {num(v.whole)} sales</span> : null}
                       {s === null && v !== null && noShare(p, m.key) === 'not judged yet' ? <span className="block text-muted-foreground">its run has not read this far yet</span> : null}
@@ -338,7 +344,7 @@ export function TimeChart(props: TimeChartProps) {
         {lenses.map((m) => (
           <span key={m.key} className="flex items-center gap-1.5">
             <Key s={m} />{m.name}
-            {m.atLeast ? <span title={`${m.name}'s share is a floor${m.floorWhy ? `: ${m.floorWhy}` : ''}`}>(at least)</span> : null}
+            {m.qualifier ? <span title={`${m.name}'s share ${m.qualifier === 'at least' ? 'is a floor' : 'can still rise'}${m.floorWhy ? `: ${m.floorWhy}` : ''}`}>({m.qualifier})</span> : null}
           </span>
         ))}
         <span>{points.length} {history ? `${props.bucket}s with trades` : 'analyses'} · times in {zone.replaceAll('_', ' ')} · hover or use ← → for each</span>
@@ -357,7 +363,7 @@ export function TimeChart(props: TimeChartProps) {
             <thead className="sticky top-0 bg-card text-muted-foreground">
               <tr className="border-b">
                 <th className="px-2 py-1.5 font-medium">{history ? 'Period' : 'Analysis'}</th>
-                {lenses.map((m) => <th key={m.key} className="px-2 py-1.5 text-right font-medium">{m.name}{m.atLeast ? ' (at least)' : ''}</th>)}
+                {lenses.map((m) => <th key={m.key} className="px-2 py-1.5 text-right font-medium">{m.name}{m.qualifier ? ` (${m.qualifier})` : ''}</th>)}
                 <th className="px-2 py-1.5 text-right font-medium">{history ? 'Sales' : 'Wallets checked'}</th>
               </tr>
             </thead>

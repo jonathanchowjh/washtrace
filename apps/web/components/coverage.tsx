@@ -114,6 +114,7 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
   // A retry of the first analysis is running: Failed is the last outcome, and Analyzing is what is true now.
   const retrying = (stages ?? []).some((x) => (x.key === 'stored-analysis' || x.key === 'analysis') && x.state === 'running');
   const failed = c.analysisError && !retrying;
+  const said = trust(c, cov);
   // Everything is read but no key checks the wallets: the same sentence as when links are missing, since a key just added is also without money lenses.
   const waitsForKey = cov.notFinal.length > 0 || (stages ?? []).some((x) => x.key === 'money' && x.state === 'blocked');
   const stage: { share: number; of: ReactNode; figure?: string } | null = cov.stops !== null ? { share: 1, figure: 'Stored data', of: <>stops <Time ms={cov.stops} style="date" /> · {cov.unsynced}. No newer block is read until its chain has an RPC.</> }
@@ -146,7 +147,15 @@ export function ReadingSummary({ c, cov, href, stages }: { c: CollectionRow; cov
           <div className="mt-1 max-w-md"><Bar share={stage?.share ?? 0} paused={cov.reading === 'paused' || cov.reading === 'silent' || cov.reading === 'stored-only' || cov.reading === 'head-unknown'} /></div>
         </div>
       </div>
-      <p className="max-w-xl text-xs text-muted-foreground">{trust(c, cov)} <a href={href} className="whitespace-nowrap underline hover:text-foreground">The six stages ↓</a></p>
+      <p className="max-w-xl text-xs text-muted-foreground">
+        {said === null ? null : said.chip === null ? said.text : (
+          <>
+            <Pill tone="idle" title={said.text} aria-describedby={`trust-${c.id}`}>{said.chip}</Pill>
+            <span id={`trust-${c.id}`} className="sr-only">{said.text}</span>
+          </>
+        )}{' '}
+        <a href={href} className="whitespace-nowrap underline hover:text-foreground">The six stages ↓</a>
+      </p>
       {blocked.length > 0 ? (
         <p className="w-full text-xs text-muted-foreground">
           Blocked:{' '}

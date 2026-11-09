@@ -65,13 +65,16 @@ export function plural(n: number, word: string, many = `${word}s`): string {
   return `${num(n)} ${n === 1 ? word : many}`;
 }
 
-/** How long a wait will take, roughly: a guess is never shown to the minute. "about 40 min left". */
-export function eta(ms: number): string {
+/** A guess at a duration, never shown to the minute: "about 40 min". A bound reads "at least" plus `floorTime` instead. */
+export function about(ms: number): string {
   const min = Math.max(1, Math.round(ms / 60_000));
-  if (min < 60) return `about ${min} min left`;
+  if (min < 60) return `about ${min} min`;
   const h = Math.round(min / 60);
-  return h < 24 ? `about ${h} h left` : `about ${plural(Math.round(h / 24), 'day')} left`;
+  return h < 24 ? `about ${h} h` : `about ${plural(Math.round(h / 24), 'day')}`;
 }
+
+/** How long a wait will take: "about 40 min left". */
+export const eta = (ms: number): string => `${about(ms)} left`;
 
 /**
  * A duration for "at least T": rounded down at the unit it shows,
@@ -137,13 +140,24 @@ export function tokenLabel(id: string, max = 20): string {
   return id.length > max ? `${id.slice(0, max - 2)}…` : id;
 }
 
-/** The six reading stages' short names, in order: the column heads of the pipeline table. */
-export const STAGE_LABELS = ['Download', 'Load', 'Analyze stored', 'Chain', 'Money', 'Re-analyze'] as const;
+/** The six reading stages, in order: `label` heads the pipeline table's column, `title` is what the stage does. */
+export const STAGES = [
+  { label: 'Download', title: 'Download stored data' },
+  { label: 'Load', title: 'Load it into the database' },
+  { label: 'Analyze stored', title: 'Analyze the stored data' },
+  { label: 'Chain', title: 'Read new transfers from the chain' },
+  { label: 'Money', title: 'Check wallets for money' },
+  { label: 'Re-analyze', title: 'Re-analyze with everything' },
+] as const;
 
-/** "reading stage 4 (Chain)": a pipeline stage by number and name, so it is not mistaken for the worker's three numbered jobs. */
+/** "reading stage 4 (Chain)": a pipeline stage by number and name, so it is not mistaken for one of the worker's four jobs. */
 export function stageName(n: 1 | 2 | 3 | 4 | 5 | 6): string {
-  return `reading stage ${n} (${STAGE_LABELS[n - 1]})`;
+  return `reading stage ${n} (${STAGES[n - 1]!.label})`;
 }
+
+/** Where a missing Etherscan key is added, and the words every link there carries. */
+export const ETHERSCAN_HREF = '/settings#etherscan.key';
+export const ETHERSCAN_CTA = 'Add an Etherscan key in Settings →';
 
 export type TimeStyle = 'datetime' | 'date' | 'time' | 'month';
 

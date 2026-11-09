@@ -1,6 +1,6 @@
-import { METHODS, moneyFor, type TradeRow } from '@washtrace/detect';
+import { MAX_STREAMS, METHODS, moneyFor, type TradeRow } from '@washtrace/detect';
 import { venueOf, VENUES, type LensKey, type TradeContext } from '@washtrace/detect/trades';
-import { collectionFrom, handle, json, readerZone } from '@/lib/api';
+import { bad, collectionFrom, handle, json, readerZone } from '@/lib/api';
 import { LENSES, NOT_RUN, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy, lensContext, ownLenses } from '@/lib/metrics';
 import { pages as pagesOf } from '@/lib/params';
@@ -89,6 +89,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ chain: s
     const empty = holdsNothing(q, ran) !== null;
 
     if (url.searchParams.get('format') === 'csv') {
+      // Each download holds a pool connection until it ends; past MAX_STREAMS the rest of the API would wait for one.
+      if (s.streaming >= MAX_STREAMS) return bad('Too many downloads at once; try again in a minute.', 429);
       return new Response(csvBody(empty ? nothing() : s.tradeStream(c.id, q, ctx), ctx, own), {
         headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${address}-trades.csv"`, 'cache-control': 'no-store' },
       });

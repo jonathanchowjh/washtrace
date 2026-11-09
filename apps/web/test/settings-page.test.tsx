@@ -23,7 +23,7 @@ function fields(more: Record<string, Partial<FieldView>> = {}, locked = false): 
     { key: 'etherscan.key', label: 'Etherscan API key', secret: true, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
     { key: 'etherscan.rps', label: 'Etherscan calls per second', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
     { key: 'etherscan.url', label: 'Etherscan API URL', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
-    { key: 'follow.hops', label: 'Follow hops', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
+    { key: 'follow.hops', label: 'Follow money (wallets out)', secret: false, set: false, shown: null, source: null, env: null, locked, pinned: null, invalid: null },
   ];
   return base.map((f) => ({ ...f, ...more[f.key] }));
 }
@@ -71,6 +71,7 @@ describe('Settings, each field', () => {
     expect(box('etherscan.key').textContent).toMatch(/Money loops back.*Linked wallets/);
     expect(box('etherscan.key').textContent).not.toMatch(/\bSCC\b|\bAU\b|\bAC\b/);
     for (const key of ['etherscan.rps', 'etherscan.url', 'follow.hops']) expect(box(key).querySelector('[data-hint]')?.textContent?.length).toBeGreaterThan(20);
+    expect(box('follow.hops').textContent).not.toMatch(/\bhops?\b/i);
   });
 
   it('says what tokens.payees is for, what it costs and when a payee is not read, with the fan-out the worker follows by', () => {
@@ -123,13 +124,13 @@ describe('Settings, each field', () => {
     vi.stubGlobal('fetch', fetch);
     render(<Settings writable fields={fields({ 'follow.hops': { set: true, source: 'console', shown: '4', env: '2' } })} />);
     expect(box('follow.hops').querySelector<HTMLButtonElement>('button[type=submit]')!.title).toContain('.env value');
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow hops to its .env value…' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow hops to its .env value' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow money (wallets out) to its .env value…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Follow money (wallets out) to its .env value' }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ key: 'follow.hops', value: null });
     cleanup();
     render(<Settings writable fields={fields({ 'follow.hops': { source: 'console', shown: '4', env: null } })} />);
-    expect(screen.getByRole('button', { name: 'Clear Follow hops…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear Follow money (wallets out)…' })).toBeTruthy();
   });
 
   it('offers Clear on a console value .env does not set', () => {
@@ -178,9 +179,9 @@ describe('Settings, each field', () => {
   });
 
   it('says, as a fault, that the worker ignores an invalid value', () => {
-    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', env: '99', invalid: 'Follow hops must be a whole number from 0 to 10.' } })} />);
+    render(<Settings writable fields={fields({ 'follow.hops': { set: true, shown: '99', source: 'env', env: '99', invalid: 'Follow money (wallets out) must be a whole number from 0 to 10.' } })} />);
     const said = screen.getByText(/^Ignored:/);
-    expect(said.textContent).toBe('Ignored: Follow hops must be a whole number from 0 to 10. The worker uses 3.');
+    expect(said.textContent).toBe('Ignored: Follow money (wallets out) must be a whole number from 0 to 10. The worker uses 3.');
     expect(said.closest('.text-fault')).toBeTruthy();
   });
 
@@ -197,11 +198,11 @@ describe('Settings, each field', () => {
   });
 
   it('says what the API refused', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Follow hops must be a whole number from 0 to 10.' }, 400)));
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Follow money (wallets out) must be a whole number from 0 to 10.' }, 400)));
     render(<Settings writable fields={fields()} />);
     fireEvent.change(box('follow.hops').querySelector('input')!, { target: { value: '40' } });
     fireEvent.click(box('follow.hops').querySelector('button')!);
-    await waitFor(() => expect(live('follow.hops').textContent).toContain('Follow hops must be a whole number from 0 to 10.'));
+    await waitFor(() => expect(live('follow.hops').textContent).toContain('Follow money (wallets out) must be a whole number from 0 to 10.'));
     expect(live('follow.hops').querySelector('.text-fault')).toBeTruthy();
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -258,7 +259,7 @@ describe('Settings, for a screen reader', () => {
 
   it('names each button with its field', () => {
     render(<Settings writable fields={fields({ ...RPC_SET, 'etherscan.key': { set: false } })} />);
-    for (const name of ['Replace Ethereum RPC URL', 'Test Ethereum RPC URL', 'Set Etherscan API key', 'Test Etherscan API key', 'Save Follow hops', 'Save Etherscan calls per second']) {
+    for (const name of ['Replace Ethereum RPC URL', 'Test Ethereum RPC URL', 'Set Etherscan API key', 'Test Etherscan API key', 'Save Follow money (wallets out)', 'Save Etherscan calls per second']) {
       expect(screen.getByRole('button', { name })).toBeTruthy();
     }
     expect(screen.getByRole('button', { name: 'Clear Ethereum RPC URL…' })).toBeTruthy();
@@ -269,14 +270,16 @@ describe('Settings, for a screen reader', () => {
     for (const l of document.querySelectorAll('label[for]')) expect(document.getElementById(l.getAttribute('for')!)).toBeTruthy();
     expect(box('rpc.1').querySelector('label')).toBeNull();
     expect(screen.getByRole('group', { name: 'Ethereum RPC URL' })).toBeTruthy();
-    expect((screen.getByRole('textbox', { name: 'Follow hops' }) as HTMLInputElement).name).toBe('value');
+    expect((screen.getByRole('textbox', { name: 'Follow money (wallets out)' }) as HTMLInputElement).name).toBe('value');
   });
 
   it('describes each field and its input with its hint', () => {
     render(<Settings writable fields={fields()} />);
     const described = (el: Element) => (el.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent).join(' ');
     expect(described(screen.getByRole('group', { name: 'Ethereum RPC URL' }))).toContain("Where the worker reads Ethereum's blocks");
-    expect(described(screen.getByRole('textbox', { name: 'Follow hops' }))).toContain('How many wallets out from the traders');
+    expect(described(screen.getByRole('textbox', { name: 'Follow money (wallets out)' }))).toContain('How many wallets out from the traders');
+    expect(described(screen.getByRole('textbox', { name: 'Follow money (wallets out)' }))).toContain(
+      'Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".');
   });
 });
 

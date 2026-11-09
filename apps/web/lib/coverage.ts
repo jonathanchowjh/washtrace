@@ -237,26 +237,30 @@ export function analysisWaitText(c: CollectionRow, analyzePass: PassRow | undefi
   return `Waiting for its first analysis · queued behind ${names.get(running.subjectId!) ?? 'another collection'} (running ${min}).`;
 }
 
-/** What the reading's state means for the numbers: the sentence under the answer that says how far to trust it. */
-export function trust(c: CollectionRow, cov: Coverage): string | null {
+/** How far to trust the numbers: the sentence, and the chip that names it in a word (null: the reading is complete and there is nothing to warn of). */
+export type Trust = { chip: 'Shares may move' | 'Not current' | 'Starting' | null; text: string };
+const say = (chip: Trust['chip'], text: string): Trust => ({ chip, text });
+
+/** What the reading's state means for the numbers: the chip under the answer, and the sentence that says how far to trust it. A complete reading has no chip: its sentence is the whole line. */
+export function trust(c: CollectionRow, cov: Coverage): Trust | null {
   // No analysis yet means no shares on screen; the empty state says why instead.
   if (c.latest === null) return null;
-  if (cov.reading === 'queued') return 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
-  if (cov.reading === 'downloading') return 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.';
-  if (cov.reading === 'restoring') return 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.';
-  if (cov.reading === 'silent') return 'The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.';
-  if (cov.reading === 'paused') return 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.';
-  if (cov.reading === 'stored-only') return cov.stops !== null
+  if (cov.reading === 'queued') return say('Shares may move', 'Stored data is waiting to download from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.');
+  if (cov.reading === 'downloading') return say('Shares may move', 'Stored data is downloading from Hugging Face: the history it holds arrives once it has downloaded and loaded, and every share can move either way.');
+  if (cov.reading === 'restoring') return say('Shares may move', 'Stored data is loading: the history it holds arrives all at once when it is done, and every share can move either way.');
+  if (cov.reading === 'silent') return say('Not current', 'The worker is not reporting, so these numbers rest on what it had read before it went silent, not on the chain as it is now.');
+  if (cov.reading === 'paused') return say('Not current', 'Paused: the worker is not reading new blocks, so these numbers rest on what it had read, not on the chain as it is now.');
+  if (cov.reading === 'stored-only') return say('Not current', cov.stops !== null
     ? 'Stored data only: with no RPC for its chain the worker reads no newer blocks, so these numbers rest on history up to where the stored data stops.'
-    : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.';
-  if (cov.reading === 'head-unknown') return 'The chain\'s newest block is not known right now, so these numbers rest on what was read, not on the chain as it is now.';
-  if (cov.reading === 'starting') return 'The worker is still finding where this collection begins, so there are no numbers yet.';
-  if (cov.reading === 'catching-up') return `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`;
-  if (cov.reading === 'analyzing') return 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.';
+    : 'No RPC for its chain: the worker reads no newer blocks, so these numbers rest on what it had read, not on the chain as it is now.');
+  if (cov.reading === 'head-unknown') return say('Not current', 'The chain\'s newest block is not known right now, so these numbers rest on what was read, not on the chain as it is now.');
+  if (cov.reading === 'starting') return say('Starting', 'The worker is still finding where this collection begins, so there are no numbers yet.');
+  if (cov.reading === 'catching-up') return say('Shares may move', `History is ${cov.blocks === null ? 'partly' : progress(cov.blocks)} read, so every share can still move either way.`);
+  if (cov.reading === 'analyzing') return say('Shares may move', 'Every transfer is read. The shares, and how many wallets need checking for money, come from the first analysis, which has not finished yet.');
   const checked = progress(cov.wallets.of === 0 ? 0 : cov.wallets.checked / cov.wallets.of);
   // Not final with nothing checking: no key, so the rest wait for one.
-  if (cov.notFinal.length > 0 && cov.reading === 'complete') return `${checked} of wallets that traded it were checked for money, so ${lensList(cov.notFinal)} are not final: with no Etherscan key the rest go unchecked.`;
-  if (cov.notFinal.length > 0) return `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`;
-  if (!cov.money) return `Every transfer is read. Money links were not checked, so only ${LENSES.A.name} ran.`;
-  return 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.';
+  if (cov.notFinal.length > 0 && cov.reading === 'complete') return say('Shares may move', `${checked} of wallets that traded it were checked for money, so ${lensList(cov.notFinal)} are not final: with no Etherscan key the rest go unchecked.`);
+  if (cov.notFinal.length > 0) return say('Shares may move', `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`);
+  if (!cov.money) return say(null, `Every transfer is read. Money links were not checked, so only ${LENSES.A.name} ran.`);
+  return say(null, 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.');
 }

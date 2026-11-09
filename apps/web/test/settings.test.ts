@@ -47,6 +47,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+describe('the follow setting\'s words', () => {
+  it('counts wallets out, and names no hop to the user', () => {
+    const f = FIELDS.find((x) => x.key === 'follow.hops')!;
+    expect(f.label).toBe('Follow money (wallets out)');
+    expect(f.validate('11')).not.toMatch(/\bhops?\b/i);
+  });
+});
+
 describe('view', () => {
   it('shows a secret as dots and its last 4, never the value', () => {
     const fields = fieldViews(new Map([['rpc.1', RPC]]), { 'rpc.1': src('console', null) }, true);
@@ -102,7 +110,7 @@ describe('view', () => {
 
   it('says why the worker ignores an invalid environment value', () => {
     const hops = field(fieldViews(new Map(), { 'follow.hops': src('env', '99', '99') }, true), 'follow.hops');
-    expect(hops.invalid).toBe('Follow hops must be a whole number from 0 to 10.');
+    expect(hops.invalid).toBe('Follow money (wallets out) must be a whole number from 0 to 10.');
   });
 
   it('calls invalid only what the worker ignores, not what the console would refuse to save', () => {
@@ -263,9 +271,9 @@ describe('validators', () => {
     ['etherscan.url', 'http://api.etherscan.io/v2/api', 'The Etherscan URL starts with https://.'],
     ['follow.hops', '0', null],
     ['follow.hops', '10', null],
-    ['follow.hops', '11', 'Follow hops must be a whole number from 0 to 10.'],
-    ['follow.hops', '2.5', 'Follow hops must be a whole number from 0 to 10.'],
-    ['follow.hops', '-1', 'Follow hops must be a whole number from 0 to 10.'],
+    ['follow.hops', '11', 'Follow money (wallets out) must be a whole number from 0 to 10.'],
+    ['follow.hops', '2.5', 'Follow money (wallets out) must be a whole number from 0 to 10.'],
+    ['follow.hops', '-1', 'Follow money (wallets out) must be a whole number from 0 to 10.'],
   ])('%s %j → %j', (key, v, expected) => {
     expect(check(key, v)).toBe(expected);
   });

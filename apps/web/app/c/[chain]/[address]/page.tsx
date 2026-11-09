@@ -23,7 +23,7 @@ import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { chainName } from '@/lib/chains';
 import { NOT_RUN_LATEST, lensInfo, pct, pctTenth, plural, short, num } from '@/lib/format';
-import { runStateWords } from '@/lib/lens-state';
+import { builtinCauses, runStateWords, shareQualifier } from '@/lib/lens-state';
 import { moneyFor, type CollectionProfile, type Method, type MethodTotals, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { collectionLinks, explorerAddress, explorerTx, venues } from '@/lib/links';
 import { analyzingOn, coverage, unread, analysisWaitText } from '@/lib/coverage';
@@ -124,7 +124,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const silent = workerSilent(passes, Date.now());
   const why = analysisWaitText(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone, silent !== null);
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding, silent !== null);
-  const { funded, needs, atLeast, moneyShort, tokens: tokensFloor, chartOwn, chartLeft, chartNotRun } = await collectionView(s, c, runs, { config, cov, editing, watched: all.length, yours, chart });
+  const { funded, needs, qualifier, moneyReasons, tokens: tokensFloor, chartOwn, chartLeft, chartNotRun } = await collectionView(s, c, runs, { config, cov, editing, watched: all.length, yours, chart });
   const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
   const name = c.name ?? short(address);
   const lens = lensInfo(method, own)!;
@@ -174,17 +174,17 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           {/* These are the rules now set, which the latest analysis may not have run under yet. */}
           {rules ? <p className="mb-4 text-sm text-muted-foreground">{rules}</p> : null}
           <LensTabs
-            base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyShort={moneyShort} tokens={tokensFloor}
-            coverage={{ trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null }} writable={writable}
+            base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyReasons={moneyReasons} tokens={tokensFloor}
+            coverage={{ trail: c.trailImportedSha !== null, funded, funding: config.funding, coming, silent: silent !== null }} writable={writable}
             editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing} /> : null}
           >
             {comparing ? <Compare base={base} both={grid?.both ?? {}} not={grid?.not ?? {}} keys={ctx.ran} own={own} left={leftOut(a, runs, ctx.ran, { trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null })} /> : null}
-            {t && !comparing ? <LensStats m={method} t={t} own={own} loops={!yours && a?.loops && ctx.ran.includes(method) ? a.loops[method as Method] : null} base={base} notFinal={cov.notFinal}
-              atLeast={atLeast} /> : null}
+            {t && !comparing ? <LensStats m={method} t={t} own={own} loops={!yours && a?.loops && ctx.ran.includes(method) ? a.loops[method as Method] : null} base={base}
+              qualifier={yours ? qualifier : shareQualifier(builtinCauses(method as Method, cov.notFinal, funded, config.funding))} /> : null}
             {a && !comparing ? (
               <p className="mb-4 text-sm text-muted-foreground">
                 {t?.available
-                  ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: {yours ? `${atLeast ? 'at least ' : 'its '}${pctTenth(t.flaggedSales, t.sales)}` : `its ${pct(t.flaggedSales, t.sales)}`} of sales, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
+                  ? <>What <span className="font-medium text-foreground">{lens.name}</span> flags most: {yours ? `${qualifier === 'at least' ? 'at least ' : 'its '}${pctTenth(t.flaggedSales, t.sales)}` : `its ${pct(t.flaggedSales, t.sales)}`} of sales{yours && qualifier === 'so far' ? ' so far' : ''}, token by token and wallet by wallet. Open a token to see why each trade was flagged.</>
                   : <><span className="font-medium text-foreground">{lens.name}</span> {yours ? runStateWords(yours.run)?.full : NOT_RUN_LATEST} Choose another lens above.</>}
               </p>
             ) : null}
@@ -217,7 +217,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           title="When did it happen?"
           lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
-          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} now={Date.now()} zone={zone} base={base}
+          <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} funded={funded} funding={config.funding} now={Date.now()} zone={zone} base={base}
             own={chartOwn} ownLeft={chartLeft} ownNotRun={chartNotRun} />
         </Section>
       ) : null}

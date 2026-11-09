@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUILT_IN_NAMES } from '@washtrace/detect';
-import { LENSES, notRunAll, interval, lensInfo, num, stageName, tokenLabel, took, floorTime } from '@/lib/format';
+import { LENSES, notRunAll, interval, lensInfo, num, stageName, tokenLabel, took, floorTime, about, eta } from '@/lib/format';
 
 describe('lensInfo', () => {
   it('gives a built-in, one of yours, or null for a key that names neither', () => {
@@ -66,6 +66,15 @@ describe('notRunAll', () => {
   it('before any analysis a built-in has not run at all, in the words a lens of yours with no run has', () => {
     expect(notRunAll(['AU'], false)).toBe('Money loops back has not run on this collection, so it flags nothing yet.');
     expect(notRunAll(['AU', 'AC'], false)).toBe('Money loops back and Linked wallets have not run on this collection, so they flag nothing yet.');
+  });
+});
+
+describe('about and eta, the one rule for a guess', () => {
+  const MIN = 60_000;
+  it('about rounds to the unit it shows and eta is about plus left', () => {
+    expect(about(40 * MIN)).toBe('about 40 min');
+    expect(eta(40 * MIN)).toBe('about 40 min left');
+    expect([0, 90 * MIN, 36 * 60 * MIN, 3 * 24 * 60 * MIN].map(about)).toEqual(['about 1 min', 'about 2 h', 'about 2 days', 'about 3 days']);
   });
 });
 

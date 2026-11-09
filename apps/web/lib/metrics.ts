@@ -33,6 +33,8 @@ export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes
 
 /** Why they are not counted, said wherever a page names one. */
 export const APART_WHY = 'on real data it flags as many sales as it does with buyers relabelled at random among wallets of similar activity, so it is not counted';
+/** APART_WHY as a sentence, for the tooltip on each "(not counted)". */
+export const APART_WHY_TITLE = APART_WHY.charAt(0).toUpperCase() + APART_WHY.slice(1);
 
 /** What a page says of a trade no analysis has covered: unread is not clean. */
 export const NOT_JUDGED = 'Its transfers are read, but no analysis has covered them yet. That is not the same as clean.';

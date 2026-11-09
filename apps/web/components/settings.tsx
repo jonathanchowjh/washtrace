@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/ui';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { LENSES, num, stageName, withoutKey } from '@/lib/format';
+import { LENSES, STAGES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
 
@@ -23,7 +23,7 @@ const HINTS: Record<string, string> = {
   'etherscan.key': `Lets the worker see who paid whom, for the money lenses: ${MONEY}.`,
   'etherscan.rps': 'How many Etherscan calls the worker makes a second. Higher checks wallets sooner; above your plan\'s limit, Etherscan refuses calls.',
   'etherscan.url': 'Where the worker sends its Etherscan calls. Change it only for a proxy or an Etherscan-compatible API.',
-  'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls.`,
+  'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls. Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".`,
   // What it buys, what it costs, and what it never reads, with the fan-out the worker follows by.
   'tokens.payees': `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
     + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`,
@@ -44,12 +44,12 @@ function unset(key: string, trailFunded: boolean): string | undefined {
 const GROUPS = [
   {
     title: 'Where it reads the chain',
-    lead: () => `Read new transfers from the chain, ${stageName(4)} for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read.`,
+    lead: () => `${STAGES[3].title}, ${stageName(4)} for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read.`,
     keys: (k: string) => k.startsWith('rpc.'),
   },
   {
     title: 'Where it checks who paid whom',
-    lead: (trailFunded: boolean) => `Check wallets for money, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
+    lead: (trailFunded: boolean) => `${STAGES[4].title}, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
     keys: (k: string) => !k.startsWith('rpc.'),
   },
 ];

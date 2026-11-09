@@ -6,8 +6,8 @@ import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import { Time } from '@/components/time';
 import { chainName } from '@/lib/chains';
 import { progress, storedOnly, type Coverage } from '@/lib/coverage';
-import { STAGE_LABELS, floorPct, formatBytes, num, pct, plural, short, took } from '@/lib/format';
-import { STATE_WORDS, TITLES, type Stage, type StageState } from '@/lib/pipeline';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, floorPct, formatBytes, num, pct, plural, short, took } from '@/lib/format';
+import { stateWord, type Stage, type StageState } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 
 /** A stage's hue: working is blue, a limit to lift (a missing key) is its own colour, and only a failure is the fault colour. */
@@ -25,8 +25,8 @@ const TONE: Record<StageState, PillTone> = {
 };
 
 /** A stage's state in one word, for the stage on the collection page and for any other list of stages. */
-export function StageChip({ state }: { state: StageState }) {
-  return <Pill tone={TONE[state]} className="shrink-0">{STATE_WORDS[state]}</Pill>;
+export function StageChip({ n, state }: { n: Stage['n']; state: StageState }) {
+  return <Pill tone={TONE[state]} className="shrink-0">{stateWord(n, state)}</Pill>;
 }
 
 type Cell = Pick<Stage, 'n' | 'title' | 'state' | 'share'>;
@@ -57,8 +57,8 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
         <thead>
           <tr className="border-b text-left text-xs text-muted-foreground">
             <th scope="col" className="px-4 py-2 font-medium">Collection</th>
-            {STAGE_LABELS.map((label, i) => (
-              <th key={label} scope="col" title={TITLES[i]} className="px-2 py-2 font-medium whitespace-nowrap">
+            {STAGES.map(({ label, title }, i) => (
+              <th key={label} scope="col" title={title} className="px-2 py-2 font-medium whitespace-nowrap">
                 <span data-row-number className="tabular-nums">{i + 1}</span> {label}
               </th>
             ))}
@@ -73,7 +73,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
               {r.stages.map((x) => (
                 <td key={x.n} className="p-0">
                   <Link href={`/c/${r.chainId}/${r.address}#reading`} tabIndex={-1} prefetch={false} className="block px-2 py-2.5 whitespace-nowrap">
-                    <StageChip state={x.state} />
+                    <StageChip n={x.n} state={x.state} />
                     {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? floorPct(x.share, 1) : progress(x.share)}</span> : null}
                   </Link>
                 </td>
@@ -114,7 +114,7 @@ function Step({ stage, figure, value, bar, children }: { stage: Stage; figure: R
     <li className="relative flex flex-col gap-1 px-4 py-3.5">
       <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
         <span data-row-number className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{stage.n}</span>{stage.title}
-        <span className="ml-auto"><StageChip state={stage.state} /></span>
+        <span className="ml-auto"><StageChip n={stage.n} state={stage.state} /></span>
       </p>
       <p data-progress className="text-xl font-semibold text-foreground tabular-nums">{figure}</p>
       {bar !== undefined ? <Bar share={bar} paused={stage.state !== 'done' && stage.state !== 'live'} name="stage" /> : null}
@@ -255,7 +255,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
       >
         {/* A "No RPC" left from before the stored data loaded is no fault, paused or not: the worker clears it on its next pass. */}
         {/* Nor one on a paused collection: the worker does not touch it, so it cannot clear it, and nothing is failing now. */}
-        {/* Nor one under a Needs a key chip: a missing RPC is a limit to lift, and the sentence below says it. */}
+        {/* Nor one under a No RPC chip: a missing RPC is a limit to lift, and the sentence below says it. */}
         {c.error && s4.state !== 'blocked' && !storedOnly(c, rpcChains) ? c.pausedAt !== null
           ? <p className="text-xs text-muted-foreground">{pausedError(c.error, rpcChains.has(c.chainId), c.chainId)}</p>
           : <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" /><span>{lastReadFailed(c.error)}</span></p> : null}
@@ -273,10 +273,10 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
       >
         {trailed && !funding && fed ? (
           <p className="text-xs text-muted-foreground">
-            Using the stored money trail; <a href="/settings#etherscan.key" className="underline hover:text-foreground">add an Etherscan key</a> to check newer wallets.
+            Using the stored money trail, so newer wallets go unchecked. <a href={ETHERSCAN_HREF} className="underline hover:text-foreground">{ETHERSCAN_CTA}</a>
           </p>
         ) : null}
-        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search', 'money searches')} stopped at the visit cap before following every hop.</p> : null}
+        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search', 'money searches')} stopped at the visit cap before following every wallet out.</p> : null}
       </Step>
       <Step stage={s6} figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>} value={v6}>
         {a ? <AnalysisFailed c={c} now={now} retrying={s6.state === 'running'} /> : null}

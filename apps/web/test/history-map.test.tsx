@@ -16,8 +16,8 @@ describe('History, at the boundary to the chart', () => {
     render(
       <History
         timeline={{ bucket: 'day', readThrough: null, points: [{ at: 0, transfers: 20, sales: 10, flaggedSales: { A: 3, AU: 4, AC: 5, L7: 2 }, judgedSales: { L7: 6 } }] }}
-        totals={{ A: on, AU: on, AC: off }} notFinal={[]} now={0} zone="UTC" base="/c/1/0xabc"
-        own={[{ key: 'L7', name: 'Quick flips', atLeast: false }]}
+        totals={{ A: on, AU: on, AC: off }} notFinal={[]} funded funding now={0} zone="UTC" base="/c/1/0xabc"
+        own={[{ key: 'L7', name: 'Quick flips', qualifier: null }]}
       />,
     );
     const lens = seen.points[0]!.lens;
@@ -31,8 +31,8 @@ describe('History, at the boundary to the chart', () => {
     render(
       <History
         timeline={{ bucket: 'day', readThrough: null, points: [{ at: 0, transfers: 20, sales: 10, flaggedSales: { A: 0, AU: 0, AC: 0, L7: 0 }, judgedSales: { L7: 0 } }] }}
-        totals={{ A: on, AU: on, AC: on }} notFinal={[]} now={0} zone="UTC" base="/c/1/0xabc"
-        own={[{ key: 'L7', name: 'Quick flips', atLeast: false }]}
+        totals={{ A: on, AU: on, AC: on }} notFinal={[]} funded funding now={0} zone="UTC" base="/c/1/0xabc"
+        own={[{ key: 'L7', name: 'Quick flips', qualifier: null }]}
       />,
     );
     expect(seen.points[0]!.lens.L7).toEqual({ part: 0, whole: 0 });

@@ -205,7 +205,7 @@ describe('PATCH /api/lenses/[id]', () => {
     r.hops = { min: 4, max: 2 };
     const refused = await edit(req('PATCH', { name: 'x', rule: r }), idCtx('7'));
     expect(refused.status).toBe(400);
-    expect(await refused.json()).toEqual({ error: 'Hops: "from" is more than "to".' });
+    expect(await refused.json()).toEqual({ error: 'Wallets between: "from" is more than "to".' });
     expect((await edit(req('PATCH', { name: '', rule: DEFAULT_RULE }), idCtx('7'))).status).toBe(400);
     fake.nameTaken.mockResolvedValueOnce(true);
     const taken = await edit(req('PATCH', { name: 'Money loops back', rule: DEFAULT_RULE }), idCtx('7'));
@@ -414,7 +414,7 @@ describe('POST /api/lenses/previews', () => {
     fake.requestPreview.mockResolvedValue('not-analysed');
     res = await previewIt(req('POST', ASK));
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: 'This collection has not been analysed yet, so there is nothing to preview on.' });
+    expect(await res.json()).toEqual({ error: 'This collection has not been analyzed yet, so there is nothing to preview on.' });
   });
 });
 
@@ -456,7 +456,7 @@ describe('POST /api/collections/[chain]/[address]/follow', () => {
   it('refuses hops at or below the global limit, which frees no quota', async () => {
     const res = await follow(req('POST', { hops: 3 }), ctx);
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toContain('3 hops');
+    expect((await res.json()).error).toContain('3 wallets out');
     fake.sources.mockResolvedValueOnce({ 'follow.hops': { value: '6' } });
     expect((await follow(req('POST', { hops: 6 }), ctx)).status).toBe(400);
     expect(fake.followFurther).not.toHaveBeenCalled();

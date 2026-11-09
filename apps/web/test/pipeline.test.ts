@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { pipeline, STATE_WORDS, trailComing } from '@/lib/pipeline';
+import { STAGES } from '@/lib/format';
+import { pipeline, STATE_WORDS, stateWord, trailComing } from '@/lib/pipeline';
 
 const LATEST = { throughBlock: 1000 };
 const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 30, sha256: 'feed', files: { wallets: { bytes: 1, sha256: 'w' }, flows: { bytes: 2, sha256: 'f' } } } as unknown as StoredEntry['trail'];
@@ -162,7 +163,7 @@ describe('pipeline', () => {
   });
   it('titles and feeds are the spec\'s, in order', () => {
     const s = run(row());
-    expect(s.map((x) => x.title)).toEqual(['Download stored data', 'Load it into the database', 'Analyze the stored data', 'Read new transfers from the chain', 'Check wallets for money', 'Re-analyze with everything']);
+    expect(s.map((x) => x.title)).toEqual(STAGES.map((x) => x.title));
     expect(s.map((x) => x.feeds)).toEqual([
       'stage 2: the history it holds arrives once it has downloaded.',
       'every lens: the history up to where the stored data stops, and the money trail for Money loops back and Linked wallets.',
@@ -183,6 +184,10 @@ describe('pipeline of a silent worker', () => {
     expect(s[3]).toMatchObject({ state: 'silent', share: null });
     expect(s[4]).toMatchObject({ state: 'silent', share: null });
     expect(STATE_WORDS.silent).toBe('Worker silent');
+    // A blocked chain stage lacks an RPC; a blocked money stage lacks a key.
+    expect(stateWord(4, 'blocked')).toBe('No RPC');
+    expect(stateWord(5, 'blocked')).toBe('Needs a key');
+    expect(stateWord(4, 'done')).toBe('Done');
   });
 
   it('leaves a stage that is done or not needed alone', () => {

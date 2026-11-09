@@ -1,6 +1,6 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, NOT_DONE, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { LENSES, eta, floorPct, formatBytes, localTime, num } from './format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES, eta, floorPct, formatBytes, localTime, num } from './format';
 import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './coverage';
 import { FIELDS, type SourcesConfig } from './settings';
 
@@ -8,7 +8,7 @@ import { FIELDS, type SourcesConfig } from './settings';
 export interface Snapshot {
   passes: readonly PassRow[];
   collections: readonly CollectionRow[];
-  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the hops set (moneyBacklog). */
+  /** pending and failed are what the worker will check; stranded is held back with paused or removed collections, or followed further out than the follow limit (moneyBacklog). */
   funding: readonly { chainId: number; pending: number; done: number; failed: number; stranded: number; truncated: number; doneLastHour: number }[];
   /** From the worker's report (configFromSources), never this process's environment. */
   config: SourcesConfig;
@@ -52,10 +52,15 @@ const JOBS: readonly Job[] = ['ingest', 'fund', 'analyze', 'lens'];
 
 /** Each job by the step the worker page names it, so a notice says which step stopped, never the job's code. */
 export const JOB_STEP: Readonly<Record<Job, string>> = {
-  ingest: 'Read transfers', fund: 'Check wallets for money', analyze: 'Run the built-in lenses', lens: 'Run your lenses',
+  ingest: 'Read transfers', fund: STAGES[4].title, analyze: 'Run the built-in lenses', lens: 'Run your lenses',
 };
 
-/** Analyze and lens take the same lock, so while one runs the other's passes are skipped, and a skipped pass records nothing. */
+/**
+ * Analyze and lens are one job's two rows: each analyze pass runs one side's
+ * work on its row and notes the other's as it starts, with why it ran nothing.
+ * While a pass runs one, the other's row is not written again until the next
+ * pass, so it is waiting on that pass, not missed.
+ */
 const PARTNER: Partial<Record<Job, Job>> = { analyze: 'lens', lens: 'analyze' };
 
 /** `job`'s partner on the shared lock and its row, for `jobState`. */
@@ -72,7 +77,7 @@ export function partnerOf(passes: readonly PassRow[], job: Job): { job: Job; pas
  * failed or ok.
  *
  * `partner` (see partnerOf) is the job sharing this one's lock. While it runs
- * and is not stalled, this job's passes are skipped for the lock, not missed,
+ * and is not stalled, this job's row waits on that pass (PARTNER), not missed,
  * so a finished job is not overdue; and its wait counts from the later of
  * its own and the partner's finish, so a long partner pass that just ended
  * does not make it overdue at once. A stalled partner gives no cover. The
@@ -92,7 +97,7 @@ export function jobState(p: PassRow | undefined, job: Job, now: number, partner?
   return { state: p.outcome === 'failed' ? 'failed' : 'ok', why: null };
 }
 
-/** The partner is running and not stalled, so it holds the shared lock, and this job's passes are skipped, not missed. */
+/** The partner is running and not stalled, so it holds the shared lock, and this job's row waits on its pass, not missed. */
 function partnerHolds(partner: { job: Job; pass: PassRow | undefined } | undefined, now: number): boolean {
   return partner?.pass !== undefined && jobState(partner.pass, partner.job, now).state === 'running';
 }
@@ -244,12 +249,12 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
     // A money trail loaded from stored data is funding the worker does not have to fetch.
     notice('info', s.trailFunded
       ? `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} run on stored money trails only, and newer wallets go unchecked.`
-      : `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} do not run without one.`, { label: 'Add an Etherscan key in Settings', href: '/settings#etherscan.key' });
+      : `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} do not run without one.`, { label: ETHERSCAN_CTA, href: ETHERSCAN_HREF });
   }
   // With no key nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {
     // No lane takes these, so they neither wait nor fail: resuming a collection brings its own back.
-    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${num(f.stranded)} wallets are not checked while their collections are paused or removed, or they are further out than the hops followed.`);
+    if (f.stranded > 0) notice('info', `${chainName(f.chainId)}: ${num(f.stranded)} wallets are not checked while their collections are paused or removed, or they are further out than the follow limit.`);
     // Only wallets the worker will check count as failed, so one held back never blames the key.
     if (f.failed === 0) continue;
     // Some wallets failing while others are checked is a rate limit or a timeout: they retry on their own.

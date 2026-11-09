@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 import Link from 'next/link';
 import { plural } from '@/lib/format';
 import type { Tone } from '@/lib/metrics';
@@ -202,8 +202,8 @@ const PILL_TONE: Record<PillTone, string> = {
 };
 
 /** A status in one or two words. The radius is not full, so a pill that wraps in a narrow column stays a rounded box. */
-export function Pill({ tone, className, children }: { tone: PillTone; className?: string; children: ReactNode }) {
-  return <span className={cn('rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL_TONE[tone], className)}>{children}</span>;
+export function Pill({ tone, className, children, ...rest }: { tone: PillTone; className?: string; children: ReactNode } & Pick<HTMLAttributes<HTMLSpanElement>, 'title' | 'aria-describedby'>) {
+  return <span {...rest} className={cn('rounded-[10px] px-2 py-0.5 text-xs font-medium', PILL_TONE[tone], className)}>{children}</span>;
 }
 
 /** Progress as a thin bar. Never green when `paused` (a stage that is not done or following, or a frozen head): a full bar would claim it is current. */

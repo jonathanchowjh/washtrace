@@ -40,11 +40,15 @@ vi.mock('@/lib/store', () => ({
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
-vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => { cleanup(); Object.assign(state, fresh()); });
 
 async function dom(sp: Record<string, string | string[]> = {}): Promise<HTMLElement> {
+  const { default: Trades } = await import('@/app/c/[chain]/[address]/trades/page');
+  return render(await Trades({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
+}
+async function flaggedDom(sp: Record<string, string | string[]>): Promise<HTMLElement> {
   const { default: Flagged } = await import('@/app/c/[chain]/[address]/flagged/page');
   return render(await Flagged({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
@@ -55,18 +59,42 @@ const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-l
 const linkTo = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
 const hrefs = (c: HTMLElement, sel: string) => [...c.querySelectorAll(sel)].map((a) => a.getAttribute('href'));
 
-describe('the flagged page, Trades view', () => {
+describe('the trades page', () => {
+  it('redirects an old flagged?kind=trades link to /trades, in the order the trades page writes it', async () => {
+    const old = { kind: 'trades', caught: 'L3', market: 'blur', page: '2', sort: 'price', dir: 'asc' };
+    await expect(flaggedDom({ ...old, caught: 'A' })).rejects.toThrow(`redirect:${BASE}/trades?caught=A&market=blur&sort=price&dir=asc&page=2`);
+    // A lens of yours that ran here is kept, in the same place.
+    state.runs = [ownRun(3, 'Blur 3-hop')];
+    await expect(flaggedDom(old)).rejects.toThrow(`redirect:${BASE}/trades?caught=L3&market=blur&sort=price&dir=asc&page=2`);
+  });
+
+  it('links its CSV to the unchanged API route with the same query', async () => {
+    const el = await dom({ caught: 'A', market: 'blur', page: '2' });
+    expect(el.querySelector('a[href^="/api/"]')?.getAttribute('href')).toBe(`/api/collections/1/${ADDR}/trades?format=csv&caught=A&market=blur`);
+    cleanup();
+    expect((await dom()).querySelector('a[href^="/api/"]')?.getAttribute('href')).toBe(`/api/collections/1/${ADDR}/trades?format=csv`);
+  });
+
+  it('posts its forms to /trades and carries no kind', async () => {
+    const el = await dom({ caught: 'A' });
+    for (const form of el.querySelectorAll('form')) {
+      expect(form.getAttribute('action')).toBe(`${BASE}/trades`);
+      expect(form.querySelector('input[name=kind]')).toBeNull();
+    }
+  });
+
   it('shows matching trades with a dot per lens that ran, named by lens, and the date opens the trade', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A' });
+    const el = await dom({ caught: 'A' });
     expect(el.textContent).toContain('2 trades match');
     expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops back (not counted)', 'Linked wallets']));
+    expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
     expect(el.querySelector('a[href="/tx/1/0xs2"]')).not.toBeNull();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
   });
 
   it('reads trades, their count and their groups with the lenses that ran, money and the reader zone', async () => {
     state.moneyRan = false;
-    await dom({ kind: 'trades', by: 'marketplace' });
+    await dom({ by: 'marketplace' });
     const [id, q, ctx, limit, offset] = state.calls.trades[0]!;
     expect(id).toBe(1);
     expect((q as { kind: string }).kind).toBe('sales');
@@ -80,7 +108,7 @@ describe('the flagged page, Trades view', () => {
 
   it('draws only the lenses that ran', async () => {
     state.moneyRan = false;
-    const th = [...(await dom({ kind: 'trades' })).querySelectorAll('thead th')].map((t) => t.textContent);
+    const th = [...(await dom()).querySelectorAll('thead th')].map((t) => t.textContent);
     expect(th).toContain('Round trips');
     expect(th).not.toContain('Linked wallets');
     expect(th.join()).not.toContain('Money loops back');
@@ -88,22 +116,22 @@ describe('the flagged page, Trades view', () => {
 
   it('a caught filter on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', caught: 'AU' })).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
+    expect(await page({ caught: 'AU' })).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
     expect(state.calls.trades).toHaveLength(0);
   });
 
   it('before any analysis a built-in is never said to have missed the latest one: it has not run here at all', async () => {
     state.analysed = false;
-    const text = await page({ kind: 'trades', caught: 'AU' });
+    const text = await page({ caught: 'AU' });
     expect(text).toContain('Money loops back has not run on this collection, so it flags nothing yet.');
     expect(text).not.toContain('latest analysis');
     cleanup();
-    expect(await page({ method: 'A', kind: 'tokens' })).toContain('Round trips has not run on this collection, so it flags nothing yet.');
+    expect((await flaggedDom({ method: 'A', kind: 'tokens' })).textContent).toContain('Round trips has not run on this collection, so it flags nothing yet.');
   });
 
   it('says how many matching trades are newer than the latest analysis, and shows them as not judged', async () => {
     Object.assign(state, { count: { total: 3, unjudged: 1 }, rows: [row('0xs1'), row('0xs2', { judged: false, lenses: [] })] });
-    const el = await dom({ kind: 'trades' });
+    const el = await dom();
     expect(el.textContent).toContain('3 trades match');
     expect(el.textContent).toContain(' 1 of them are newer than the latest analysis and not judged yet.');
     const cell = [...el.querySelectorAll('td')].find((td) => td.textContent === 'Not judged yet');
@@ -112,23 +140,23 @@ describe('the flagged page, Trades view', () => {
 
   it('a not-caught lens that did not run is left out and said', async () => {
     state.moneyRan = false;
-    expect(await page({ kind: 'trades', not: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
+    expect(await page({ not: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
   });
 
   it('each chip removes its own filter and keeps the grouping; each group row and share cell adds its group', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A', by: 'marketplace' });
-    expect(linkTo(el, `${BASE}/flagged?kind=trades&by=marketplace`)?.textContent).toContain('Flagged by Round trips');
+    const el = await dom({ caught: 'A', by: 'marketplace' });
+    expect(linkTo(el, `${BASE}/trades?by=marketplace`)?.textContent).toContain('Flagged by Round trips');
     const blur = el.querySelector('a[href*="market=blur"][href*="by=marketplace"]');
     expect(blur?.closest('tr')?.textContent).toContain('Blur');
     // Count and share agree: the share adds only the lens.
     const links = hrefs(blur!.closest('tr')!, 'a');
-    expect(links).toContain(`${BASE}/flagged?kind=trades&caught=A&market=blur&by=marketplace`);
-    expect(links).toContain(`${BASE}/flagged?kind=trades&caught=AU&market=blur&by=marketplace`);
+    expect(links).toContain(`${BASE}/trades?caught=A&market=blur&by=marketplace`);
+    expect(links).toContain(`${BASE}/trades?caught=AU&market=blur&by=marketplace`);
     expect(blur!.closest('tr')!.textContent).toContain('67%');
   });
 
   it('the unknown group has no links and says what it is; the Money loops back column says it is not counted', async () => {
-    const el = await dom({ kind: 'trades', by: 'marketplace' });
+    const el = await dom({ by: 'marketplace' });
     const unknown = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Not a marketplace sale'));
     expect(unknown).toBeDefined();
     expect(unknown!.querySelectorAll('a')).toHaveLength(0);
@@ -137,28 +165,28 @@ describe('the flagged page, Trades view', () => {
 
   it('a lens that did not run shows not run in a group row', async () => {
     state.moneyRan = false;
-    const el = await dom({ kind: 'trades', by: 'marketplace' });
+    const el = await dom({ by: 'marketplace' });
     const blur = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Blur') && r.textContent.includes('not run'));
     expect(blur).toBeDefined();
   });
 
   it('the Find box keeps the other filters, and an unreadable find says what it takes', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A', market: 'blur', by: 'month' });
+    const el = await dom({ caught: 'A', market: 'blur', by: 'month' });
     const form = el.querySelector('form[role=search]')!;
     expect((form.querySelector('input[name=q]') as HTMLInputElement).placeholder).toBe('Token number, wallet or tx');
     const kept = Object.fromEntries([...form.querySelectorAll('input[type=hidden]')].map((i) => [(i as HTMLInputElement).name, (i as HTMLInputElement).value]));
-    expect(kept).toEqual({ kind: 'trades', caught: 'A', market: 'blur', by: 'month' });
+    expect(kept).toEqual({ caught: 'A', market: 'blur', by: 'month' });
     cleanup();
     state.calls.trades.length = 0;
-    expect(await page({ kind: 'trades', q: 'hello' })).toContain('“hello” is not a token number, wallet address or transaction hash.');
+    expect(await page({ q: 'hello' })).toContain('“hello” is not a token number, wallet address or transaction hash.');
     expect(state.calls.trades).toHaveLength(0);
     cleanup();
-    await dom({ kind: 'trades', q: '12' });
+    await dom({ q: '12' });
     expect(state.calls.trades).toHaveLength(1);
   });
 
   it('the filter form is plain fields, prefilled from the query, with no client component and no page', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A', pmin: '0.5', heldunder: '90m', ageover_n: '2', ageover_u: 'd', from_day: '2023-03-01', market: 'blur', wallet: SELLER, sort: 'price', page: '2' });
+    const el = await dom({ caught: 'A', pmin: '0.5', heldunder: '90m', ageover_n: '2', ageover_u: 'd', from_day: '2023-03-01', market: 'blur', wallet: SELLER, sort: 'price', page: '2' });
     const form = el.querySelector('form[aria-label="Filter trades"]')!;
     const input = (n: string) => form.querySelector(`input[name=${n}], select[name=${n}]`) as HTMLInputElement;
     expect(input('pmin').value).toBe('0.5');
@@ -173,7 +201,7 @@ describe('the flagged page, Trades view', () => {
     const singles = [...form.querySelectorAll('input[name]:not([type=checkbox])')].map((i) => (i as HTMLInputElement).name);
     expect(new Set(singles).size).toBe(singles.length);
     expect(form.querySelector('input[name=page]')).toBeNull();
-    expect(singles).toEqual(expect.arrayContaining(['kind', 'wallet', 'sort']));
+    expect(singles).toEqual(expect.arrayContaining(['wallet', 'sort']));
     expect(form.getAttribute('method')).toBe('get');
     const { readFileSync } = await import('node:fs');
     expect(readFileSync('apps/web/components/trades.tsx', 'utf8')).not.toMatch(/use client|trade-fields/);
@@ -181,7 +209,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a row with no block time still opens its trade, and the count line comes before the groups', async () => {
     state.rows = [row('0xs1', { blockTime: null })];
-    const el = await dom({ kind: 'trades', by: 'marketplace' });
+    const el = await dom({ by: 'marketplace' });
     expect(linkTo(el, '/tx/1/0xs1')?.textContent).toBe('Unknown time');
     const text = el.textContent!;
     expect(text.indexOf('trades match')).toBeLessThan(text.indexOf('Not a marketplace sale'));
@@ -189,61 +217,61 @@ describe('the flagged page, Trades view', () => {
 
   it('with no match, still says a not-caught lens did not run', async () => {
     Object.assign(state, { moneyRan: false, count: { total: 0, unjudged: 0 }, rows: [] });
-    const text = await page({ kind: 'trades', not: 'AC' });
+    const text = await page({ not: 'AC' });
     expect(text).toContain('No trade matches these filters.');
     expect(text).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
   });
 
   it('every header sorts and toggles the direction; a lens column sorts by the lens', async () => {
-    const el = await dom({ kind: 'trades', sort: 'price', dir: 'asc' });
+    const el = await dom({ sort: 'price', dir: 'asc' });
     const link = (name: string) => [...el.querySelectorAll('thead th a')].find((a) => a.textContent === name)?.getAttribute('href');
-    expect(link('Price')).toBe(`${BASE}/flagged?kind=trades&sort=price`);
-    expect(link('Round trips')).toBe(`${BASE}/flagged?kind=trades&sort=lens-A`);
+    expect(link('Price')).toBe(`${BASE}/trades?sort=price`);
+    expect(link('Round trips')).toBe(`${BASE}/trades?sort=lens-A`);
     expect(link('Seller → buyer')).toContain('sort=seller');
-    expect(link('Date')).toBe(`${BASE}/flagged?kind=trades`);
+    expect(link('Date')).toBe(`${BASE}/trades`);
   });
 
   it('a wallet and a token each have a link that narrows the view to them', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A' });
-    expect(linkTo(el, `${BASE}/flagged?kind=trades&caught=A&wallet=${SELLER}`)?.title).toBe('Only trades with this wallet');
-    expect(linkTo(el, `${BASE}/flagged?kind=trades&caught=A&token=7`)?.title).toBe('Only trades with this token');
+    const el = await dom({ caught: 'A' });
+    expect(linkTo(el, `${BASE}/trades?caught=A&wallet=${SELLER}`)?.title).toBe('Only trades with this wallet');
+    expect(linkTo(el, `${BASE}/trades?caught=A&token=7`)?.title).toBe('Only trades with this token');
     expect(linkTo(el, `${BASE}/t/7`)).toBeDefined();
   });
 
   it('a page past the last shows the last page', async () => {
     state.count = { total: 120, unjudged: 0 };
-    const el = await dom({ kind: 'trades', page: '99999' });
+    const el = await dom({ page: '99999' });
     expect(el.textContent).toContain('Page');
     expect(el.textContent).toContain('101–120 of 120 trades');
     expect(state.calls.trades[0]!.slice(3)).toEqual([50, 100]);
   });
 
   it('junk in the URL is dropped and shows the unfiltered list', async () => {
-    const el = await dom({ kind: 'trades', caught: 'ZZ', pmin: 'abc', page: '-2', by: 'nope' });
+    const el = await dom({ caught: 'ZZ', pmin: 'abc', page: '-2', by: 'nope' });
     expect(el.textContent).toContain('2 trades match');
     expect(el.querySelectorAll('a[title="Remove this filter"]')).toHaveLength(0);
   });
 
   it('no match says so, with the chips still shown', async () => {
     Object.assign(state, { count: { total: 0, unjudged: 0 }, rows: [] });
-    const el = await dom({ kind: 'trades', market: 'x2y2' });
+    const el = await dom({ market: 'x2y2' });
     expect(el.textContent).toContain('No trade matches these filters.');
     expect(el.textContent).toContain('Marketplace: X2Y2');
   });
 
   it('Download CSV links to the export with the same filters, without the page or grouping', async () => {
-    const el = await dom({ kind: 'trades', caught: 'A', by: 'month', page: '2' });
+    const el = await dom({ caught: 'A', by: 'month', page: '2' });
     const a = [...el.querySelectorAll('a')].find((x) => x.textContent === 'Download CSV ↓');
     expect(a?.getAttribute('href')).toBe(`/api/collections/1/${ADDR}/trades?format=csv&caught=A`);
   });
 
   it('the Tokens and Wallets tabs carry the first caught lens; a lens link replaces the caught filter', async () => {
-    const el = await dom({ kind: 'trades', caught: 'AC,A' });
+    const el = await dom({ caught: 'AC,A' });
     const tab = (name: string) => [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(tab('Tokens')).toBe(`${BASE}/flagged?method=A&kind=tokens`);
     expect(tab('Wallets')).toBe(`${BASE}/flagged?method=A&kind=wallets`);
     const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets');
-    expect(lens?.getAttribute('href')).toBe(`${BASE}/flagged?kind=trades&caught=AC`);
+    expect(lens?.getAttribute('href')).toBe(`${BASE}/trades?caught=AC`);
   });
   it.each([
     ['marketplace', 'Not a marketplace sale'],
@@ -252,28 +280,28 @@ describe('the flagged page, Trades view', () => {
     ['buyerAge', 'Not judged yet, or no block time'],
     ['floor', 'Unpriced, not in ETH, WETH or Blur Pool, no priced sale in the 7 days before, no block time, or not judged yet'],
   ])('the unknown %s group says why its trades have no value there', async (by, label) => {
-    const el = await dom({ kind: 'trades', by });
+    const el = await dom({ by });
     const rows = [...el.querySelectorAll('tbody tr')].map((r) => r.querySelector('td')?.textContent);
     expect(rows).toContain(label);
   });
 
   it('a hold or a buyer age under a minute reads <1 min', async () => {
     state.rows = [row('0xs1', { heldS: 30, buyerAgeS: 0 })];
-    const cells = [...(await dom({ kind: 'trades' })).querySelectorAll('tbody td')].map((td) => td.textContent);
+    const cells = [...(await dom()).querySelectorAll('tbody td')].map((td) => td.textContent);
     expect(cells.filter((t) => t === '<1 min')).toHaveLength(2);
     expect(cells).not.toContain('1 min');
   });
 
   it('with no lens run, an unjudged row has as many cells as the header', async () => {
     Object.assign(state, { analysed: false, count: { total: 1, unjudged: 1 }, rows: [row('0xs1', { judged: false, lenses: [] })] });
-    const el = await dom({ kind: 'trades' });
+    const el = await dom();
     const head = el.querySelectorAll('table thead th').length;
     expect(el.querySelector('table tbody tr')!.children).toHaveLength(head);
   });
 
   it('an hour-period view keeps its hour bounds when a new filter is added', async () => {
     const from = '2023-03-01T05:00Z', to = '2023-03-01T06:00Z';
-    const el = await dom({ kind: 'trades', from, to });
+    const el = await dom({ from, to });
     const form = el.querySelector('form[aria-label="Filter trades"]')!;
     // The form as the browser sends it, with one more filter ticked.
     (form.querySelector('input[name=market][value=blur]') as HTMLInputElement).checked = true;
@@ -291,7 +319,7 @@ describe('the flagged page, Trades view', () => {
   });
 
   it('a kept hour bound disables its day field and says how to change it', async () => {
-    const el = await dom({ kind: 'trades', from: '2023-03-01T05:00Z' });
+    const el = await dom({ from: '2023-03-01T05:00Z' });
     const form = el.querySelector('form[aria-label="Filter trades"]')!;
     expect((form.querySelector('input[name=from_day]') as HTMLInputElement).disabled).toBe(true);
     expect((form.querySelector('input[name=to_day]') as HTMLInputElement).disabled).toBe(false);
@@ -300,7 +328,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a trade row opens its trade on the price; its hold, buyer age and floor are plain measures', async () => {
     state.rows = [row('0xs1')];
-    const el = await dom({ kind: 'trades' });
+    const el = await dom();
     const cells = [...el.querySelectorAll('tbody td[data-measure]')];
     expect(cells.map((td) => td.textContent)).toEqual(['2 h', '3 d', '1.25×']);
     expect(cells.every((td) => td.querySelector('a') === null)).toBe(true);
@@ -308,7 +336,7 @@ describe('the flagged page, Trades view', () => {
   });
 
   it('a midnight bound goes back as a day field, not a hidden one', async () => {
-    const el = await dom({ kind: 'trades', from: '2023-03-01' });
+    const el = await dom({ from: '2023-03-01' });
     const form = el.querySelector('form[aria-label="Filter trades"]')!;
     expect(form.querySelector('input[type=hidden][name=from]')).toBeNull();
     expect((form.querySelector('input[name=from_day]') as HTMLInputElement).value).toBe('2023-03-01');
@@ -316,7 +344,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a group on a lens that did not run says so, and reads no rows', async () => {
     state.moneyRan = false;
-    const text = await page({ kind: 'trades', group: `AU.t.7` });
+    const text = await page({ group: `AU.t.7` });
     expect(text).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
     expect(text).not.toContain('No trade matches');
     expect(state.calls.trades).toHaveLength(0);
@@ -324,7 +352,7 @@ describe('the flagged page, Trades view', () => {
 
   it('a sort on a lens that did not run says nothing and falls back to newest first', async () => {
     state.moneyRan = false;
-    const el = await dom({ kind: 'trades', sort: 'lens-AU' });
+    const el = await dom({ sort: 'lens-AU' });
     expect(el.textContent).toContain('2 trades match');
     expect(el.textContent).not.toContain('did not run');
     expect((state.calls.trades[0]![1] as { sort: string }).sort).toBe('date');
@@ -332,21 +360,21 @@ describe('the flagged page, Trades view', () => {
   });
 
   it('every change of owner says so in its sub line', async () => {
-    expect(await page({ kind: 'trades', all: '1' })).toContain('Every change of owner, filtered by what you ask');
+    expect(await page({ all: '1' })).toContain('Every change of owner, filtered by what you ask');
     cleanup();
-    expect(await page({ kind: 'trades' })).toContain('Every sale, filtered by what you ask');
+    expect(await page()).toContain('Every sale, filtered by what you ask');
   });
 
   it('an analysis that predates the figures says the collection is queued again, not that its trades are newer', async () => {
     Object.assign(state, { loops: null, count: { total: 2, unjudged: 2 } });
-    const text = await page({ kind: 'trades' });
+    const text = await page();
     expect(text).toContain('The latest analysis predates these figures; this collection is queued to be analyzed again.');
     expect(text).not.toContain('newer than the latest analysis');
   });
 
   it('a collection never analysed says so in the count line', async () => {
     Object.assign(state, { analysed: false, count: { total: 2, unjudged: 2 } });
-    const text = await page({ kind: 'trades' });
+    const text = await page();
     expect(text).toContain('2 trades match · everything is in the address bar, so this view can be shared. Not judged yet.');
     expect(text).not.toContain('newer than the latest analysis');
   });
@@ -356,7 +384,7 @@ describe('the flagged page, Trades view', () => {
 
     it('names it in the lens nav, the Flagged-by boxes, the dot column and the Group by column, and never by its key', async () => {
       mine();
-      const el = await dom({ kind: 'trades', caught: 'L7', by: 'marketplace' });
+      const el = await dom({ caught: 'L7', by: 'marketplace' });
       expect(el.querySelector('nav[aria-label=Lens]')?.textContent).toContain('Blur 3-hop');
       const boxes = [...el.querySelectorAll('fieldset')].find((f) => f.querySelector('legend')?.textContent === 'Flagged by')!;
       expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Blur 3-hop']);
@@ -369,16 +397,16 @@ describe('the flagged page, Trades view', () => {
 
     it('a filter on a run that is queued says it has not run, in the one sentence every page uses, and reads nothing', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
-      expect(await page({ kind: 'trades', caught: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet.');
+      expect(await page({ caught: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet.');
       expect(state.calls.trades).toHaveLength(0);
       // A built-in's is about the latest analysis.
       state.moneyRan = false;
-      expect(await page({ kind: 'trades', caught: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
+      expect(await page({ caught: 'AC' })).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     });
 
     it('reads every trade list through the block your lens\'s run read, so a newer trade is never judged clean by it', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
-      await dom({ kind: 'trades', not: 'L7', by: 'marketplace' });
+      await dom({ not: 'L7', by: 'marketplace' });
       expect(state.calls.trades[0]![2]).toMatchObject({ through: { L7: 8 } });
       expect(state.calls.count[0]![2]).toMatchObject({ through: { L7: 8 } });
       expect(state.calls.groups[0]![3]).toMatchObject({ through: { L7: 8 } });
@@ -387,7 +415,7 @@ describe('the flagged page, Trades view', () => {
     it('marks a trade past that block not judged yet in your lens\'s column, as a trade no analysis covered is', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
       state.rows = [row('0xs1', { blockNumber: 8, lenses: ['A', 'L7'] }), row('0xs2', { blockNumber: 9, lenses: ['A'] })];
-      const el = await dom({ kind: 'trades' });
+      const el = await dom();
       const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.lastElementChild!);
       expect(cells[0]!.querySelector('i[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
       expect(cells[1]!.textContent).toBe('Not judged yet');
@@ -399,29 +427,29 @@ describe('the flagged page, Trades view', () => {
     it('takes a group\'s share of your lens over the trades it judged there, not every trade in the group', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
       state.groups = [{ key: 'blur', trades: 4, caught: { A: 2, L7: 1 }, judged: { L7: 2 } } as never];
-      const el = await dom({ kind: 'trades', by: 'marketplace' });
+      const el = await dom({ by: 'marketplace' });
       const cells = [...el.querySelector('section[aria-label="Group by"] tbody tr')!.querySelectorAll('td')].map((td) => td.textContent);
       expect(cells).toEqual(['Blur', '4', '50%', '0%', '0%', '50%']);
     });
 
     it('says above Trades which lens of yours is behind, and why', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { analysisId: 0 })];
-      expect(await page({ kind: 'trades' })).toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
+      expect(await page()).toContain('Blur 3-hop shows figures from the run before the latest analysis, so trades after it are not judged by it yet.');
       state.runs = [{ ...ownRun(7, 'Blur 3-hop', 'queued', { totals: { available: true } }), lens: { ...ownRun(7, 'Blur 3-hop').lens, version: 2 } }];
-      expect(await page({ kind: 'trades' })).toContain("Blur 3-hop shows figures from before its latest edit, so its flags are the old rule's until the new run saves.");
+      expect(await page()).toContain("Blur 3-hop shows figures from before its latest edit, so its flags are the old rule's until the new run saves.");
       state.runs = [ownRun(7, 'Blur 3-hop')];
-      expect(await page({ kind: 'trades' })).not.toContain('shows figures from');
+      expect(await page()).not.toContain('shows figures from');
     });
 
     it('a not-flagged-by on a queued lens is left out and said by name', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
       state.count = { total: 0, unjudged: 0 };
-      expect(await page({ kind: 'trades', not: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet. It is left out of "not flagged by".');
+      expect(await page({ not: 'L7' })).toContain('Blur 3-hop has not run on this collection, so it flags nothing yet. It is left out of "not flagged by".');
     });
 
     it('a deleted lens in the URL is dropped: no chip, no failure, every trade listed', async () => {
       mine();
-      const el = await dom({ kind: 'trades', caught: 'L99', not: 'L99', group: 'L99.t.5', sort: 'lens-L99' });
+      const el = await dom({ caught: 'L99', not: 'L99', group: 'L99.t.5', sort: 'lens-L99' });
       expect(el.textContent).toContain('2 trades match');
       expect(el.querySelector('a[title="Remove this filter"]')).toBeNull();
       expect(state.calls.trades[0]![1]).toMatchObject({ caught: [], notCaught: [], group: null, sort: 'date' });
@@ -429,20 +457,20 @@ describe('the flagged page, Trades view', () => {
 
     it('a sort on a lens of yours that did not run falls back to newest first', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'queued')];
-      await dom({ kind: 'trades', sort: 'lens-L7' });
+      await dom({ sort: 'lens-L7' });
       expect(state.calls.trades[0]![1]).toMatchObject({ sort: 'date', dir: 'desc' });
     });
 
     it('the Tokens tab for a filter on your lens carries its key in the link', async () => {
       mine();
-      const el = await dom({ kind: 'trades', caught: 'L7' });
+      const el = await dom({ caught: 'L7' });
       const tab = [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === 'Tokens');
       expect(tab?.getAttribute('href')).toBe(`${BASE}/flagged?method=L7&kind=tokens`);
     });
 
     it('the tokens list of your lens names it in the heading and the tab title', async () => {
       mine();
-      const el = await dom({ kind: 'tokens', method: 'L7' });
+      const el = await flaggedDom({ kind: 'tokens', method: 'L7' });
       expect(el.textContent).toContain('Tokens flagged by Blur 3-hop');
       const { generateMetadata } = await import('@/app/c/[chain]/[address]/flagged/page');
       expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ kind: 'tokens', method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });

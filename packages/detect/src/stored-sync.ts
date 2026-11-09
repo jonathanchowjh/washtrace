@@ -45,11 +45,11 @@ export function needsRestore(c: CollectionRow, entry: StoredEntry | null, key: s
  * (`onDisk`: both are there, and each matches its sha256 in the manifest),
  * and it is not the trail already loaded. A trail cut again has a new sha,
  * so it loads again. No request is needed: a trail on disk loads as stored
- * data does. Returns 'import' when the trail is due, null when not.
+ * data does. Returns true when the trail is due, false when not.
  */
-export function needsTrail(c: CollectionRow, e: StoredEntry | null, onDisk: boolean): 'import' | null {
-  if (c.pausedAt !== null || e?.trail == null || !onDisk) return null;
-  return c.trailImportedSha !== e.trail.sha256 ? 'import' : null;
+export function needsTrail(c: CollectionRow, e: StoredEntry | null, onDisk: boolean): boolean {
+  if (c.pausedAt !== null || e?.trail == null || !onDisk) return false;
+  return c.trailImportedSha !== e.trail.sha256;
 }
 
 /** The most a progress bar reads while a load or download runs: it never reads done, because the data is not there until the load commits and the progress is then cleared. */
@@ -391,7 +391,7 @@ export class StoredSync {
         }
         continue;
       }
-      if (needsTrail(c, entry, disk !== null) !== 'import' || this.trailsUnreadable.get(trailPaths(this.stored, entry).flows) === disk!.key) continue;
+      if (!needsTrail(c, entry, disk !== null) || this.trailsUnreadable.get(trailPaths(this.stored, entry).flows) === disk!.key) continue;
       // One at a time; the first due goes.
       if (this.importing !== null || next !== null) continue;
       if (now < (this.trailsRetry.get(c.id)?.retryAt ?? 0)) continue;

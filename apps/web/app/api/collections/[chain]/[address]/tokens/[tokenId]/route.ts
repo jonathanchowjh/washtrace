@@ -13,7 +13,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chain: 
     if (chainId === null || address === null || tokenId === null) return bad('Not a chain id, collection address and token id.', 404);
     const view = await tokenView(chainId, address, tokenId);
     if (view === 'not-watched') return bad('This collection is not watched.', 404);
-    if (view === 'no-transfer') return bad('No transfer of this token is read.', 404);
+    if ('empty' in view) return bad('No transfer of this token is read.', 404);
     const { collection, transfers, middles, flows } = view;
     return json({ collection, tokenId: view.tokenId, transfers, middles, flows, ...verdictFields(view) });
   });

@@ -6,7 +6,7 @@ import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 const ADDR = '0x' + 'b'.repeat(40);
 const ran = (m: string) => ({ available: m === 'A' || state.moneyRan });
 // `each`, when set, gives each transfer its own flags in place of `flagged`.
-const state = { moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[] };
+const state = { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[] };
 
 /** A lens of yours and its run here: a done run has figures, so it is in `ctx.ran`; a queued one has none yet. */
 function lensRun(id: number, name: string, done = true) {
@@ -18,20 +18,24 @@ function lensRun(id: number, name: string, done = true) {
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', latest: state.latestNull ? null : { throughBlock: state.throughBlock, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, ran(m)])) } }),
-    token: async () => state.blocks.map((b, i) => ({
+    collection: async () => state.missing ? null : ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 0, cursorBlock: state.behind ? 640 : 1000, headBlock: 1000, latest: state.latestNull ? null : { throughBlock: state.throughBlock, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, ran(m)])) } }),
+    token: async () => (state.empty ? [] : state.blocks).map((b, i) => ({
       txHash: '0x' + i, logIndex: 0, blockNumber: b, blockTime: null, tokenId: '7', from: '0x1', to: '0x2', marketplace: state.sales.includes(i) ? 'Seaport' : null, priceWei: null, currency: null,
       flags: Object.fromEntries((state.each?.[i] ?? state.flagged).map((m) => [m, { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 }])),
     })),
     flowsAmong: async () => [],
     lensRuns: async () => state.runs,
+    passes: async () => [],
+    sources: async () => ({}),
+    settings: async () => new Map(),
     lensFlagsOfToken: async (_id: number, _token: string, ids: readonly number[]) => state.own.filter((f) => ids.includes(f.lensId)),
   }),
 }));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
-afterEach(() => { cleanup(); Object.assign(state, { moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [] }); });
+afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [] }); });
 
 async function dom(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
@@ -115,7 +119,7 @@ describe('the token page paging and filter', () => {
   it('links every trade of this token, every change of owner included, in the Trades view', async () => {
     const c = await dom();
     const a = [...c.querySelectorAll('a')].find((x) => x.textContent === 'Every trade of this token →');
-    expect(a?.getAttribute('href')).toBe(`/c/1/${ADDR}/flagged?kind=trades&token=7&all=1`);
+    expect(a?.getAttribute('href')).toBe(`/c/1/${ADDR}/trades?token=7&all=1`);
   });
 
   it('a token of one page shows no pager under its table', async () => {
@@ -345,5 +349,26 @@ describe('the token page with lenses of yours', () => {
       ...[...c.querySelectorAll('title')].map((e) => e.textContent ?? ''),
     ];
     for (const s of said) expect(s).not.toMatch(/\bL[789]\b/);
+  });
+});
+
+describe('the token page for a watched collection with no transfer of the token', () => {
+  it('says the history is still being read, with its share, and links back, without a 404', async () => {
+    Object.assign(state, { empty: true, behind: true });
+    const el = await dom();
+    expect(el.textContent).toContain('No transfer of #7 is read yet · history 64% read');
+    expect([...el.querySelectorAll('a')].find((a) => a.textContent === 'Back to Coll')!.getAttribute('href')).toBe(`/c/1/${ADDR}`);
+  });
+
+  it('says the token is not in the history once the history is read', async () => {
+    Object.assign(state, { empty: true });
+    const text = await page();
+    expect(text).toContain("No transfer of #7 is in Coll's history.");
+    expect(text).not.toContain('read yet');
+  });
+
+  it('still answers not found for a collection that is not watched', async () => {
+    Object.assign(state, { missing: true });
+    await expect(dom()).rejects.toThrow('not found');
   });
 });

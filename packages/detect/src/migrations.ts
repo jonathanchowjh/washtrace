@@ -594,4 +594,7 @@ CREATE TABLE IF NOT EXISTS washtrace.token_payees (
   PRIMARY KEY (chain_id, payer, payee)
 );
 `,
+  // When an analysis began and has not ended: a worker killed during one leaves it set, which the next worker counts as a failed try.
+  `ALTER TABLE washtrace.collections ADD COLUMN IF NOT EXISTS analysis_started_at timestamptz;
+`,
 ];

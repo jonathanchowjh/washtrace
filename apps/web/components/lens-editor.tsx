@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { checkRule, depthNeeded, nameError, type LensRule } from '@washtrace/detect/lens-rule';
-import { estimateTo, moneyShort, tokensReason } from '@washtrace/detect/lens-reads';
+import { estimateTo, moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
 import { LOCAL_ONLY } from '@/lib/auth';
 import type { Method } from '@washtrace/detect';
 import { LENSES } from '@/lib/format';
@@ -24,7 +24,7 @@ const BUTTON = 'rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted
  */
 export function LensEditor({ base, chainId, address, selected, title, name: startName, rule: startRule, differs, lensId, writable, notFinal, funded, needs }: {
   base: string; chainId: number; address: string; selected: string;
-  /** What "Data this lens needs" compares the rule with: what is read of this collection, and the numbers it is priced by. */
+  /** What the readiness strip compares the rule with: what is read of this collection, and the numbers it is priced by. */
   needs: Omit<Parameters<typeof DataNeeds>[0], 'rule' | 'estimate' | 'writable' | 'chainId' | 'address'>;
   /** Which built-ins' money is not final, and whether the next analysis has funding: Preview reads "at least" by them, as the page does. */
   notFinal: readonly Method[]; funded: boolean;
@@ -79,6 +79,13 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
         <span className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground">yours · editing</span>
       </div>
       {differs ? <p className="text-sm text-muted-foreground">{differs}</p> : null}
+      <label className="block text-sm">
+        <span className="font-medium">Name</span>
+        <span className="ml-2 text-xs text-muted-foreground">what the tab, the filters and the lists call this lens</span>
+        <input type="text" className="field mt-1 block w-full max-w-md disabled:opacity-60" value={name} disabled={!writable}
+          onChange={(e) => setName(e.target.value)} />
+      </label>
+
       <p className="text-sm text-muted-foreground">
         Every loop starts with the trade: the NFT goes from seller → buyer. A lens says which edges may carry the way back to the seller, in which direction, and how much of each.
       </p>
@@ -89,15 +96,8 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
       <DataNeeds rule={rule} estimate={estimateTo(needs.money.estimate, depthNeeded(rule))} writable={writable} chainId={chainId} address={address} {...needs} />
 
       {/* A preview reads the money as it is now, so no run of it is behind what was fetched: no 'behind'. */}
-      <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} moneyShort={moneyShort(rule, needs.money, needs.followHops, false)}
+      <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} funding={needs.funding} money={moneyReason(rule, needs.money, needs.followHops, false)}
         tokens={{ reason: tokensReason(rule, needs.tokens.started, needs.tokens.counts, needs.tokens.counts?.read ?? null), payees: needs.tokens.counts?.payees ?? needs.tokens.payees }} writable={writable} />
-
-      <label className="block text-sm">
-        <span className="font-medium">Name</span>
-        <span className="ml-2 text-xs text-muted-foreground">what the tab, the filters and the lists call this lens</span>
-        <input type="text" className="field mt-1 block w-full max-w-md disabled:opacity-60" value={name} disabled={!writable}
-          onChange={(e) => setName(e.target.value)} />
-      </label>
 
       {writable ? null : <p className="text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
       {error ? <p ref={alert} role="alert" tabIndex={-1} className="text-sm text-fault">{error}</p> : null}

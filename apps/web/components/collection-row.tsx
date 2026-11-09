@@ -67,8 +67,8 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
           // On a chain with no RPC the error is the old "No RPC": the limit is what to say.
           ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{rpcChains.has(c.chainId) ? `Paused · last error before the pause: ${c.error}` : `Paused · no RPC is set for ${chainName(c.chainId)}.`}</p>
           : !rpcChains.has(c.chainId)
-            // A missing RPC is a limit to lift, not a fault: the worker writes it as an error, but it reads as the key it needs.
-            ? <p className="mt-1 max-w-sm text-xs text-money">Needs a key: no RPC is set for {chainName(c.chainId)}.</p>
+            // A missing RPC is a limit to lift, not a fault: the worker writes it as an error, but it reads as the RPC it needs.
+            ? <p className="mt-1 max-w-sm text-xs text-money">No RPC is set for {chainName(c.chainId)}.</p>
             : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again. */}
         <RestoreNote c={c} rpcChains={rpcChains} now={now} className="mt-1 max-w-sm" />
