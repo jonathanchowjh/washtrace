@@ -22,13 +22,13 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
     // The wrapper stretches to the grid row, so the sidebar's ground and edge run the page's full height; the aside inside stays put while the page scrolls.
     <div className="bg-sidebar md:border-r">
       {/* Under 768 px the search box has a row of its own, so a type-ahead list under it is not clipped by the row below, which scrolls sideways. */}
-      <SearchBox id="q-top" className="border-b p-2 md:hidden" />
+      <SearchBox id="q-top" className="border-b p-2 md:hidden" watched={watched} wide={false} />
       <aside className="flex items-center gap-1 overflow-x-auto border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
         <Link href="/" className="px-2 md:pb-1">
           <span className="block font-mono font-semibold text-foreground">washtrace</span>
           <span className="block text-xs text-muted-foreground max-md:hidden">NFT wash trading detector</span>
         </Link>
-        <SearchBox id="q" className="max-md:hidden" />
+        <SearchBox id="q" className="max-md:hidden" watched={watched} wide />
         <nav aria-label="Collections" className="flex gap-px md:flex-col">
           <Link href="/" aria-current={current('/', true)} className={ITEM}>All collections</Link>
           {watched.map((c) => {

@@ -115,7 +115,11 @@ leading `'`.
 |---|---|---|---|
 | `GET /api/wallets/{chain}/{address}` | `trades`, `partners`, `flows` (page numbers); `collection` (a collection address); `flagged=1`; `q`; `psort` (`flows`, `sent`, `received` or `watched`); `with` (another wallet) and `dir` (`sent` or `received`, both when left out) | 200, 404 | `chainId`, `address`, `funding`, `collections`, `counterparties`, `transfers`, `counts`, `pages`, `cut`, `between`, and the verdict keys |
 | `GET /api/transfers/{chain}/{tx}` | | 200, 404 | `chainId`, `tx`, `transfers`, and the verdict keys |
-| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page` | 200 | `collections`, `tokens`, `wallets`, `trades`, `more` |
+| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page`; `scope` (`<chain>:<address>`) | 200 | `collections`, `tokens`, `wallets`, `trades`, `more` |
+
+- `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
+  address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
+  collection narrows nothing.
 
 - A wallet page holds 20 money partners and 20 trades, newest first. `pages` gives each list's
   `{page, pages, total}` (a page past the last reads as the last); `counts` every trade it has and those counted

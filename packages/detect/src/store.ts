@@ -3210,7 +3210,13 @@ export class Store {
    * What a search finds, by what was typed: each kind fetches `limit + 1` so
    * `more` can say it was cut. `only` reads one kind, for its own paged view.
    */
-  async search(p: Parsed, opts: { limit?: number; offset?: number; only?: SearchKind } = {}): Promise<SearchHits> {
+  /**
+   * What a search finds. `scope` narrows it to one collection: its tokens, and
+   * the wallets that traded in it. A full address or a transaction hash names
+   * one thing wherever it is, so the scope leaves those alone, as it does
+   * collections, which a reader may be looking for from inside another.
+   */
+  async search(p: Parsed, opts: { limit?: number; offset?: number; only?: SearchKind; scope?: { id: number; chainId: number } } = {}): Promise<SearchHits> {
     const limit = opts.limit ?? 20;
     const want = (k: SearchKind) => opts.only === undefined || opts.only === k;
     const more: SearchHits['more'] = { collections: false, tokens: false, wallets: false, trades: false };
@@ -3241,8 +3247,8 @@ export class Store {
       asks.push(this.pool.query(
         `SELECT c.chain_id, c.address, c.name, x.n FROM washtrace.collections c CROSS JOIN LATERAL (
            SELECT count(*)::int AS n FROM washtrace.transfers t WHERE t.collection_id = c.id AND t.token_id = $1::numeric) x
-         WHERE x.n > 0 ORDER BY x.n DESC, c.id LIMIT $2 OFFSET $3`,
-        [p.tokenId, ...page],
+         WHERE x.n > 0 AND ($4::int IS NULL OR c.id = $4) ORDER BY x.n DESC, c.id LIMIT $2 OFFSET $3`,
+        [p.tokenId, ...page, opts.scope?.id ?? null],
       ).then(({ rows }) => { hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n })), 'tokens'); }));
     }
     if (p.kind === 'address') {
@@ -3252,7 +3258,15 @@ export class Store {
     if (p.kind === 'prefix') {
       // Hex has no `%` or `_`, so the prefix needs no escaping.
       if (want('collections')) asks.push(collections(`c.address LIKE $1 || '%'`, p.prefix).then((h) => { hits.collections = h; }));
-      if (want('wallets')) asks.push(wallets(`address LIKE $1 || '%'`, p.prefix).then((h) => { hits.wallets = h; }));
+      if (want('wallets')) {
+        // In a scope, the collection's traders: both sides' prefix indexes (transfers_coll_from/to_prefix_idx) find them.
+        const s = opts.scope;
+        const where = s === undefined ? `address LIKE $1 || '%'`
+          : `chain_id = ${Number(s.chainId)} AND address IN (
+              SELECT from_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND from_address LIKE $1 || '%'
+              UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND to_address LIKE $1 || '%')`;
+        asks.push(wallets(where, p.prefix).then((h) => { hits.wallets = h; }));
+      }
     }
     if (p.kind === 'tx' && want('trades')) {
       asks.push(this.pool.query(

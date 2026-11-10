@@ -4192,6 +4192,15 @@ describe('Store.search', () => {
       expect((await store.search({ kind: 'address', address: c2 })).collections.map((r) => r.address)).toEqual([c2]);
       expect((await store.search({ kind: 'address', address: carol })).wallets.map((r) => r.address)).toEqual([carol]);
 
+      // In one collection: its tokens, the wallets that traded it; a full address and a hash ignore the scope.
+      const scope = { id: one, chainId: 1 };
+      expect((await store.search({ kind: 'token', tokenId: '7', text: '7' }, { scope })).tokens.map((r) => r.address)).toEqual([c1]);
+      const inOne = (await store.search({ kind: 'prefix', prefix: '0xab' }, { scope: { id: two, chainId: 10 } })).wallets;
+      expect(inOne.map((r) => [r.chainId, r.address])).toEqual([[10, alice]]);
+      expect((await store.search({ kind: 'prefix', prefix: '0xcd' }, { scope })).wallets).toEqual([]);
+      expect((await store.search({ kind: 'address', address: carol }, { scope })).wallets.map((r) => r.address)).toEqual([carol]);
+      expect((await store.search({ kind: 'tx', tx }, { scope })).trades).toHaveLength(1);
+
       // A transaction.
       expect((await store.search({ kind: 'tx', tx })).trades).toEqual([{ chainId: 10, txHash: tx, address: c2, name: 'Searchable Cats', tokenId: '7' }]);
       expect(await store.search({ kind: 'empty' })).toMatchObject({ collections: [], tokens: [], wallets: [], trades: [] });

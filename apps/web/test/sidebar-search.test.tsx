@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '@/components/sidebar';
 
 const push = vi.fn();
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => '/' }));
+const nav = { path: '/' };
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => nav.path }));
 
 const ADDR = '0x' + 'a'.repeat(40);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
@@ -19,7 +20,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   push.mockReset();
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); nav.path = '/'; });
 
 const reply = (body: unknown) => ({ ok: true, json: async () => body });
 const box = () => screen.getAllByRole('combobox')[0]!;
@@ -127,5 +128,50 @@ describe('the search box type-ahead', () => {
     render(<Sidebar watched={[]} />);
     await type('zzz');
     expect(screen.getByText('No match. Press Enter to search everything.')).toBeTruthy();
+  });
+});
+
+describe('the search box under a collection', () => {
+  const under = () => { nav.path = `/c/1/${ADDR}/t/7`; render(<Sidebar watched={[terra]} />); };
+
+  it('searches that collection: says so, and asks with its scope', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    under();
+    expect(box().getAttribute('placeholder')).toBe('Search Terraforms…  /');
+    await type('#7');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(`/api/search?q=%237&scope=1:${ADDR}`);
+    expect((document.querySelector('input[name=scope]') as HTMLInputElement).value).toBe(`1:${ADDR}`);
+  });
+
+  it('drops the scope from its chip, so the next search is of everything', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    under();
+    fireEvent.click(screen.getAllByRole('button', { name: /In Terraforms/ })[0]!);
+    expect(box().getAttribute('placeholder')).toBe('Search name, #token, address or tx  /');
+    await type('#7');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
+  });
+
+  it('opens a wallet it finds under the collection\'s tabs, and lists tokens first for a token number', async () => {
+    const W = '0x' + 'b'.repeat(40);
+    fetchMock.mockResolvedValue(reply(hits({ collections: [terra], tokens: [{ chainId: 1, address: ADDR, name: 'Terraforms', tokenId: '777', transfers: 2 }], wallets: [{ chainId: 1, address: W, transfers: 3 }] })));
+    under();
+    await type('#777');
+    const options = screen.getAllByRole('option');
+    expect(options[0]!.textContent).toContain('Token #777');
+    fireEvent.click(options.find((o) => o.textContent?.startsWith('Wallet'))!);
+    expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/w/${W}`);
+  });
+});
+
+describe('the / shortcut', () => {
+  it('focuses the box on show, and leaves a key typed into a field alone', () => {
+    render(<><input aria-label="other" /><Sidebar watched={[]} /></>);
+    fireEvent.keyDown(window, { key: '/' });
+    expect(document.activeElement).toBe(box());
+    const other = screen.getByLabelText('other');
+    other.focus();
+    fireEvent.keyDown(other, { key: '/' });
+    expect(document.activeElement).toBe(other);
   });
 });

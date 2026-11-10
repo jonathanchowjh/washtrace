@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSearch, searchArgs } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOf, scopeOfPath, searchArgs } from '@/lib/search';
 
 describe('parseSearch', () => {
   it('reads what was typed', () => {
@@ -56,5 +56,33 @@ describe('where a trade hit opens', () => {
     // Past one page of hits the rest could be anywhere.
     const cut = { ...one, more: { ...none.more, trades: true } };
     expect(tradeHref(cut, cut.trades[0]!)).toBe(`/tx/1/${TX}`);
+  });
+});
+
+describe('a search\'s scope', () => {
+  const A = '0x' + 'a'.repeat(40);
+  it('reads chain:address, and nothing else', () => {
+    expect(scopeOf(`1:${A.toUpperCase().replace('0X', '0x')}`)).toEqual({ chainId: 1, address: A });
+    expect([scopeOf('1'), scopeOf(`x:${A}`), scopeOf(`1:${A}:2`), scopeOf(null)]).toEqual([null, null, null, null]);
+  });
+
+  it('is the collection a console path is under', () => {
+    expect(scopeOfPath(`/c/1/${A}/t/7`)).toEqual({ chainId: 1, address: A });
+    expect([scopeOfPath('/'), scopeOfPath(`/w/1/${A}`)]).toEqual([null, null]);
+  });
+
+  it('opens a wallet hit under the collection\'s tabs, on its own chain only', () => {
+    const hits = { collections: [], tokens: [], trades: [], wallets: [{ chainId: 1, address: A, transfers: 1 }, { chainId: 10, address: A, transfers: 1 }], more: { collections: false, tokens: false, wallets: false, trades: false } };
+    const scope = { chainId: 1, address: '0x' + 'c'.repeat(40) };
+    expect([hitRow(hits, 'wallets', 0, scope).href, hitRow(hits, 'wallets', 1, scope).href]).toEqual([`/c/1/${scope.address}/w/${A}`, `/w/10/${A}`]);
+  });
+});
+
+describe('the order of a search\'s kinds', () => {
+  it('leads with the kind typed', () => {
+    expect(kindsFor(parseSearch('#7'))[0]).toBe('tokens');
+    expect(kindsFor(parseSearch('0x' + 'd'.repeat(64)))[0]).toBe('trades');
+    expect(kindsFor(parseSearch('0xabcdef'))[0]).toBe('wallets');
+    expect(kindsFor(parseSearch('terra'))).toEqual(['collections', 'tokens', 'wallets', 'trades']);
   });
 });

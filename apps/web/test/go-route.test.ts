@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const ADDR = '0x' + 'a'.repeat(40);
 const TX = '0x' + 'c'.repeat(64);
 const none = { collections: [], tokens: [], wallets: [], trades: [], more: { collections: false, tokens: false, wallets: false, trades: false } };
-const state = { watched: false, hits: none as Record<string, unknown> };
+const state = { watched: false, hits: none as Record<string, unknown>, asked: undefined as unknown };
 vi.mock('@/lib/store', () => ({
-  store: () => ({ collection: async () => (state.watched ? { id: 1 } : null), search: async () => state.hits }),
+  store: () => ({ collection: async () => (state.watched ? { id: 1, chainId: 1 } : null), search: async (_p: unknown, opts: unknown) => { state.asked = opts; return state.hits; } }),
 }));
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), connection: async () => {} }));
 
@@ -102,5 +102,33 @@ describe('/go', () => {
     expect(await go('terraforms')).toBe('/search?q=terraforms');
     expect(await go('')).toBe('/search?q=');
     expect(await go('0xzz')).toBe('/search?q=0xzz');
+  });
+});
+
+describe('/go from inside a collection', () => {
+  const W = '0x' + 'b'.repeat(40);
+
+  it('narrows the search to the collection, opens a wallet it finds under its tabs, and keeps the scope on the results', async () => {
+    state.watched = true;
+    state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }] };
+    const { GET } = await import('@/app/go/route');
+    const { NextRequest } = await import('next/server');
+    const at = async (q: string) => new URL((await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}&scope=1:${ADDR}`))).headers.get('location')!);
+    const to = await at('0xbbbbbb');
+    expect(to.pathname).toBe(`/c/1/${ADDR}/w/${W}`);
+    expect(state.asked).toEqual({ scope: { id: 1, chainId: 1 } });
+    state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }, { chainId: 1, address: ADDR, transfers: 1 }] };
+    const many = await at('0xbbbbbb');
+    expect(many.pathname + many.search).toBe(`/search?q=0xbbbbbb&scope=1:${ADDR}`);
+  });
+
+  it('ignores a scope that names no watched collection', async () => {
+    state.watched = false;
+    state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }] };
+    const { GET } = await import('@/app/go/route');
+    const { NextRequest } = await import('next/server');
+    const to = new URL((await GET(new NextRequest(`http://x/go?q=0xbbbbbb&scope=1:${ADDR}`))).headers.get('location')!);
+    expect(to.pathname).toBe(`/w/1/${W}`);
+    expect(state.asked).toEqual({});
   });
 });
