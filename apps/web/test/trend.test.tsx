@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { TimeChart, type TimePoint } from '@/components/trend';
+import { BUILT_INS, TimeChart, type TimePoint } from '@/components/trend';
+import { SHOWN } from '@/lib/metrics';
 
 // The chart opens a period through the router.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -140,6 +141,14 @@ describe('the time chart, for a history in one period', () => {
     expect(fig.textContent).toContain('Linked wallets');
     expect(el.querySelector('polyline')).toBeNull();
     expect(el.textContent).not.toMatch(/hours? with trades/);
+  });
+
+  it('lists the lenses in the order every page does, each in its own lens\'s hue', () => {
+    expect(BUILT_INS).toEqual(SHOWN);
+    const el = one({ ...point(at), sales: 12, lens: { A: frac(3, 12), AU: frac(1, 12), AC: frac(6, 12) } });
+    const items = [...el.querySelectorAll('figure[data-one-period] li')];
+    expect(items.map((li) => li.textContent?.match(/Round trips|Linked wallets|Money loops back/)?.[0])).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
+    expect(items[1]!.querySelector('line')!.getAttribute('class')).toContain('stroke-money');
   });
 
   it('says one sale as one, and a period read only part way says how far the chain is read', () => {

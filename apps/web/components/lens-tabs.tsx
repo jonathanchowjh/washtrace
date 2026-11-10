@@ -116,7 +116,8 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
 function Tab({ href, on, tone, title, children }: { href: string; on: boolean; tone: keyof typeof ACCENT; title: string; children: ReactNode }) {
   return (
     <Link href={href} prefetch={false} scroll={false} title={title} aria-current={on ? 'page' : undefined}
-      className={cn('flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors',
+      // On a phone the tabs wrap; each grows so a row fills the width, rather than leaving Compare a stub on its own.
+      className={cn('flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors max-sm:grow',
         on ? cn('-mb-px border-b-0 bg-card pb-3', ACCENT[tone]) : 'border-t-border bg-muted/50 hover:bg-card')}>
       {children}
     </Link>

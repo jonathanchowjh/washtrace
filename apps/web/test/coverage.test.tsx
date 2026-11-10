@@ -1017,7 +1017,9 @@ describe('the time chart', () => {
   it('draws Money loops back grey, as it is everywhere it is shown apart, keeping its dash and its square', () => {
     const point = (at: number) => ({ at, lens: { A: { part: 1, whole: 10 }, AU: { part: 2, whole: 10 }, AC: { part: 3, whole: 10 } }, sales: 10, transfers: 10 });
     const el = render(<TimeChart kind="analyses" points={[point(0), point(86_400_000)]} zone="UTC" />).container;
-    expect(el.querySelector('.stroke-money, .fill-money')).toBeNull();
+    // The money hue is Linked wallets' (undashed); Money loops back, dashed, never wears it.
+    expect(el.querySelector('polyline.stroke-money[stroke-dasharray]')).toBeNull();
+    expect(el.querySelector('polyline.stroke-money')).not.toBeNull();
     expect(el.querySelector('polyline.stroke-muted-foreground')?.getAttribute('stroke-dasharray')).toBe('5 3');
     expect(el.querySelector('rect.fill-muted-foreground')).not.toBeNull();
   });

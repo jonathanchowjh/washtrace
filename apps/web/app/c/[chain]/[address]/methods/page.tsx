@@ -190,7 +190,11 @@ export default async function MethodsPage({ params, searchParams }: Props) {
       {a && timeline && timeline.points.length > 0 ? (
         <Section
           title="When did it happen?"
-          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
+          lead={<>{timeline.points.length === 1
+            // One period draws no chart (History says it in words), so the lead names no bar and no shaded stretch.
+            ? <>Every trade so far falls in one {timeline.bucket}, so each lens&rsquo;s share of its sales is said in words. The period opens its trades; the list leaves out mints and custody moves.</>
+            : <>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.</>}
+            {timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
           <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} funded={funded} funding={config.funding} now={Date.now()} zone={zone} base={base}
             own={chartOwn} ownLeft={chartLeft} ownNotRun={chartNotRun} />

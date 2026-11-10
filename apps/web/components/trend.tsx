@@ -43,19 +43,23 @@ type TimeChartProps =
       ownNotRun: { key: string; name: string; why: string }[] }
   | { kind: 'analyses'; points: TimePoint[]; zone: string };
 
-const BUILT_INS = Object.keys(LENS_INFO) as Method[];
-// Literal class names for Tailwind. Money loops back is grey, as everywhere
+// In the order every page lists them, floor, ceiling, then the one not counted: SHOWN's order. lib/metrics, its home,
+// loads the detect package's root, which a client module cannot, so it is said here and a test holds the two equal.
+export const BUILT_INS: readonly Method[] = ['A', 'AC', 'AU'];
+// Literal class names for Tailwind. Each built-in wears its lens's tone, as everywhere: Linked wallets the money hue. Money loops back is grey, as everywhere
 // it is shown apart (its lens's tone), never the money hue. It is also dashed
 // and every series has its own marker shape, so identity never rests on hue
 // alone, which deutan readers could not tell apart.
-const STROKE: Record<Method, string> = { A: 'stroke-cycle', AU: 'stroke-muted-foreground', AC: 'stroke-foreground' };
-const FILL: Record<Method, string> = { A: 'fill-cycle', AU: 'fill-muted-foreground', AC: 'fill-foreground' };
+const STROKE: Record<Method, string> = { A: 'stroke-cycle', AU: 'stroke-muted-foreground', AC: 'stroke-money' };
+const FILL: Record<Method, string> = { A: 'fill-cycle', AU: 'fill-muted-foreground', AC: 'fill-money' };
 const DASH: Record<Method, string | undefined> = { A: undefined, AU: '5 3', AC: undefined };
 // A round cap adds half the width to each end of a dash and closes small gaps, so yours are butt-capped: the gaps below are what they draw.
 // Yours share the flow colour, so each is told apart by its own dash and marker (never by hue): up to three, as the page picks.
 const OWN_DASH = ['2 2', '6 2', '1 3'];
 const OWN_SHAPE = ['triangle', 'cross', 'hexagon'] as const;
 const BUILT_IN_SHAPE = ['circle', 'square', 'diamond'] as const;
+// Each built-in keeps its marker whatever the order.
+const SHAPE: Record<Method, (typeof BUILT_IN_SHAPE)[number]> = { A: 'circle', AU: 'square', AC: 'diamond' };
 
 /** One line of the chart: how it is named, stroked and marked. Built-ins and yours alike, so the drawing code below has one path. */
 interface Series { key: Lens; name: string; stroke: string; fill: string; dash: string | undefined; cap: 'round' | 'butt'; shape: (typeof BUILT_IN_SHAPE | typeof OWN_SHAPE)[number]; qualifier: Qualifier | null; floorWhy?: string }
@@ -68,7 +72,7 @@ function builtIn(m: Method, notFinal: readonly Method[], funded: boolean, fundin
 
 function seriesOf(own: { key: Lens; name: string; qualifier: Qualifier | null; floorWhy?: string }[], notFinal: readonly Method[], funded: boolean, funding: boolean): Series[] {
   return [
-    ...BUILT_INS.map((m, i): Series => ({ key: m, name: LENS_INFO[m].name, stroke: STROKE[m], fill: FILL[m], dash: DASH[m], cap: 'round', shape: BUILT_IN_SHAPE[i]!, ...builtIn(m, notFinal, funded, funding) })),
+    ...BUILT_INS.map((m): Series => ({ key: m, name: LENS_INFO[m].name, stroke: STROKE[m], fill: FILL[m], dash: DASH[m], cap: 'round', shape: SHAPE[m], ...builtIn(m, notFinal, funded, funding) })),
     ...own.map((o, i): Series => ({ key: o.key, name: o.name, stroke: 'stroke-flow', fill: 'fill-flow', dash: OWN_DASH[i % 3], cap: 'butt', shape: OWN_SHAPE[i % 3]!, qualifier: o.qualifier, floorWhy: o.floorWhy })),
   ];
 }

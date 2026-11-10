@@ -263,7 +263,8 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : <>took {took(a.tookMs)}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.pausedAt === null && c.trailProgress !== null ? ' · money trail loading; analyzed again once it has' : ' · nothing new since'}</>;
 
   return (
-    <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0">
+    // Three across from md: a rule over stages 4–6 keeps each card its own, where the divide lines alone ran 1 into 4.
+    <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0 md:[&>li:nth-child(n+4)]:border-t">
       <Step stage={s1} figure={s1.state === 'running' ? floorPct(s1.share!, 1) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
         <DownloadNote c={c} />
       </Step>
