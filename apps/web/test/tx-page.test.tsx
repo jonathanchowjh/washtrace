@@ -143,6 +143,8 @@ describe('the trade page: one card per lens', () => {
     const c = await txPage();
     const card = cards(c, 'How each lens reads First #7');
     const title = 'How each lens reads First #7';
+    // A lens caught it, so the graph is drawn and the lead points to it.
+    expect(c.textContent).toContain('the token’s graph below lights the loop of each that caught it.');
     // One graph for the token, not one a card.
     expect([...c.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === title)!.querySelectorAll('figure')).toHaveLength(1);
     expect(c.querySelectorAll('li[data-lens] figure')).toHaveLength(0);
@@ -196,6 +198,9 @@ describe('the trade page: one card per lens', () => {
     // Nothing caught it, so nothing is drawn and the token was not read.
     expect(c.querySelectorAll('li[data-lens] figure')).toHaveLength(0);
     expect(flows).not.toHaveBeenCalled();
+    // And the lead says no graph is below.
+    expect(c.textContent).toContain('why it caught this transfer or why not.');
+    expect(c.textContent).not.toContain('graph below');
   });
 
   it('the copy says each built-in’s miss in its own words', async () => {

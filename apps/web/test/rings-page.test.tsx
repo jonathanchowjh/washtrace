@@ -153,6 +153,9 @@ describe('a ring', () => {
     expect([...c.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['Traded (2)']);
     expect(c.textContent).toContain('Every wallet listed traded; none only moved the money.');
     expect(c.textContent).not.toContain('None.');
+    // The answer and the picture's legend say no zero count either.
+    expect(c.textContent).toContain('Every one traded the tokens.');
+    expect(c.textContent).not.toContain('0 only moved the money');
   });
 
   it('says when no ring of the latest analysis has the anchor, and links the list', async () => {
@@ -176,6 +179,12 @@ describe('the ring’s picture', () => {
     expect(c.querySelectorAll('svg[role=img] g:not([data-traded]) circle[stroke-dasharray]')).toHaveLength(1);
     expect([...c.querySelectorAll('svg[role=img] text')].map((t) => t.textContent)).toEqual(['3', 'wallets']);
     expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 only moved the money']);
+  });
+
+  it('gives a kind with no wallet no legend line', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(3, 0)} total={3} />).container;
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['3 traded']);
   });
 
   it('past a dozen, keeps each kind’s share of the dots, never dropping one, and says how many are drawn', async () => {

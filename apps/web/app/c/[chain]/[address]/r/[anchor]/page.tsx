@@ -96,7 +96,7 @@ export default async function RingPage(props: Props) {
       />
 
       <Answer tone={ringTone(line)} title={line.sales === 0 ? `${plural(line.wallets, 'wallet')}, with no counted sale` : `${plural(line.wallets, 'wallet')} joined by ${plural(line.sales, 'flagged sale')}`}>
-        {walletsCut ? null : <>{num(traders.length)} traded the tokens and {num(movers.length)} only moved the money. </>}
+        {walletsCut ? null : movers.length === 0 ? 'Every one traded the tokens. ' : traders.length === 0 ? 'Each only moved the money. ' : <>{num(traders.length)} traded the tokens and {num(movers.length)} only moved the money. </>}
         {line.sales === 0 ? 'None of its flagged trades is a counted sale.'
           : <>Its {plural(line.sales, 'flagged sale')}, {num(line.floorSales)} of them round trips, moved {eth(line.volumeWei)} across {plural(line.tokens, 'token')}.</>}
         <p className="mt-2 text-muted-foreground">

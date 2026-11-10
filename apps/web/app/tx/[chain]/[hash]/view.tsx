@@ -131,12 +131,14 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
         // Out of custody to another wallet is that wallet's trade with the one that put the token in, which every card's "seller" means.
         const seller = out?.parked != null && out.parked !== t.to ? out.parked : t.from;
         const cards = alone !== null ? [] : lensCards(t, c, graph === null || drawing === null ? null : { graph, drawing }, own, chainId, base);
+        // The token's graph is drawn once a lens caught it; the lead mentions it only then.
+        const drawn = drawing !== null && cards.some((card) => card.caught);
         const held = seller === t.from ? '' : `, through custody: ${short(t.from)} held the token for ${short(seller)}, so each lens reads this as a trade from ${short(seller)}`;
         return (
           <Section
             key={`${t.txHash}:${t.logIndex}`}
             title={alone === null ? `How each lens reads ${token}` : alone.title}
-            lead={alone !== null ? undefined : `${short(seller)} → ${short(t.to)}${held}. One card per lens says why it caught this transfer or why not; the token’s graph below lights the loop of each that caught it.`}
+            lead={alone !== null ? undefined : `${short(seller)} → ${short(t.to)}${held}. One card per lens says why it caught this transfer or why not${drawn ? '; the token’s graph below lights the loop of each that caught it' : ''}.`}
           >
             {alone !== null ? <p className="text-sm">{alone.line}</p> : (
               <>
@@ -157,7 +159,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
                   ))}
                 </ul>
                 {/* The token's graph once, not once a card: a switch lights each catching lens's loop in turn. */}
-                {drawing === null || !cards.some((card) => card.caught) ? null : (
+                {!drawn ? null : (
                   <div className="mt-3">
                     <LensGraph drawing={drawing} chainId={chainId} base={base} tokenHref={`${base}/t/${t.tokenId}`}
                       caught={cards.filter((card) => card.caught).map((card) => ({ key: card.key, name: lensInfo(card.key, ownLenses)?.name ?? 'this lens', loop: card.loop }))} />
