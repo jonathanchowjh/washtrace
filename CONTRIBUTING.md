@@ -1,9 +1,11 @@
 # Contributing to washtrace
 
 This is the guide for changing the code. To *run* washtrace, read the
-[README](README.md). The routes are in [doc/api.md](doc/api.md), the tables and
-files a dataset user sees in [doc/stored-data.md](doc/stored-data.md), and
-upgrading in [doc/upgrading.md](doc/upgrading.md). Every environment variable
+[README](README.md) and [doc/operating.md](doc/operating.md). What each method
+flags, on the demo's tokens, is in [doc/methods.md](doc/methods.md). The routes
+are in [doc/api.md](doc/api.md), the tables and files a dataset user sees in
+[doc/stored-data.md](doc/stored-data.md), and upgrading in
+[doc/upgrading.md](doc/upgrading.md). Every environment variable
 and console setting is in the README's [Configuration](README.md#configuration)
 table; [.env.example](.env.example) is the same list as a template.
 
@@ -173,8 +175,9 @@ scripts/
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
-doc/                      Reference pages: api.md, upgrading.md, stored-data.md
+doc/                      Reference pages: methods.md, operating.md, api.md, upgrading.md, stored-data.md
 paper/                    The paper and its slides (PDF)
+LICENSE, CITATION.cff     MIT for the code; how to cite the paper
 .githooks/pre-commit      See the hook above
 ```
 
