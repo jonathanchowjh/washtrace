@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { HEADLINE, lensRefusal } from '@washtrace/detect';
-import { ConnectedRail, ParentLine, walletRoles } from '@/components/connected-rail';
+import { ConnectedRail, OpenUnder, ParentLine, walletRoles, type Home } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
 import { SpotCheck } from '@/components/spot-check';
@@ -54,6 +54,12 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
   const home = homes.size === 1 ? [...homes][0]! : null;
   if (within !== undefined && home !== within) redirect(txHref(chainId, tx));
   const collection = home === null ? null : transfers.find((t) => t.collection)!.collection!;
+  // Outside the tabs: the way into each collection it moved, under its tabs when there is one, else each collection's own page.
+  const homeOf = new Map(transfers.flatMap((t) => (t.collection ? [[t.collection.address, t.collection] as const] : [])));
+  const ways: Home[] = [...homeOf.values()].map((c) => {
+    const b = `/c/${c.chainId}/${c.address}`;
+    return { base: b, name: c.name ?? short(c.address), href: homeOf.size === 1 ? txHref(chainId, tx, b) : b };
+  });
   const notRunLine = notRun.length === 0 ? '' : homes.size > 1 ? notRunAcross(notRun, Object.values(collections)) : notRunAll(notRun);
   // One drawing per token, however many of its transfers the transaction moved.
   const drawings = new Map<TokenDrawing, Drawing>();
@@ -68,14 +74,16 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
     <>
       {within === undefined || collection === null ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={collection.address} from={from} of={{ tx }} /></Suspense>}
       {/* Under a collection's tabs its parent line is the layout's; outside them this page draws one the same way. */}
-      {within === undefined ? <ParentLine home={collection === null ? undefined : { base: home!, name: collection.name ?? short(collection.address), href: txHref(chainId, tx, home!) }} /> : null}
+      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} /> : null}
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
-        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{within !== undefined && collection !== null
+        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{collection !== null
           ? <Suspense fallback={null}><RingChips chainId={chainId} address={collection.address} of={{ tx }} /></Suspense> : null}</>}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
-      />
+      >
+        {within === undefined ? <OpenUnder homes={ways} /> : null}
+      </Head>
       <Answer
         tone={tone}
         title={title}
@@ -93,8 +101,9 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
         {body}{notRunLine && !unread ? ` ${notRunLine}` : ''}{ownLine}
       </Answer>
 
-      {within === undefined || collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ tx }} /></Suspense>}
-      {within === undefined || collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
+      {/* Its one collection's panels, here or under its tabs: a transaction across several has no one strip or rail. */}
+      {collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ tx }} /></Suspense>}
+      {collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
       {unread || washTrade === null ? (
         <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}
           lenses={(await store().lenses()).map((l) => ({ key: l.key, name: l.name, refusal: lensRefusal(l.rule) }))} />

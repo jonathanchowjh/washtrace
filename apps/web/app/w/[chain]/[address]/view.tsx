@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { ConnectedRail, partnersOf } from '@/components/connected-rail';
+import { ConnectedRail, OpenUnder, ParentLine, partnersOf, type Home } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
@@ -123,17 +123,25 @@ export async function WalletView({ chainId, address, sp, within }: {
   const partnerFirst = (pages.partners.page - 1) * COUNTERPARTIES + 1;
 
   const from = within === undefined ? undefined : sp.from;
+  // Outside the tabs: the way into each collection it traded, and that collection's panels when it traded only one.
+  const ways: Home[] = within !== undefined ? [] : collections.map((c) => {
+    const b = `/c/${chainId}/${c.address}`;
+    return { base: b, name: c.name ?? short(c.address), href: walletHref(chainId, address, b) };
+  });
+  const home = within?.collection ?? (collections.length === 1 ? collections[0]!.address : undefined);
   return (
     <>
       {within === undefined ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={within.collection} from={from} of={{ wallet: address }} /></Suspense>}
+      {/* Under a collection's tabs its parent line is the layout's; outside them this page draws one the same way. */}
+      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} /> : null}
       <Head
         kind="wallet"
         title={<span className="font-mono">{short(address)}</span>}
-        crumb={scope === undefined ? [{ href: '/', label: 'Collections' }] : []}
-        part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{within === undefined ? null : <Suspense fallback={null}><RingChips chainId={chainId} address={within.collection} of={{ wallet: address }} /></Suspense>}</>}
+        part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{home === undefined ? null : <Suspense fallback={null}><RingChips chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}</>}
         sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext>
           {scope === undefined ? null : <> · its trades here · <Link href={walletHref(chainId, address)} className="hover:text-foreground hover:underline">in every collection</Link></>}</>}
       >
+        <OpenUnder homes={ways} />
         <Elsewhere links={walletLinks(chainId, address)} />
       </Head>
 
@@ -145,8 +153,9 @@ export async function WalletView({ chainId, address, sp, within }: {
         <p className="text-muted-foreground">{money}</p>
       </Answer>
 
-      {within === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={within.collection} of={{ wallet: address }} /></Suspense>}
-      {within === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={within.collection} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
+      {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
+      {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}
+      {home === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
 
       <Section title="Which of its trades?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (

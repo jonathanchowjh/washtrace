@@ -1,4 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer, Flow, WalletFilter } from '@washtrace/detect';
 import { TINT_LEAD } from '@/lib/metrics';
@@ -350,6 +351,59 @@ describe('the wallet page', () => {
     const { GET } = await import('@/app/api/wallets/[chain]/[address]/route');
     const body = await (await GET(new Request('http://x'), { params })).json();
     expect(body).toMatchObject({ cut: { trades: false, counterparties: false }, washTrade: true, judged: true, methods: ['A'], between: null });
+  });
+});
+
+/** Every element of `type` in a page's tree, through every prop: the panels read in their own Suspense, so the tree is where they show. */
+function elementsOf(node: unknown, type: unknown): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    if (n.type === type) out.push(n as { props: Record<string, unknown> });
+    Object.values(n.props as Record<string, unknown>).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+describe('the wallet outside any collection\'s tabs', () => {
+  async function tree() {
+    const { default: WalletPage } = await import('@/app/w/[chain]/[address]/page');
+    return WalletPage({ params, searchParams: Promise.resolve({}) });
+  }
+
+  it('in one collection: its parent line names it after "/", and the page opens under its tabs', async () => {
+    trades = 2;
+    const el = await render_();
+    const line = [...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
+    expect(line.textContent).toBe('Collections/Bees');
+    expect(line.closest('header')).toBeNull();
+    expect(linkTo(el, 'Open in Bees →')).toBe(`/c/1/${COLL}/w/${SELF}`);
+  });
+
+  it('in one collection: its ring chips, strip and Connected to are that collection\'s', async () => {
+    trades = 2; counterparties = 1;
+    const t = await tree();
+    const { RingChips } = await import('@/components/rings');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    for (const type of [RingChips, WhereItSits]) expect(elementsOf(t, type).map((e) => [e.props.address, e.props.of])).toEqual([[COLL, { wallet: SELF }]]);
+    const rail = elementsOf(t, ConnectedRail);
+    expect(rail.map((e) => e.props.address)).toEqual([COLL]);
+    expect(rail[0]!.props.wallets).toContainEqual({ address: partner(0), role: 'funder · payee' });
+  });
+
+  it('in several collections: no one collection\'s panels, and each collection a link under its tabs', async () => {
+    trades = 3; unjudgedTrades = 1;
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    const el = render(t).container;
+    const nav = el.querySelector('nav[aria-label="Its collections"]')!;
+    expect([...nav.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]))
+      .toEqual([['Bees', `/c/1/${COLL}/w/${SELF}`], [short(OTHER), `/c/1/${OTHER}/w/${SELF}`]]);
+    expect([...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!.textContent).toBe('Collections');
   });
 });
 

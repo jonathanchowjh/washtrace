@@ -141,3 +141,18 @@ export function ParentLine({ home }: { home?: Home }) {
 
 /** A watched collection a trade or wallet belongs to: its page, its name, and the item's page under its tabs. */
 export type Home = { base: string; name: string; href: string };
+
+/**
+ * The way from a trade or wallet page outside any collection's tabs into
+ * them: one button for its one collection, or each collection as a link.
+ */
+export function OpenUnder({ homes }: { homes: readonly Home[] }) {
+  if (homes.length === 0) return null;
+  if (homes.length === 1) return <Link href={homes[0]!.href} prefetch={false} className="btn inline-flex items-center gap-1.5 text-sm"><KindIcon kind="collection" />Open in {homes[0]!.name} →</Link>;
+  return (
+    <nav aria-label="Its collections" className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <span>Open in</span>
+      {homes.map((h) => <Link key={h.base} href={h.href} prefetch={false} className={CHIP}><KindIcon kind="collection" className="size-3.5" />{h.name}</Link>)}
+    </nav>
+  );
+}

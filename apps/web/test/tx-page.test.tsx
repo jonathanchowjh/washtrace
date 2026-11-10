@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopEdge, Method, OwnFlag } from '@washtrace/detect';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
@@ -642,6 +643,56 @@ describe('the trade page: a spot check', () => {
     expect(up.getAttribute('href')).toBe('/');
     expect(up.closest('header')).toBeNull();
     expect(up.parentElement!.nextElementSibling?.tagName).toBe('HEADER');
+  });
+});
+
+/** Every element of `type` in a page's tree, through every prop: the panels read in their own Suspense, so the tree is where they show. */
+function elementsOf(node: unknown, type: unknown): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    if (n.type === type) out.push(n as { props: Record<string, unknown> });
+    Object.values(n.props as Record<string, unknown>).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+describe('the trade page outside a collection\'s tabs', () => {
+  async function tree() {
+    const { default: P } = await import('@/app/tx/[chain]/[hash]/page');
+    return P({ params: Promise.resolve({ chain: '1', hash: TX }) });
+  }
+
+  it('in one collection: its ring chips, strip and Connected to are that collection\'s, and it opens under its tabs', async () => {
+    roundTrip();
+    const t = await tree();
+    const { RingChips } = await import('@/components/rings');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    for (const type of [RingChips, WhereItSits]) expect(elementsOf(t, type).map((e) => [e.props.address, e.props.of])).toEqual([[A1, { tx: TX }]]);
+    expect(elementsOf(t, ConnectedRail).map((e) => [e.props.address, e.props.token, e.props.wallets]))
+      .toEqual([[A1, '7', [{ address: S, role: 'seller' }, { address: B, role: 'buyer' }]]]);
+    const link = [...render(t).container.querySelectorAll('a')].find((a) => a.textContent === 'Open in First →');
+    expect(link?.getAttribute('href')).toBe(`/c/1/${A1}/tx/${TX}`);
+  });
+
+  it('in several collections: no one collection\'s panels, and each collection a link', async () => {
+    state.tx = [transfer(A1, '7', TX, 5, 5), transfer(A2, '8', TX, 9, 5)];
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    expect([...elementsOf(t, ConnectedRail), ...elementsOf(t, WhereItSits)]).toEqual([]);
+    const nav = render(t).container.querySelector('nav[aria-label="Its collections"]')!;
+    expect([...nav.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])).toEqual([['First', `/c/1/${A1}`], ['Second', `/c/1/${A2}`]]);
+  });
+
+  it('unread: no panels and no way in', async () => {
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    expect(render(t).container.textContent).not.toContain('Open in');
   });
 });
 
