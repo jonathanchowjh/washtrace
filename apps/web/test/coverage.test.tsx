@@ -592,6 +592,13 @@ describe('the six stages', () => {
     expect(lis[0]!.textContent).not.toContain(STAGES[1].title);
   });
 
+  it('a stage card can shrink to its column, its chip wrapping under the title rather than past the edge', () => {
+    for (const li of panel(row()).querySelectorAll('li')) {
+      expect(li.className).toContain('min-w-0');
+      expect(li.firstElementChild!.className).toContain('flex-wrap');
+    }
+  });
+
   it('a stage missing its key says so and links to Settings, never "Off"', () => {
     const c = row();
     const el = view(c, { rpc: NONE, funding: false });
@@ -839,6 +846,35 @@ describe('the worker page\'s stages', () => {
     });
     // A collection with no name shows its short address.
     expect(body[1]!.querySelector('a')!.textContent).toBe(short('0xdef'));
+  });
+
+  it('on a phone each collection is a card listing its six stages, with the row’s states and links; the table is hidden there', () => {
+    const running = pipeline({ c: row({ restoreProgress: 0.5, storedThroughTime: null }), entry: entry(), rpcChains: ON, funding: true, analyzing: false, silent: false });
+    const rows = [
+      { chainId: 1, address: '0xabc', name: 'Demo', stages: running },
+      { chainId: 1, address: '0xdef', name: null, stages: stages(row()) },
+    ];
+    const el = render(<PipelineTable rows={rows} />).container;
+    expect(el.querySelector('ul[aria-label=Collections]')!.className).toContain('sm:hidden');
+    expect(el.querySelector('table')!.parentElement!.className).toMatch(/^hidden .*sm:block/);
+    const cards = [...el.querySelectorAll('li[data-pipeline-card]')];
+    const body = [...el.querySelectorAll('tbody tr')];
+    expect(cards).toHaveLength(2);
+    cards.forEach((card, i) => {
+      const lines = [...card.querySelectorAll('ol > li')];
+      expect(lines.map((li) => li.getAttribute('title'))).toEqual(STAGES.map((s) => s.title));
+      lines.forEach((li, j) => {
+        expect(li.textContent).toContain(STAGES[j]!.label);
+        expect(li.textContent).toContain(STATE_WORDS[rows[i]!.stages[j]!.state]);
+      });
+      // The same place as the row, the name the one link a keyboard reaches.
+      const links = [...card.querySelectorAll('a')];
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(['/c/1/' + rows[i]!.address + '#reading', '/c/1/' + rows[i]!.address + '#reading']);
+      expect(links.map((a) => a.getAttribute('tabindex'))).toEqual([null, '-1']);
+      expect(links[0]!.textContent).toBe(body[i]!.querySelector('a')!.textContent);
+    });
+    const share = rows[0]!.stages.find((s) => s.state === 'running')!.share!;
+    expect(cards[0]!.textContent).toContain(progress(share));
   });
 
   it('PipelineErrors lists a fault, a paused collection\'s error as information, and never a missing key as an error', () => {

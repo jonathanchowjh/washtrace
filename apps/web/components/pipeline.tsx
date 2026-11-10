@@ -50,40 +50,71 @@ function pausedError(error: string, rpc: boolean, chainId: number): string {
  * out of the tab order with tabIndex -1 (the name is the one a keyboard reaches;
  * the cell links stay in the accessibility tree), because an overlay on a `tr` relies on `position: relative` there, which CSS 2.1
  * leaves undefined.
+ *
+ * Below `sm` six stage columns do not fit the screen, so each collection is a
+ * card there instead, its six stages listed down it, as a trade is on Trades:
+ * both draw the same cells and the breakpoint shows one.
  */
 export function PipelineTable({ rows }: { rows: { chainId: number; address: string; name: string | null; stages: Cell[] }[] }) {
+  // Each stage's cell, made once: the table and the card both draw it.
+  const state = (x: Cell) => (
+    <>
+      <StageChip n={x.n} state={x.state} />
+      {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? floorPct(x.share, 1) : progress(x.share)}</span> : null}
+    </>
+  );
   return (
-    <div className="overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-xs text-muted-foreground">
-            <th scope="col" className="px-4 py-2 font-medium">Collection</th>
-            {STAGES.map(({ label, title }, i) => (
-              <th key={label} scope="col" title={title} className="px-2 py-2 font-medium whitespace-nowrap">
-                <span data-row-number className="tabular-nums">{i + 1}</span> {label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {rows.map((r) => (
-            <tr key={`${r.chainId}/${r.address}`} className="hover:bg-muted/50">
-              <td className="p-0">
-                <Link href={`/c/${r.chainId}/${r.address}#reading`} prefetch={false} className="block px-4 py-2.5 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
-              </td>
-              {r.stages.map((x) => (
-                <td key={x.n} className="p-0">
-                  <Link href={`/c/${r.chainId}/${r.address}#reading`} tabIndex={-1} prefetch={false} className="block px-2 py-2.5 whitespace-nowrap">
-                    <StageChip n={x.n} state={x.state} />
-                    {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? floorPct(x.share, 1) : progress(x.share)}</span> : null}
-                  </Link>
-                </td>
+    <>
+      <ul aria-label="Collections" className="divide-y rounded-lg border bg-card text-sm sm:hidden">
+        {rows.map((r) => {
+          const href = `/c/${r.chainId}/${r.address}#reading`;
+          return (
+            <li key={`${r.chainId}/${r.address}`} data-pipeline-card>
+              <Link href={href} prefetch={false} className="block px-4 pt-2.5 pb-1 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
+              {/* The stages open the same place, out of the tab order, as the table's cells do: the name is the one a keyboard reaches. */}
+              <Link href={href} tabIndex={-1} prefetch={false} className="block px-4 pb-2.5">
+                <ol className="space-y-1">
+                  {r.stages.map((x, i) => (
+                    <li key={x.n} title={STAGES[i]?.title} className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span data-row-number className="w-3 tabular-nums">{i + 1}</span>{STAGES[i]?.label}
+                      <span className="ml-auto flex items-center whitespace-nowrap">{state(x)}</span>
+                    </li>
+                  ))}
+                </ol>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="hidden overflow-x-auto rounded-lg border bg-card sm:block">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs text-muted-foreground">
+              <th scope="col" className="px-4 py-2 font-medium">Collection</th>
+              {STAGES.map(({ label, title }, i) => (
+                <th key={label} scope="col" title={title} className="px-2 py-2 font-medium whitespace-nowrap">
+                  <span data-row-number className="tabular-nums">{i + 1}</span> {label}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody className="divide-y">
+            {rows.map((r) => (
+              <tr key={`${r.chainId}/${r.address}`} className="hover:bg-muted/50">
+                <td className="p-0">
+                  <Link href={`/c/${r.chainId}/${r.address}#reading`} prefetch={false} className="block px-4 py-2.5 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
+                </td>
+                {r.stages.map((x) => (
+                  <td key={x.n} className="p-0">
+                    <Link href={`/c/${r.chainId}/${r.address}#reading`} tabIndex={-1} prefetch={false} className="block px-2 py-2.5 whitespace-nowrap">{state(x)}</Link>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -111,9 +142,10 @@ export function PipelineErrors({ rows }: { rows: { chainId: number; address: str
 }
 
 function Step({ stage, figure, value, bar, children }: { stage: Stage; figure: ReactNode; value: ReactNode; bar?: number; children?: ReactNode }) {
+  // A narrow column may shrink the card, and its chip then wraps under the title rather than past the card's edge.
   return (
-    <li className="relative flex flex-col gap-1 px-4 py-3.5">
-      <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+    <li className="relative flex min-w-0 flex-col gap-1 px-4 py-3.5">
+      <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-muted-foreground">
         <span data-row-number className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{stage.n}</span>{stage.title}
         <span className="ml-auto"><StageChip n={stage.n} state={stage.state} /></span>
       </p>
