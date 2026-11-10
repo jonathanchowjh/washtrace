@@ -1,8 +1,8 @@
 # API reference
 
 The console's HTTP API, for clients that read verdicts or manage what is watched. It is served by the
-`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 23 route files under
-`apps/web/app/api` with 28 method handlers, and `/go`.
+`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 25 route files under
+`apps/web/app/api` with 30 method handlers, and `/go`.
 
 Paths below use `{chain}` for a chain id (digits, such as `1`), `{address}` for a 0x address (any case; stored
 lowercase), and `{tx}` for a 0x transaction hash (64 hex digits).
@@ -171,6 +171,43 @@ check is 400 with the reason.
 - Editing a lens moves its version and queues its runs again. Creating one queues its run on the collection.
 - A preview is a sample run of an unsaved rule. Poll it until it finishes. It is 404 once it is swept (an hour
   after it was asked for) or its collection is removed.
+
+### Spot checks
+
+One transaction judged without watching its collection: the worker reads its receipt, each of its tokens'
+histories, and the money of its sellers, buyers and the wallets that could join them, at the start of a fund pass
+and between wallets in one. The console's Check this transaction button uses these two routes.
+
+| Route | Body or query | Status | Top-level keys |
+|---|---|---|---|
+| `POST /api/spots` | `{chainId, tx, lens?}`. `chainId` a number, `tx` a 0x hash, `lens` a key of yours such as `L7`. | 200, 202, 400, 404 | 200: `status: 'done'`, `result`. 202: `id`, `status`, `reused`. |
+| `GET /api/spots/{id}` | | 200, 404 | `id`, `chainId`, `tx`, `lens`, `status` (`queued`, `running`, `done`, `failed`), `result`, `error`, `requestedAt`, `finishedAt` |
+
+- **200 at once.** With no `lens`, a transaction every transfer of which a watched collection's latest analysis
+  judged is answered from the store, `result.source: 'watched'`. With a lens it is always queued: stored verdicts
+  hold only the built-ins.
+- **Reuse.** A check of the same transaction, with the same lens at the same version, that is queued or running is
+  shared (`reused: true`), so two requests at once make one check. A done one is answered again for an hour when
+  its block was final. A failed one is asked again.
+- **400** for a bad `chainId`, `tx` or `lens`, and for a lens a spot check cannot run, with the sentence: `This lens
+  uses Other tokens, which a spot check does not read.` or `This lens follows other tokens in the collection, which
+  a spot check does not read.` **404** `No such lens.` and `No such spot check.` (swept a day after it was asked).
+- **A failed check's `error`** says why: `No such transaction on chain N.`, `This transaction reverted.`, `This
+  transaction moved only ERC-1155 tokens, which washtrace does not read.`, `This transaction moved no ERC-721
+  token.`, `This transaction holds no trade: a mint, a burn or a move into or out of custody.`, `No RPC is configured
+  for chain N. Set WASHTRACE_RPC_N.`, `That lens was removed.`, `That lens was edited; ask again.`
+
+**The result** has the verdict keys' meaning, in one shape for both sources:
+
+| Key | Meaning |
+|---|---|
+| `washTrade` | `true` when a counted method flags a trade (Round trips or Linked wallets; with a lens, that lens). `false` only when each of them ran on every trade, nothing is `atLeast`, and none flagged. Otherwise `null`. |
+| `methods` | The counted methods, or the lens, that flagged. |
+| `notRun` | What could not run: `AU` always on a spot check; `AC` (or the lens) without an Etherscan key or when a seller's or buyer's money could not be read. |
+| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, or a lens needs money further out than the sellers and buyers. |
+| `finalized` | The transaction's block was final when read. A check of one that was not is never reused. |
+| `source` | `spot` or `watched`. |
+| `transfers` | The transaction's transfers, each with its `collection` and `flags`: a built-in's witness as in the verdict keys, or a lens's `{path, wallets}`. |
 
 ### Status
 

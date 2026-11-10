@@ -14,8 +14,8 @@ shows is also in the [API](api.md).
 | `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |
 | `/w/{chain}/{address}` | One wallet: how many of its trades are flagged, whether its money has been read, and who it moved money with. | On open |
-| `/tx/{chain}/{hash}` | One transaction's verdict. | On open |
-| `/search?q=` | A collection name, token number (`#1234`), wallet address or transaction hash. The sidebar search goes to the one thing it finds (via `/go`), else here. | On open |
+| `/tx/{chain}/{hash}` | One transaction's verdict, and [Check this transaction](#checking-a-transaction-you-do-not-watch) where washtrace has not read or judged it. | On open |
+| `/search?q=` | A collection name, token number (`#1234`), wallet address or transaction hash. The sidebar search goes to the one thing it finds (via `/go`), else here. A hash nothing watched matches links to its transaction page on each chain the worker has an RPC for. | On open |
 | `/settings` | The settings in [operating.md](operating.md#settings), where each value came from, and a Test for the RPC and Etherscan. | On open |
 | `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
 
@@ -68,3 +68,22 @@ loop never passes through.
 button asks the worker for them, and the share reads "so far" meanwhile. **Preview** tries the unsaved rule on a
 sample of 2,000 sales (`PREVIEW_SAMPLE`) and compares its catch with Round trips. **Save and run** queues the
 lens's run. The lens routes are in [api.md](api.md).
+
+## Checking a transaction you do not watch
+
+Where a transaction's page says washtrace has not read it, or has not judged it yet, a **Check this transaction**
+panel sits under the answer. It asks the worker for a spot check: the transaction's receipt, each of its tokens'
+histories, and the money of its sellers and buyers, without watching the collection.
+
+- **Judge with** is **Built-in methods** (Round trips and Linked wallets) by default, or one of your lenses. A lens
+  a spot check cannot run, one using Other tokens or the collection's other tokens, is shown greyed out with why.
+- The answer arrives in seconds, polled every second: which lens flagged it, each flagged token with why and links
+  to the wallets involved, and what could not run. Money loops back never runs on a spot check.
+- "At least" means some wallets could not be judged, so the answer is not clean. "This block is not final yet"
+  means the answer may change.
+- A check that fails says why (an unknown transaction, an ERC-1155 transfer, a chain with no RPC) and has **Try
+  again**.
+- Where this console may not be written to, the button is greyed out, as Save is.
+
+What a spot check can and cannot say is in the README's [Not watched yet?](../README.md#not-watched-yet), and its
+routes in [api.md](api.md#spot-checks).

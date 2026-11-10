@@ -1,7 +1,7 @@
 # Upgrading
 
 For operators. The schema is defined in one file, [migrations.ts](../packages/detect/src/migrations.ts):
-34 migrations, forward-only, numbered from 1, each safe to run again.
+35 migrations, forward-only, numbered from 1, each safe to run again.
 
 ## How a migration runs
 
@@ -62,6 +62,7 @@ migration creates is built empty, so it costs nothing and is not listed as a wai
 | 32 | Other tokens: creates `token_flows`, `token_reads`, `token_payees`; adds `collections.read_tokens_at`, `reach_hops`, `reach_stepped_at`, `traders_at`, `token_counts` and `lens_runs.tokens_read`; copies `follow_hops` into `reach_hops`. | |
 | 33 | `collections.analysis_started_at`. | |
 | 34 | Reading a trader again (`follow.reread`): adds `read_block bigint` and `stale_at timestamptz` to `wallets` and to `token_reads`. | `wallets_stale_idx` on `wallets` and `token_reads_stale_idx` on `token_reads`, both plain and partial (`WHERE stale_at IS NOT NULL`), so they hold no rows on upgrade. Each still scans its table, and the `ADD COLUMN`s before it hold an ACCESS EXCLUSIVE lock until commit, so reads of `wallets` and `token_reads` wait for the scans. |
+| 35 | Spot checks: creates `spot_checks`, one row per transaction judged without watching its collection. | On the new table: `spot_checks_queued_idx`, `spot_checks_tx_idx` and the unique `spot_checks_open_idx`, built empty. |
 
 A wallet due a read again keeps `status = 'done'` and gets `stale_at` set, so every reader of a done wallet still
 counts it. With `follow.reread` at 0, the default, nothing is marked and #34 changes no behaviour.
