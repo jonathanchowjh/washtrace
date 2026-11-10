@@ -26,6 +26,8 @@ import { tokenView, type EmptyToken } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { moneyFor } from '@washtrace/detect';
+import { StepLine } from '@/components/step-line';
+import { collectionOf } from '@/lib/collection-reads';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -34,7 +36,7 @@ const SHOWS = ['all', 'flagged', 'sales'] as const;
 type Show = (typeof SHOWS)[number];
 const SHOW_NAME: Record<Show, string> = { all: 'All', flagged: 'Flagged', sales: 'Sales' };
 
-type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string }> };
+type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string; from?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { tokenId } = await params;
@@ -113,8 +115,11 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const rowOf = new Map(transfers.map((t, i) => [`${t.txHash}:${t.logIndex}`, i + 1]));
   const ownLoops = drawing.loops.slice(why.length);
 
+  // The list it was opened from, if any: its stepper reads that list in a Suspense of its own.
+  const c = sp.from === undefined ? null : await collectionOf(chainId, address);
   return (
     <>
+      {c ? <Suspense fallback={null}><StepLine c={c} from={sp.from} id={tokenId} /></Suspense> : null}
       <Head
         kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}

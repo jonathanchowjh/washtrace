@@ -64,6 +64,8 @@ async function page(sp: Record<string, string | string[]> = {}): Promise<string>
 /** Every text, aria-label and title in `c`: a lens key may show in none of them. */
 const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-label],[title]')].flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')])].join('\n');
 const linkTo = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
+/** A trade's link, whatever list it says it came from (`?from=`, for stepping). */
+const tradeLink = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href')?.split('?')[0] === href);
 const hrefs = (c: HTMLElement, sel: string) => [...c.querySelectorAll(sel)].map((a) => a.getAttribute('href'));
 
 describe('the trades page', () => {
@@ -95,7 +97,7 @@ describe('the trades page', () => {
     expect(el.textContent).toContain('2 trades match');
     expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops back (not counted)', 'Linked wallets']));
     expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
-    expect(linkTo(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
+    expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
   });
 
@@ -217,7 +219,7 @@ describe('the trades page', () => {
   it('a row with no block time still opens its trade, and the count line comes before the groups', async () => {
     state.rows = [row('0xs1', { blockTime: null })];
     const el = await dom({ by: 'marketplace' });
-    expect(linkTo(el, `${BASE}/tx/0xs1`)?.textContent).toBe('Unknown time');
+    expect(tradeLink(el, `${BASE}/tx/0xs1`)?.textContent).toBe('Unknown time');
     const text = el.textContent!;
     expect(text.indexOf('trades match')).toBeLessThan(text.indexOf('Not a marketplace sale'));
   });
@@ -336,7 +338,7 @@ describe('the trades page', () => {
     const cells = [...el.querySelectorAll('tbody td[data-measure]')];
     expect(cells.map((td) => td.textContent)).toEqual(['2 h', '3 d', '1.25×']);
     expect(cells.every((td) => td.querySelector('a') === null)).toBe(true);
-    expect([...el.querySelectorAll('tbody a')].find((a) => a.textContent === '1.5 ETH')?.getAttribute('href')).toBe(`${BASE}/tx/0xs1`);
+    expect([...el.querySelectorAll('tbody a')].find((a) => a.textContent === '1.5 ETH')?.getAttribute('href')?.split('?')[0]).toBe(`${BASE}/tx/0xs1`);
   });
 
   it('a midnight bound goes back as a day field, not a hidden one', async () => {

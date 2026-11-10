@@ -19,10 +19,11 @@ import { addressOf, chainOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { clampedPage, listView } from '@/lib/views';
+import { LIST_PAGE, clampedPage, listView } from '@/lib/views';
+import { fromParam } from '@/lib/step';
 
-/** Tokens or wallets to a page, as many as a screen shows without scrolling far; the Trades list's page is TRADES_PAGE. */
-const PAGE = 20;
+/** Tokens or wallets to a page (LIST_PAGE); the Trades list's page is TRADES_PAGE. */
+const PAGE = LIST_PAGE;
 
 type Kind = 'tokens' | 'wallets' | 'trades';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
@@ -165,7 +166,8 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
               <GroupBy base={base} q={query} view={view} zone={zone} own={own} groups={trades.groups} ran={trades.ran} />
               {trades.total === 0 ? null : (
                 <>
-                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money} />
+                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money}
+                    from={fromParam('trades', new URL(tradesHref(base, query, { by: view.by }), 'http://x.invalid').searchParams, trades.page)} />
                   <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label="trades" />
                   <p className="mt-3 text-sm"><a href={csv} className="font-medium hover:underline">Download CSV ↓</a></p>
                 </>
@@ -182,6 +184,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
               kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of}
               sort={lv.sort} sortHref={(sort) => href({ sort })} find={lv.find} findParam="q"
               pager={{ page: rows.page, size: PAGE, href: (n) => href({ page: n }) }} empty={`${lens.name} flags no ${list === 'tokens' ? 'token' : 'wallet'}.`}
+              from={fromParam(list, new URL(href({}), 'http://x.invalid').searchParams, rows.page)}
             />
           )}
         </div>

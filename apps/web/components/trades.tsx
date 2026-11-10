@@ -7,7 +7,7 @@ import { NotCounted } from '@/components/methods';
 import { TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
-import { cardSrc, txHref } from '@/lib/links';
+import { cardSrc, txHref, withFrom } from '@/lib/links';
 import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
@@ -272,8 +272,10 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
  * run read (lensContext): a trade past it reads not judged yet in that lens's
  * column, as a trade no analysis covered reads across them all.
  */
-export function TradesTable({ chainId, rows, ran, through, money, ...where }: Where & {
+export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
+  /** The list as a trade's `from` (lib/step.ts), so a trade opened from it can step to its neighbours. */
+  from?: string;
 }) {
   const { base, q, view, zone, own = {} } = where;
   const lenses = withOwn(ran);
@@ -297,11 +299,11 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
             const venue = r.marketplace === null ? null : venueOf(r.marketplace);
             const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
             // The price opens the trade, as a price does in the transfer tables.
-            const trade = (v: string) => (v === '—' ? v : <Link href={txHref(chainId, r.txHash, base)} title="Open this trade" className="hover:underline">{v}</Link>);
+            const trade = (v: string) => (v === '—' ? v : <Link href={withFrom(txHref(chainId, r.txHash, base), from)} title="Open this trade" className="hover:underline">{v}</Link>);
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={txHref(chainId, r.txHash, base)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
+                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
                   <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>

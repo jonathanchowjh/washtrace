@@ -308,9 +308,10 @@ describe('the list of a lens of yours', () => {
   it('opens a token as its page with the lens\'s loops lit, says why in the built-ins\' words, and promises what a built-in does', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', { totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
     state.tokens = { rows: [token('7', { loops: 3, wallets: 4, closedByMoney: 2, middles: 1, laps: 3, pairs: 0 })], total: 1 };
-    const page7 = `${BASE}/t/7?method=L7#why`;
-    for (const page of [() => collectionPage({ method: 'L7' }), () => flaggedPage({ method: 'L7', kind: 'tokens' })]) {
+    // The full list's links also say which list they came from, for stepping (lib/step.ts).
+    for (const [page, from] of [[() => collectionPage({ method: 'L7' }), ''], [() => flaggedPage({ method: 'L7', kind: 'tokens' }), '&from=tokens%3Fmethod%3DL7']] as const) {
       const el = await page();
+      const page7 = `${BASE}/t/7?method=L7${from}#why`;
       const section = el.querySelector('section[aria-label="Tokens Blur 3-hop flagged"]')!;
       expect(named(section, '#7')).toEqual([page7]);
       expect(named(section, '3 loops')).toEqual([page7]);

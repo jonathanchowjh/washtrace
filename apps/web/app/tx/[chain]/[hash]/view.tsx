@@ -22,6 +22,8 @@ import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/vi
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { moneyFor } from '@washtrace/detect';
+import { StepLine } from '@/components/step-line';
+import { collectionOf } from '@/lib/collection-reads';
 
 /**
  * The console's form of GET /api/transfers/<chain>/<tx>: is this sale a wash
@@ -30,7 +32,7 @@ import { moneyFor } from '@washtrace/detect';
  * transaction whose every transfer is in that collection sits there; any other
  * is sent to its own page, so no row reads as another collection's.
  */
-export async function TxView({ chainId, tx, within }: { chainId: number; tx: string; within?: string }) {
+export async function TxView({ chainId, tx, within, from }: { chainId: number; tx: string; within?: string; from?: string }) {
   const v = await txView(chainId, tx);
   const { transfers, washTrade, by, apartOnly, notRun, own, collections, graphs, custody, ownLenses } = v;
   const unread = transfers.length === 0;
@@ -61,8 +63,10 @@ export async function TxView({ chainId, tx, within }: { chainId: number; tx: str
     drawings.set(g, d);
     return d;
   };
+  const c = within !== undefined && from !== undefined && collection !== null ? await collectionOf(chainId, collection.address) : null;
   return (
     <>
+      {c ? <Suspense fallback={null}><StepLine c={c} from={from} id={tx} /></Suspense> : null}
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}

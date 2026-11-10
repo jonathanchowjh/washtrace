@@ -10,6 +10,7 @@ import { plural, short } from '@/lib/format';
 import { addressOf, chainOf, pageOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { RINGS_PAGE } from '@/lib/views';
+import { fromParam } from '@/lib/step';
 
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ page?: string }> };
 
@@ -47,7 +48,7 @@ export default async function RingsPage({ params, searchParams }: Props) {
         : (
           <>
             <p className="mb-2 text-sm text-muted-foreground">{plural(read.total, 'ring')}. Each count opens its trades.</p>
-            <RingsTable rows={read.rows} base={base} chainId={chainId} />
+            <RingsTable rows={read.rows} base={base} chainId={chainId} from={fromParam('rings', new URLSearchParams(), page)} />
             <Pager total={read.total} page={page} size={RINGS_PAGE} href={(n) => (n > 1 ? `${base}/rings?page=${n}` : `${base}/rings`)} label="rings" />
           </>
         )}

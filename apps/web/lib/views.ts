@@ -42,6 +42,9 @@ export type TokenView = {
   ownLenses: Lenses;
 } & TokenDrawing & Verdict;
 
+/** Tokens or wallets to a page in a collection's Tokens and Wallets lists, as many as a screen shows without scrolling far. */
+export const LIST_PAGE = 20;
+
 /** A collection's rings to a page, in its list and the API's, so a page number means the same rings in both. */
 export const RINGS_PAGE = 20;
 

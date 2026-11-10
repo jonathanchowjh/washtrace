@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
-import { cardSrc, explorerTx, lensTabHref, txHref, walletHref } from '@/lib/links';
+import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
@@ -14,9 +14,9 @@ import { HoverCard } from '@/components/hover-card';
  * collection's base), so a link from inside a collection stays inside it. The
  * zero address is a mint or a burn, not a wallet.
  */
-export function Wallet({ chainId, address, within }: { chainId: number; address: string; within?: string }) {
+export function Wallet({ chainId, address, within, from }: { chainId: number; address: string; within?: string; from?: string }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  const link = <Link href={walletHref(chainId, address, within)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
   // Inside a collection there is a card to show: its trades there and its ring.
   return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }

@@ -118,3 +118,10 @@ export function lensTabHref(base: string, method: string, o: { lens?: string; ev
 export function cardSrc(base: string, of: 'wallet' | 'token' | 'ring', value: string): string {
   return `/api/collections/${base.slice('/c/'.length)}/card?${of}=${encodeURIComponent(value)}`;
 }
+
+/** `href` with `from` (lib/step.ts: the list it was opened from) added to its query, before any #hash. */
+export function withFrom(href: string, from: string | undefined): string {
+  if (from === undefined) return href;
+  const [path, hash] = href.split('#', 2);
+  return `${path}${path!.includes('?') ? '&' : '?'}from=${encodeURIComponent(from)}${hash === undefined ? '' : `#${hash}`}`;
+}

@@ -13,8 +13,10 @@ import { walletHref } from '@/lib/links';
 import { addressOf, chainOf } from '@/lib/params';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
+import { Suspense } from 'react';
+import { StepLine } from '@/components/step-line';
 
-type Props = { params: Promise<{ chain: string; address: string; anchor: string }> };
+type Props = { params: Promise<{ chain: string; address: string; anchor: string }>; searchParams?: Promise<{ from?: string }> };
 
 /** Under a day apart, its first and last trades read as one date. */
 const DAY = 86_400_000;
@@ -58,11 +60,13 @@ export default async function RingPage(props: Props) {
     );
   }
   const { line, wallets, walletsCut, tokens } = ring;
+  const from = (await props.searchParams)?.from;
   const traders = wallets.filter((w) => w.traded);
   const movers = wallets.filter((w) => !w.traded);
   const sales = tradesHref(base, { ring: anchor });
   return (
     <>
+      {from === undefined ? null : <Suspense fallback={null}><StepLine c={r.c} from={from} id={anchor} /></Suspense>}
       <Head
         kind="ring" title={ringName(line)}
         sub={<>{plural(line.wallets, 'wallet')} · {plural(line.tokens, 'token')} · {line.firstAt === null ? null : line.lastAt! - line.firstAt < DAY ? <><Time ms={line.firstAt} style="date" /> · </> : <><Time ms={line.firstAt} style="date" /> to <Time ms={line.lastAt!} style="date" /> · </>}named by <span className="font-mono">{short(anchor)}</span></>}

@@ -5,7 +5,7 @@ import { short } from '@/lib/format';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { TxView } from '@/app/tx/[chain]/[hash]/view';
 
-type Props = { params: Promise<{ chain: string; address: string; hash: string }> };
+type Props = { params: Promise<{ chain: string; address: string; hash: string }>; searchParams?: Promise<{ from?: string }> };
 
 /** The transaction's own page is the canonical one: it can move tokens of more than one collection. */
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -16,12 +16,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 /** One transaction, opened from a collection: under its tabs, with Trades lit. */
-export default async function CollectionTxPage({ params }: Props) {
+export default async function CollectionTxPage({ params, searchParams }: Props) {
   await connection();
   const p = await params;
   const chainId = chainOf(p.chain);
   const address = addressOf(p.address);
   const tx = txOf(p.hash);
   if (chainId === null || address === null || tx === null) notFound();
-  return TxView({ chainId, tx, within: `/c/${chainId}/${address}` });
+  return TxView({ chainId, tx, within: `/c/${chainId}/${address}`, from: (await searchParams)?.from });
 }

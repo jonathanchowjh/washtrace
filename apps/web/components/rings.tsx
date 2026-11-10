@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { cache } from 'react';
 import type { RingLine } from '@washtrace/detect';
 import { eth, num, plural, short } from '@/lib/format';
-import { cardSrc, walletHref } from '@/lib/links';
+import { cardSrc, walletHref, withFrom } from '@/lib/links';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -22,7 +22,7 @@ export const ringTone = (r: Pick<RingLine, 'floorSales'>) => (r.floorSales > 0 ?
 export const ringName = (r: Pick<RingLine, 'rank'>) => `Ring ${r.rank}`;
 
 /** Rings as rows: its name and mark, a few of its wallets, then what its flagged sales add up to. Each row opens the ring. */
-export function RingsTable({ rows, base, chainId, total }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number }) {
+export function RingsTable({ rows, base, chainId, total, from }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string }) {
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
       <table className="w-full min-w-[36rem] text-left text-sm">
@@ -37,7 +37,7 @@ export function RingsTable({ rows, base, chainId, total }: { rows: readonly Ring
         </thead>
         <tbody className="divide-y">
           {rows.map((r) => {
-            const href = `${base}/r/${r.anchor}`;
+            const href = withFrom(`${base}/r/${r.anchor}`, from);
             return (
               <tr key={r.anchor} className="hover:bg-muted/50">
                 <td className="px-3 py-2 whitespace-nowrap">

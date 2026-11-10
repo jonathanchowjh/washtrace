@@ -15,6 +15,8 @@ import { Time } from '@/components/time';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { moneyFor } from '@washtrace/detect';
+import { StepLine } from '@/components/step-line';
+import { collectionOf } from '@/lib/collection-reads';
 
 /**
  * This page with `o`'s lists, filter and pages, defaults left out. Every link
@@ -117,8 +119,11 @@ export async function WalletView({ chainId, address, sp, within }: {
   const unreadable = named !== null && named.kind !== 'token' && named.kind !== 'address' && named.kind !== 'prefix';
   const partnerFirst = (pages.partners.page - 1) * COUNTERPARTIES + 1;
 
+  const from = within === undefined ? undefined : sp.from;
+  const c = from === undefined ? null : await collectionOf(chainId, within!.collection);
   return (
     <>
+      {c ? <Suspense fallback={null}><StepLine c={c} from={from} id={address} /></Suspense> : null}
       <Head
         kind="wallet"
         title={<span className="font-mono">{short(address)}</span>}

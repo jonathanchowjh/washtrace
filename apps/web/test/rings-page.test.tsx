@@ -38,7 +38,7 @@ describe('the rings list', () => {
     const c = await list();
     const rows = [...c.querySelectorAll('tbody tr')];
     expect(rows.map((r) => r.querySelector('td a')!.textContent)).toEqual(['Ring 1', 'Ring 2']);
-    expect(rows[0]!.querySelector('td a')!.getAttribute('href')).toBe(`${BASE}/r/${A}`);
+    expect(rows[0]!.querySelector('td a')!.getAttribute('href')).toBe(`${BASE}/r/${A}?from=rings`);
     // Round trips flags some of Ring 1's sales, none of Ring 2's.
     expect(rows[0]!.querySelector('td a i')!.className).toContain('bg-cycle');
     expect(rows[1]!.querySelector('td a i')!.className).toContain('repeating-linear-gradient');
