@@ -3,9 +3,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
-import { ConnectedRail } from '@/components/connected-rail';
+import { ConnectedRail, walletRoles } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/sales-strip';
-import { Empty, Head, MoreLink, Section } from '@/components/ui';
+import { Answer, Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, VerdictChip } from '@/components/kit';
 import { RingFigure, ringTone } from '@/components/rings';
 import { Time } from '@/components/time';
@@ -80,6 +80,12 @@ export default async function RingPage(props: Props) {
   // Its loops drawn as a token's are, for a ring small enough to read; the list below holds every wallet either way.
   const drawn = walletsCut ? null : await ringDrawing(store(), chainId, r.c, ring);
   const drawing = drawn === null ? null : layout(drawn.transfers, drawn.flows, drawn.middles);
+  // Its wallets on the rail as every item page lists them: a trader by its side of the sales drawn, else "traded"; the rest moved money.
+  const sides = new Map((drawn === null ? [] : walletRoles(drawn.transfers, [], [])).map((w) => [w.address, w.role]));
+  const railWallets = wallets.map((w) => ({ address: w.address, role: w.traded ? sides.get(w.address) ?? 'traded' : 'moved money' }));
+  const name = r.c.name ?? short(address);
+  // An empty group is noise beside the other: it is said in the lead instead.
+  const groups = [{ title: `Traded (${num(traders.length)})`, list: traders }, { title: `Only moved the money (${num(movers.length)})`, list: movers }].filter((g) => g.list.length > 0);
   return (
     <>
       <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={from} of={{ ring: anchor }} /></Suspense>
@@ -88,6 +94,19 @@ export default async function RingPage(props: Props) {
         sub={<>{plural(line.wallets, 'wallet')} · {plural(line.tokens, 'token')} · {line.firstAt === null ? null : line.lastAt! - line.firstAt < DAY ? <><Time ms={line.firstAt} style="date" /> · </> : <><Time ms={line.firstAt} style="date" /> to <Time ms={line.lastAt!} style="date" /> · </>}named by <span className="font-mono">{short(anchor)}</span></>}
         part={<VerdictChip tone={ringTone(line)} />}
       />
+
+      <Answer tone={ringTone(line)} title={line.sales === 0 ? `${plural(line.wallets, 'wallet')}, with no counted sale` : `${plural(line.wallets, 'wallet')} joined by ${plural(line.sales, 'flagged sale')}`}>
+        {walletsCut ? null : <>{num(traders.length)} traded the tokens and {num(movers.length)} only moved the money. </>}
+        {line.sales === 0 ? 'None of its flagged trades is a counted sale.'
+          : <>Its {plural(line.sales, 'flagged sale')}, {num(line.floorSales)} of them round trips, moved {eth(line.volumeWei)} across {plural(line.tokens, 'token')}.</>}
+        <p className="mt-2 text-muted-foreground">
+          <b className="font-medium text-foreground">What this means:</b>{' '}
+          {line.floorSales > 0
+            ? 'Tokens went round among these wallets, back to one that sold them. '
+            : 'Buyers and sellers among these wallets are linked by money. '}
+          A ring is wallets the evidence joins, not one person{line.sales === 0 ? '.' : <>; its sales count toward <Link href={base} className="underline hover:text-foreground">{name}&rsquo;s share</Link>.</>}
+        </p>
+      </Answer>
 
       <section aria-label="What it adds up to" className="flex flex-wrap items-center gap-6 rounded-lg border bg-card p-4">
         <RingFigure wallets={wallets} total={line.wallets} />
@@ -100,7 +119,7 @@ export default async function RingPage(props: Props) {
       </section>
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} /></Suspense>
-      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} salesOf={{ ring: anchor }} /></Suspense>
+      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} wallets={railWallets} salesOf={{ ring: anchor }} /></Suspense>
 
       {drawing === null || drawn === null ? null : (
         <Section title="What it looks like" lead="Each circle is a wallet of the ring. Solid arrows are its tokens changing hands between them, numbered by block, each opening its trade; dashed arrows are money between them.">
@@ -109,24 +128,22 @@ export default async function RingPage(props: Props) {
         </Section>
       )}
 
-      <Section title="Who is in it" lead={`Those that traded, then those that only moved the money: a funder, a middle, a payee. A ring is wallets the evidence joins, not one person.${walletsCut ? ` The first ${num(wallets.length)} of ${num(line.wallets)} are listed.` : ''}`}>
+      <Section title="Who is in it" lead={`Those that traded, then those that only moved the money: a funder, a middle, a payee. A ring is wallets the evidence joins, not one person.${movers.length === 0 ? ' Every wallet listed traded; none only moved the money.' : traders.length === 0 ? ' None listed traded; each only moved the money.' : ''}${walletsCut ? ` The first ${num(wallets.length)} of ${num(line.wallets)} are listed.` : ''}`}>
         <div className="grid gap-4 md:grid-cols-2">
-          {[{ title: `Traded (${num(traders.length)})`, list: traders }, { title: `Only moved the money (${num(movers.length)})`, list: movers }].map((g) => (
+          {groups.map((g) => (
             <div key={g.title} className="rounded-lg border bg-card">
               <h3 className="border-b px-4 py-2 text-sm font-medium">{g.title}</h3>
-              {g.list.length === 0 ? <p className="px-4 py-2 text-sm text-muted-foreground">None.</p> : (
-                <ul className="divide-y">
-                  {g.list.map((w) => (
-                    <li key={w.address}>
-                      <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
-                        <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} prefetch={false} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
-                          <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
-                        </Link>
-                      </HoverCard>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className="divide-y">
+                {g.list.map((w) => (
+                  <li key={w.address}>
+                    <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
+                      <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} prefetch={false} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
+                        <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
+                      </Link>
+                    </HoverCard>
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>

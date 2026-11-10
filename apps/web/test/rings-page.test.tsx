@@ -1,4 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { short } from '@/lib/format';
 import { tradesHref } from '@/lib/trades-url';
@@ -9,12 +10,13 @@ const A = '0x' + 'a1'.repeat(20), B = '0x' + 'b1'.repeat(20), M = '0x' + 'c1'.re
 const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wallets: 3, sample: [A, B, M], sales: 3, floorSales, tokens: 1, volumeWei: '9000000000000000000', firstAt: null, lastAt: null });
 const X = '0x' + 'd1'.repeat(20);
 const moved = (from: string, to: string, n: number) => ({ txHash: '0x' + String(n).repeat(64), logIndex: 0, blockNumber: n, blockTime: n, tokenId: '114', from, to, marketplace: 'opensea', priceWei: '1', currency: '', flags: {} });
-const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)] };
+const MEMBERS = [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }];
+const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS };
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => ({ id: 1, name: 'Demo Apes', address: ADDR, latest: state.latest ? { rings: state.rings } : null }),
     rings: async (_id: number, _ctx: unknown, limit: number, offset: number) => ({ rows: state.list.slice(offset, offset + limit), total: state.list.length }),
-    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1), wallets: [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }], walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
+    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1), wallets: state.members, walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
     ringsOf: async (_id: number, of: { wallet?: string }) => (of.wallet === M ? [A] : []),
     ringLines: async (_id: number, anchors: string[]) => anchors.map((a) => line(3, a)),
     // A and B pass #114 back and forth; it then leaves the ring for X.
@@ -25,7 +27,7 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)] }); });
+afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS }); });
 
 const params = Promise.resolve({ chain: '1', address: ADDR });
 async function list(page?: string) {
@@ -100,6 +102,41 @@ describe('a ring', () => {
     const hrefs = [...fig.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(expect.arrayContaining([`${BASE}/tx/0x${'1'.repeat(64)}`, `${BASE}/tx/0x${'2'.repeat(64)}`]));
     expect(hrefs.some((h) => h?.includes('3'.repeat(64)))).toBe(false);
+  });
+
+  it('answers what the ring is and what its flagged sales add up to, in the token page\'s voice', async () => {
+    const c = await one(A);
+    const answer = c.querySelector('p.text-lg')!;
+    expect(answer.textContent).toBe('3 wallets joined by 3 flagged sales');
+    const body = answer.nextElementSibling!.textContent;
+    expect(body).toContain('2 traded the tokens and 1 only moved the money.');
+    expect(body).toContain('Its 3 flagged sales, 2 of them round trips, moved 9 ETH across 1 token.');
+    expect(body).toContain('What this means: Tokens went round among these wallets');
+    expect(links(answer.nextElementSibling!)).toContainEqual(['Demo Apes’s share', BASE]);
+  });
+
+  it('gives Connected to its wallets: each trader by its side of the sales, the rest as moving money', async () => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/r/[anchor]/page');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    const rails: { props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown) => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      if (n.type === ConnectedRail) rails.push(n as { props: Record<string, unknown> });
+      Object.values(n.props as Record<string, unknown>).forEach(walk);
+    };
+    walk(await P({ params: Promise.resolve({ chain: '1', address: ADDR, anchor: A }) }));
+    expect(rails.map((r) => r.props.wallets)).toEqual([[
+      { address: A, role: 'seller · buyer' }, { address: B, role: 'buyer · seller' }, { address: M, role: 'moved money' },
+    ]]);
+  });
+
+  it('leaves out an empty group, and says it in the lead', async () => {
+    state.members = MEMBERS.filter((w) => w.traded);
+    const c = await one(A);
+    expect([...c.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['Traded (2)']);
+    expect(c.textContent).toContain('Every wallet listed traded; none only moved the money.');
+    expect(c.textContent).not.toContain('None.');
   });
 
   it('says when no ring of the latest analysis has the anchor, and links the list', async () => {
