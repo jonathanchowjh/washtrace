@@ -249,6 +249,36 @@ export interface RingView {
 /** The most wallets a ring's page lists; a ring of a whole collection can hold tens of thousands. */
 export const RING_WALLETS = 500;
 
+/**
+ * Every ring of collection `$1` with what its counted flagged trades add up
+ * to, priced in money `$2`, ranked: a CTE chain that ends in `ranked`, for a
+ * SELECT after it. A trade two witnesses of one ring flag counts once; a ring
+ * none of whose trades is counted is listed with zeros, so the list holds
+ * every ring the analysis counted in `rings`.
+ */
+const RINGS_SQL = `WITH hits AS (
+  SELECT w.ring, f.tx_hash, f.log_index, bool_or(f.method = 'A') AS floor
+  FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
+  WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring IS NOT NULL
+  GROUP BY w.ring, f.tx_hash, f.log_index),
+r AS (
+  SELECT h.ring, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
+         count(*) FILTER (WHERE t.marketplace IS NOT NULL AND h.floor)::int AS floor_sales,
+         count(DISTINCT t.token_id)::int AS tokens,
+         COALESCE(sum(CASE WHEN t.marketplace IS NOT NULL AND t.currency = ANY($2::text[]) THEN t.price_wei END), 0) AS volume,
+         extract(epoch FROM min(t.block_time))::float8 * 1000 AS first_at, extract(epoch FROM max(t.block_time))::float8 * 1000 AS last_at
+  FROM hits h JOIN washtrace.transfers t ON t.collection_id = $1 AND t.tx_hash = h.tx_hash AND t.log_index = h.log_index ${COUNTED_JOIN}
+  GROUP BY h.ring),
+m AS (
+  SELECT w.ring, count(DISTINCT x)::int AS wallets, (array_agg(DISTINCT x ORDER BY x))[1:3] AS sample
+  FROM washtrace.witnesses w CROSS JOIN LATERAL unnest(w.wallets) x
+  WHERE w.collection_id = $1 AND w.ring IS NOT NULL GROUP BY w.ring),
+ranked AS (
+  SELECT m.ring, COALESCE(r.sales, 0) AS sales, COALESCE(r.floor_sales, 0) AS floor_sales, COALESCE(r.tokens, 0) AS tokens, COALESCE(r.volume, 0) AS volume,
+         r.first_at, r.last_at, m.wallets, m.sample,
+         row_number() OVER (ORDER BY COALESCE(r.volume, 0) DESC, COALESCE(r.sales, 0) DESC, m.ring)::int AS rank, count(*) OVER ()::int AS total
+  FROM m LEFT JOIN r USING (ring))`;
+
 /** One bucket of a collection's history. `at` is the bucket's start, in ms. */
 export interface TimelinePoint {
   at: number;
@@ -293,7 +323,6 @@ export interface MoneyLane {
   collectionId: number | null;
   wallets: string[];
 }
-
 
 /**
  * How far a collection's money is read (Data this lens needs). `traders`:
@@ -854,6 +883,8 @@ export class Store {
     });
   }
 
+  // ---- stored data --------------------------------------------------------
+
   /**
    * Load a collection's stored data: every transfer in `batches`, then its
    * wallets queued and the cursor moved to where the data stops, all in one
@@ -1219,6 +1250,146 @@ export class Store {
       [id],
     );
     return rows[0]?.ok ?? false;
+  }
+
+  /**
+   * What a stored-data cut of a collection starts from: where its data
+   * begins and ends. The snapshot stops at the cursor, and its time is that
+   * of the latest transfer at or below it. Null when it is not watched; the
+   * blocks and time are null until it has read some. `name` is the console's
+   * label; `contractName` is what the contract's own name() said, which is
+   * what a published copy should carry, and is null until it is described.
+   */
+  async storedHeader(chainId: number, address: string): Promise<{
+    id: number; name: string; contractName: string | null; startBlock: number | null; throughBlock: number | null; throughTime: number | null;
+  } | null> {
+    const { rows } = await this.pool.query(
+      `SELECT c.id, COALESCE(c.name, c.contract_name, c.address) AS name, c.contract_name, c.start_block, c.cursor_block,
+              (SELECT extract(epoch FROM max(t.block_time))::float8 FROM washtrace.transfers t
+               WHERE t.collection_id = c.id AND t.block_number <= c.cursor_block) AS through
+       FROM washtrace.collections c WHERE c.chain_id = $1 AND c.address = lower($2)`,
+      [chainId, address],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id, name: r.name, contractName: r.contract_name, startBlock: r.start_block === null ? null : Number(r.start_block),
+      throughBlock: r.cursor_block === null ? null : Number(r.cursor_block), throughTime: r.through === null ? null : r.through * 1000,
+    };
+  }
+
+  /** A collection's transfers up to block `through`, in chain order, streamed for writing to a file. */
+  storedTransfers(id: number, through: number): AsyncGenerator<Transfer> {
+    return this.stream(
+      `${SELECT_TRANSFER} FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.block_number <= $2 ORDER BY t.block_number, t.log_index`,
+      [id, through], toTransfer,
+    );
+  }
+
+  /**
+   * A collection's money trail: the addresses checked to the end and the
+   * flows they found. The same wallets and flows `analysisInput` reads, so a
+   * store that imports the trail analyses the collection as this one does:
+   * its traders, and every followed wallet on the chain. Only chain data goes
+   * in: an address, never how or when it was read. `checked` of `of` is how
+   * many of the collection's traders are on the list. The rows stream;
+   * nothing is read until they are iterated, addresses before flows.
+   *
+   * An importing install never reads a done wallet again, so every address in
+   * the file carries all of its flows, in and out. The followed wallets are
+   * fixed when the trail is begun, and both streams use that list: one
+   * checked later is left out, not written down without the flows nobody
+   * looked for. Traders need no such care, since flows to or from them are
+   * all read, and only grow between the two streams. A wallet that is
+   * truncated (more history than Etherscan pages through) is left out: its
+   * flows are not all there, so claiming it checked would be false. Nor are
+   * the wallets still to check: the importing install queues what it needs.
+   * Addresses are in address order, as importTrail writes them.
+   */
+  async trail(id: number, chainId: number): Promise<{ checked: number; of: number; addresses: AsyncGenerator<string>; flows: AsyncGenerator<Flow> }> {
+    // Arrays, not subqueries, for the reason analysisInput gives.
+    const traders = (await this.pool.query<{ address: string }>(
+      `SELECT from_address AS address FROM washtrace.transfers WHERE collection_id = $1
+       UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1`,
+      [id],
+    )).rows.map((r) => r.address);
+    const followed = (await this.pool.query<{ address: string }>(
+      `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
+      [chainId],
+    )).rows.map((r) => r.address);
+    const { rows } = await this.pool.query<{ checked: number; of: number }>(
+      `SELECT count(*) FILTER (WHERE status = 'done' AND NOT truncated)::int AS checked, count(*)::int AS of
+       FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2::text[])`,
+      [chainId, traders],
+    );
+    return {
+      checked: rows[0]!.checked,
+      of: rows[0]!.of,
+      addresses: this.stream(
+        `SELECT address FROM washtrace.wallets
+         WHERE chain_id = $1 AND status = 'done' AND NOT truncated AND (address = ANY($2::text[]) OR address = ANY($3::text[]))
+         ORDER BY address`,
+        [chainId, traders, followed],
+        (r): string => r.address,
+      ),
+      flows: this.stream(
+        `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
+                extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+         WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
+           OR f.from_address = ANY($3::text[]) OR f.to_address = ANY($3::text[]))
+         -- A total order: the same flows cut again give the same file, and the same sha256.
+         ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address, f.token, f.value_wei`,
+        [chainId, traders, followed], toFlow,
+      ),
+    };
+  }
+
+  /**
+   * The rows of `sql`, `page` at a time through a server-side cursor, so
+   * millions of them stream rather than land in memory. One read-only
+   * transaction, so the rows are one snapshot. Leaving the loop early (a
+   * failed write) closes the cursor and gives the connection back.
+   *
+   * A `download` is read at the pace of a stranger's network, so it is held to
+   * MAX_STREAMS at once, its session ends after `streamIdleS` without a fetch,
+   * and it errors once open `streamMaxMs`. The engine's own streams are not.
+   */
+  private async *stream<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE, download = false): AsyncGenerator<T> {
+    if (download) {
+      if (this.streaming >= MAX_STREAMS) throw new TooManyStreams();
+      // Taken before the wait for a client, so downloads that start together cannot all pass the check.
+      this.streaming++;
+    }
+    let c: pg.PoolClient;
+    try {
+      c = await this.pool.connect();
+    } catch (err) {
+      if (download) this.streaming--;
+      throw err;
+    }
+    let finished = false;
+    const opened = Date.now();
+    try {
+      await c.query('BEGIN READ ONLY');
+      if (download) await c.query(`SET LOCAL idle_in_transaction_session_timeout = ${Math.round(this.streamIdleS * 1000)}`);
+      // A cursor is planned for its first tenth of rows. Every caller reads to
+      // the end, so say so: Terraforms' payments planned an index walk at nearly
+      // 7x the cost of a scan and sort.
+      await c.query('SET LOCAL cursor_tuple_fraction = 1');
+      await c.query(`DECLARE stored NO SCROLL CURSOR FOR ${sql}`, params);
+      for (;;) {
+        const { rows } = await c.query(`FETCH ${page} FROM stored`);
+        for (const r of rows) yield map(r);
+        if (rows.length < page) break;
+        if (download && Date.now() - opened > this.streamMaxMs) throw new Error(DOWNLOAD_TOO_LONG);
+      }
+      await c.query('COMMIT');
+      finished = true;
+    } finally {
+      if (download) this.streaming--;
+      if (!finished) await c.query('ROLLBACK').catch(() => {});
+      c.release();
+    }
   }
 
   // ---- money read -----------------------------------------------------------
@@ -2506,148 +2677,6 @@ export class Store {
       [id, limit],
     );
     return rows.map((r) => toAnalysis(r, r.id)).reverse();
-  }
-
-  // ---- stored data --------------------------------------------------------
-
-  /**
-   * What a stored-data cut of a collection starts from: where its data
-   * begins and ends. The snapshot stops at the cursor, and its time is that
-   * of the latest transfer at or below it. Null when it is not watched; the
-   * blocks and time are null until it has read some. `name` is the console's
-   * label; `contractName` is what the contract's own name() said, which is
-   * what a published copy should carry, and is null until it is described.
-   */
-  async storedHeader(chainId: number, address: string): Promise<{
-    id: number; name: string; contractName: string | null; startBlock: number | null; throughBlock: number | null; throughTime: number | null;
-  } | null> {
-    const { rows } = await this.pool.query(
-      `SELECT c.id, COALESCE(c.name, c.contract_name, c.address) AS name, c.contract_name, c.start_block, c.cursor_block,
-              (SELECT extract(epoch FROM max(t.block_time))::float8 FROM washtrace.transfers t
-               WHERE t.collection_id = c.id AND t.block_number <= c.cursor_block) AS through
-       FROM washtrace.collections c WHERE c.chain_id = $1 AND c.address = lower($2)`,
-      [chainId, address],
-    );
-    const r = rows[0];
-    if (!r) return null;
-    return {
-      id: r.id, name: r.name, contractName: r.contract_name, startBlock: r.start_block === null ? null : Number(r.start_block),
-      throughBlock: r.cursor_block === null ? null : Number(r.cursor_block), throughTime: r.through === null ? null : r.through * 1000,
-    };
-  }
-
-  /** A collection's transfers up to block `through`, in chain order, streamed for writing to a file. */
-  storedTransfers(id: number, through: number): AsyncGenerator<Transfer> {
-    return this.stream(
-      `${SELECT_TRANSFER} FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.block_number <= $2 ORDER BY t.block_number, t.log_index`,
-      [id, through], toTransfer,
-    );
-  }
-
-  /**
-   * A collection's money trail: the addresses checked to the end and the
-   * flows they found. The same wallets and flows `analysisInput` reads, so a
-   * store that imports the trail analyses the collection as this one does:
-   * its traders, and every followed wallet on the chain. Only chain data goes
-   * in: an address, never how or when it was read. `checked` of `of` is how
-   * many of the collection's traders are on the list. The rows stream;
-   * nothing is read until they are iterated, addresses before flows.
-   *
-   * An importing install never reads a done wallet again, so every address in
-   * the file carries all of its flows, in and out. The followed wallets are
-   * fixed when the trail is begun, and both streams use that list: one
-   * checked later is left out, not written down without the flows nobody
-   * looked for. Traders need no such care, since flows to or from them are
-   * all read, and only grow between the two streams. A wallet that is
-   * truncated (more history than Etherscan pages through) is left out: its
-   * flows are not all there, so claiming it checked would be false. Nor are
-   * the wallets still to check: the importing install queues what it needs.
-   * Addresses are in address order, as importTrail writes them.
-   */
-  async trail(id: number, chainId: number): Promise<{ checked: number; of: number; addresses: AsyncGenerator<string>; flows: AsyncGenerator<Flow> }> {
-    // Arrays, not subqueries, for the reason analysisInput gives.
-    const traders = (await this.pool.query<{ address: string }>(
-      `SELECT from_address AS address FROM washtrace.transfers WHERE collection_id = $1
-       UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = $1`,
-      [id],
-    )).rows.map((r) => r.address);
-    const followed = (await this.pool.query<{ address: string }>(
-      `SELECT address FROM washtrace.wallets WHERE chain_id = $1 AND depth > 0 AND status = 'done'`,
-      [chainId],
-    )).rows.map((r) => r.address);
-    const { rows } = await this.pool.query<{ checked: number; of: number }>(
-      `SELECT count(*) FILTER (WHERE status = 'done' AND NOT truncated)::int AS checked, count(*)::int AS of
-       FROM washtrace.wallets WHERE chain_id = $1 AND address = ANY($2::text[])`,
-      [chainId, traders],
-    );
-    return {
-      checked: rows[0]!.checked,
-      of: rows[0]!.of,
-      addresses: this.stream(
-        `SELECT address FROM washtrace.wallets
-         WHERE chain_id = $1 AND status = 'done' AND NOT truncated AND (address = ANY($2::text[]) OR address = ANY($3::text[]))
-         ORDER BY address`,
-        [chainId, traders, followed],
-        (r): string => r.address,
-      ),
-      flows: this.stream(
-        `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
-                extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-         WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
-           OR f.from_address = ANY($3::text[]) OR f.to_address = ANY($3::text[]))
-         -- A total order: the same flows cut again give the same file, and the same sha256.
-         ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address, f.token, f.value_wei`,
-        [chainId, traders, followed], toFlow,
-      ),
-    };
-  }
-
-  /**
-   * The rows of `sql`, `page` at a time through a server-side cursor, so
-   * millions of them stream rather than land in memory. One read-only
-   * transaction, so the rows are one snapshot. Leaving the loop early (a
-   * failed write) closes the cursor and gives the connection back.
-   *
-   * A `download` is read at the pace of a stranger's network, so it is held to
-   * MAX_STREAMS at once, its session ends after `streamIdleS` without a fetch,
-   * and it errors once open `streamMaxMs`. The engine's own streams are not.
-   */
-  private async *stream<T>(sql: string, params: unknown[], map: (r: any) => T, page = CURSOR_PAGE, download = false): AsyncGenerator<T> {
-    if (download) {
-      if (this.streaming >= MAX_STREAMS) throw new TooManyStreams();
-      // Taken before the wait for a client, so downloads that start together cannot all pass the check.
-      this.streaming++;
-    }
-    let c: pg.PoolClient;
-    try {
-      c = await this.pool.connect();
-    } catch (err) {
-      if (download) this.streaming--;
-      throw err;
-    }
-    let finished = false;
-    const opened = Date.now();
-    try {
-      await c.query('BEGIN READ ONLY');
-      if (download) await c.query(`SET LOCAL idle_in_transaction_session_timeout = ${Math.round(this.streamIdleS * 1000)}`);
-      // A cursor is planned for its first tenth of rows. Every caller reads to
-      // the end, so say so: Terraforms' payments planned an index walk at nearly
-      // 7x the cost of a scan and sort.
-      await c.query('SET LOCAL cursor_tuple_fraction = 1');
-      await c.query(`DECLARE stored NO SCROLL CURSOR FOR ${sql}`, params);
-      for (;;) {
-        const { rows } = await c.query(`FETCH ${page} FROM stored`);
-        for (const r of rows) yield map(r);
-        if (rows.length < page) break;
-        if (download && Date.now() - opened > this.streamMaxMs) throw new Error(DOWNLOAD_TOO_LONG);
-      }
-      await c.query('COMMIT');
-      finished = true;
-    } finally {
-      if (download) this.streaming--;
-      if (!finished) await c.query('ROLLBACK').catch(() => {});
-      c.release();
-    }
   }
 
   // ---- rings ------------------------------------------------------------------
@@ -4020,36 +4049,6 @@ export class Store {
   }
 }
 
-/**
- * Every ring of collection `$1` with what its counted flagged trades add up
- * to, priced in money `$2`, ranked: a CTE chain that ends in `ranked`, for a
- * SELECT after it. A trade two witnesses of one ring flag counts once; a ring
- * none of whose trades is counted is listed with zeros, so the list holds
- * every ring the analysis counted in `rings`.
- */
-const RINGS_SQL = `WITH hits AS (
-  SELECT w.ring, f.tx_hash, f.log_index, bool_or(f.method = 'A') AS floor
-  FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
-  WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring IS NOT NULL
-  GROUP BY w.ring, f.tx_hash, f.log_index),
-r AS (
-  SELECT h.ring, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
-         count(*) FILTER (WHERE t.marketplace IS NOT NULL AND h.floor)::int AS floor_sales,
-         count(DISTINCT t.token_id)::int AS tokens,
-         COALESCE(sum(CASE WHEN t.marketplace IS NOT NULL AND t.currency = ANY($2::text[]) THEN t.price_wei END), 0) AS volume,
-         extract(epoch FROM min(t.block_time))::float8 * 1000 AS first_at, extract(epoch FROM max(t.block_time))::float8 * 1000 AS last_at
-  FROM hits h JOIN washtrace.transfers t ON t.collection_id = $1 AND t.tx_hash = h.tx_hash AND t.log_index = h.log_index ${COUNTED_JOIN}
-  GROUP BY h.ring),
-m AS (
-  SELECT w.ring, count(DISTINCT x)::int AS wallets, (array_agg(DISTINCT x ORDER BY x))[1:3] AS sample
-  FROM washtrace.witnesses w CROSS JOIN LATERAL unnest(w.wallets) x
-  WHERE w.collection_id = $1 AND w.ring IS NOT NULL GROUP BY w.ring),
-ranked AS (
-  SELECT m.ring, COALESCE(r.sales, 0) AS sales, COALESCE(r.floor_sales, 0) AS floor_sales, COALESCE(r.tokens, 0) AS tokens, COALESCE(r.volume, 0) AS volume,
-         r.first_at, r.last_at, m.wallets, m.sample,
-         row_number() OVER (ORDER BY COALESCE(r.volume, 0) DESC, COALESCE(r.sales, 0) DESC, m.ring)::int AS rank, count(*) OVER ()::int AS total
-  FROM m LEFT JOIN r USING (ring))`;
-
 function toRing(r: Record<string, unknown>): RingLine {
   return {
     anchor: r.ring as string, rank: r.rank as number, wallets: r.wallets as number, sample: r.sample as string[],
@@ -4108,12 +4107,6 @@ function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): stri
 function safe(key: string, shown: string | null): string | null {
   return SECRET_KEYS(key) && !shown?.includes('••••') ? null : shown;
 }
-
-
-
-
-
-
 
 /**
  * A store error the data caused (class 22, a value it refuses; 23, a broken
