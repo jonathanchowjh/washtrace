@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { Time } from '@/components/time';
 import { SortHead } from '@/components/ui';
 import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
@@ -278,7 +279,7 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
   /** The list as a trade's `from` (lib/step.ts), so a trade opened from it can step to its neighbours. */
   from?: string;
 }) {
-  const { base, q, view, zone, own = {} } = where;
+  const { base, q, view, own = {} } = where;
   const lenses = withOwn(ran);
   const only = (extra: Partial<TradeQuery>, title: string) => (
     <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
@@ -304,7 +305,7 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
+                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
                   <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>
