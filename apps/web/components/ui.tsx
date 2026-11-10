@@ -4,6 +4,7 @@ import { plural } from '@/lib/format';
 import type { Tone } from '@/lib/metrics';
 import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
+import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
 /** A page's title, the trail back up to it, and whatever it states on the right. */
@@ -30,6 +31,32 @@ export function Head({ title, crumb = [], sub, children }: {
       </div>
       {children ? <div className="flex flex-wrap items-center gap-3">{children}</div> : null}
     </header>
+  );
+}
+
+// Pulses only for a reader who has not asked for less motion.
+const BONE = 'rounded bg-muted motion-safe:animate-pulse';
+
+/**
+ * What a page shows while its reads are still out: Head's outline, with the
+ * kind of thing it will be already named, so a slow store reads as on its way
+ * and the reader knows where they are going before it lands.
+ */
+export function Loading({ kind }: { kind: Kind }) {
+  return (
+    <div role="status" aria-label={`Loading this ${kind}`}>
+      <header className="pt-6 pb-4">
+        <div className={cn('mb-2 h-3 w-32', BONE)} />
+        <div className="flex items-center gap-2">
+          <KindIcon kind={kind} className="size-5 text-muted-foreground" />
+          <div className={cn('h-7 w-64 max-w-full', BONE)} />
+        </div>
+      </header>
+      <div className={cn('h-24 rounded-lg', BONE)} />
+      <div className="mt-10 flex flex-col gap-2">
+        {[0, 1, 2, 3, 4].map((i) => <div key={i} className={cn('h-8', BONE)} />)}
+      </div>
+    </div>
   );
 }
 

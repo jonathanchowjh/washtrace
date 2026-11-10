@@ -43,9 +43,9 @@ export type TokenView = {
 } & TokenDrawing & Verdict;
 
 /** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
-export const TRADES = 100;
-export const COUNTERPARTIES = 50;
-export const FLOWS = 50;
+export const TRADES = 20;
+export const COUNTERPARTIES = 20;
+export const FLOWS = 20;
 
 /** Each collection's latest analysis, by address, for the collections these transfers are in (null: none yet). */
 async function latestByAddress(s: Store, chainId: number, transfers: readonly FlaggedTransfer[]): Promise<Map<string, AnalysisRow | null>> {

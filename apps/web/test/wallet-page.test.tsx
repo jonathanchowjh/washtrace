@@ -7,7 +7,7 @@ import { short } from '@/lib/format';
 let funding: object | null = null;
 let trades = 0;
 let flaggedTrades = 0;
-/** Where the flagged trades start, newest first: past 100, none is on the first page. */
+/** Where the flagged trades start, newest first: past 20, none is on the first page. */
 let flaggedFrom = 0;
 let moneyOnlyTrades = 0;
 let unjudgedTrades = 0;
@@ -108,7 +108,7 @@ describe('the wallet page', () => {
   });
 
   it('a wallet whose flagged trades are all past the first page titles as flagged, and says none is on this page', async () => {
-    trades = 150; flaggedFrom = 120; flaggedTrades = 2;
+    trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
     const text = el.textContent ?? '';
     expect(text).toContain('In 2 flagged trades out of 150');
@@ -120,11 +120,11 @@ describe('the wallet page', () => {
   });
 
   it('a flagged wallet never sits in a clean card, and the lead claims no cover for trades it does not hold', async () => {
-    trades = 150; flaggedFrom = 120; flaggedTrades = 2;
+    trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
     const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
     expect(card.className).toContain('bg-money-surface');
-    expect(el.textContent).toContain('Trades 1–100 of 150 are shown.');
+    expect(el.textContent).toContain('Trades 1–20 of 150 are shown.');
     expect(el.textContent).not.toContain('covers these');
     cleanup();
     // The page that holds them keeps its own verdict's tone, and says the verdict covers them.
@@ -163,19 +163,19 @@ describe('the wallet page', () => {
     expect(await page()).toContain('Its money was read from stored data.');
   });
 
-  it('a wallet with exactly 100 trades is one page and says nothing about a cut', async () => {
-    trades = 100;
+  it('a wallet with exactly 20 trades is one page and says nothing about a cut', async () => {
+    trades = 20;
     const text = await page();
     expect(text).toContain('Not flagged by any lens');
     expect(text).toContain('Every transfer it sent or received in a watched collection.');
     expect(text).not.toContain('are shown');
   });
 
-  it('a wallet with more than 100 trades names the page shown, and its verdict covers those', async () => {
-    trades = 101;
+  it('a wallet with more than 20 trades names the page shown, and its verdict covers those', async () => {
+    trades = 21;
     const text = await page();
     expect(text).toContain('Not flagged by any lens');
-    expect(text).toContain('Trades 1–100 of 101 are shown; the verdict above covers these.');
+    expect(text).toContain('Trades 1–20 of 21 are shown; the verdict above covers these.');
   });
 
   it('one flagged trade is singular', async () => {
@@ -184,25 +184,25 @@ describe('the wallet page', () => {
     expect(await page()).toContain('In 1 flagged trade out of 101');
   });
 
-  it('?trades=2 shows rows 101–200, with a working Previous', async () => {
+  it('?trades=2 shows rows 21–40, with a working Previous', async () => {
     trades = 500;
     const el = await render_({ trades: '2' });
-    expect(el.textContent).toContain('Trades 101–200 of 500 are shown; the verdict above covers these.');
-    expect(tokenShown(el, 100)).toBe(true);
-    expect(tokenShown(el, 199)).toBe(true);
-    expect(tokenShown(el, 99)).toBe(false);
-    expect(tokenShown(el, 200)).toBe(false);
+    expect(el.textContent).toContain('Trades 21–40 of 500 are shown; the verdict above covers these.');
+    expect(tokenShown(el, 20)).toBe(true);
+    expect(tokenShown(el, 39)).toBe(true);
+    expect(tokenShown(el, 19)).toBe(false);
+    expect(tokenShown(el, 40)).toBe(false);
     const trades_ = pager(el, 'trades');
-    expect(trades_.text).toContain('101–200 of 500 trades');
+    expect(trades_.text).toContain('21–40 of 500 trades');
     expect(trades_.link('‹ Previous')).toBe(here);
     expect(trades_.link('Next ›')).toBe(`${here}?trades=3`);
   });
 
   it('pages its partners on their own param, each pager keeping the other’s page', async () => {
-    trades = 500; counterparties = 120;
+    trades = 500; counterparties = 50;
     const el = await render_({ trades: '2', partners: '3' });
-    expect(el.textContent).toContain('101–120 of 120 counterparties');
-    expect(pager(el, 'trades').text).toContain('101–200 of 500 trades');
+    expect(el.textContent).toContain('41–50 of 50 counterparties');
+    expect(pager(el, 'trades').text).toContain('21–40 of 500 trades');
     expect(pager(el, 'counterparties').link('‹ Previous')).toBe(`${here}?trades=2&partners=2`);
     expect(pager(el, 'trades').link('Next ›')).toBe(`${here}?trades=3&partners=3`);
   });
@@ -210,7 +210,7 @@ describe('the wallet page', () => {
   it('a page past the end is clamped to the last', async () => {
     trades = 500;
     const el = await render_({ trades: '99999' });
-    expect(el.textContent).toContain('Trades 401–500 of 500 are shown');
+    expect(el.textContent).toContain('Trades 481–500 of 500 are shown');
     expect(tokenShown(el, 499)).toBe(true);
   });
 
@@ -247,8 +247,8 @@ describe('the wallet page', () => {
     expect(one).toContain('Trade 1 of 1 is shown; the verdict above covers it.');
     cleanup();
     // A last page holding one trade reads the same way.
-    trades = 101; flaggedTrades = 0;
-    expect(await page({ trades: '2' })).toContain('Trade 101 of 101 is shown; the verdict above covers it.');
+    trades = 21; flaggedTrades = 0;
+    expect(await page({ trades: '2' })).toContain('Trade 21 of 21 is shown; the verdict above covers it.');
   });
 
   it('sorts its partners by their headers, and each count opens what passed between the two', async () => {
@@ -277,11 +277,11 @@ describe('the wallet page', () => {
     expect(linkTo(between, 'both ways')).toBe(`${here}?with=${partner(0)}#between`);
   });
 
-  it('more than 50 payments between two wallets page on their own param', async () => {
-    sentFlows = 60;
+  it('more than 20 payments between two wallets page on their own param', async () => {
+    sentFlows = 30;
     const el = await render_({ with: partner(0), flows: '2' });
     const flows_ = pager(el, 'payments');
-    expect(flows_.text).toContain('51–60 of 60 payments');
+    expect(flows_.text).toContain('21–30 of 30 payments');
     expect(flows_.link('‹ Previous')).toBe(`${here}?with=${partner(0)}#between`);
   });
 
@@ -321,24 +321,24 @@ describe('the wallet page', () => {
     expect(text).not.toContain('1 more is flagged');
   });
 
-  it('walletView pages 100 trades and 50 partners, and says each is cut', async () => {
-    trades = 101;
-    counterparties = 51;
+  it('walletView pages 20 trades and 20 partners, and says each is cut', async () => {
+    trades = 21;
+    counterparties = 21;
     const { walletView, walletOpts } = await import('@/lib/views');
     const v = await walletView(1, SELF, walletOpts({}));
-    expect(v.transfers).toHaveLength(100);
-    expect(v.counterparties).toHaveLength(50);
+    expect(v.transfers).toHaveLength(20);
+    expect(v.counterparties).toHaveLength(20);
     expect(v.cut).toEqual({ trades: true, counterparties: true });
-    expect(v.pages).toEqual({ trades: { page: 1, pages: 2, total: 101 }, partners: { page: 1, pages: 2, total: 51 }, flows: { page: 1, pages: 1, total: 0 } });
+    expect(v.pages).toEqual({ trades: { page: 1, pages: 2, total: 21 }, partners: { page: 1, pages: 2, total: 21 }, flows: { page: 1, pages: 1, total: 0 } });
     expect(v.between).toBeNull();
   });
 
   it('the wallets route takes the page’s params, and returns cut, the pages and the verdict fields', async () => {
-    trades = 101;
+    trades = 21;
     flaggedTrades = 1;
     const { GET } = await import('@/app/api/wallets/[chain]/[address]/route');
     const body = await (await GET(new Request('http://x/api/wallets/1/a?trades=2&flagged=junk&psort=nope'), { params })).json();
-    expect(body).toMatchObject({ cut: { trades: true, counterparties: false }, pages: { trades: { page: 2, pages: 2, total: 101 } }, washTrade: false, judged: true, methods: [] });
+    expect(body).toMatchObject({ cut: { trades: true, counterparties: false }, pages: { trades: { page: 2, pages: 2, total: 21 } }, washTrade: false, judged: true, methods: [] });
     expect(body.transfers).toHaveLength(1);
     expect(body).not.toHaveProperty('by');
   });

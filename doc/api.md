@@ -109,10 +109,10 @@ leading `'`.
 | `GET /api/transfers/{chain}/{tx}` | | 200, 404 | `chainId`, `tx`, `transfers`, and the verdict keys |
 | `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page` | 200 | `collections`, `tokens`, `wallets`, `trades`, `more` |
 
-- A wallet page holds 50 money partners and 100 trades, newest first. `pages` gives each list's
+- A wallet page holds 20 money partners and 20 trades, newest first. `pages` gives each list's
   `{page, pages, total}` (a page past the last reads as the last); `counts` every trade it has and those counted
   flagged; `cut` which list has more than one page. With `with`, `between` holds the trades between the two
-  (`trades`, the latest 100, of `tradesTotal`) and a page of 50 payments in `dir` (`flows` of `flowsTotal`);
+  (`trades`, the latest 20, of `tradesTotal`) and a page of 20 payments in `dir` (`flows` of `flowsTotal`);
   otherwise `between` is null. A wallet with no trades answers `washTrade: null, judged: false`.
 - A transaction washtrace has not read is 404, never `washTrade: false`.
 - Search `q` is a collection name, a token number (`#1234`), a wallet address or its start (`0x` and at least 4
