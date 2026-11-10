@@ -62,6 +62,14 @@ describe('the rings list', () => {
     expect((await list()).textContent).toContain('No ring: nothing Round trips or Linked wallets flags ties wallets together.');
   });
 
+  it('says its count once, and titles its tab "Rings · <Collection>"', async () => {
+    const c = await list();
+    expect(c.textContent!.match(/\b2 rings\b/g)).toHaveLength(1);
+    expect(c.querySelector('h1')?.textContent).toBe('Rings');
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/rings/page');
+    expect((await generateMetadata({ params, searchParams: Promise.resolve({}) })).title).toBe('Rings · Demo Apes');
+  });
+
   it('reads a page past the last as the last', async () => {
     state.list = Array.from({ length: 25 }, (_, i) => line(i + 1, '0x' + String(i).padStart(40, '0')));
     state.rings = 25;
