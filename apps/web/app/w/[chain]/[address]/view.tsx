@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
+import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
@@ -142,6 +143,8 @@ export async function WalletView({ chainId, address, sp, within }: {
         {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
         <p className="text-muted-foreground">{money}</p>
       </Answer>
+
+      {within === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={within.collection} of={{ wallet: address }} label="this wallet's" /></Suspense>}
 
       <Section title="Which of its trades?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (

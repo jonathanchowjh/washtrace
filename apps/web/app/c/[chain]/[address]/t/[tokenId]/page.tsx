@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
+import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
@@ -157,6 +158,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
           </p>
         ) : null}
       </Answer>
+
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
 
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}

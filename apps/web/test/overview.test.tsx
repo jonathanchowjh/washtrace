@@ -87,6 +87,26 @@ describe('every sale, in order', () => {
     expect(short.querySelector('ol[aria-label="Each sale, oldest first"]')).toBeNull();
   });
 
+  it('outlines an item\'s own sales on its page, says where they sit, and lists them', () => {
+    const row = (n: number, lenses: string[]) => ({ txHash: `0x${n}`, logIndex: 0, lenses }) as unknown as TradeRow;
+    const timeline = { bucket: 'hour' as const, points: [point(0, 3, 1, 2, 1, 0)] };
+    const mine = { keys: new Set(['0x2:0']), times: [0], label: 'this token\'s', href: tradesHref(BASE, { token: '7' }) };
+    const c = render(<SalesStrip timeline={timeline} base={BASE} zone="UTC" chainId={1} sales={[row(1, ['A']), row(2, ['AC']), row(3, [])]} mine={mine} />).container;
+    const squares = [...c.querySelectorAll('ol[aria-label="Each sale, oldest first"] a')];
+    expect(squares.map((a) => a.className.includes('ring-2'))).toEqual([false, true, false]);
+    expect(squares[1]!.getAttribute('title')).toBe('Sale 2 of 3: linked by money (ceiling), this token\'s');
+    expect(c.textContent).toContain('Where this token\'s sales sit among all 3');
+    expect(links(c)).toContainEqual(['1 this token\'s', tradesHref(BASE, { token: '7' })]);
+  });
+
+  it('outlines the columns an item\'s sales fall in, when the strip is a column per period', () => {
+    const hour = 3_600_000;
+    const timeline = { bucket: 'hour' as const, points: [point(0, 4, 1, 2, 1, 1), point(2 * hour, 6, 0, 0, 0, 0)] };
+    const mine = { keys: new Set(['0x9:0']), times: [2 * hour + 60_000], label: 'this wallet\'s', href: '/x' };
+    const c = render(<SalesStrip timeline={timeline} base={BASE} zone="UTC" chainId={1} mine={mine} />).container;
+    expect([...c.querySelectorAll('a[aria-label]')].map((a) => a.className.includes('ring-2'))).toEqual([false, true]);
+  });
+
   it('draws nothing for a collection with no sale', () => {
     expect(render(<SalesStrip timeline={{ bucket: 'day', points: [] }} base={BASE} zone="UTC" chainId={1} />).container.innerHTML).toBe('');
   });

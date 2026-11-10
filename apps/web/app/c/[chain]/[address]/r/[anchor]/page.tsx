@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
+import { WhereItSits } from '@/components/where-it-sits';
 import { Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, TierMark } from '@/components/kit';
 import { RingFigure, ringName, ringTone } from '@/components/rings';
@@ -87,6 +88,8 @@ export default async function RingPage(props: Props) {
         </dl>
         <MoreLink href={sales} className="basis-full">All its {plural(line.sales, 'sale')} →</MoreLink>
       </section>
+
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} label="this ring's" /></Suspense>
 
       <Section title="Who is in it" lead={`Those that traded, then those that only moved the money: a funder, a middle, a payee. A ring is wallets the evidence joins, not one person.${walletsCut ? ` The first ${num(wallets.length)} of ${num(line.wallets)} are listed.` : ''}`}>
         <div className="grid gap-4 md:grid-cols-2">

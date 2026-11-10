@@ -168,11 +168,25 @@ const SEGMENT = {
  * When `sales` holds every sale (a small collection), it is a square per sale
  * instead, each opening its trade.
  */
-export function SalesStrip({ timeline, base, zone, chainId, sales }: {
+/**
+ * One item's sales on the strip: their keys (`txHash:logIndex`) outline its
+ * squares, their times (ms) the columns they fall in. `label` names them
+ * ("this token's"), and `href` lists them.
+ */
+export type Mine = { keys: ReadonlySet<string>; times: readonly number[]; label: string; href: string };
+
+// Literal classes: an item's own sales, outlined on the strip.
+const OUTLINE = 'ring-2 ring-foreground ring-offset-1 ring-offset-card';
+
+export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
   timeline: { bucket: Bucket; points: TimelinePoint[] }; base: string; zone: string; chainId: number; sales?: readonly TradeRow[] | null;
+  /** On an item's page: its sales, outlined among the collection's. */
+  mine?: Mine;
 }) {
   const pts = timeline.points.filter((p) => p.sales > 0);
   if (pts.length === 0) return null;
+  // A column holds an item's sale when the sale's time falls in its period.
+  const lit = new Set(mine === undefined ? [] : pts.filter((p) => { const end = nextStart(p.at, timeline.bucket, zone); return mine.times.some((t) => t >= p.at && t < end); }).map((p) => p.at));
   const sum = { floor: 0, ceiling: 0, apart: 0, clean: 0 };
   for (const p of pts) for (const [k, v] of Object.entries(standing(p))) sum[k as keyof typeof sum] += v;
   const tallest = Math.max(...pts.map((p) => p.sales));
@@ -180,8 +194,9 @@ export function SalesStrip({ timeline, base, zone, chainId, sales }: {
   return (
     <section aria-label="Every sale, in order" className="rounded-lg border bg-card p-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground"><KindIcon kind="transaction" />All {plural(total, 'sale')}, in order</h2>
+        <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground"><KindIcon kind="transaction" />{mine === undefined ? `All ${plural(total, 'sale')}, in order` : `Where ${mine.label} sales sit among all ${num(total)}`}</h2>
         <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
+          {mine === undefined ? null : <Link href={mine.href} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{num(mine.keys.size)} {mine.label}</Link>}
           <Link href={tradesHref(base, { caught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} round trip</Link>
           <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} linked by money</Link>
           <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} not counted</Link>
@@ -192,8 +207,9 @@ export function SalesStrip({ timeline, base, zone, chainId, sales }: {
         <ol aria-label="Each sale, oldest first" className="flex flex-wrap gap-0.5">
           {sales.map((r, i) => {
             const k = saleStanding(r.lenses);
-            const title = `Sale ${i + 1} of ${total}: ${WORD[k]}`;
-            return <li key={`${r.txHash}:${r.logIndex}`}><Link href={txHref(chainId, r.txHash, base)} title={title} aria-label={title} className={cn('block size-3.5 rounded-[2px] hover:opacity-70', SEGMENT[k])} /></li>;
+            const own = mine?.keys.has(`${r.txHash}:${r.logIndex}`) ?? false;
+            const title = `Sale ${i + 1} of ${total}: ${WORD[k]}${own ? `, ${mine!.label}` : ''}`;
+            return <li key={`${r.txHash}:${r.logIndex}`}><Link href={txHref(chainId, r.txHash, base)} title={title} aria-label={title} className={cn('block size-3.5 rounded-[2px] hover:opacity-70', SEGMENT[k], own && OUTLINE)} /></li>;
           })}
         </ol>
       ) : <>
@@ -201,10 +217,11 @@ export function SalesStrip({ timeline, base, zone, chainId, sales }: {
         <div className="flex h-20 min-w-full items-end gap-px">
           {pts.map((p) => {
             const s = standing(p);
-            const title = `${plural(p.sales, 'sale')}: ${s.floor} round trip, ${s.ceiling} linked by money, ${s.apart} not counted, ${s.clean} clean`;
+            const own = lit.has(p.at);
+            const title = `${plural(p.sales, 'sale')}: ${s.floor} round trip, ${s.ceiling} linked by money, ${s.apart} not counted, ${s.clean} clean${own ? `; ${mine!.label} among them` : ''}`;
             return (
               <Link key={p.at} href={tradesHref(base, { fromMs: p.at, toMs: nextStart(p.at, timeline.bucket, zone) })} title={title} aria-label={title}
-                className="flex min-w-1 flex-1 flex-col-reverse overflow-hidden rounded-t-[2px] hover:opacity-80" style={{ height: `${(p.sales / tallest) * 100}%` }}>
+                className={cn('flex min-w-1 flex-1 flex-col-reverse overflow-hidden rounded-t-[2px] hover:opacity-80', own && OUTLINE)} style={{ height: `${(p.sales / tallest) * 100}%` }}>
                 {(['floor', 'ceiling', 'apart', 'clean'] as const).map((k) => s[k] === 0 ? null : <i key={k} className={cn('block w-full', SEGMENT[k])} style={{ flexGrow: s[k] }} />)}
               </Link>
             );
