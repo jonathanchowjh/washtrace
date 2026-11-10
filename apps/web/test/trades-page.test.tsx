@@ -476,3 +476,69 @@ describe('the trades page', () => {
     });
   });
 });
+
+describe('the trades list on a phone', () => {
+  /** Each trade's card and its table row, in the list's order. */
+  async function both(sp: Record<string, string> = {}) {
+    const el = await dom(sp);
+    const cards = [...el.querySelectorAll('ul[aria-label="Trades"] > li')];
+    const rows = [...el.querySelectorAll('table tbody tr')];
+    return { el, cards, rows };
+  }
+  const sorted = (c: Element) => hrefs(c as HTMLElement, 'a').sort();
+
+  it('draws the same trades as cards below sm, and the table from sm up', async () => {
+    const { el, cards, rows } = await both({ caught: 'A' });
+    expect(cards).toHaveLength(2);
+    expect(rows).toHaveLength(2);
+    expect(el.querySelector('ul[aria-label="Trades"]')!.classList).toContain('sm:hidden');
+    expect(el.querySelector('table')!.parentElement!.classList).toContain('hidden');
+    expect(el.querySelector('table')!.parentElement!.classList).toContain('sm:block');
+  });
+
+  it('links each card to all its row links to: the trade with the same from, the token, the wallets, the only-this filters', async () => {
+    const { cards, rows } = await both({ caught: 'A' });
+    cards.forEach((card, i) => expect(sorted(card)).toEqual(sorted(rows[i]!)));
+    const opens = hrefs(cards[1] as HTMLElement, 'a').filter((h) => h?.startsWith(`${BASE}/tx/0xs2`));
+    // The date and the price both open the trade, as in the row.
+    expect(opens).toHaveLength(2);
+    expect(opens[0]).toMatch(/\?from=/);
+    expect(opens[0]).toBe(hrefs(rows[1] as HTMLElement, 'a').find((h) => h?.startsWith(`${BASE}/tx/0xs2`)));
+  });
+
+  it('keeps the wallets\' hover cards: the seller and buyer are the row\'s own markup', async () => {
+    const { cards, rows } = await both();
+    const parties = (c: Element) => [...c.querySelectorAll('a')].filter((a) => a.getAttribute('title') === SELLER || a.getAttribute('title') === BUYER);
+    cards.forEach((card, i) => {
+      expect(parties(card)).toHaveLength(2);
+      expect(parties(card).map((a) => a.parentElement!.outerHTML)).toEqual(parties(rows[i]!).map((a) => a.parentElement!.outerHTML));
+    });
+  });
+
+  it('puts the token and date first, then the lenses that flagged it, then the facts the row has', async () => {
+    const { cards } = await both();
+    const card = cards[1]!;
+    expect(card.firstElementChild!.textContent).toMatch(/^#7⊕/);
+    expect(card.firstElementChild!.querySelector('time')).not.toBeNull();
+    expect([...card.querySelectorAll('[role="img"]')].map((m) => m.getAttribute('aria-label'))).toEqual(['Flagged by Round trips', 'Flagged by Money loops back']);
+    expect(card.textContent).toContain('1.5 ETH');
+    expect(card.textContent).toContain('Blur');
+    expect(card.textContent).toContain('Held 2 h · buyer age 3 d · 1.25× vs 7-day median');
+  });
+
+  it('says a trade no lens flagged is not flagged, and one no analysis covered is not judged yet', async () => {
+    state.rows = [row('0xs1', { lenses: [] }), row('0xs2', { judged: false, lenses: [] })];
+    const { cards } = await both();
+    expect(cards[0]!.textContent).toContain('Not flagged');
+    expect(cards[0]!.querySelector('[role="img"]')).toBeNull();
+    expect(cards[1]!.textContent).toContain('Not judged yet');
+  });
+
+  it('says a trade past the block your lens\'s run read is not judged yet by it', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+    state.rows = [row('0xs2', { blockNumber: 9, lenses: ['A'] })];
+    const { cards } = await both();
+    const later = cards[0]!.querySelector('[title^="Newer than the block Blur 3-hop"]');
+    expect(later!.closest('.chip')!.textContent).toBe('Not judged yetBlur 3-hop');
+  });
+});

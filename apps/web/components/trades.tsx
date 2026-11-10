@@ -268,11 +268,18 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
   );
 }
 
+/** What one lens says of one trade: past the block its run read, flagged, or judged and passed. */
+function verdictOf(r: TradeRow, m: LensKey, through: TradeContext['through']): 'later' | 'flagged' | 'clear' {
+  return !judgedBy(r, m, through) ? 'later' : r.lenses.includes(m) ? 'flagged' : 'clear';
+}
+
 /**
  * One page of trades: a dot per lens that ran, and links from every name and
  * number to what it opens. `through` is, for each lens of yours, the block its
  * run read (lensContext): a trade past it reads not judged yet in that lens's
- * column, as a trade no analysis covered reads across them all.
+ * column, as a trade no analysis covered reads across them all. Below `sm` the
+ * table is too wide for the screen, so each trade is a card there instead:
+ * both draw the same cells and the breakpoint shows one, so it needs no script.
  */
 export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
@@ -287,54 +294,95 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
   const wallet = (a: string) => (
     <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
   );
+  // Each trade's cells, made once: the table row and the card both draw these.
+  const trades = rows.map((r) => {
+    const venue = r.marketplace === null ? null : venueOf(r.marketplace);
+    const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
+    const href = withFrom(txHref(chainId, r.txHash, base), from);
+    const verdicts = lenses.map((m) => {
+      const v = verdictOf(r, m, through);
+      const name = lensInfo(m, own)?.name;
+      const mark = v === 'later'
+        ? <span title={`Newer than the block ${name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
+        : v === 'flagged'
+          ? <span role="img" aria-label={`Flagged by ${name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
+          : <span aria-label="Not flagged" className="text-muted-foreground">–</span>;
+      return { m, v, name, mark };
+    });
+    return {
+      key: `${r.txHash}-${r.logIndex}`,
+      judged: r.judged,
+      verdicts,
+      date: <Link href={href} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>,
+      token: <><HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>{only({ token: r.tokenId }, 'Only trades with this token')}</>,
+      parties: <>{wallet(r.from)} → {wallet(r.to)}</>,
+      // The price opens the trade, as a price does in the transfer tables.
+      price: priced ? <Link href={href} title="Open this trade" className="hover:underline">{eth(r.priceWei)}</Link> : '—',
+      market: venue === null ? '—' : VENUES[venue]?.name ?? venue,
+      held: span(r.heldS),
+      buyerAge: span(r.buyerAgeS),
+      floor: r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`,
+    };
+  });
   return (
-    <div className="mt-4 overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full text-sm">
-        <thead className="text-xs text-muted-foreground">
-          <tr>
-            {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
-            {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {rows.map((r) => {
-            const venue = r.marketplace === null ? null : venueOf(r.marketplace);
-            const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
-            // The price opens the trade, as a price does in the transfer tables.
-            const trade = (v: string) => (v === '—' ? v : <Link href={withFrom(txHref(chainId, r.txHash, base), from)} title="Open this trade" className="hover:underline">{v}</Link>);
-            return (
-              <tr key={`${r.txHash}-${r.logIndex}`}>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 font-mono">
-                  <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>
-                  {only({ token: r.tokenId }, 'Only trades with this token')}
-                </td>
-                <td className="px-3 py-2">{wallet(r.from)} → {wallet(r.to)}</td>
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{trade(priced ? eth(r.priceWei) : '—')}</td>
-                <td className="whitespace-nowrap px-3 py-2">{venue === null ? '—' : VENUES[venue]?.name ?? venue}</td>
+    <>
+      <ul aria-label="Trades" className="mt-4 divide-y rounded-lg border bg-card text-sm sm:hidden">
+        {trades.map((t) => {
+          // Only the lenses with something to say: a card has no column to hold a dash.
+          const said = t.verdicts.filter((x) => x.v !== 'clear');
+          return (
+            <li key={t.key} className="space-y-1 px-3 py-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span className="whitespace-nowrap font-mono">{t.token}</span>
+                <span className="text-xs text-muted-foreground">{t.date}</span>
+              </div>
+              {lenses.length === 0 ? null : (
+                <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                  {!t.judged ? NOT_JUDGED_YET : said.length === 0 ? 'Not flagged' : said.map((x) => (
+                    // A flagged mark names its lens to a screen reader already, so there the name beside it is for the eye.
+                    <span key={x.m} className="chip">{x.mark}<span aria-hidden={x.v === 'flagged' ? true : undefined}>{x.name}</span></span>
+                  ))}
+                </div>
+              )}
+              <div>{t.parties}</div>
+              <div className="flex flex-wrap gap-x-3 tabular-nums">
+                <span>{t.price}</span>
+                <span className="text-muted-foreground">{t.market}</span>
+              </div>
+              <p data-measure className="text-xs text-muted-foreground tabular-nums">Held {t.held} · buyer age {t.buyerAge} · {t.floor} vs {MEDIAN}</p>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-4 hidden overflow-x-auto rounded-lg border bg-card sm:block">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-muted-foreground">
+            <tr>
+              {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
+              {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {trades.map((t) => (
+              <tr key={t.key}>
+                <td className="whitespace-nowrap px-3 py-2">{t.date}</td>
+                <td className="whitespace-nowrap px-3 py-2 font-mono">{t.token}</td>
+                <td className="px-3 py-2">{t.parties}</td>
+                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{t.price}</td>
+                <td className="whitespace-nowrap px-3 py-2">{t.market}</td>
                 {/* The trade's own measures count no list, and the row's date opens the trade. */}
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{span(r.heldS)}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{span(r.buyerAgeS)}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`}</td>
-                {r.judged
-                  ? lenses.map((m) => (
-                    <td key={m} className="px-3 py-2">
-                      {!judgedBy(r, m, through)
-                        ? <span title={`Newer than the block ${lensInfo(m, own)?.name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
-                        : r.lenses.includes(m)
-                        ? <span role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
-                        : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
-                    </td>
-                  ))
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.held}</td>
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.buyerAge}</td>
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.floor}</td>
+                {t.judged
+                  ? t.verdicts.map((x) => <td key={x.m} className="px-3 py-2">{x.mark}</td>)
                   // With no lens run there is no lens column to say it in.
                   : lenses.length > 0 ? <td colSpan={lenses.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

@@ -229,7 +229,7 @@ const ALLOWED: { why: string; test: (el: Element) => boolean }[] = [
   { why: 'the range a table page shows, as a pager says it: the list is already open', test: (el) => /^Showing /.test(el.textContent ?? '') },
   { why: 'the pipeline’s progress figures: how far a stage has read, not a list', test: (el) => el.closest('[data-progress]') !== null },
   { why: 'a Group by row no filter can hold, such as the unknown group: its trades are in the list below, but no list holds only them', test: (el) => el.closest('tr[data-unlisted]') !== null },
-  { why: "a trade row's own measure: it counts no list, and the row's date opens the trade", test: (el) => el.closest('td[data-measure]') !== null },
+  { why: "a trade's own measure, in its row or its card: it counts no list, and the trade's date opens the trade", test: (el) => el.closest('[data-measure]') !== null },
   { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
 ];
 
