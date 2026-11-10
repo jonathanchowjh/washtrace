@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
+type CollectionTab = 'overview' | 'methods' | 'rings' | 'tokens' | 'wallets' | 'trades';
 
 /**
  * The tab a path under a collection belongs to: a list lights its own tab,
@@ -16,6 +16,7 @@ type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
  */
 export function tabOf(base: string, path: string): CollectionTab {
   const rest = path.startsWith(base) ? path.slice(base.length) : '';
+  if (rest.startsWith('/methods')) return 'methods';
   if (rest.startsWith('/rings') || rest.startsWith('/r/')) return 'rings';
   if (rest.startsWith('/tokens') || rest.startsWith('/t/')) return 'tokens';
   if (rest.startsWith('/wallets') || rest.startsWith('/w/')) return 'wallets';
@@ -53,6 +54,7 @@ export function revealTab(bar: HTMLElement, tab: HTMLElement) {
 
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
   { tab: 'overview', label: 'Overview', kind: 'collection' },
+  { tab: 'methods', label: 'Methods', kind: 'lens' },
   { tab: 'rings', label: 'Rings', kind: 'ring' },
   { tab: 'tokens', label: 'Tokens', kind: 'token' },
   { tab: 'wallets', label: 'Wallets', kind: 'wallet' },
@@ -83,8 +85,6 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
     const lit = bar.current?.querySelector<HTMLElement>('[aria-current="page"]');
     if (bar.current && lit) revealTab(bar.current, lit);
   }, [current]);
-  // The one page under a tab that is no item of a list: the parent line says it, as Overview alone would not.
-  const methods = path === `${base}/methods`;
   const method = lensOf(useSearchParams(), current, lenses);
   const defaultLens = method === null || method === 'AC';
   const hrefOf = (tab: CollectionTab) =>
@@ -99,13 +99,12 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
         <Link href={base} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
           <KindIcon kind="collection" />{name}
         </Link>
-        {methods ? <><span aria-hidden>›</span><span className="font-medium text-foreground">Methods</span></> : null}
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
-      <nav ref={bar} aria-label={`${name}: overview, rings, tokens, wallets and trades`} className="relative mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
+      <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
         {TABS.map(({ tab, label, kind }) => {
-          // Rings and Trades are no lens's lists: their counts always stand.
-          const count = tab === 'overview' || ((tab === 'tokens' || tab === 'wallets') && !defaultLens) ? null : counts[tab];
+          // Rings and Trades are no lens's lists: their counts always stand. Overview and Methods count nothing.
+          const count = tab === 'overview' || tab === 'methods' || ((tab === 'tokens' || tab === 'wallets') && !defaultLens) ? null : counts[tab];
           return (
             <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
               className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',

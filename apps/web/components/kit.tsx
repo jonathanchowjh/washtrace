@@ -9,14 +9,15 @@ import { cn } from '@/lib/utils';
  * and follows the dark theme with no colours of its own.
  */
 
-export type Kind = 'collection' | 'ring' | 'token' | 'wallet' | 'transaction';
+export type Kind = 'collection' | 'lens' | 'ring' | 'token' | 'wallet' | 'transaction';
 
-/** The five kinds of thing a page or link can be; the same shape on every link to it, so a reader learns it once. */
+/** The kinds of thing a page or link can be; the same shape on every link to it, so a reader learns it once. */
 export function KindIcon({ kind, className }: { kind: Kind; className?: string }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
       className={cn('size-4 shrink-0', className)}>
       {kind === 'collection' ? <><rect x="2" y="4" width="10" height="10" rx="2" /><path d="M5 2h8a1 1 0 0 1 1 1v8" /></>
+        : kind === 'lens' ? <><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></>
         : kind === 'ring' ? <><path d="M3.5 6.5A5 5 0 0 1 12.5 5" /><path d="M12.5 2.5V5H10" /><path d="M12.5 9.5A5 5 0 0 1 3.5 11" /><path d="M3.5 13.5V11H6" /></>
         : kind === 'token' ? <path d="M8 1.5l5.6 3.25v6.5L8 14.5l-5.6-3.25v-6.5z" />
         : kind === 'wallet' ? <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="1.5" fill="currentColor" /></>

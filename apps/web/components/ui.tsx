@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-const KIND_NAME: Record<Kind, string> = { collection: 'Collection', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
+const KIND_NAME: Record<Kind, string> = { collection: 'Collection', lens: 'Lens', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
 
 /**
  * A page's title, the trail back up to it, and whatever it states on the

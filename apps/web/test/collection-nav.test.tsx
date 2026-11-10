@@ -74,12 +74,14 @@ describe('the collection tab bar', () => {
     expect(['Rings', 'Tokens', 'Wallets', 'Trades'].map((t) => other.tab(t).textContent)).toEqual(['Rings6', 'Tokens', 'Wallets', 'Trades56']);
   });
 
-  it('on the Methods page, lights Overview, which it is under, and says Methods in the parent line', () => {
-    const { el, tab } = nav(`${BASE}/methods`);
-    expect(tab('Overview').getAttribute('aria-current')).toBe('page');
-    expect(el.querySelector('p')!.textContent).toContain('Coll›Methods');
+  it('lights Methods on the Methods page, a tab of its own beside the lists, and carries the chosen lens there', () => {
+    const { el, tab } = nav(`${BASE}/methods`, 'method=A');
+    expect(tab('Methods').getAttribute('aria-current')).toBe('page');
+    expect(el.querySelectorAll('[aria-current]')).toHaveLength(1);
+    expect([...el.querySelectorAll('nav a')].map((x) => x.textContent?.replace(/\d+$/, ''))).toEqual(['Overview', 'Methods', 'Rings', 'Tokens', 'Wallets', 'Trades']);
+    expect(tab('Methods').getAttribute('href')).toBe(`${BASE}/methods?method=A`);
     cleanup();
-    expect(nav(`${BASE}/t/14`).el.querySelector('p')!.textContent).not.toContain('Methods');
+    expect(nav(BASE).tab('Methods').getAttribute('href')).toBe(`${BASE}/methods`);
   });
 
   it('names the collection it belongs to, linked to its overview', () => {
@@ -115,8 +117,8 @@ describe('the lit tab on a narrow screen', () => {
       const page = () => <CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} counts={{}} />;
       const { container, rerender } = render(page());
       const bar = container.querySelector('nav')!;
-      // Trades sits at 400-500px: the bar scrolls until its right edge shows.
-      expect(bar.scrollLeft).toBe(250);
+      // Trades sits at 500-600px: the bar scrolls until its right edge shows.
+      expect(bar.scrollLeft).toBe(350);
       // Off to Overview, at 0-100px: the bar scrolls back to show it.
       at.path = BASE;
       rerender(page());
@@ -133,13 +135,13 @@ describe('the lit tab on a narrow screen', () => {
       const { el, tab } = nav(BASE);
       const bar = el.querySelector('nav')!;
       expect(bar.scrollLeft).toBe(0);
-      // Scrolled past Rings, at 100-200px, the bar comes back just to its left edge;
+      // Scrolled past Rings, at 200-300px, the bar comes back just to its left edge;
       // Tokens, then in view, moves nothing.
-      bar.scrollLeft = 300;
+      bar.scrollLeft = 400;
       revealTab(bar, tab('Rings') as HTMLElement);
-      expect(bar.scrollLeft).toBe(100);
+      expect(bar.scrollLeft).toBe(200);
       revealTab(bar, tab('Tokens') as HTMLElement);
-      expect(bar.scrollLeft).toBe(100);
+      expect(bar.scrollLeft).toBe(200);
     } finally {
       restore();
     }
