@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -38,6 +38,19 @@ export function lensOf(sp: URLSearchParams, tab: CollectionTab, lenses: readonly
   return lenses.find((m) => caught.includes(m)) ?? null;
 }
 
+/**
+ * Scroll a tab bar sideways just far enough that its lit tab shows: on a phone
+ * the bar is wider than the screen, and Trades, the last tab, would sit off it.
+ * It moves the bar's own scrollLeft, as scrollIntoView could scroll the page
+ * down to the bar too. The bar is the tabs' offsetParent, so their offsets are
+ * within it.
+ */
+export function revealTab(bar: HTMLElement, tab: HTMLElement) {
+  const right = tab.offsetLeft + tab.offsetWidth;
+  if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
+  else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
+}
+
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
   { tab: 'overview', label: 'Overview', kind: 'collection' },
   { tab: 'rings', label: 'Rings', kind: 'ring' },
@@ -65,6 +78,11 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
 }) {
   const path = usePathname();
   const current = tabOf(base, path);
+  const bar = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const lit = bar.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (bar.current && lit) revealTab(bar.current, lit);
+  }, [current]);
   // The one page under a tab that is no item of a list: the parent line says it, as Overview alone would not.
   const methods = path === `${base}/methods`;
   const method = lensOf(useSearchParams(), current, lenses);
@@ -84,7 +102,7 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
         {methods ? <><span aria-hidden>›</span><span className="font-medium text-foreground">Methods</span></> : null}
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
-      <nav aria-label={`${name}: overview, rings, tokens, wallets and trades`} className="mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
+      <nav ref={bar} aria-label={`${name}: overview, rings, tokens, wallets and trades`} className="relative mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
         {TABS.map(({ tab, label, kind }) => {
           // Rings and Trades are no lens's lists: their counts always stand.
           const count = tab === 'overview' || ((tab === 'tokens' || tab === 'wallets') && !defaultLens) ? null : counts[tab];

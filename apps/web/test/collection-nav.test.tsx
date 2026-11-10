@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CollectionNav, lensOf, tabOf } from '@/components/collection-nav';
+import { CollectionNav, lensOf, revealTab, tabOf } from '@/components/collection-nav';
 import { listHref } from '@/lib/links';
 
 const BASE = `/c/1/0x${'b'.repeat(40)}`;
@@ -86,6 +86,63 @@ describe('the collection tab bar', () => {
     const { el } = nav(`${BASE}/t/14`);
     const up = [...el.querySelectorAll('p a')].map((a) => [a.textContent, a.getAttribute('href')]);
     expect(up).toEqual([['Collections', '/'], ['Coll', BASE]]);
+  });
+});
+
+// jsdom lays nothing out: each tab is given a box 100px wide, side by side in
+// TABS' order, inside a bar 250px wide, so only two and a half tabs show.
+function laidOut() {
+  const left = (el: HTMLElement) => (el.tagName === 'A' ? [...el.parentElement!.children].indexOf(el) * 100 : 0);
+  const width = (el: HTMLElement) => (el.tagName === 'NAV' ? 250 : 100);
+  const sizes: Record<string, (el: HTMLElement) => number> = { offsetLeft: left, offsetWidth: width, clientWidth: width };
+  const own = Object.keys(sizes).map((k) => [k, Object.getOwnPropertyDescriptor(HTMLElement.prototype, k)] as const);
+  for (const [k, size] of Object.entries(sizes)) {
+    Object.defineProperty(HTMLElement.prototype, k, { configurable: true, get(this: HTMLElement) { return size(this); } });
+  }
+  return () => {
+    for (const [k, d] of own) {
+      if (d) Object.defineProperty(HTMLElement.prototype, k, d);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[k];
+    }
+  };
+}
+
+describe('the lit tab on a narrow screen', () => {
+  it('scrolls the bar sideways so the lit tab shows, on mount and when it changes', () => {
+    const restore = laidOut();
+    try {
+      at.path = `${BASE}/trades`;
+      const page = () => <CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} counts={{}} />;
+      const { container, rerender } = render(page());
+      const bar = container.querySelector('nav')!;
+      // Trades sits at 400-500px: the bar scrolls until its right edge shows.
+      expect(bar.scrollLeft).toBe(250);
+      // Off to Overview, at 0-100px: the bar scrolls back to show it.
+      at.path = BASE;
+      rerender(page());
+      expect(bar.querySelector('[aria-current]')!.textContent).toBe('Overview');
+      expect(bar.scrollLeft).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it('moves the bar no further than it must, and not at all for a tab already in view', () => {
+    const restore = laidOut();
+    try {
+      const { el, tab } = nav(BASE);
+      const bar = el.querySelector('nav')!;
+      expect(bar.scrollLeft).toBe(0);
+      // Scrolled past Rings, at 100-200px, the bar comes back just to its left edge;
+      // Tokens, then in view, moves nothing.
+      bar.scrollLeft = 300;
+      revealTab(bar, tab('Rings') as HTMLElement);
+      expect(bar.scrollLeft).toBe(100);
+      revealTab(bar, tab('Tokens') as HTMLElement);
+      expect(bar.scrollLeft).toBe(100);
+    } finally {
+      restore();
+    }
   });
 });
 
