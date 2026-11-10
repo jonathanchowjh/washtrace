@@ -5,18 +5,18 @@ const ADDR = '0x' + 'a'.repeat(40);
 const TX = '0x' + 'c'.repeat(64);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const none = { collections: [], tokens: [], wallets: [], trades: [], more };
-const state = { hits: none as Record<string, unknown>, calls: [] as unknown[], sources: {} as Record<string, unknown> };
+const state = { hits: none as Record<string, unknown>, calls: [] as unknown[], sources: {} as Record<string, unknown>, collection: null as Record<string, unknown> | null };
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
     search: async (p: unknown, o: unknown) => { state.calls.push([p, o]); return state.hits; },
-    sources: async () => state.sources, settings: async () => new Map<string, string>(),
+    sources: async () => state.sources, settings: async () => new Map<string, string>(), collection: async () => state.collection,
   }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], sources: {} }); });
+afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], sources: {}, collection: null }); });
 
 async function dom(sp: Record<string, string>): Promise<HTMLElement> {
   const { default: SearchPage } = await import('@/app/search/page');
@@ -113,6 +113,29 @@ describe('the search page', () => {
     expect(c.textContent).toContain('Check it on');
     expect(c.querySelector(`a[href="/tx/1/${TX}"]`)?.textContent).toBe('Ethereum');
     expect(c.querySelector(`a[href="/tx/8453/${TX}"]`)?.textContent).toBe('Base');
+  });
+
+  it('heads with its title alone, no trail, and its rows run the page\'s width', async () => {
+    state.hits = { ...none, collections: [coll] };
+    const c = await dom({ q: 'terra' });
+    expect(c.querySelector('nav[aria-label=Trail]')).toBeNull();
+    expect(c.querySelector('ul')?.className).not.toMatch(/max-w-/);
+  });
+
+  it('gives each row what it knows besides its line: a symbol, whether a wallet traded here, the transaction', async () => {
+    const W = '0x' + 'b'.repeat(40);
+    state.collection = { id: 3, chainId: 1, address: ADDR, name: 'Terraforms' };
+    state.hits = {
+      ...none, collections: [coll],
+      wallets: [{ chainId: 1, address: W, transfers: 4, here: true }, { chainId: 1, address: ADDR, transfers: 1, here: false }],
+      trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'Meebits', tokenId: '14022' }],
+    };
+    const c = await dom({ q: 'terra', scope: `1:${ADDR}` });
+    const chipIn = (href: string) => c.querySelector(`a[href="${href}"] [data-chip]`)?.textContent;
+    expect(chipIn(`/c/1/${ADDR}`)).toBe('TERRA');
+    expect(chipIn(`/c/1/${ADDR}/w/${W}`)).toBe('Traded here');
+    expect(chipIn(`/w/1/${ADDR}`)).toBe('Never traded here');
+    expect(chipIn(`/c/1/${ADDR}/tx/${TX}`)).toMatch(/^Tx 0xcccc/);
   });
 
   it('offers no check for a pasted hash when no chain has an RPC', async () => {
