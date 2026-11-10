@@ -634,6 +634,26 @@ describe('the trade page: a spot check', () => {
     const judged = await txPage();
     expect(judged.querySelector('#spot-check')).toBeNull();
   });
+
+  it('sets the check in a card of its own, and the parent line above the head, as a collection page has it', async () => {
+    const c = await txPage();
+    expect(c.querySelector('#spot-check')!.closest('section')!.className).toMatch(/\brounded-lg border bg-card\b/);
+    const up = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!;
+    expect(up.getAttribute('href')).toBe('/');
+    expect(up.closest('header')).toBeNull();
+    expect(up.parentElement!.nextElementSibling?.tagName).toBe('HEADER');
+  });
+});
+
+describe('the trade page\'s parent line', () => {
+  it('names its one collection after "/", above the head', async () => {
+    roundTrip();
+    const c = await txPage();
+    const line = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
+    expect(line.textContent).toBe('Collections/First');
+    expect([...line.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['/', `/c/1/${A1}`]);
+    expect(c.querySelector('header nav[aria-label="Trail"]')).toBeNull();
+  });
 });
 
 describe('a transaction under a collection\'s tabs', () => {

@@ -118,3 +118,26 @@ export async function ConnectedRail({ chainId, address, token, wallets = [], txs
     </section>
   );
 }
+
+/**
+ * The parent line of a trade or wallet page outside any collection's tabs,
+ * drawn as the collection pages draw theirs (CollectionNav): above the head,
+ * Collections, then the one watched collection it belongs to, "/" between.
+ * One in several collections has no one parent: OpenUnder lists them.
+ */
+export function ParentLine({ home }: { home?: Home }) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 pt-4 text-xs text-muted-foreground">
+      <Link href="/" className="hover:text-foreground hover:underline">Collections</Link>
+      {home === undefined ? null : (
+        <>
+          <span aria-hidden>/</span>
+          <Link href={home.base} prefetch={false} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline"><KindIcon kind="collection" />{home.name}</Link>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** A watched collection a trade or wallet belongs to: its page, its name, and the item's page under its tabs. */
+export type Home = { base: string; name: string; href: string };

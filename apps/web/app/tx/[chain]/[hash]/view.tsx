@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { HEADLINE, lensRefusal } from '@washtrace/detect';
-import { ConnectedRail, walletRoles } from '@/components/connected-rail';
+import { ConnectedRail, ParentLine, walletRoles } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
 import { SpotCheck } from '@/components/spot-check';
@@ -67,12 +67,13 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
   return (
     <>
       {within === undefined || collection === null ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={collection.address} from={from} of={{ tx }} /></Suspense>}
+      {/* Under a collection's tabs its parent line is the layout's; outside them this page draws one the same way. */}
+      {within === undefined ? <ParentLine home={collection === null ? undefined : { base: home!, name: collection.name ?? short(collection.address), href: txHref(chainId, tx, home!) }} /> : null}
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
         part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{within !== undefined && collection !== null
           ? <Suspense fallback={null}><RingChips chainId={chainId} address={collection.address} of={{ tx }} /></Suspense> : null}</>}
-        crumb={within !== undefined ? [] : [{ href: '/', label: 'Collections' }, ...(home === null ? [] : [{ href: home, label: collection!.name ?? short(collection!.address) }])]}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       />
       <Answer
