@@ -100,7 +100,7 @@ describe('the trades page', () => {
     expect((q as { kind: string }).kind).toBe('sales');
     expect(ctx).toMatchObject({ ran: ['A'], zone: 'UTC' });
     expect((ctx as { money: Set<string> }).money.has('')).toBe(true);
-    expect([limit, offset]).toEqual([50, 0]);
+    expect([limit, offset]).toEqual([20, 0]);
     expect(state.calls.count[0]![2]).toBe(ctx);
     expect(state.calls.groups[0]![2]).toBe('marketplace');
     expect(state.calls.groups[0]![3]).toMatchObject({ ran: ['A'] });
@@ -243,7 +243,7 @@ describe('the trades page', () => {
     const el = await dom({ page: '99999' });
     expect(el.textContent).toContain('Page');
     expect(el.textContent).toContain('101–120 of 120 trades');
-    expect(state.calls.trades[0]!.slice(3)).toEqual([50, 100]);
+    expect(state.calls.trades[0]!.slice(3)).toEqual([20, 100]);
   });
 
   it('junk in the URL is dropped and shows the unfiltered list', async () => {
@@ -389,7 +389,7 @@ describe('the trades page', () => {
       const boxes = [...el.querySelectorAll('fieldset')].find((f) => f.querySelector('legend')?.textContent === 'Flagged by')!;
       expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Blur 3-hop']);
       expect([...el.querySelectorAll('thead th')].map((t) => t.textContent).filter((t) => t === 'Blur 3-hop')).toHaveLength(2);
-      expect(el.querySelector('i[aria-label="Flagged by Blur 3-hop"]')?.className).toContain('bg-flow');
+      expect(el.querySelector('[aria-label="Flagged by Blur 3-hop"] i')?.className).toContain('bg-flow');
       expect(el.textContent).toContain('Flagged by Blur 3-hop');
       expect(reads(el)).not.toMatch(/\bL7\b/);
       expect(state.calls.trades[0]![2]).toMatchObject({ ran: ['A', 'AU', 'AC', 'L7'] });
@@ -417,11 +417,11 @@ describe('the trades page', () => {
       state.rows = [row('0xs1', { blockNumber: 8, lenses: ['A', 'L7'] }), row('0xs2', { blockNumber: 9, lenses: ['A'] })];
       const el = await dom();
       const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.lastElementChild!);
-      expect(cells[0]!.querySelector('i[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
+      expect(cells[0]!.querySelector('[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
       expect(cells[1]!.textContent).toBe('Not judged yet');
       expect(cells[1]!.querySelector('[aria-label="Not flagged"]')).toBeNull();
       // The built-ins judged it: their cells read as before.
-      expect(el.querySelectorAll('tbody tr')[1]!.querySelector('i[aria-label="Flagged by Round trips"]')).not.toBeNull();
+      expect(el.querySelectorAll('tbody tr')[1]!.querySelector('[aria-label="Flagged by Round trips"]')).not.toBeNull();
     });
 
     it('takes a group\'s share of your lens over the trades it judged there, not every trade in the group', async () => {

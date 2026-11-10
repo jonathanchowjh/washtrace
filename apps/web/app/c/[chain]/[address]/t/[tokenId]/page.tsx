@@ -8,6 +8,7 @@ import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segment
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
+import { EvidenceGlyph } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
@@ -156,7 +157,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         items={[
           ...why.map((r, i) => ({
             key: drawing.loops[i]!.key,
-            body: because(r.witness, chainId),
+            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId)}</span></span>,
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>

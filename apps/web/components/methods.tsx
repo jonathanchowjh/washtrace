@@ -8,6 +8,7 @@ import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metri
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
+import { TierMark } from './kit';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
@@ -23,7 +24,7 @@ export function LensName({ m, className, href, own = {} }: { m: string; classNam
   const name = info.name;
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
-      <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[info.tone])} />
+      <TierMark tone={info.tone} />
       {href === undefined ? <span className="font-medium text-foreground">{name}</span>
         : <Link href={href} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
     </span>

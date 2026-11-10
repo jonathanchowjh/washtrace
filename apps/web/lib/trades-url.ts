@@ -16,8 +16,8 @@ import { dateIn, midnight } from './zone';
 export type Params = Record<string, string | string[] | undefined>;
 export interface View { by: TradeGroupBy | null; page: number }
 
-/** Trades to a page, in the Trades list and its route. */
-export const TRADES_PAGE = 50;
+/** Trades to a page, in the Trades list and its route, so a page number means the same rows in both. */
+export const TRADES_PAGE = 20;
 
 const BYS: readonly TradeGroupBy[] = ['marketplace', 'month', 'held', 'floor', 'buyerAge'];
 const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller'];

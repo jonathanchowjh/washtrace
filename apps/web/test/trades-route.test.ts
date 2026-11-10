@@ -46,9 +46,9 @@ const get = async (qs = '') => (await import('@/app/api/collections/[chain]/[add
 describe('GET trades', () => {
   it('pages as JSON with the same filters as the page', async () => {
     const body = await (await get('caught=A&page=2')).json();
-    expect(body).toMatchObject({ total: 120, unjudged: 3, page: 2, pages: 3, ran: ['A', 'AU', 'AC'] });
+    expect(body).toMatchObject({ total: 120, unjudged: 3, page: 2, pages: 6, ran: ['A', 'AU', 'AC'] });
     expect(body.rows).toHaveLength(1);
-    expect(state.calls[0]!.slice(3)).toEqual([50, 50]);
+    expect(state.calls[0]!.slice(3)).toEqual([20, 20]);
   });
 
   it('reads a repeated key as the Trades form sends it, every value and not only the last', async () => {
@@ -57,7 +57,7 @@ describe('GET trades', () => {
   });
 
   it('clamps a page past the last, and holds nothing for a lens that did not run', async () => {
-    expect((await (await get('page=99999')).json()).page).toBe(3);
+    expect((await (await get('page=99999')).json()).page).toBe(6);
     state.moneyRan = false;
     expect(await (await get('caught=AU')).json()).toMatchObject({ total: 0, pages: 1, rows: [], ran: ['A'] });
   });

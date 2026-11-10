@@ -219,29 +219,29 @@ describe('the lens lists on the collection page', () => {
 });
 
 describe('the lens lists on the flagged page', () => {
-  it('reads fifty a page with sort, q and page, and its links keep them', async () => {
-    state.tokens = { rows: tokens(50), total: 120 };
+  it('reads twenty a page with sort, q and page, and its links keep them', async () => {
+    state.tokens = { rows: tokens(20), total: 120 };
     const el = await flaggedPage({ method: 'A', kind: 'tokens', sort: 'volume', q: '1', page: '2' });
-    expect(state.calls.tokens[0]![2]).toEqual({ sort: 'volume', find: '1', limit: 50, offset: 50 });
+    expect(state.calls.tokens[0]![2]).toEqual({ sort: 'volume', find: '1', limit: 20, offset: 20 });
     const l = list(el, 'tokens');
     expect(named(l, 'share')).toEqual([`${BASE}/flagged?method=A&kind=tokens&sort=share&q=1`]);
     expect(named(l, 'Next ›')).toEqual([`${BASE}/flagged?method=A&kind=tokens&sort=volume&q=1&page=3`]);
     expect((l.querySelector('input[name=q]') as HTMLInputElement).value).toBe('1');
     expect(l.textContent).toContain('120 of 644 tokens match “1”');
     // The row numbers go on from the page before.
-    expect(l.querySelector('li')?.textContent).toMatch(/^51/);
+    expect(l.querySelector('li')?.textContent).toMatch(/^21/);
   });
 
   it('a wallet list sorts by first seen', async () => {
     const el = await flaggedPage({ method: 'A', kind: 'wallets', sort: 'first' });
-    expect(state.calls.wallets[0]![2]).toEqual({ sort: 'first', find: null, limit: 50, offset: 0 });
+    expect(state.calls.wallets[0]![2]).toEqual({ sort: 'first', find: null, limit: 20, offset: 0 });
     expect(list(el, 'wallets').querySelector('[aria-current=true]')?.textContent).toBe('first seen');
   });
 
   it('a page past the last shows the last page; junk is dropped', async () => {
     state.tokens = { rows: [], total: 120 };
     const el = await flaggedPage({ method: 'A', kind: 'tokens', page: '99999', sort: 'nope' });
-    expect(state.calls.tokens.map((c) => (c[2] as { offset: number }).offset)).toEqual([99998 * 50, 100]);
+    expect(state.calls.tokens.map((c) => (c[2] as { offset: number }).offset)).toEqual([99998 * 20, 100]);
     expect(state.calls.tokens[0]![2]).toMatchObject({ sort: 'caught' });
     expect(el.textContent).toContain('101–120 of 120 tokens');
     cleanup();

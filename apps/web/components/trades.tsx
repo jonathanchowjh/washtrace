@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { METHODS, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/ui';
-import { DOT, NotCounted } from '@/components/methods';
+import { NotCounted } from '@/components/methods';
+import { TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy } from '@/lib/metrics';
@@ -257,7 +258,7 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
   const dir = here ? (q.dir === 'asc' ? 'desc' : 'asc') : FIRST_ASC.includes(sort) ? 'asc' : 'desc';
   return (
     <SortHead href={tradesHref(base, { ...q, sort, dir }, { by: view.by })} dir={here ? (q.dir === 'asc' ? 'asc' : 'desc') : null}>
-      {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[lensInfo(tone, where.own ?? {})?.tone ?? 'apart'])} /> : null}
+      {tone ? <TierMark tone={lensInfo(tone, where.own ?? {})?.tone ?? 'apart'} /> : null}
       {label}
     </SortHead>
   );
@@ -317,7 +318,7 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
                       {!judgedBy(r, m, through)
                         ? <span title={`Newer than the block ${lensInfo(m, own)?.name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
                         : r.lenses.includes(m)
-                        ? <i role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className={cn('inline-block size-2.5 rounded-full', DOT[lensInfo(m, own)?.tone ?? 'apart'])} />
+                        ? <span role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
                         : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
                     </td>
                   ))

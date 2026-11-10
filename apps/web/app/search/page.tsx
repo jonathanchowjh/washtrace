@@ -8,6 +8,7 @@ import { short } from '@/lib/format';
 import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, searchArgs, SEARCH_LIMIT } from '@/lib/search';
+import { KindIcon, type Kind } from '@/components/kit';
 import { store } from '@/lib/store';
 import { chainName } from '@/lib/chains';
 import { configFromSources } from '@/lib/settings';
@@ -103,13 +104,16 @@ export default async function SearchPage({ searchParams }: Props) {
   );
 }
 
+/** Each kind of hit drawn as the thing it opens: a trade opens its transaction. */
+const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'token', wallets: 'wallet', trades: 'transaction' };
+
 /** One hit: a link whose line says what it is, with its address beside it. */
 function Row({ hits, kind, i }: { hits: SearchHits; kind: SearchKind; i: number }) {
   const { href, line, address } = hitRow(hits, kind, i);
   return (
     <li>
-      <Link href={href} className="flex flex-wrap items-baseline justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
-        <span className="font-medium text-foreground">{line}</span>
+      <Link href={href} className="flex flex-wrap items-center justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
+        <span className="flex items-center gap-2 font-medium text-foreground"><KindIcon kind={KIND[kind]} className="text-muted-foreground" />{line}</span>
         <span className="font-mono text-xs text-muted-foreground">{short(address)}</span>
       </Link>
     </li>

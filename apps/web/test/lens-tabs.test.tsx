@@ -115,11 +115,11 @@ describe('the tab strip', () => {
     expect(on.getAttribute('href')).toBe(`${BASE}?method=L7`);
   });
 
-  it('draws yours with the own hue and Money loops back with grey', async () => {
+  it('draws yours as a diamond in the own hue and Money loops back as a dashed grey ring', async () => {
     state.runs = [run('done')];
     const dots = [...strip(await draw()).querySelectorAll('i')].map((i) => i.className);
-    expect(dots.some((d) => d.includes('bg-flow'))).toBe(true);
-    expect(dots.some((d) => d.includes('bg-muted-foreground'))).toBe(true);
+    expect(dots.some((d) => d.includes('bg-flow') && d.includes('rotate-45'))).toBe(true);
+    expect(dots.some((d) => d.includes('border-dashed') && d.includes('border-muted-foreground'))).toBe(true);
   });
 
   it('falls back to Linked wallets for an unknown or deleted lens', async () => {

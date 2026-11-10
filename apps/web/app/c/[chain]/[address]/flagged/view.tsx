@@ -20,8 +20,8 @@ import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-u
 import { cn } from '@/lib/utils';
 import { clampedPage, listView } from '@/lib/views';
 
-/** Tokens or wallets to a page; the Trades list's page is TRADES_PAGE. */
-const PAGE = 50;
+/** Tokens or wallets to a page, as many as a screen shows without scrolling far; the Trades list's page is TRADES_PAGE. */
+const PAGE = 20;
 
 type Kind = 'tokens' | 'wallets' | 'trades';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };

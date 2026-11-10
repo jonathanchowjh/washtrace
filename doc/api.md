@@ -84,7 +84,7 @@ The query is the Trades page's address bar. The filters are `caught`, `not`, `ma
 
 | `format` | Response |
 |---|---|
-| none | One page of 50: `total`, `unjudged` (trades newer than the latest analysis), `page`, `pages`, `ran` (the lenses that ran), `through` (for each lens of yours in `ran`, the block its run read), `rows`. Rows carry lens codes. |
+| none | One page of 20: `total`, `unjudged` (trades newer than the latest analysis), `page`, `pages`, `ran` (the lenses that ran), `through` (for each lens of yours in `ran`, the block its run read), `rows`. Rows carry lens codes. |
 | `csv` | Every trade the filters hold, streamed as `text/csv` and named `<address>-trades.csv`. Read one row at a time, so a cancelled download closes its cursor. |
 
 Limits on the CSV download:
