@@ -32,7 +32,8 @@ export function Stepper({ step }: { step: Step }) {
       <span className="tabular-nums">{num(step.at)} of <Link href={step.back.href} className="hover:underline">{num(step.total)}</Link></span>
       {step.prev ? <Link href={step.prev.href} rel="prev" className={edge} title="Previous (K)">‹ {step.prev.label}</Link> : null}
       {step.next ? <Link href={step.next.href} rel="next" className={edge} title="Next (J)">{step.next.label} ›</Link> : null}
-      <span aria-hidden className="max-sm:hidden"><kbd className="rounded border px-1 font-mono">K</kbd> <kbd className="rounded border px-1 font-mono">J</kbd></span>
+      {/* Which key goes which way, said: a bare "K J" leaves it to be guessed. The links' titles say it to a screen reader. */}
+      {step.prev || step.next ? <span aria-hidden className="max-sm:hidden"><kbd className="rounded border px-1 font-mono">K</kbd> previous · <kbd className="rounded border px-1 font-mono">J</kbd> next</span> : null}
     </nav>
   );
 }

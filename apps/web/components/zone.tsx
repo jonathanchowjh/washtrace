@@ -21,7 +21,7 @@ function write(value: string) {
 }
 
 /** The reader's zone and whether it was detected. Null while rendering on the server, which cannot know it. */
-export function useZoneChoice(): ZoneChoice | null {
+function useZoneChoice(): ZoneChoice | null {
   const raw = useSyncExternalStore(subscribe, snapshot, () => null);
   return useMemo(() => (raw === null ? null : parseZone(raw) ?? { zone: detectedZone(), auto: true }), [raw]);
 }

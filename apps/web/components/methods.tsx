@@ -7,7 +7,7 @@ import type { Qualifier } from '@/lib/lens-state';
 import { APART, APART_WHY_TITLE, part, rangeEnds, type Range, SHOWN } from '@/lib/metrics';
 import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
-import { dateIn, midnight } from '@/lib/zone';
+import { nextStart } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 import { FILL, TierMark } from './kit';
 import { TimeChart, type TimePoint } from './trend';
@@ -15,7 +15,7 @@ import { TimeChart, type TimePoint } from './trend';
 // Literal class names: Tailwind generates only the classes it can read in the source.
 
 /** " (not counted)" after the name of a lens the verdict leaves out; the tooltip says why. */
-export const NotCounted = () => <span title={APART_WHY_TITLE}> (not counted)</span>;
+const NotCountedTag = () => <span title={APART_WHY_TITLE}> (not counted)</span>;
 
 /** A lens by its name, with its verdict hue; `href` makes the name open that lens's tab (leave it off inside a link). */
 export function LensName({ m, className, href, own = {} }: { m: string; className?: string; href?: string; own?: Lenses }) {
@@ -141,7 +141,7 @@ export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
     <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>
         {qualifier === 'at least' ? 'at least ' : null}<Link href={caught} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
-        {(APART as readonly string[]).includes(m) ? <NotCounted /> : null}{qualifier === 'so far' ? ' so far' : ''}
+        {(APART as readonly string[]).includes(m) ? <NotCountedTag /> : null}{qualifier === 'so far' ? ' so far' : ''}
         {' · '}<Link href={caught} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{num(t.sales)}</Link>
         {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
@@ -204,13 +204,6 @@ export function History({ timeline, totals, notFinal, funded, funding, now, zone
   const linked = [...METHODS.filter((m) => totals[m].available), ...own.map((o) => o.key)] as LensKey[];
   const lensHrefs = spans.map((r) => Object.fromEntries(linked.map((m) => [m, tradesHref(base, { ...r, caught: [m] })])) as Partial<Record<LensKey, string>>);
   return <TimeChart kind="history" points={points} bucket={timeline.bucket} readThrough={timeline.readThrough} now={now} notFinal={notFinal} funded={funded} funding={funding} zone={zone} periodHrefs={periodHrefs} lensHrefs={lensHrefs} own={own} ownLeft={ownLeft} ownNotRun={ownNotRun} />;
-}
-
-/** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */
-export function nextStart(at: number, bucket: Bucket, zone: string): number {
-  if (bucket === 'hour') return at + 3_600_000;
-  const { y, m, d } = dateIn(at, zone);
-  return bucket === 'month' ? midnight(y, m + 1, 1, zone) : midnight(y, m, d + (bucket === 'week' ? 7 : 1), zone);
 }
 
 /** The three lenses side by side: what washtrace looks for, before any number. */

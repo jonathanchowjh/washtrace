@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COPIES, DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
-import { send } from '@/components/lens-actions';
+import { send } from '@/lib/send';
 import { LensEditor } from '@/components/lens-editor';
 import { LOCAL_ONLY } from '@/lib/auth';
 

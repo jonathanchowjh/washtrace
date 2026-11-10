@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Warn } from '@/components/ui';
 import { LOCAL_ONLY } from '@/lib/auth';
+import { send } from '@/lib/send';
 import { CHAINS } from '@/lib/chains';
 import { storedLine, type StoredSize } from '@/lib/format';
 
@@ -29,14 +30,9 @@ type Row = { name: string; chainId: number; address: string } & Partial<{ paper:
 
 /** POST /api/collections, the same call an integrator makes, and what to say about its answer. */
 async function watch(collection: { chainId: number; address: string; name?: string; fromBlock?: number }): Promise<Said> {
-  const res = await fetch('/api/collections', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(collection),
-  }).catch(() => null);
-  const body = res ? await res.json().catch(() => ({})) : {};
-  if (!res || !res.ok) return { ok: false, text: body.error ?? 'The service did not answer.' };
-  return { ok: true, text: body.warning ?? (body.created ? 'Watching. The worker reads it on its next pass.' : 'Already watched.') };
+  const r = await send<{ warning?: string; created?: boolean }>('/api/collections', 'POST', collection);
+  if (r.error !== null) return { ok: false, text: r.error };
+  return { ok: true, text: r.body.warning ?? (r.body.created ? 'Watching. The worker reads it on its next pass.' : 'Already watched.') };
 }
 
 /**
@@ -165,14 +161,6 @@ export function AddCollection({ writable, stored }: { writable: boolean; stored:
   );
 }
 
-/** POST a JSON body to a collection's route. `{}` still counts: the routes refuse anything that is not JSON. */
-async function send(method: string, path: string, body: unknown = {}): Promise<string | null> {
-  const res = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
-  if (res?.ok) return null;
-  const said = res ? await res.json().catch(() => ({})) : {};
-  return said.error ?? 'The service did not answer.';
-}
-
 /**
  * What can be done with one watched collection. In sync: pause it (the worker
  * stops reading new blocks, its data stays) or move it up the worker's queue.
@@ -188,10 +176,10 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   const [error, setError] = useState<string | null>(null);
   const path = `/api/collections/${chainId}/${address}`;
 
-  async function run(method: string, to: string, body?: unknown, after?: () => void) {
+  async function run(method: 'POST' | 'DELETE', to: string, body?: object, after?: () => void) {
     setBusy(true);
     setError(null);
-    const failed = await send(method, to, body);
+    const { error: failed } = await send(to, method, body);
     setBusy(false);
     if (failed) { setError(failed); return; }
     if (after) after(); else router.refresh();

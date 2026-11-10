@@ -31,8 +31,6 @@ interface Funding {
   silent: boolean;
 }
 
-const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted';
-const OFF = 'cursor-not-allowed opacity-60';
 const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground', own: 'border-t-flow' } as const;
 
 /** No token cause: a lens the page gave no tokens figure for. */
@@ -92,8 +90,8 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           );
         })}
         {writable
-          ? <Link href={lensTabHref(base, selected, { lens: 'new' })} scroll={false} title="Write a lens of your own" className={cn(BUTTON, 'self-center')}>+ New lens</Link>
-          : <button type="button" disabled title={LOCAL_ONLY} className={cn(BUTTON, OFF, 'self-center')}>+ New lens</button>}
+          ? <Link href={lensTabHref(base, selected, { lens: 'new' })} scroll={false} title="Write a lens of your own" className="btn self-center text-xs">+ New lens</Link>
+          : <button type="button" disabled title={LOCAL_ONLY} className="btn self-center text-xs">+ New lens</button>}
         <Tab href={href('compare')} on={selected === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
       </nav>
       <section
@@ -137,8 +135,8 @@ function Chip({ children }: { children: ReactNode }) {
 /** A control that is a link while the console may write, and a disabled button saying why while it may not. */
 function Action({ href, writable, children }: { href: string; writable: boolean; children: string }) {
   return writable
-    ? <Link href={href} scroll={false} className={BUTTON}>{children}</Link>
-    : <button type="button" disabled title={LOCAL_ONLY} className={cn(BUTTON, OFF)}>{children}</button>;
+    ? <Link href={href} scroll={false} className="btn text-xs">{children}</Link>
+    : <button type="button" disabled title={LOCAL_ONLY} className="btn text-xs">{children}</button>;
 }
 
 function BuiltIn({ base, m, t, coverage, writable, children }: {

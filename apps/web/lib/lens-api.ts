@@ -43,7 +43,7 @@ export async function collectionIdOf(
 }
 
 /** The most collections one save may run a lens on: the Lab lists every watched one, and a body past this is not one it sends. */
-export const MAX_RUN_ON = 100;
+const MAX_RUN_ON = 100;
 
 /**
  * The watched collections a body runs a lens on: `collections`, a list of

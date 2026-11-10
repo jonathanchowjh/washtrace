@@ -8,6 +8,8 @@
  * detected rather than chosen, so it follows the reader when they travel.
  */
 
+import type { Bucket } from '@washtrace/detect';
+
 export const ZONE_COOKIE = 'washtrace_tz';
 
 export interface ZoneChoice { zone: string; auto: boolean }
@@ -66,4 +68,11 @@ export function midnight(y: number, m: number, d: number, zone: string): number 
 export function dateIn(ms: number, zone: string): { y: number; m: number; d: number } {
   const w = wall(ms, zone);
   return { y: w.y, m: w.m, d: w.d };
+}
+
+/** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */
+export function nextStart(at: number, bucket: Bucket, zone: string): number {
+  if (bucket === 'hour') return at + 3_600_000;
+  const { y, m, d } = dateIn(at, zone);
+  return bucket === 'month' ? midnight(y, m + 1, 1, zone) : midnight(y, m, d + (bucket === 'week' ? 7 : 1), zone);
 }

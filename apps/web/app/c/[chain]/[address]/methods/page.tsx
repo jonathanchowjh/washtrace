@@ -20,16 +20,17 @@ import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { NOT_RUN_LATEST, lensInfo, pct, pctTenth, plural, short } from '@/lib/format';
 import { builtinCauses, runStateWords, shareQualifier } from '@/lib/lens-state';
-import { moneyFor, type Method, type MethodTotals, type TokenSort, type WalletSort } from '@washtrace/detect';
+import { type Method, type MethodTotals, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { listHref } from '@/lib/links';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import { collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
 import { analyzingOn, coverage, unread, analysisWaitText } from '@/lib/coverage';
-import { chartLenses, evidenceLead, leftOut, lensContext, ownLenses } from '@/lib/metrics';
+import { chartLenses, evidenceLead, leftOut, ownLenses } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
-import { clampedPage, collectionView, listView } from '@/lib/views';
+import { listView } from '@/lib/params';
+import { clampedPage, collectionView } from '@/lib/views';
 
 /** Rows of each lens list a page in the lens panel; the flagged page has all of them. */
 const TOP = 10;
@@ -78,7 +79,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
   const wv = listView('wallets', { page: sp.wp, sort: sp.ws, find: sp.wq });
   // Only a lens that ran is listed: when funding did not, the money lenses hold Round trips' flags, copied. Yours join once they have
   // figures, and are read only through the block their run read.
-  const ctx = { money: moneyFor(chainId), zone, ...lensContext(c.latest, runs) };
+  const ctx = await tradeContextOf(c);
   const listed = !comparing && ctx.ran.includes(method);
   // The over-time chart draws at most three of yours (the chosen one first); the timeline counts just those.
   const chart = chartLenses(runs, method);

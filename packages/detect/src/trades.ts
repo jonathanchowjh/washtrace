@@ -38,6 +38,8 @@ export function isOwnKey(s: string): s is `L${number}` {
 export const HELD_BANDS = [3_600, 86_400, 30 * 86_400] as const;
 /** 0 <1 d, 1 1–30 d, 2 >30 d. */
 export const AGE_BANDS = [86_400, 30 * 86_400] as const;
+/** How many UTC days before a sale its floor looks back over: the median price of the collection's priced sales in them (facts.ts). */
+export const FLOOR_DAYS = 7;
 /** 0 <0.5×, 1 0.5–0.9×, 2 0.9–1.1×, 3 1.1–2×, 4 >2×. */
 export const FLOOR_BANDS = [0.5, 0.9, 1.1, 2] as const;
 

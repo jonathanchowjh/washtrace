@@ -53,7 +53,7 @@ export default async function SearchPage({ searchParams }: Props) {
     `/search?q=${encodeURIComponent(q)}${scope && !over.unscoped ? `&scope=${scopeParam(scope)}` : ''}${over.kind ? `&kind=${over.kind}` : ''}${(over.page ?? 1) > 1 ? `&page=${over.page}` : ''}`;
   const head = (
     <Head title={titleOf(q)} crumb={[{ href: '/', label: 'Collections' }]}
-      part={c === null ? undefined : <Link href={here({ unscoped: true })} title="Search every collection" className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium hover:bg-muted"><KindIcon kind="collection" className="size-3.5" />In {c.name ?? short(c.address)} <span aria-hidden>✕</span></Link>} />
+      part={c === null ? undefined : <Link href={here({ unscoped: true })} title="Search every collection" className="chip font-medium hover:bg-muted"><KindIcon kind="collection" className="size-3.5" />In {c.name ?? short(c.address)} <span aria-hidden>✕</span></Link>} />
   );
   if (parsed.kind === 'empty') return <>{head}<Empty>{HINT}</Empty></>;
 

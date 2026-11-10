@@ -3,7 +3,8 @@ import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@was
 import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, analysisWaitText } from '@/lib/coverage';
 import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
 import { APART_WHY, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
-import { formatBytes, localTime } from '@/lib/format';
+import { formatBytes } from '@washtrace/detect/bytes';
+import { localTime } from '@/lib/format';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {

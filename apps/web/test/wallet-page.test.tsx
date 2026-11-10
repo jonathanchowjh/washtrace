@@ -324,7 +324,8 @@ describe('the wallet page', () => {
   it('walletView pages 20 trades and 20 partners, and says each is cut', async () => {
     trades = 21;
     counterparties = 21;
-    const { walletView, walletOpts } = await import('@/lib/views');
+    const { walletView } = await import('@/lib/views');
+    const { walletOpts } = await import('@/lib/params');
     const v = await walletView(1, SELF, walletOpts({}));
     expect(v.transfers).toHaveLength(20);
     expect(v.counterparties).toHaveLength(20);

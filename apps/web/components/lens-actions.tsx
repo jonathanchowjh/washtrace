@@ -3,22 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LOCAL_ONLY } from '@/lib/auth';
-
-export const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
-
-/**
- * Sends a lens write to its route, as JSON: the body it answered, parsed (or
- * {} when there is none), when it took; else the error the route gave, or
- * what went wrong when it gave none. The editor saves through it too. `T` is
- * the body the caller's route answers, taken on its word, so what the caller
- * reads of it is type-checked; left out, the body is unknown.
- */
-export async function send<T = unknown>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: object): Promise<{ error: null; body: T } | { error: string }> {
-  const res = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) }).catch(() => null);
-  const said = res ? await res.json().catch(() => ({})) : {};
-  if (res?.ok) return { error: null, body: said };
-  return { error: said.error ?? (res ? `The service answered ${res.status}.` : 'The service did not answer.') };
-}
+import { send } from '@/lib/send';
 
 /**
  * Deletes one of your lenses, its runs and its flags on every collection. It
@@ -39,13 +24,13 @@ export function DeleteLens({ id, name, writable }: { id: number; name: string; w
   }
 
   if (!asking) {
-    return <button type="button" className={BUTTON} disabled={!writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => setAsking(true)}>Delete</button>;
+    return <button type="button" className="btn text-xs" disabled={!writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => setAsking(true)}>Delete</button>;
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-2 text-sm">
       <span>Delete {name} and its results? This cannot be undone.</span>
-      <button type="button" className={BUTTON} disabled={busy} onClick={remove}>Delete</button>
-      <button type="button" className={BUTTON} disabled={busy} onClick={() => { setAsking(false); setError(null); }}>Keep it</button>
+      <button type="button" className="btn text-xs" disabled={busy} onClick={remove}>Delete</button>
+      <button type="button" className="btn text-xs" disabled={busy} onClick={() => { setAsking(false); setError(null); }}>Keep it</button>
       {error ? <span role="alert" className="text-sm text-fault">{error}</span> : null}
     </span>
   );
@@ -73,7 +58,7 @@ export function RunHere({ id, chainId, address, writable }: { id: number; chainI
 
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
-      <button type="button" className={BUTTON} disabled={!writable || busy} title={writable ? undefined : LOCAL_ONLY} onClick={queue}>Run here</button>
+      <button type="button" className="btn text-xs" disabled={!writable || busy} title={writable ? undefined : LOCAL_ONLY} onClick={queue}>Run here</button>
       {error ? <span role="alert" className="text-sm text-fault">{error}</span> : null}
     </span>
   );

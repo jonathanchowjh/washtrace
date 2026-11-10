@@ -16,7 +16,7 @@ import { runStateWords } from './lens-state';
  * and wallet pages and their routes all read it, and none decides it again.
  */
 
-export type Measure = 'sales' | 'volume' | 'owners';
+type Measure = 'sales' | 'volume' | 'owners';
 
 /** One lens's share of one measure. Volume in micro-ETH: enough for a share, and it fits a number. */
 export function part(t: MethodTotals, measure: Measure): { part: number; whole: number } {
@@ -24,9 +24,6 @@ export function part(t: MethodTotals, measure: Measure): { part: number; whole: 
   if (measure === 'owners') return { part: t.flagged, whole: t.transfers };
   return { part: Number(BigInt(t.flaggedVolumeWei) / 10n ** 12n), whole: Number(BigInt(t.volumeWei) / 10n ** 12n) };
 }
-
-/** The lenses the headline range reads, Round trips to Linked wallets. Money loops back runs and keeps its card, but is not counted. */
-export { HEADLINE };
 
 /** The lenses that run and are shown but never counted: all but HEADLINE. */
 export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes(m));

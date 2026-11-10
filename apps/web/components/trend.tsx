@@ -33,7 +33,7 @@ export interface TimePoint {
  * chain is not read yet, and the chart says so rather than drawing a quiet
  * market. `analyses`: the answer at each run of the worker.
  */
-export type TimeChartProps =
+type TimeChartProps =
   | { kind: 'history'; points: TimePoint[]; bucket: Bucket; readThrough: number | null; now: number; notFinal: Method[]; funded: boolean; funding: boolean; zone: string; periodHrefs?: string[]; lensHrefs?: Partial<Record<Lens, string>>[];
       /** Up to three of your lenses that ran, drawn beside the built-ins; `qualifier`: how its share reads (shareQualifier), and `floorWhy` says what makes it so. */
       own: { key: `L${number}`; name: string; qualifier: Qualifier | null; floorWhy?: string }[];

@@ -3,7 +3,7 @@ import type { TokenLine, WalletLine } from '@washtrace/detect';
 import { findOf, isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, tokenLabel, type Lenses } from '@/lib/format';
 import { tradesHref } from '@/lib/trades-url';
-import { SORTS } from '@/lib/views';
+import { SORTS } from '@/lib/params';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 import { cn } from '@/lib/utils';
 import { Empty } from './ui';

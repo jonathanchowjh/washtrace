@@ -12,7 +12,7 @@ const CONTROL = 'rounded-md border bg-background px-2 py-1 text-sm disabled:opac
  * default rule's, so a copy of a built-in opens showing what makes it differ.
  * Only the rows the table shows count: an unavailable edge type is not drawn.
  */
-export function differsFromDefault(rule: LensRule): boolean {
+function differsFromDefault(rule: LensRule): boolean {
   const hidden = (r: LensRule) => JSON.stringify([
     EDGE_TYPES.filter((t) => t.unavailable === null).map(({ kind, money }) => {
       const e = r.edges[kind];

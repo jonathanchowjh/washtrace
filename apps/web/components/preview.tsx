@@ -7,7 +7,7 @@ import { LOCAL_ONLY } from '@/lib/auth';
 import { floorPct, num, pctTenth } from '@/lib/format';
 import type { MoneyReason } from '@washtrace/detect/lens-reads';
 import { shareCauses, shareQualifier, type TokensFloor } from '@/lib/lens-state';
-import { send } from './lens-actions';
+import { send } from '@/lib/send';
 
 const POLL_MS = 1000;
 

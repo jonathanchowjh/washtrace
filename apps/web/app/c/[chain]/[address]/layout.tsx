@@ -1,13 +1,11 @@
 import { Suspense, type ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS, moneyFor, type CollectionRow } from '@washtrace/detect';
+import { METHODS, type CollectionRow } from '@washtrace/detect';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { CollectionNav } from '@/components/collection-nav';
-import { readerZone } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import { collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
 import { num, short } from '@/lib/format';
-import { lensContext } from '@/lib/metrics';
 import { addressOf, chainOf } from '@/lib/params';
 import { store } from '@/lib/store';
 
@@ -53,7 +51,7 @@ function Badge({ n }: { n: number }) {
  */
 async function Count({ c, kind }: { c: CollectionRow; kind: Counted }) {
   try {
-    const ctx = { money: moneyFor(c.chainId), zone: await readerZone(), ...lensContext(c.latest, await runsOf(c.id)) };
+    const ctx = await tradeContextOf(c);
     const s = store();
     const none = { sort: 'caught', find: null, limit: 0, offset: 0 } as const;
     const n = kind === 'trades' ? (await s.tradeCount(c.id, NO_FILTER, ctx)).total

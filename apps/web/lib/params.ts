@@ -1,10 +1,12 @@
 /**
  * Reading what a URL, a path or a JSON body says: ids, addresses, pages and
- * Find text. It imports only detect's lens-rule, which is client-safe, so a
- * client component, lib/trades-url.ts and lib/search.ts read it as well as
- * the pages and routes, and one rule is written once.
+ * Find text, and what a list's or the wallet page's URL asks for. Its only
+ * value import is detect's lens-rule, which is client-safe (the rest are
+ * types), so a client component, lib/trades-url.ts and lib/search.ts read it
+ * as well as the pages and routes, and one rule is written once.
  */
 
+import type { FlowDir, PartnerSort, WalletFilter } from '@washtrace/detect';
 import { UINT256_DIGITS } from '@washtrace/detect/lens-rule';
 
 const TOKEN_ID = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
@@ -55,4 +57,48 @@ export function pageOf(raw: string | undefined): number {
 /** How many pages `total` rows make at `size` a page: at least one, so an empty list still has a first. */
 export function pages(total: number, size: number): number {
   return Math.max(1, Math.ceil(total / size));
+}
+
+/** Each list's orders, as the URL names them and as its sort links read. */
+export const SORTS = {
+  tokens: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
+  wallets: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
+} as const;
+
+/** A list's page, order and Find from the URL. Junk is dropped: an unknown order is the default, and a page under 1 is the first. */
+export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?: string; find?: string }): { page: number; sort: string; find: string | null } {
+  return {
+    page: pageOf(raw.page),
+    sort: SORTS[kind].some(([s]) => s === raw.sort) ? raw.sort! : 'caught',
+    find: findText(raw.find),
+  };
+}
+
+/**
+ * What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`.
+ * `partners` is the page of counterparties; the URL param and `pages.partners` keep that name.
+ */
+export type WalletOpts = { trades: number; partners: number; flows: number; filter: WalletFilter; dir: FlowDir; psort: PartnerSort };
+
+const PARTNER_SORTS: readonly PartnerSort[] = ['flows', 'sent', 'received', 'watched'];
+
+/**
+ * The wallet page's and route's params as one reading. Junk is dropped: a
+ * page under 1 or not a number is the first, a collection or `with` that is
+ * no address is none, `flagged` is only `1`, and an unknown order or
+ * direction is the default.
+ */
+export function walletOpts(q: Record<string, string | string[] | undefined>): WalletOpts {
+  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
+  const filter: WalletFilter = {};
+  const collection = addressOf(one('collection') ?? '');
+  if (collection !== null) filter.collection = collection;
+  if (one('flagged') === '1') filter.flaggedOnly = true;
+  const find = findText(one('q'));
+  if (find) filter.find = find;
+  const other = addressOf(one('with') ?? '');
+  if (other !== null) filter.with = other;
+  const dir = one('dir');
+  const psort = PARTNER_SORTS.find((s) => s === one('psort')) ?? 'flows';
+  return { trades: pageOf(one('trades')), partners: pageOf(one('partners')), flows: pageOf(one('flows')), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
 }

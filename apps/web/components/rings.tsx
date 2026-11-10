@@ -1,11 +1,11 @@
 import Link from 'next/link';
 import { cache } from 'react';
-import type { RingLine } from '@washtrace/detect';
-import { eth, num, plural, short } from '@/lib/format';
+import { moneyFor, type RingLine } from '@washtrace/detect';
+import { collectionOf, type Item } from '@/lib/collection-reads';
+import { eth, num, plural, ringName, short } from '@/lib/format';
 import { cardSrc, walletHref, withFrom } from '@/lib/links';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
-import { cn } from '@/lib/utils';
 import { KindIcon, TierMark } from './kit';
 import { HoverCard } from './hover-card';
 
@@ -17,9 +17,6 @@ import { HoverCard } from './hover-card';
 
 /** A ring's mark: the floor's when Round trips flags any of its sales, else the ceiling's. */
 export const ringTone = (r: Pick<RingLine, 'floorSales'>) => (r.floorSales > 0 ? 'cycle' : 'money');
-
-/** "Ring 3": its place among the collection's, the most ETH first. A new analysis can move it; its anchor names it in a link. */
-export const ringName = (r: Pick<RingLine, 'rank'>) => `Ring ${r.rank}`;
 
 /** Rings as rows: its name and mark, a few of its wallets, then what its flagged sales add up to. Each row opens the ring. */
 export function RingsTable({ rows, base, chainId, total, from }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string }) {
@@ -99,21 +96,17 @@ const CHIPS = 3;
  * analysis it is in, by rank. Rendered in a Suspense of its own by the page,
  * since ranking reads every ring of the collection: a slow read holds no page.
  */
-/** The rings of the latest analysis a token, wallet or trade is in, by rank: the chips and the Connected to rail both list them. */
-export async function ringsIn(id: number, money: ReadonlySet<string>, of: Parameters<ReturnType<typeof store>['ringsOf']>[1]): Promise<RingLine[]> {
-  const anchors = await store().ringsOf(id, of);
-  return anchors.length === 0 ? [] : linesOf(id, anchors.join(','), [...money].join(','));
-}
-
-export async function RingChips({ id, base, money, of }: {
-  id: number; base: string; money: ReadonlySet<string>; of: Parameters<ReturnType<typeof store>['ringsOf']>[1];
-}) {
-  const lines = await ringsIn(id, money, of);
+export async function RingChips({ chainId, address, of }: { chainId: number; address: string; of: Exclude<Item, { ring: string }> }) {
+  const c = await collectionOf(chainId, address);
+  if (!c) return null;
+  const base = `/c/${chainId}/${address}`;
+  const anchors = await store().ringsOf(c.id, 'token' in of ? { tokenId: of.token } : of);
+  const lines = anchors.length === 0 ? [] : await linesOf(c.id, anchors.join(','), [...moneyFor(chainId)].join(','));
   if (lines.length === 0) return null;
   return (
     <>
       {lines.slice(0, CHIPS).map((r) => (
-        <Link key={r.anchor} href={`${base}/r/${r.anchor}`} className={cn('inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted')}>
+        <Link key={r.anchor} href={`${base}/r/${r.anchor}`} className="chip font-medium hover:bg-muted">
           <TierMark tone={ringTone(r)} /><KindIcon kind="ring" className="size-3.5" />Part of {ringName(r)} ›
         </Link>
       ))}

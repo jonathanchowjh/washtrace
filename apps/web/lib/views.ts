@@ -1,9 +1,9 @@
-import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type FlowDir, type Lens, type LensRun, type OwnFlag, type PartnerSort, type Store, type WalletFilter } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type OwnFlag, type Store } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
 import type { LensRule } from '@washtrace/detect/lens-rule';
 import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
 import type { Lenses } from './format';
-import { addressOf, findText, pageOf, pages as pagesOf } from './params';
+import { pages as pagesOf, type WalletOpts } from './params';
 import { authConfigured, mayWrite } from './auth';
 import { analyzingOn, storedOnly, unread, type Coverage } from './coverage';
 import { shareCauses, shareQualifier, staleSinceLastWrite, runStateWords, type TokensFloor } from './lens-state';
@@ -35,7 +35,7 @@ export interface TokenDrawing {
   own: OwnFlag[];
 }
 
-export type TokenView = {
+type TokenView = {
   collection: { id: number; chainId: number; address: string; name: string | null };
   tokenId: string;
   /** Your lenses' names, for their chips and lines. */
@@ -76,7 +76,7 @@ async function drawingInputs(s: Store, chainId: number, c: Pick<CollectionRow, '
 }
 
 /** Past this many wallets a ring's loops are a tangle: its page draws who is in it instead. */
-export const RING_DRAWN = 25;
+const RING_DRAWN = 25;
 
 /**
  * A ring's loops as a token's graph draws them (layout()): each of its tokens
@@ -218,7 +218,7 @@ export function inEscrow(address: string): boolean {
 }
 
 /** A move out of an escrow to a wallet: of the custody moves, the only one the engine may read as a trade. */
-export function outOfCustody(t: Pick<FlaggedTransfer, 'from' | 'to'>): boolean {
+function outOfCustody(t: Pick<FlaggedTransfer, 'from' | 'to'>): boolean {
   return inEscrow(t.from) && t.to !== ZERO && !inEscrow(t.to);
 }
 
@@ -234,56 +234,12 @@ function parkedFor(t: FlaggedTransfer, all: readonly FlaggedTransfer[]): string 
   return at < 0 ? null : parkedOf(all, ESCROWS)[at] ?? null;
 }
 
-/** Each list's orders, as the URL names them and as its sort links read. */
-export const SORTS = {
-  tokens: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['newest', 'newest']],
-  wallets: [['caught', 'most flagged'], ['share', 'share'], ['volume', 'volume'], ['first', 'first seen']],
-} as const;
-
-/** A list's page, order and Find from the URL. Junk is dropped: an unknown order is the default, and a page under 1 is the first. */
-export function listView(kind: 'tokens' | 'wallets', raw: { page?: string; sort?: string; find?: string }): { page: number; sort: string; find: string | null } {
-  return {
-    page: pageOf(raw.page),
-    sort: SORTS[kind].some(([s]) => s === raw.sort) ? raw.sort! : 'caught',
-    find: findText(raw.find),
-  };
-}
-
 /** Page `asked` of a list, or its last when `asked` is past the end: the first read's count says where the end is. */
 export async function clampedPage<T>(asked: number, size: number, read: (offset: number) => Promise<{ rows: T[]; total: number }>): Promise<{ rows: T[]; total: number; page: number }> {
   const first = await read((asked - 1) * size);
   if (first.rows.length > 0 || first.total === 0) return { ...first, page: asked };
   const page = pagesOf(first.total, size);
   return { ...(await read((page - 1) * size)), page };
-}
-
-/**
- * What the wallet page and route ask for: each list's page, the trades' filter, and which payments between it and `filter.with`.
- * `partners` is the page of counterparties; the URL param and `pages.partners` keep that name.
- */
-export type WalletOpts = { trades: number; partners: number; flows: number; filter: WalletFilter; dir: FlowDir; psort: PartnerSort };
-
-const PARTNER_SORTS: readonly PartnerSort[] = ['flows', 'sent', 'received', 'watched'];
-
-/**
- * The wallet page's and route's params as one reading. Junk is dropped: a
- * page under 1 or not a number is the first, a collection or `with` that is
- * no address is none, `flagged` is only `1`, and an unknown order or
- * direction is the default.
- */
-export function walletOpts(q: Record<string, string | string[] | undefined>): WalletOpts {
-  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
-  const filter: WalletFilter = {};
-  const collection = addressOf(one('collection') ?? '');
-  if (collection !== null) filter.collection = collection;
-  if (one('flagged') === '1') filter.flaggedOnly = true;
-  const find = findText(one('q'));
-  if (find) filter.find = find;
-  const other = addressOf(one('with') ?? '');
-  if (other !== null) filter.with = other;
-  const dir = one('dir');
-  const psort = PARTNER_SORTS.find((s) => s === one('psort')) ?? 'flows';
-  return { trades: pageOf(one('trades')), partners: pageOf(one('partners')), flows: pageOf(one('flows')), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
 }
 
 /** Page `asked` of `total` rows, clamped to the last there is, before any offset is read from it. */

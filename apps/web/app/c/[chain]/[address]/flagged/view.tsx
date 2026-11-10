@@ -19,11 +19,10 @@ import { addressOf, chainOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { LIST_PAGE, clampedPage, listView } from '@/lib/views';
+import { listView } from '@/lib/params';
+import { LIST_PAGE, clampedPage } from '@/lib/views';
 import { fromParam } from '@/lib/step';
 
-/** Tokens or wallets to a page (LIST_PAGE); the Trades list's page is TRADES_PAGE. */
-const PAGE = LIST_PAGE;
 
 type Kind = 'tokens' | 'wallets' | 'trades';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
@@ -97,7 +96,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   const listed = kind !== 'trades' && ctx.ran.includes(method);
   // With a Find the list is also counted without it, for "2 of 644": a limit of 0 reads the count alone.
   const [rows, unfound] = await Promise.all([
-    listed ? clampedPage<TokenLine | WalletLine>(lv.page, PAGE, (offset) => read({ sort: lv.sort, find: lv.find, limit: PAGE, offset })) : null,
+    listed ? clampedPage<TokenLine | WalletLine>(lv.page, LIST_PAGE, (offset) => read({ sort: lv.sort, find: lv.find, limit: LIST_PAGE, offset })) : null,
     listed && lv.find !== null ? read({ sort: 'caught', find: null, limit: 0, offset: 0 }) : null,
   ]);
   // The list's own count, never the analysis totals: those also count a token or wallet whose every flagged trade is uncounted.
@@ -183,7 +182,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
             <LensList
               kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of}
               sort={lv.sort} sortHref={(sort) => href({ sort })} find={lv.find} findParam="q"
-              pager={{ page: rows.page, size: PAGE, href: (n) => href({ page: n }) }} empty={`${lens.name} flags no ${list === 'tokens' ? 'token' : 'wallet'}.`}
+              pager={{ page: rows.page, size: LIST_PAGE, href: (n) => href({ page: n }) }} empty={`${lens.name} flags no ${list === 'tokens' ? 'token' : 'wallet'}.`}
               from={fromParam(list, new URL(href({}), 'http://x.invalid').searchParams, rows.page)}
             />
           )}

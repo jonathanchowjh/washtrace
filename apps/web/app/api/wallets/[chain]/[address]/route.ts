@@ -1,7 +1,8 @@
 import { bad, handle, json } from '@/lib/api';
 import { addressOf, chainOf } from '@/lib/params';
 import { verdictFields } from '@/lib/metrics';
-import { walletOpts, walletView } from '@/lib/views';
+import { walletOpts } from '@/lib/params';
+import { walletView } from '@/lib/views';
 
 /**
  * GET: a wallet's funding state, a page of its money partners and a page of

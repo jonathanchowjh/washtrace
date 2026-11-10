@@ -1,9 +1,10 @@
 'use client';
 
 import { useId, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
-import type { Drawing, DrawnEdge } from '@/lib/layout';
+import type { Drawing, DrawnEdge, DrawnLoop } from '@/lib/layout';
 import { LENSES, andList, short } from '@/lib/format';
 import { txHref, walletHref } from '@/lib/links';
 import { cn } from '@/lib/utils';
@@ -33,9 +34,9 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   pick?: boolean;
   label?: string;
 }) {
-  // Its own arrowheads: the trade page draws a figure per card, and ids must not repeat on a page. Only an id's letters and digits, so it reads the same inside url(#…).
+  // Its own arrowheads: a page can draw several (the trade page one a transfer), and ids must not repeat on a page. Only an id's letters and digits, so it reads the same inside url(#…).
   const marker = `${useId().replace(/[^a-zA-Z0-9]/g, '')}-arrow`;
-  const { size, nodes, edges } = drawing;
+  const { view, nodes, edges } = drawing;
   const litEdges = new Set(lit.edges), litNodes = new Set(lit.nodes);
   const any = litEdges.size > 0 || litNodes.size > 0;
   const labels = nodes.length <= 24;
@@ -48,7 +49,8 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   const labelHref = (e: DrawnEdge) => (e.row !== null ? rowHrefs[e.row] : e.token === undefined || base === '' ? undefined : `${base}/t/${e.token}`);
   return (
     <figure className="rounded-lg border bg-card p-3">
-      <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block h-auto w-full max-w-[560px]" role="group" aria-label={label}>
+      {/* The box round what is drawn, never wider on screen than it is drawn: a two-wallet loop is a short strip, not a square of empty card. */}
+      <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px` }} className="mx-auto block h-auto w-full" role="group" aria-label={label}>
         <defs>
           {(['cycle', 'money', 'apart', 'clean', 'flow'] as const).map((k) => (
             <marker key={k} id={`${marker}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -90,7 +92,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
               <title>{n.id}</title>
               <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
               {labels ? (
-                <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.lx < n.x - 4 ? 'end' : n.lx > n.x + 4 ? 'start' : 'middle'} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
+                <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
               ) : null}
             </>
           );
@@ -216,6 +218,40 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * A trade page's one picture of a token: its graph drawn once, with a switch
+ * for each lens that caught the transfer, the chosen lens's loop lit, the
+ * first lens chosen to start. `caught` is in the order the cards are; a lens
+ * whose loop the layout did not draw lights nothing and opens no loop.
+ * `tokenHref` is the token's page, which opens the chosen loop in full.
+ */
+export function LensGraph({ drawing, chainId, base, caught, tokenHref }: {
+  drawing: Drawing; chainId: number; base: string;
+  caught: readonly { key: LensKey; name: string; loop: DrawnLoop | null }[];
+  tokenHref: string;
+}) {
+  const [on, setOn] = useState(caught[0]?.key);
+  const chosen = caught.find((c) => c.key === on) ?? caught[0];
+  if (chosen === undefined) return null;
+  return (
+    <div data-lens-graph className="rounded-lg border bg-card p-3.5">
+      {caught.length > 1 ? (
+        <div role="group" aria-label="Light the loop of" className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground">Light the loop of</span>
+          {caught.map((c) => (
+            <button key={c.key} type="button" aria-pressed={c.key === chosen.key} onClick={() => setOn(c.key)}
+              className={cn('rounded border px-2 py-1', c.key === chosen.key ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
+              {c.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <LoopFigure drawing={drawing} chainId={chainId} base={base} lit={chosen.loop ?? { edges: [], nodes: [] }} label={`The loop ${chosen.name} caught, lit in this token’s graph`} />
+      {chosen.loop === null ? null : <Link href={`${tokenHref}?loop=${chosen.loop.key}`} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">Open it in the token’s graph →</Link>}
     </div>
   );
 }

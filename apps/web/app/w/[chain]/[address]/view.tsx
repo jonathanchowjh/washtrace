@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { ConnectedRail, partnersOf, railTxs } from '@/components/connected-rail';
+import { ConnectedRail, partnersOf } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
-import { WhereItSits } from '@/components/where-it-sits';
+import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
@@ -11,15 +11,15 @@ import { Transfers, Wallet } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
 import { LENSES, eth, lensList, plural, short, num } from '@/lib/format';
 import { explorerAddress, explorerTx, walletHref, walletLinks } from '@/lib/links';
-import { FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
+import { HEADLINE } from '@washtrace/detect';
+import { FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
-import { COUNTERPARTIES, FLOWS, TRADES, walletOpts, walletView, type WalletOpts } from '@/lib/views';
+import { walletOpts, type WalletOpts } from '@/lib/params';
+import { COUNTERPARTIES, FLOWS, TRADES, walletView } from '@/lib/views';
 import { Time } from '@/components/time';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
-import { moneyFor } from '@washtrace/detect';
 import { StepLine } from '@/components/step-line';
-import { collectionOf } from '@/lib/collection-reads';
 
 /**
  * This page with `o`'s lists, filter and pages, defaults left out. Every link
@@ -123,15 +123,14 @@ export async function WalletView({ chainId, address, sp, within }: {
   const partnerFirst = (pages.partners.page - 1) * COUNTERPARTIES + 1;
 
   const from = within === undefined ? undefined : sp.from;
-  const c = from === undefined ? null : await collectionOf(chainId, within!.collection);
   return (
     <>
-      {c ? <Suspense fallback={null}><StepLine c={c} from={from} id={address} /></Suspense> : null}
+      {within === undefined ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={within.collection} from={from} of={{ wallet: address }} /></Suspense>}
       <Head
         kind="wallet"
         title={<span className="font-mono">{short(address)}</span>}
         crumb={scope === undefined ? [{ href: '/', label: 'Collections' }] : []}
-        part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{within === undefined ? null : <Suspense fallback={null}><RingChips id={within.id} base={within.base} money={moneyFor(chainId)} of={{ wallet: address }} /></Suspense>}</>}
+        part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{within === undefined ? null : <Suspense fallback={null}><RingChips chainId={chainId} address={within.collection} of={{ wallet: address }} /></Suspense>}</>}
         sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext>
           {scope === undefined ? null : <> · its trades here · <Link href={walletHref(chainId, address)} className="hover:text-foreground hover:underline">in every collection</Link></>}</>}
       >
@@ -146,8 +145,8 @@ export async function WalletView({ chainId, address, sp, within }: {
         <p className="text-muted-foreground">{money}</p>
       </Answer>
 
-      {within === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={within.collection} of={{ wallet: address }} label="this wallet's" /></Suspense>}
-      {within === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={within.collection} of={{ wallet: address }} wallets={partnersOf(transfers, counterparties, address)} txs={railTxs(transfers, [])} /></Suspense>}
+      {within === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={within.collection} of={{ wallet: address }} /></Suspense>}
+      {within === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={within.collection} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
 
       <Section title="Which of its trades?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (

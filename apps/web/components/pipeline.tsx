@@ -6,7 +6,8 @@ import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import { Time } from '@/components/time';
 import { chainName } from '@/lib/chains';
 import { progress, storedOnly, type Coverage } from '@/lib/coverage';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, floorPct, formatBytes, num, pct, plural, short, took } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, floorPct, num, pct, plural, short, took } from '@/lib/format';
+import { formatBytes } from '@washtrace/detect/bytes';
 import { stateWord, type Stage, type StageState } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 
@@ -25,7 +26,7 @@ const TONE: Record<StageState, PillTone> = {
 };
 
 /** A stage's state in one word, for the stage on the collection page and for any other list of stages. */
-export function StageChip({ n, state }: { n: Stage['n']; state: StageState }) {
+function StageChip({ n, state }: { n: Stage['n']; state: StageState }) {
   return <Pill tone={TONE[state]} className="shrink-0">{stateWord(n, state)}</Pill>;
 }
 

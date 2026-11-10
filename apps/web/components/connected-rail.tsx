@@ -1,21 +1,19 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { moneyFor, type Flow, type Transfer } from '@washtrace/detect';
-import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
-import { readerZone } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
-import { plural, short, tokenLabel } from '@/lib/format';
+import type { Flow, Transfer } from '@washtrace/detect';
+import { NO_FILTER } from '@washtrace/detect/trades';
+import { collectionOf, tradeContextOf, tradesOf, type Item } from '@/lib/collection-reads';
+import { short, tokenLabel } from '@/lib/format';
 import { cardSrc, txHref, walletHref } from '@/lib/links';
-import { lensContext, range, rangeEnds } from '@/lib/metrics';
+import { range, rangeEnds } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { HoverCard } from './hover-card';
 import { KindIcon } from './kit';
-import { ringName, ringsIn } from './rings';
 
 /** One wallet on the rail, with what it did here. */
-export type RailWallet = { address: string; role: string };
+type RailWallet = { address: string; role: string };
 /** One transaction on the rail: a sale of a token, or a payment. */
-export type RailTx = { hash: string; block: number; what: string };
+type RailTx = { hash: string; block: number; what: string };
 
 // A group past this many lists the first; the page's own sections hold the rest.
 const SHOWN = 6;
@@ -71,33 +69,32 @@ export function railTxs(transfers: readonly Transfer[], flows: readonly Flow[]):
   return [...out.values()].sort((a, b) => a.block - b.block || a.hash.localeCompare(b.hash));
 }
 
-const CHIP = 'inline-flex max-w-full items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs text-foreground hover:bg-muted';
+const CHIP = 'chip max-w-full hover:bg-muted';
 
 /**
  * "Connected to", on a token, wallet, trade or ring page: what it is part of,
- * up the tree (the collection and its washed share, its rings, its token);
- * the wallets here, each with its role; and the transactions that tie them, by
- * block. Every chip opens its page, and a wallet's or ring's shows its card on
- * hover. Rendered in a Suspense of its own by the page: it reads the rings.
+ * up the tree (the collection and its washed share, a trade's token); the
+ * wallets here, each with its role; and the transactions that tie them, by
+ * block, which a page passes only when no table of its own lists them. Every
+ * chip opens its page, and a wallet's or token's shows its card on hover. Its
+ * rings are the header's chips, so they are not said twice. Rendered in a
+ * Suspense of its own by the page: it reads the collection.
  */
-export async function ConnectedRail({ chainId, address, of, token, wallets = [], txs = [], salesOf }: {
+export async function ConnectedRail({ chainId, address, token, wallets = [], txs = [], salesOf }: {
   chainId: number; address: string;
-  /** What to find its rings by; none for a ring's own page. */
-  of?: Parameters<typeof ringsIn>[2];
   /** The token a trade is of. */
   token?: string;
   wallets?: readonly RailWallet[]; txs?: readonly RailTx[];
-  /** A page without its transactions to hand (a ring's): its first sales, by this filter, read here. */
-  salesOf?: Partial<TradeQuery>;
+  /** A page without its transactions to hand (a ring's): this item's first sales, read here. */
+  salesOf?: Item;
 }) {
   const c = await collectionOf(chainId, address);
   if (!c) return null;
   if (salesOf !== undefined && c.latest !== null) {
-    const ctx = { money: moneyFor(chainId), zone: await readerZone(), ...lensContext(c.latest, await runsOf(c.id)) };
-    txs = railTxs(await store().trades(c.id, { ...NO_FILTER, ...salesOf, sort: 'date', dir: 'asc' }, ctx, SHOWN + 1, 0), []);
+    const ctx = await tradeContextOf(c);
+    txs = railTxs(await store().trades(c.id, { ...NO_FILTER, ...tradesOf(salesOf), sort: 'date', dir: 'asc' }, ctx, SHOWN + 1, 0), []);
   }
   const base = `/c/${chainId}/${address}`;
-  const rings = of === undefined ? [] : await ringsIn(c.id, moneyFor(chainId), of);
   const share = c.latest === null ? null : range(c.latest.totals, 'sales');
   const ends = share === null ? null : rangeEnds(share);
   const group = (title: string, items: ReactNode[], more: number) => items.length === 0 ? null : (
@@ -110,9 +107,6 @@ export async function ConnectedRail({ chainId, address, of, token, wallets = [],
     <section aria-label="Connected to" className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-[auto_1fr_1fr]">
       {group('Part of', [
         <li key="c"><Link href={base} className={CHIP}><KindIcon kind="collection" className="size-3.5" />{c.name ?? short(address)}{ends === null ? null : <span className="text-muted-foreground">{ends.same ? ends.high : `${ends.low}–${ends.high}`} washed</span>}</Link></li>,
-        ...rings.slice(0, 3).map((r) => (
-          <li key={r.anchor}><HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={`${base}/r/${r.anchor}`} className={CHIP}><KindIcon kind="ring" className="size-3.5" />{ringName(r)}<span className="text-muted-foreground">{plural(r.wallets, 'wallet')}</span></Link></HoverCard></li>
-        )),
         ...(token === undefined ? [] : [<li key="t"><HoverCard src={cardSrc(base, 'token', token)}><Link href={`${base}/t/${token}`} className={CHIP}><KindIcon kind="token" className="size-3.5" />#{tokenLabel(token)}</Link></HoverCard></li>]),
       ], 0)}
       {group('Wallets', wallets.slice(0, SHOWN).map((w) => (

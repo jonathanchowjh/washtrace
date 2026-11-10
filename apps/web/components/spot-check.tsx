@@ -5,7 +5,7 @@ import Link from 'next/link';
 import type { SpotResult, Witness } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
-import { send } from './lens-actions';
+import { send } from '@/lib/send';
 
 const POLL_MS = 1000;
 const BUILT_IN: Record<string, string> = { A: 'Round trips', AU: 'Money loops back', AC: 'Linked wallets' };

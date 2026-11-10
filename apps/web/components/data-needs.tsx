@@ -7,7 +7,7 @@ import { moneyReason, pendingUpTo, tokensReason } from '@washtrace/detect/lens-r
 import type { MoneyRead, TokenCounts } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, about, floorTime, num, plural } from '@/lib/format';
-import { BUTTON, send } from './lens-actions';
+import { send } from '@/lib/send';
 
 /** `asks`: the action is a button that changes this collection, not a link. */
 type Line = { key: string; text: ReactNode; action?: ReactNode; asks?: boolean; error?: string | null };
@@ -65,7 +65,7 @@ export function DataNeeds({ rule, transfers, transfersRead, money, estimate, fun
   }
 
   const button = (label: string, title: string, onClick: () => void) => (
-    <button type="button" className={BUTTON} disabled={!writable || busy} title={writable ? title : LOCAL_ONLY} onClick={onClick}>{label}</button>
+    <button type="button" className="btn text-xs" disabled={!writable || busy} title={writable ? title : LOCAL_ONLY} onClick={onClick}>{label}</button>
   );
 
   /** The money line when this lens is short of money, else null. */

@@ -238,7 +238,7 @@ export function analysisWaitText(c: CollectionRow, analyzePass: PassRow | undefi
 }
 
 /** How far to trust the numbers: the sentence, and the chip that names it in a word (null: the reading is complete and there is nothing to warn of). */
-export type Trust = { chip: 'Shares may move' | 'Not current' | 'Starting' | null; text: string };
+type Trust = { chip: 'Shares may move' | 'Not current' | 'Starting' | null; text: string };
 const say = (chip: Trust['chip'], text: string): Trust => ({ chip, text });
 
 /** What the reading's state means for the numbers: the chip under the answer, and the sentence that says how far to trust it. A complete reading has no chip: its sentence is the whole line. */

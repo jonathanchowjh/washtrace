@@ -60,6 +60,9 @@ export function pctTenth(part: number, whole: number): string {
   return p >= 10 ? `${p.toFixed(1)}%` : pct(part, whole);
 }
 
+/** "Ring 3": a ring's place among the collection's, the most ETH first. A new analysis can move it; its anchor names it in a link. */
+export const ringName = (r: { rank: number }) => `Ring ${r.rank}`;
+
 /** "1 wallet", "2 wallets": `many` for a word whose plural is not an added s ("searches"). */
 export function plural(n: number, word: string, many = `${word}s`): string {
   return `${num(n)} ${n === 1 ? word : many}`;
@@ -317,9 +320,6 @@ export function withoutKey(trailFunded: boolean): string {
   const money = `${LENSES.AU.name} and ${LENSES.AC.name}`;
   return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
 }
-
-/** A file's size as the Hub shows it. Defined once in the detect package, so the dataset card says the same size (see bytes.ts). */
-export { formatBytes };
 
 /** One collection's stored files, sized: what the suggested list and the add form say of it. */
 export interface StoredSize { chainId: number; address: string; name: string; transfers: number; trail: number | null }

@@ -142,7 +142,7 @@ export function behindLine(lenses: readonly { name: string; behind: Behind }[]):
 }
 
 /** Where the figures a lens of yours shows come from when they are not its current rule's on the latest analysis (behindOf), as the rest of a sentence. */
-export const FIGURES_FROM = {
+const FIGURES_FROM = {
   edit: 'figures from before its latest edit',
   analysis: 'figures from the run before the latest analysis',
 } as const;

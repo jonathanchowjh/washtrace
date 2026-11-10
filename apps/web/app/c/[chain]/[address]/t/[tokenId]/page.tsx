@@ -5,7 +5,7 @@ import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
-import { WhereItSits } from '@/components/where-it-sits';
+import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
@@ -18,7 +18,8 @@ import { lensTabHref, tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
-import { APART_WHY, FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
+import { HEADLINE } from '@washtrace/detect';
+import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
 import { coverage, progress, unread } from '@/lib/coverage';
 import { readerZone } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
@@ -27,9 +28,7 @@ import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
-import { moneyFor } from '@washtrace/detect';
 import { StepLine } from '@/components/step-line';
-import { collectionOf } from '@/lib/collection-reads';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -118,15 +117,14 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const ownLoops = drawing.loops.slice(why.length);
 
   // The list it was opened from, if any: its stepper reads that list in a Suspense of its own.
-  const c = sp.from === undefined ? null : await collectionOf(chainId, address);
   return (
     <>
-      {c ? <Suspense fallback={null}><StepLine c={c} from={sp.from} id={tokenId} /></Suspense> : null}
+      <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={sp.from} of={{ token: tokenId }} /></Suspense>
       <Head
         kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
-        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense></>}
+        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense></>}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
@@ -160,8 +158,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : null}
       </Answer>
 
-      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
-      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} of={{ tokenId }} wallets={walletRoles(transfers, flows, middles)} txs={railTxs(transfers, flows)} /></Suspense>
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense>
+      <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
+      <ConnectedRail chainId={chainId} address={address} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
 
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}

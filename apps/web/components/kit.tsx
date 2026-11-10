@@ -45,7 +45,7 @@ const VERDICT = { cycle: 'Round trips · the floor', money: 'Linked wallets · t
  */
 export function VerdictChip({ tone }: { tone: keyof typeof VERDICT | null }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground">
+    <span className="chip font-medium">
       {tone === null ? <i aria-hidden className="inline-block size-2.5 shrink-0 rounded-[2px] border border-dashed border-muted-foreground" /> : <TierMark tone={tone} />}
       {tone === null ? 'Not judged yet' : VERDICT[tone]}
     </span>

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-export type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
+type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
 
 /**
  * The tab a path under a collection belongs to: a list lights its own tab,
@@ -63,7 +63,10 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
   /** Each tab's count badge, streamed in: nothing shows until it is read, or when there is none to show. */
   counts: Partial<Record<Exclude<CollectionTab, 'overview'>, ReactNode>>;
 }) {
-  const current = tabOf(base, usePathname());
+  const path = usePathname();
+  const current = tabOf(base, path);
+  // The one page under a tab that is no item of a list: the parent line says it, as Overview alone would not.
+  const methods = path === `${base}/methods`;
   const method = lensOf(useSearchParams(), current, lenses);
   const defaultLens = method === null || method === 'AC';
   const hrefOf = (tab: CollectionTab) =>
@@ -78,6 +81,7 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
         <Link href={base} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
           <KindIcon kind="collection" />{name}
         </Link>
+        {methods ? <><span aria-hidden>›</span><span className="font-medium text-foreground">Methods</span></> : null}
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
       <nav aria-label={`${name}: overview, rings, tokens, wallets and trades`} className="mt-2 flex max-w-full gap-1 overflow-x-auto border-b">

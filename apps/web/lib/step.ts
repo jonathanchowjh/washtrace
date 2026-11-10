@@ -1,13 +1,14 @@
-import { moneyFor, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
-import { lensKeyOf, readerZone } from './api';
-import { runsOf } from './collection-reads';
-import { short, tokenLabel } from './format';
+import type { CollectionRow, TokenSort, WalletSort } from '@washtrace/detect';
+import { lensKeyOf } from './api';
+import { runsOf, tradeContextOf } from './collection-reads';
+import { eth, localTime, ringName, short, tokenLabel } from './format';
 import { txHref, walletHref, withFrom } from './links';
-import { lensContext, ownLenses } from './metrics';
-import { pageOf } from './params';
+import { ownLenses } from './metrics';
+import { addressOf, pageOf } from './params';
 import { store } from './store';
 import { TRADES_PAGE, holdsNothing, parseView } from './trades-url';
-import { LIST_PAGE, RINGS_PAGE, listView } from './views';
+import { LIST_PAGE, RINGS_PAGE } from './views';
+import { listView } from './params';
 
 /**
  * Stepping through a list from one of its items: ‹ and › (and J and K) open
@@ -17,10 +18,13 @@ import { LIST_PAGE, RINGS_PAGE, listView } from './views';
  * The item is found on it by what it is, not by its place, because a new
  * analysis can reorder a list: one no longer on its page steps nowhere, and
  * its page offers the way back to the list.
+ *
+ * A ring's wallets or tokens are a list too, `ring?anchor=…&of=wallets`:
+ * its page lists every one, so it is one page, and its way back is the ring.
  */
 
-export type ListKind = 'tokens' | 'wallets' | 'rings' | 'trades';
-const KINDS: readonly ListKind[] = ['tokens', 'wallets', 'rings', 'trades'];
+type ListKind = 'tokens' | 'wallets' | 'rings' | 'trades' | 'ring';
+const KINDS: readonly ListKind[] = ['tokens', 'wallets', 'rings', 'trades', 'ring'];
 
 /** A `from`: the list's kind and its query; null for anything else. */
 export function fromOf(raw: string | string[] | undefined): { kind: ListKind; params: URLSearchParams } | null {
@@ -41,20 +45,33 @@ export function fromParam(kind: ListKind, params: URLSearchParams, page: number)
 
 type Item = { id: string; label: string; href: string };
 export type Step = { prev: Item | null; next: Item | null; at: number; total: number; back: { href: string; label: string } };
+/** An item and its place in the list, counted as `total` is: a trade's is its first transfer's, as Trades counts transfers. */
+type Listed = Item & { at: number };
 
-const SIZE: Record<ListKind, number> = { tokens: LIST_PAGE, wallets: LIST_PAGE, rings: RINGS_PAGE, trades: TRADES_PAGE };
-const NOUN: Record<ListKind, string> = { tokens: 'tokens', wallets: 'wallets', rings: 'rings', trades: 'trades' };
+const SIZE: Record<ListKind, number> = { tokens: LIST_PAGE, wallets: LIST_PAGE, rings: RINGS_PAGE, trades: TRADES_PAGE, ring: Number.MAX_SAFE_INTEGER };
 
-/** One page of the list a `from` names, as items, and the list's total. */
-async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchParams, page: number): Promise<{ items: Item[]; total: number }> {
+/** One page of the list a `from` names, as items, and the list's total; a ring's also names its way back. */
+async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchParams, page: number): Promise<{ items: Listed[]; total: number; back?: { href: string; label: string } }> {
   const s = store();
   const base = `/c/${c.chainId}/${c.address}`;
   const runs = await runsOf(c.id);
   const own = ownLenses(runs);
-  const zone = await readerZone();
-  const ctx = { money: moneyFor(c.chainId), zone, ...lensContext(c.latest, runs) };
+  const ctx = await tradeContextOf(c);
+  const zone = ctx.zone;
   const offset = (page - 1) * SIZE[kind];
   const from = (p: number) => fromParam(kind, params, p);
+  const placed = <T extends Item>(xs: T[]): (T & { at: number })[] => xs.map((x, i) => ({ ...x, at: offset + i + 1 }));
+  if (kind === 'ring') {
+    const anchor = addressOf(params.get('anchor') ?? '');
+    const r = anchor === null ? null : await s.ring(c.id, anchor, ctx);
+    if (r === null) return { items: [], total: 0 };
+    const tokens = params.get('of') === 'tokens';
+    // In the order its page lists them: those that traded, then those that only moved the money.
+    const items = tokens
+      ? r.tokens.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(1)) }))
+      : [...r.wallets.filter((w) => w.traded), ...r.wallets.filter((w) => !w.traded)].map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(1)) }));
+    return { items: placed(items), total: items.length, back: { href: `${base}/r/${anchor}`, label: `${ringName(r.line)}'s ${tokens ? 'tokens' : 'wallets'}` } };
+  }
   if (kind === 'tokens' || kind === 'wallets') {
     const method = lensKeyOf(params.get('method'), own);
     if (!ctx.ran.includes(method)) return { items: [], total: 0 };
@@ -62,21 +79,27 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
     const o = { sort: lv.sort, find: lv.find, limit: LIST_PAGE, offset };
     if (kind === 'tokens') {
       const r = await s.lensTokens(c.id, method, { ...o, sort: o.sort as TokenSort }, ctx);
-      return { total: r.total, items: r.rows.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(page)) })) };
+      return { total: r.total, items: placed(r.rows.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(page)) }))) };
     }
     const r = await s.lensWallets(c.id, method, { ...o, sort: o.sort as WalletSort }, ctx);
-    return { total: r.total, items: r.rows.map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(page)) })) };
+    return { total: r.total, items: placed(r.rows.map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(page)) }))) };
   }
   if (kind === 'rings') {
     const r = await s.rings(c.id, ctx, RINGS_PAGE, offset);
-    return { total: r.total, items: r.rows.map((x) => ({ id: x.anchor, label: `Ring ${x.rank}`, href: withFrom(`${base}/r/${x.anchor}`, from(page)) })) };
+    return { total: r.total, items: placed(r.rows.map((x) => ({ id: x.anchor, label: ringName(x), href: withFrom(`${base}/r/${x.anchor}`, from(page)) }))) };
   }
   const { q } = parseView(Object.fromEntries(params), zone, new Set(Object.keys(own)));
   if (holdsNothing(q, ctx.ran) !== null) return { items: [], total: 0 };
   const [rows, { total }] = await Promise.all([s.trades(c.id, q, ctx, TRADES_PAGE, offset), s.tradeCount(c.id, q, ctx)]);
-  // A transaction with two transfers in the list is one stop.
+  // A transaction with two transfers in the list is one stop, at its first transfer's place, as the list counts transfers.
+  // Its neighbour is named by what the list is ordered by: its price on a list by price, else its day.
   const seen = new Set<string>();
-  const items = rows.flatMap((t) => (seen.has(t.txHash) ? [] : (seen.add(t.txHash), [{ id: t.txHash, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(txHref(c.chainId, t.txHash, base), from(page)) }])));
+  const items = rows.flatMap((t, i) => {
+    if (seen.has(t.txHash)) return [];
+    seen.add(t.txHash);
+    const by = q.sort === 'price' ? (t.priceWei == null ? null : eth(t.priceWei)) : t.blockTime == null ? null : localTime(t.blockTime * 1000, 'date', zone);
+    return [{ id: t.txHash, label: `#${tokenLabel(t.tokenId)}${by === null ? '' : ` · ${by}`}`, href: withFrom(txHref(c.chainId, t.txHash, base), from(page)), at: offset + i + 1 }];
+  });
   return { total, items };
 }
 
@@ -100,8 +123,8 @@ export async function stepOf(c: CollectionRow, from: NonNullable<ReturnType<type
   return {
     prev: i > 0 ? here.items[i - 1]! : before?.items.findLast((x) => x.id !== id) ?? null,
     next: i < here.items.length - 1 ? here.items[i + 1]! : after?.items.find((x) => x.id !== id) ?? null,
-    at: (page - 1) * size + i + 1,
+    at: here.items[i]!.at,
     total: here.total,
-    back: { href: back, label: `All ${here.total} ${NOUN[kind]}` },
+    back: here.back ?? { href: back, label: `All ${here.total} ${kind}` },
   };
 }

@@ -28,7 +28,7 @@ export function bad(message: string, status = 400): Response {
  * `application/json` cross-origin without a preflight, which is the CSRF
  * defence basic auth's ambient credentials otherwise lack.
  */
-export async function readJson(req: Request): Promise<Record<string, unknown> | Response> {
+async function readJson(req: Request): Promise<Record<string, unknown> | Response> {
   if (!(req.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) {
     return bad('Send Content-Type: application/json.', 415);
   }
@@ -47,7 +47,7 @@ export function refuseWrite(req: Request): Response | null {
 }
 
 /** Who made the request, for the log line of a change; whoever the proxy named, else 'anonymous'. */
-export function actorOf(req: Request): string {
+function actorOf(req: Request): string {
   return decodeURIComponent(req.headers.get(ACTOR_HEADER) ?? 'anonymous');
 }
 
@@ -93,7 +93,7 @@ export async function readerZone(): Promise<string> {
 }
 
 /** AC by default: the lens that counts the most, and a superset of Round trips. */
-export function methodOf(raw: string | null | undefined): Method {
+function methodOf(raw: string | null | undefined): Method {
   return METHODS.includes(raw as Method) ? (raw as Method) : 'AC';
 }
 
