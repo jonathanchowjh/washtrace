@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, SECRET_KEYS, Store, TOKEN_COUNT_MS, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, Store, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { SECRET_KEYS } from '../src/env.js';
+import { TOKEN_COUNT_MS } from '../src/worker.js';
 import type { ListOpts, TokenSort, WalletSort } from '../src/trade-sql.js';
 import { followOf } from '../src/reach.js';
 import { FACTS_VERSION } from '../src/facts.js';

@@ -263,7 +263,7 @@ skipped.
      `Store.saveAnalysis` against the collection `version` read before it ran,
      so a write that lands mid-analysis leaves the collection due again.
      The same save joins the witnesses Round trips and Linked wallets point
-     at into rings (`ringsOf` in `rings.ts`, a union-find over shared
+     at into rings (`anchorsOf` in `rings.ts`, a union-find over shared
      wallets) and tags each witness with its ring's anchor.
    - **Lens run or preview** (`lensRun`, `preview`): `runLensInThread` or
      `runPreviewInThread` start `lens-thread.ts`, which reads its own input

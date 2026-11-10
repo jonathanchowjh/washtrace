@@ -186,3 +186,9 @@ export async function queueWallets(c: pg.PoolClient, chainId: number, counts: Re
     );
   }
 }
+
+/** The columns a flag of a lens of yours is read with, for toOwnFlag. */
+export const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
+
+/** Whether a row's stored rule still checks; a list leaves out the rows that don't. */
+export const readable = (r: any): boolean => !('error' in checkRule(r.rule));

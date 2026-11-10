@@ -1,5 +1,5 @@
 import { toEventSelector, type Log } from 'viem';
-import type { Chain } from './chain.js';
+import { topicAddress, type Chain } from './chain.js';
 import type { Etherscan } from './etherscan.js';
 import { ZERO, chainOrder, tokenGraph } from './graph.js';
 import { runLens } from './lens.js';
@@ -57,7 +57,6 @@ export function lensRefusal(rule: LensRule): string | null {
   return null;
 }
 
-const topicAddress = (topic: string) => `0x${topic.slice(26)}`.toLowerCase();
 
 /** The ERC-721 transfers in a transaction's logs (an ERC-20 Transfer has 3 topics, not 4), each with its collection, marked as sales. */
 export function receiptTrades(tx: string, blockNumber: number, logs: readonly Log[]): (Transfer & { collection: string })[] {

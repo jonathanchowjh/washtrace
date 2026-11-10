@@ -8,7 +8,7 @@ import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
 import { LockedRun } from './locked-run.js';
 import { followOf } from './reach.js';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, TOKEN_COUNT_MS, LOCKS, retryMs, type CollectionRow, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, LOCKS, retryMs, type CollectionRow, type DueRun, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -84,11 +84,14 @@ const SEED_CHUNK = 2_000;
 export const TOKENS_MS = 10_000;
 
 /**
- * What of a fund pass is kept, at its end, for counting one collection's
- * next hop when one is due: COUNT_TIMEOUT_MS, the longest the
- * count (capped at WALK_CAP) runs before it is stopped.
+ * The fund pass's reserve for Store.countTokens, every chain's in all:
+ * kept back from the checking, and spent after every chain has
+ * been checked, each chain in an equal share of what is left,
+ * so a count of a big set is cut short there rather than eat the checking
+ * or the estimate's count; a stopped count keeps the counts it would have
+ * replaced.
  */
-export const COUNT_MS = COUNT_TIMEOUT_MS;
+export const TOKEN_COUNT_MS = 5_000;
 
 /**
  * A pass still running after this long is stuck, however fresh its heartbeat:
@@ -484,7 +487,7 @@ export class Worker {
     const due = await this.dueAnalysis(now).catch((err) => { failed.set('analyze', err); return null; });
     const analysisFirst = this.last === 'preview' && due !== null;
     let preview: Awaited<ReturnType<Store['nextPreview']>> = null;
-    let run: Awaited<ReturnType<Store['nextLensRun']>> = null;
+    let run: DueRun | null = null;
     if (swept && !analysisFirst) {
       try {
         preview = await this.store.nextPreview();
@@ -661,7 +664,7 @@ export class Worker {
 
   /**
    * Read the funding of wallets not yet read, collections taking turns, within
-   * the budget. The reserves come off the end first: COUNT_MS for
+   * the budget. The reserves come off the end first: COUNT_TIMEOUT_MS (Store.countNext's own cap) for
    * a stale estimate's count, and, with any collection reading tokens,
    * TOKEN_COUNT_MS for their counts. Each chain then walks its reaches (within
    * SEED_MS), reads its started collections' tokens (within TOKENS_MS) and
@@ -685,7 +688,7 @@ export class Worker {
     if (etherscan === null) return 'no funding source configured';
     const collections = await this.store.collections();
     const counting = await this.store.nextCount(globalHops);
-    const countUntil = deadline - (counting === null ? 0 : COUNT_MS);
+    const countUntil = deadline - (counting === null ? 0 : COUNT_TIMEOUT_MS);
     const tokenChains = new Set(collections.filter((c) => c.readTokens).map((c) => c.chainId));
     const checkUntil = tokenChains.size > 0 ? countUntil - TOKEN_COUNT_MS : countUntil;
     // Every collection flagged on a chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
@@ -743,7 +746,7 @@ export class Worker {
       const c = collections.find((c) => c.id === counting);
       await this.beat('fund', `Counting the next wallets out for ${c?.name ?? c?.address ?? `collection ${counting}`}`, counting);
       // A count that fails or runs out of time fails no checking. It was noted as tried, so the next pass counts another.
-      await this.store.countNext(counting, globalHops, Math.min(COUNT_MS, deadline - Date.now()))
+      await this.store.countNext(counting, globalHops, Math.min(COUNT_TIMEOUT_MS, deadline - Date.now()))
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
     return `${done} wallets read, ${failed} failed${spotted > 0 ? `, ${spotted} transactions checked` : ''}`;
@@ -941,7 +944,7 @@ export class Worker {
    * what it found. A failure is noted on the run, scrubbed, and rethrown, so
    * the pass fails as an analysis does.
    */
-  private async lensRun(next: NonNullable<Awaited<ReturnType<Store['nextLensRun']>>>): Promise<string> {
+  private async lensRun(next: DueRun): Promise<string> {
     const { lens, collectionId, chainId, name, analysisId, through } = next;
     const where = `${lens.name} on ${name}`;
     const started = Date.now();

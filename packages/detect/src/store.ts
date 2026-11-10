@@ -9,9 +9,10 @@ import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_J
 import { FOLLOW_FANOUT, checkRule, type EdgeKind, type LensRule } from './lens-rule.js';
 import type { FollowEstimate } from './lens-reads.js';
 import type { Rules } from './methods.js';
-import { ringsOf } from './rings.js';
+import { anchorsOf } from './rings.js';
+import { SECRET_KEYS, type SettingSource } from './env.js';
 import { FOLLOWED_NEAR, REACH_LIMIT, SERVED_LIVE, SERVED_NAMES, SERVED_REACH, UNSEEDED, addTraders, followOf, paidBy, raiseReach, servedWallet, stepReach, timeLeft, tokenSetSql, walkOut, type Follow } from './reach.js';
-import { COLLECTION_SELECT, FLAG_BATCH_CHARS, FLAG_BATCH_ROWS, LENS_SELECT, deadlockRetried, insertFlows, insertTransfers, pgCode, queueWallets, tally, toAnalysis, toCollection, toFlow, toLens, toLensRun, toOwnFlag } from './store-rows.js';
+import { COLLECTION_SELECT, FLAG_BATCH_CHARS, FLAG_BATCH_ROWS, LENS_SELECT, deadlockRetried, insertFlows, insertTransfers, pgCode, queueWallets, tally, toAnalysis, toCollection, toFlow, toLens, toLensRun, toOwnFlag, OWN_FLAG, readable } from './store-rows.js';
 import { factsKey, writeFacts } from './facts.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
 import type { SpotResult } from './spot.js';
@@ -94,7 +95,6 @@ const QUERY_CANCELED = '57014';
 const UTC_ISO_NOW = `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 /** How long one of a trail import's statements waits for a lock before it fails: a stopped or stalled import is only seen between statements. */
 const TRAIL_LOCK_TIMEOUT = '5min';
-const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
 /** Rows a cursor fetches at a time when stored data is cut. */
 const CURSOR_PAGE = 10_000;
 /** Rows a download fetches at a time: its idle limit counts while a stranger's network drains one fetch, so a fetch is kept small. */
@@ -341,16 +341,6 @@ export const WALK_CAP = 50_000;
 export const COUNT_TIMEOUT_MS = 15_000;
 
 /**
- * The fund pass's reserve for Store.countTokens, every chain's in all:
- * kept back from the checking, and spent after every chain has
- * been checked, each chain in an equal share of what is left,
- * so a count of a big set is cut short there rather than eat the checking
- * or the estimate's count; a stopped count keeps the counts it would have
- * replaced.
- */
-export const TOKEN_COUNT_MS = 5_000;
-
-/**
  * The longest Store.tokenLanes runs: a scan of every started collection's
  * set, each pass, which a cold cache can make slow at a big collection's
  * scale. Past it the pass reads no tokens, and loses nothing else.
@@ -400,24 +390,11 @@ export interface PassRow {
   subjectId: number | null;
 }
 
-/**
- * The settings that hold a secret: an RPC URL carries its provider's key.
- * Their values are kept in `settings`, which the worker needs, but only
- * masked in `setting_sources`, which the API reads, and in anything the API
- * returns.
- */
-export const SECRET_KEYS = (key: string): boolean => key.startsWith('rpc.') || key === 'etherscan.key';
+/** A lens run that is due, as nextLensRun hands it to the worker: the lens, where, and the analysis it reads. */
+export type DueRun = { lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number };
 
-/**
- * Where the worker found one setting. `value` is the value used and `env` what
- * .env holds (null when it does not set it), each as the console may show it:
- * a secret masked, `etherscan.url` with its credentials masked, else raw.
- */
-export interface SettingSource {
-  source: 'env' | 'console';
-  value: string | null;
-  env: string | null;
-}
+/** What the rings of are asked for: a wallet, a token, or a transaction. */
+export type RingOf = { wallet: string } | { tokenId: string } | { tx: string };
 
 /** A Test the console asked the worker to run. */
 export type CheckKind = 'rpc' | 'etherscan';
@@ -1663,7 +1640,7 @@ export class Store {
    * estimate before any. One whose last try failed (tried after its estimate
    * was written, or with none) under an hour ago waits out the hour: as the
    * only one due, it would otherwise be tried every pass, each costing the
-   * pass COUNT_MS of its checking.
+   * pass COUNT_TIMEOUT_MS of its checking.
    */
   async nextCount(globalHops: number): Promise<number | null> {
     // A count that succeeds writes its `at` after count_tried_at, truncated to the millisecond, hence the 1 ms.
@@ -2430,7 +2407,7 @@ export class Store {
         // Rings join the witnesses a counted lens points at; Money loops back's alone make none (rings.ts).
         const counted = new Map<number, readonly string[]>();
         for (const x of f) if (x.method !== 'AU') counted.set(ids.get(x.witness)!, walletsOf(x.witness));
-        const ring = ringsOf([...counted].map(([wid, wallets]) => ({ id: wid, wallets })));
+        const ring = anchorsOf([...counted].map(([wid, wallets]) => ({ id: wid, wallets })));
         // How far the facts on disk reach, and what they were worked out with: the latest analysis's, read before this one's row is in.
         // Facts worked out otherwise, or by an analysis from before facts were keyed, are no base to add to.
         const key = factsKey(money);
@@ -2719,7 +2696,7 @@ export class Store {
            WHERE w.collection_id = $1 AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND f.witness_id = w.id)`,
           [due.collection_id],
         );
-        const ring = ringsOf(rows);
+        const ring = anchorsOf(rows);
         await c.query(
           `UPDATE washtrace.witnesses w SET ring = u.r FROM unnest($2::int[], $3::text[]) AS u(i, r) WHERE w.collection_id = $1 AND w.id = u.i`,
           [due.collection_id, [...ring.keys()], [...ring.values()]],
@@ -2785,7 +2762,7 @@ export class Store {
    * The anchors of the rings, in the latest analysis, that a wallet is in, or
    * that a token's or a transaction's counted flagged trades are in.
    */
-  async ringsOf(id: number, of: { wallet: string } | { tokenId: string } | { tx: string }): Promise<string[]> {
+  async ringsOf(id: number, of: RingOf): Promise<string[]> {
     const { rows } = 'wallet' in of
       ? await this.pool.query<{ ring: string }>(
         'SELECT DISTINCT ring FROM washtrace.witnesses WHERE collection_id = $1 AND ring IS NOT NULL AND wallets @> ARRAY[$2]::text[] ORDER BY ring', [id, of.wallet])
@@ -3605,7 +3582,7 @@ export class Store {
    * worker out of memory would stop the next one too. After
    * LENS_TRIES failures in a row a run waits to be asked again.
    */
-  async nextLensRun(now: number): Promise<{ lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number } | null> {
+  async nextLensRun(now: number): Promise<DueRun | null> {
     for (;;) {
       const next = await this.dueLensRun(now);
       if (next === null || 'lens' in next) return next;
@@ -3614,7 +3591,7 @@ export class Store {
   }
 
   /** The next due run, as nextLensRun orders them, or the ids of one to fail instead, and why. */
-  private async dueLensRun(now: number): Promise<{ lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number } | { lensId: number; collectionId: number; error: string } | null> {
+  private async dueLensRun(now: number): Promise<DueRun | { lensId: number; collectionId: number; error: string } | null> {
     const tokensMoved = `(coalesce((l.rule->'edges'->'other-tokens'->>'use')::boolean, false)
       AND c.token_counts->>'read' IS NOT NULL AND (c.token_counts->>'read')::int IS DISTINCT FROM r.tokens_read)`;
     const { rows } = await this.pool.query(
@@ -4113,13 +4090,6 @@ function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): stri
   const judged = judgedThrough(method, ctx, params);
   return judged === null ? '' : ` AND ${judged}`;
 }
-
-/** Whether a row's stored rule still checks; a list leaves out the rows that don't. */
-const readable = (r: any): boolean => !('error' in checkRule(r.rule));
-
-
-
-
 
 // bigint and numeric columns arrive as strings; each is converted where it is read.
 /** What a setting's report may keep: a secret only when it is masked, the store's own guard against its caller. */

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import pg from 'pg';
-import { BUDGET_MS, COUNT_MS, EVERY, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, pickWork, SEED_MS, TOKENS_MS, Worker, type Work } from '../src/worker.js';
+import { COUNT_TIMEOUT_MS } from '../src/store.js';
+import { BUDGET_MS, EVERY, TOKEN_COUNT_MS, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, pickWork, SEED_MS, TOKENS_MS, Worker, type Work } from '../src/worker.js';
 import { needsRestore, needsTrail, StoredSync, TRAIL_NOTES } from '../src/stored-sync.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
@@ -12,7 +13,7 @@ import { workerConfig, type WorkerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan, WALLET_MS } from '../src/etherscan.js';
 import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPaths, trailSha, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
 import { hubUrl, partPath } from '../src/hub.js';
-import { LOCKS, TOKEN_COUNT_MS, type CollectionRow, type StaleRow } from '../src/store.js';
+import { LOCKS, type CollectionRow, type StaleRow } from '../src/store.js';
 import type { LensRequest, PreviewRequest } from '../src/lens-thread.js';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type AnalysisRequest } from '../src/analysis-thread.js';
 import { runLensInThread, runPreviewInThread } from '../src/lens-thread.js';
@@ -2176,9 +2177,9 @@ describe('Worker.fund following a collection further, and counting its next hop'
     const w = new Worker(store, config, '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
-    // The checking stops COUNT_MS short of the budget: d starts at 30 seconds in, e would at 40, and the count has the rest.
-    expect(BUDGET_MS - COUNT_MS).toBe(30_000);
-    // At 40 seconds in, 5 are left: less than COUNT_MS, so the count is given those.
+    // The checking stops COUNT_TIMEOUT_MS short of the budget: d starts at 30 seconds in, e would at 40, and the count has the rest.
+    expect(BUDGET_MS - COUNT_TIMEOUT_MS).toBe(30_000);
+    // At 40 seconds in, 5 are left: less than COUNT_TIMEOUT_MS, so the count is given those.
     expect(calls).toEqual(['next 3', 'fund a', 'fund b', 'fund c', 'fund d', 'count 7 3 5000']);
     expect(beats.at(-1)).toEqual(['Counting the next wallets out for Doodles', 7]);
 
@@ -2406,9 +2407,9 @@ describe('Worker.fund reading tokens', () => {
     await w.fund();
     expect(t.now - begun).toBeLessThanOrEqual(BUDGET_MS);
     expect(calls.includes('countNext')).toBe(due);
-    // The last count ends by the one deadline: BUDGET_MS, less COUNT_MS when the estimate is due.
+    // The last count ends by the one deadline: BUDGET_MS, less COUNT_TIMEOUT_MS when the estimate is due.
     const untils = calls.filter((c) => c.startsWith('count ')).map((c) => Number(c.split(' ')[2]));
-    expect(untils.at(-1)).toBe(begun + BUDGET_MS - (due ? COUNT_MS : 0));
+    expect(untils.at(-1)).toBe(begun + BUDGET_MS - (due ? COUNT_TIMEOUT_MS : 0));
   });
 
   it('gives each chain an equal share of the counting time left, so a count that always runs out cannot starve the next chain', async () => {
