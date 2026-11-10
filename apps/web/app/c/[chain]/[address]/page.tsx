@@ -113,7 +113,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       {a === null ? <Empty>{why}</Empty> : (
         <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <section aria-label="The answer" className="rounded-lg border bg-card p-4">
               {sales === null ? <p className="text-sm text-muted-foreground">No sale read yet.</p> : (
                 <>

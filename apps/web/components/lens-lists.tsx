@@ -133,14 +133,15 @@ function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }:
   const number = 'font-medium text-foreground hover:underline';
   return (
     <li className="border-b px-3 py-2 last:border-b-0">
-      <div className="flex items-baseline gap-2">
+      {/* A name keeps its width (a short address is already cut); on a phone the counts wrap under it instead. */}
+      <div className="flex flex-wrap items-baseline gap-x-2">
         <span data-row-number className="w-7 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{n}</span>
-        <span className="min-w-0 truncate">{name}</span>
+        <span className="min-w-0 max-w-full shrink-0 truncate">{name}</span>
         <span className="ml-auto shrink-0 text-xs tabular-nums">
           <Link href={caught} prefetch={false} title="The trades it flagged" className={number}>{num(line.caught)}</Link>
           {' of '}
           <Link href={trades} prefetch={false} title="All its counted trades" className={number}>{num(line.trades)}</Link>
-          {' trades'}
+          {line.trades === 1 ? ' trade' : ' trades'}
         </span>
         <span className="w-20 shrink-0 text-right text-xs tabular-nums" title="Volume of the flagged sales priced in ETH or WETH">
           {line.volumeWei === '0' ? '—' : <Link href={volume} prefetch={false} title="The trades it flagged, biggest first" className={number}>{eth(line.volumeWei)}</Link>}

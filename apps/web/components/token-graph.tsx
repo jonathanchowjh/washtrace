@@ -15,6 +15,8 @@ const FILL = { cycle: 'fill-cycle', money: 'fill-money', apart: 'fill-muted-fore
 
 /** The least a phone draws the graph at, of its own size: its 10 px labels stay 8 px or more. */
 const MIN_SCALE = 0.8;
+// A label's own outline in the card's colour, drawn under its fill, so a number on an arrow reads clear of the line.
+const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:round]';
 
 /**
  * The token's graph as one picture (paper Figure 8, drawn from data), with
@@ -84,7 +86,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
                   </a>
                 )}
                 {labels && e.label ? (
-                  <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn('font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : 'fill-muted-foreground')}>
+                  <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn(HALO, 'font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : 'fill-muted-foreground')}>
                     {href === undefined ? e.label : <a href={href}>{e.label}</a>}
                   </text>
                 ) : null}
@@ -98,7 +100,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
                 <title>{n.id}</title>
                 <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
                 {labels ? (
-                  <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
+                  <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className={cn(HALO, 'fill-body font-mono text-[10px]')}>{short(n.id)}</text>
                 ) : null}
               </>
             );
@@ -191,7 +193,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
   };
 
   return (
-    <div className="grid gap-x-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-x-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <section className="mt-10 scroll-mt-6">
         {graphHead}
         {/* The figure's presses, delegated here: its wallets and arrows carry what was pressed as data. */}
