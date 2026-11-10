@@ -9,11 +9,10 @@ import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
-import { TierMark } from './kit';
+import { FILL, TierMark } from './kit';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
-export const DOT = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
 
 /** " (not counted)" after the name of a lens the verdict leaves out; the tooltip says why. */
 export const NotCounted = () => <span title={APART_WHY_TITLE}> (not counted)</span>;
@@ -80,8 +79,8 @@ export function RangeBar({ range, className }: { range: Range; className?: strin
   const w = (s: number) => (s > 0 ? Math.max(1.5, s * 100) : 0);
   return (
     <span aria-hidden className={cn('relative block h-2.5 overflow-hidden rounded-full bg-muted', className)}>
-      <i className={cn('absolute inset-y-0 left-0 rounded-full opacity-45', DOT[LENSES[range.high].tone])} style={{ width: `${w(range.highShare)}%` }} />
-      <i className={cn('absolute inset-y-0 left-0 rounded-full', DOT[LENSES[range.low].tone])} style={{ width: `${w(range.lowShare)}%` }} />
+      <i className={cn('absolute inset-y-0 left-0 rounded-full opacity-45', FILL[LENSES[range.high].tone])} style={{ width: `${w(range.highShare)}%` }} />
+      <i className={cn('absolute inset-y-0 left-0 rounded-full', FILL[LENSES[range.low].tone])} style={{ width: `${w(range.lowShare)}%` }} />
     </span>
   );
 }
@@ -91,8 +90,8 @@ export function RangeKey({ range }: { range: Range }) {
   if (range.low === range.high) return <span className="text-xs text-muted-foreground">by {LENSES[range.low].name}</span>;
   return (
     <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', DOT[LENSES[range.low].tone])} />{LENSES[range.low].name}</span>
-      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm opacity-45', DOT[LENSES[range.high].tone])} />{LENSES[range.high].name}</span>
+      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', FILL[LENSES[range.low].tone])} />{LENSES[range.low].name}</span>
+      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm opacity-45', FILL[LENSES[range.high].tone])} />{LENSES[range.high].name}</span>
     </span>
   );
 }

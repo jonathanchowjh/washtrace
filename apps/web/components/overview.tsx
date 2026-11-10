@@ -6,7 +6,7 @@ import { cardSrc, lensTabHref, listHref, txHref, venues, walletHref } from '@/li
 import type { Stage, StageState } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { KindIcon, TierMark } from './kit';
+import { HATCH, KindIcon, TierMark } from './kit';
 import { LensPicture, nextStart } from './methods';
 import { Time } from './time';
 import { HoverCard } from './hover-card';
@@ -156,7 +156,7 @@ const WORD = { floor: 'round trip (floor)', ceiling: 'linked by money (ceiling)'
 
 const SEGMENT = {
   floor: 'bg-cycle',
-  ceiling: 'bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,var(--money-surface)_2px_4px)]',
+  ceiling: HATCH,
   apart: 'border border-dashed border-muted-foreground bg-card',
   clean: 'bg-muted',
 } as const;
@@ -200,7 +200,7 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
           <Link href={tradesHref(base, { caught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} round trip</Link>
           <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} linked by money</Link>
           <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} not counted</Link>
-          <Link href={tradesHref(base, { notCaught: ['A', 'AC', 'AU'] })} className="flex items-center gap-1.5 hover:underline"><i aria-hidden className="inline-block size-2.5 rounded-[2px] bg-muted" />{num(sum.clean)} clean</Link>
+          <Link href={tradesHref(base, { notCaught: ['A', 'AC', 'AU'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="clean" />{num(sum.clean)} clean</Link>
         </p>
       </div>
       {sales && total <= SQUARES && sales.length === total ? (
