@@ -8,7 +8,7 @@
  * still opens a list.
  */
 
-import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { AGE_BANDS, FLOOR_BANDS, FLOOR_DAYS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { LENSES, ethToWei, localTime, short, weiToEth } from './format';
 import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
@@ -18,6 +18,12 @@ export interface View { by: TradeGroupBy | null; page: number }
 
 /** Trades to a page, in the Trades list and its route, so a page number means the same rows in both. */
 export const TRADES_PAGE = 20;
+
+/**
+ * What a sale's price is set against: the median of the collection's priced sales in the days before it. Not a
+ * floor price, the lowest ask: washtrace reads no listings, and a trader would read "floor" as that.
+ */
+export const MEDIAN = `${FLOOR_DAYS}-day median`;
 
 const BYS: readonly TradeGroupBy[] = ['marketplace', 'month', 'held', 'floor', 'buyerAge'];
 const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller'];
@@ -245,7 +251,7 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
     ['price', price && `Price ${price} ETH`, { priceMinWei: null, priceMaxWei: null }],
     ['held', held && `Held ${held}`, { heldOverS: null, heldUnderS: null }],
     ['age', age && `Bought by a wallet ${age} old`, { buyerAgeOverS: null, buyerAgeUnderS: null }],
-    ['floor', floor && `Price vs floor price ${floor}`, { floorMin: null, floorMax: null }],
+    ['floor', floor && `Price vs ${MEDIAN} ${floor}`, { floorMin: null, floorMax: null }],
     ['when', when, { fromMs: null, toMs: null }],
     ['wallet', q.wallet && `Wallet ${short(q.wallet)}`, { wallet: null }],
     ['token', q.token && `Token #${q.token}`, { token: null }],

@@ -2,10 +2,9 @@
 // and version are a contract of their own.
 import pg from 'pg';
 import { FLAG_BATCH_ROWS } from './store-rows.js';
+import { FLOOR_DAYS } from './trades.js';
 import type { Analysis } from './types.js';
 
-/** How many UTC days before a sale its floor looks back over. */
-export const FLOOR_DAYS = 7;
 /** Bump it whenever a fact's definition changes: an analysis then writes every trade fact again, not only the new ones. */
 export const FACTS_VERSION = 1;
 

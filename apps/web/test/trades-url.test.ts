@@ -64,7 +64,7 @@ describe('Trades in the URL', () => {
       wallet, token: '14022', group: { method: 'A', token: '1234' }, find: '0x3a1f',
     };
     expect(chips('/c', q, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual([
-      'Marketplace: OpenSea, Blur', 'Price 0.5–2 ETH', 'Held under 1 h', 'Bought by a wallet under 1 d old', 'Price vs floor price 0.9–1.1×',
+      'Marketplace: OpenSea, Blur', 'Price 0.5–2 ETH', 'Held under 1 h', 'Bought by a wallet under 1 d old', 'Price vs 7-day median 0.9–1.1×',
       '1 Mar 2023 → 1 Apr 2023', 'Wallet 0x3a1f…abcd', 'Token #14022', 'Wallets in #1234\'s Round trips loops', 'Matching “0x3a1f”', 'Every change of owner',
     ]);
     const w = { ...NO_FILTER, group: { method: 'AC', wallet } } as TradeQuery;
@@ -105,8 +105,8 @@ describe('Trades in the URL', () => {
     expect(a).toContain('caught=A,AC&market=opensea,blur');
     expect(parseView({ caught: ['AC', 'A'] }, 'UTC', OWN).q.caught).toEqual(['AC', 'A']);
     const q: TradeQuery = { ...NO_FILTER, heldOverS: 86_400, heldUnderS: 30 * 86_400, buyerAgeOverS: 3600, buyerAgeUnderS: 86_400, floorMin: 0.9, floorMax: 1.1 };
-    expect(chips('/c', q, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held 1–30 d', 'Bought by a wallet 1 h–1 d old', 'Price vs floor price 0.9–1.1×']);
-    expect(chips('/c', { ...NO_FILTER, floorMin: 2, heldOverS: 3600 }, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held over 1 h', 'Price vs floor price at least 2×']);
+    expect(chips('/c', q, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held 1–30 d', 'Bought by a wallet 1 h–1 d old', 'Price vs 7-day median 0.9–1.1×']);
+    expect(chips('/c', { ...NO_FILTER, floorMin: 2, heldOverS: 3600 }, { by: null, page: 1 }, 'UTC').map((x) => x.label)).toEqual(['Held over 1 h', 'Price vs 7-day median at least 2×']);
   });
 
   it('a date bound that is not midnight in the zone shows its time', () => {

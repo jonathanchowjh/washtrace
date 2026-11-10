@@ -10,7 +10,7 @@ import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel
 import { cardSrc, txHref, withFrom } from '@/lib/links';
 import { APART_WHY_TITLE, judgedBy, SHOWN } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
-import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
+import { MEDIAN, bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { HoverCard } from './hover-card';
 
@@ -140,8 +140,8 @@ export function FilterBar(w: Where) {
               <Duration name="heldunder" label="Held under" seconds={q.heldUnderS} />
               <Duration name="ageover" label="Buyer wallet older than" seconds={q.buyerAgeOverS} />
               <Duration name="ageunder" label="Buyer wallet younger than" seconds={q.buyerAgeUnderS} />
-              <Text name="fmin" label="Price vs floor price, at least (×)" type="number" value={q.floorMin === null ? null : String(q.floorMin)} />
-              <Text name="fmax" label="Price vs floor price, under (×)" type="number" value={q.floorMax === null ? null : String(q.floorMax)} />
+              <Text name="fmin" label={`Price vs ${MEDIAN}, at least (×)`} type="number" value={q.floorMin === null ? null : String(q.floorMin)} />
+              <Text name="fmax" label={`Price vs ${MEDIAN}, under (×)`} type="number" value={q.floorMax === null ? null : String(q.floorMax)} />
               <Day name="from" label={`From (${zone})`} ms={q.fromMs} zone={zone} />
               <Day name="to" label={`Before (${zone})`} ms={q.toMs} zone={zone} />
             </div>
@@ -153,7 +153,7 @@ export function FilterBar(w: Where) {
   );
 }
 
-const BYS: [TradeGroupBy, string][] = [['marketplace', 'Marketplace'], ['month', 'Month'], ['held', 'Held time'], ['floor', 'Price vs floor price'], ['buyerAge', 'Buyer age']];
+const BYS: [TradeGroupBy, string][] = [['marketplace', 'Marketplace'], ['month', 'Month'], ['held', 'Held time'], ['floor', `Price vs ${MEDIAN}`], ['buyerAge', 'Buyer age']];
 const BY_NAME = Object.fromEntries(BYS);
 
 /**
@@ -247,7 +247,7 @@ function Cell({ href, children }: { href: string | null; children: React.ReactNo
 /** The sort a header starts with: names read A to Z, the rest biggest or newest first. */
 const FIRST_ASC: readonly TradeSort[] = ['token', 'seller', 'marketplace'];
 
-const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', 'vs floor price']];
+const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', `vs ${MEDIAN}`]];
 
 /** "<1 min", "45 min", "3 h", "12 d": a length of time to one unit, rounded down. */
 function span(s: number | null): string {

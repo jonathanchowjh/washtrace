@@ -33,9 +33,9 @@ pages are in [console.md](console.md), and the methods behind the words in [meth
   analysis also gives changes of owner and volume. See [methods.md](methods.md#shares) on reading the volume share.
 - **So far / at least.** "So far": reads still running can move the share. "At least": waiting will not close it
   (a search cap, a missing Etherscan key, a limit), so the true share is this or more.
-- **Floor price.** On the Trades page, the median price of the collection's priced sales over the 7 UTC days
-  before a sale's day (`FLOOR_DAYS`). washtrace reads no listings, so it is not the lowest ask. "vs floor price"
-  is a sale's price divided by it: 0.5× is half, 2× is double.
+- **7-day median.** On the Trades page, the median price of the collection's priced sales over the 7 UTC days
+  before a sale's day (`FLOOR_DAYS`). It stands where a floor price would, but washtrace reads no listings, so it
+  is not the lowest ask. "vs 7-day median" is a sale's price divided by it: 0.5× is half, 2× is double.
 - **Held** and **buyer age.** How long the token sat still before this sale, and how long before it the buyer first
   appeared in the collection.
 
