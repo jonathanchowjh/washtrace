@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { METHODS, type TradeRow } from '@washtrace/detect';
+import { type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { Time } from '@/components/time';
 import { SortHead } from '@/components/ui';
-import { NotCounted } from '@/components/methods';
 import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
-import { judgedBy } from '@/lib/metrics';
+import { APART_WHY_TITLE, judgedBy, SHOWN } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -23,10 +23,11 @@ import { HoverCard } from './hover-card';
 /** `own` is your lenses by key, for their names and hues; the built-ins need no entry. */
 interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: Lenses }
 
-const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <>{i.name}{i.tone === 'apart' ? <NotCounted /> : null}</>; };
+// One item in a header's row, so a lens not counted says so under its name rather than in what reads as a column of its own.
+const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <span>{i.name}{i.tone === 'apart' ? <span title={APART_WHY_TITLE} className="block text-[11px] font-normal text-muted-foreground">not counted</span> : null}</span>; };
 
 /** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
-const withOwn = (ran: readonly LensKey[]) => [...METHODS.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
+const withOwn = (ran: readonly LensKey[]) => [...SHOWN.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
 
 /** The current view's parameters as hidden inputs, less the ones a form shows itself or must not keep. */
 function carried({ base, q, view }: Where, keep: (key: string) => boolean) {
@@ -104,7 +105,7 @@ function Checks({ title, name, options, on }: { title: string; name: string; opt
 /** Find, the filters in play as chips that each remove one, and the form that adds more. */
 export function FilterBar(w: Where) {
   const { base, q, view, zone, own = {} } = w;
-  const lenses = [...METHODS, ...Object.keys(own)].flatMap((k): [string, string][] => { const i = lensInfo(k, own); return i === null ? [] : [[k, i.name]]; });
+  const lenses = [...SHOWN, ...Object.keys(own)].flatMap((k): [string, string][] => { const i = lensInfo(k, own); return i === null ? [] : [[k, i.name]]; });
   const names = Object.fromEntries(Object.entries(own).map(([k, i]) => [k, i.name]));
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
@@ -139,8 +140,8 @@ export function FilterBar(w: Where) {
               <Duration name="heldunder" label="Held under" seconds={q.heldUnderS} />
               <Duration name="ageover" label="Buyer wallet older than" seconds={q.buyerAgeOverS} />
               <Duration name="ageunder" label="Buyer wallet younger than" seconds={q.buyerAgeUnderS} />
-              <Text name="fmin" label="Price vs floor at least (×)" type="number" value={q.floorMin === null ? null : String(q.floorMin)} />
-              <Text name="fmax" label="Price vs floor under (×)" type="number" value={q.floorMax === null ? null : String(q.floorMax)} />
+              <Text name="fmin" label="Price vs floor price, at least (×)" type="number" value={q.floorMin === null ? null : String(q.floorMin)} />
+              <Text name="fmax" label="Price vs floor price, under (×)" type="number" value={q.floorMax === null ? null : String(q.floorMax)} />
               <Day name="from" label={`From (${zone})`} ms={q.fromMs} zone={zone} />
               <Day name="to" label={`Before (${zone})`} ms={q.toMs} zone={zone} />
             </div>
@@ -152,7 +153,7 @@ export function FilterBar(w: Where) {
   );
 }
 
-const BYS: [TradeGroupBy, string][] = [['marketplace', 'Marketplace'], ['month', 'Month'], ['held', 'Held time'], ['floor', 'Price vs floor'], ['buyerAge', 'Buyer age']];
+const BYS: [TradeGroupBy, string][] = [['marketplace', 'Marketplace'], ['month', 'Month'], ['held', 'Held time'], ['floor', 'Price vs floor price'], ['buyerAge', 'Buyer age']];
 const BY_NAME = Object.fromEntries(BYS);
 
 /**
@@ -189,7 +190,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
 }) {
   const by = view.by;
   // The built-ins always, with NOT_RUN where one did not run; yours only once they have run.
-  const cols = [...METHODS, ...ran.filter(isOwnKey)];
+  const cols = [...SHOWN, ...ran.filter(isOwnKey)];
   return (
     <section aria-label="Group by" className="mt-6">
       <nav className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
@@ -246,7 +247,7 @@ function Cell({ href, children }: { href: string | null; children: React.ReactNo
 /** The sort a header starts with: names read A to Z, the rest biggest or newest first. */
 const FIRST_ASC: readonly TradeSort[] = ['token', 'seller', 'marketplace'];
 
-const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', 'vs floor']];
+const COLUMNS: [TradeSort, string][] = [['date', 'Date'], ['token', 'Token'], ['seller', 'Seller → buyer'], ['price', 'Price'], ['marketplace', 'Marketplace'], ['held', 'Held'], ['buyerAge', 'Buyer age'], ['floor', 'vs floor price']];
 
 /** "<1 min", "45 min", "3 h", "12 d": a length of time to one unit, rounded down. */
 function span(s: number | null): string {
@@ -278,7 +279,7 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
   /** The list as a trade's `from` (lib/step.ts), so a trade opened from it can step to its neighbours. */
   from?: string;
 }) {
-  const { base, q, view, zone, own = {} } = where;
+  const { base, q, view, own = {} } = where;
   const lenses = withOwn(ran);
   const only = (extra: Partial<TradeQuery>, title: string) => (
     <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
@@ -304,7 +305,7 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
+                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
                   <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>

@@ -24,16 +24,16 @@ function counts(loops: number, pairs: number): string {
  */
 type Counts<K extends string> = Record<K, number>;
 
-/** "3 loops among 4 wallets, 5 laps, 2 closed by money, 1 through a middle wallet". */
+/** "3 loops among 4 wallets, 5 cycles, 2 closed by money, 1 through a middle wallet". */
 export function tokenWhy(_method: LensKey, line: TokenLine): WhyPart[] {
   const l = line as TokenLine & Counts<'loops' | 'pairs' | 'wallets' | 'laps' | 'closedByMoney' | 'middles'>;
   const what = counts(l.loops, l.pairs);
   if (what === '') return [];
   const parts: WhyPart[] = [{ text: what, opens: 'loops' }];
   if (l.wallets > 0) parts.push({ text: ' among ' }, { text: plural(l.wallets, 'wallet'), opens: 'wallets' });
-  // Laps only when some loop went round more than once: one lap a loop says nothing the loops did not.
+  // Cycles only when some loop has more than one: one cycle a loop says nothing the loops did not.
   const tails = [
-    l.laps > l.loops ? plural(l.laps, 'lap') : null,
+    l.laps > l.loops ? plural(l.laps, 'cycle') : null,
     l.closedByMoney > 0 ? `${num(l.closedByMoney)} closed by money` : null,
     l.middles > 0 ? `${num(l.middles)} through a middle wallet` : null,
   ].filter((s) => s !== null);

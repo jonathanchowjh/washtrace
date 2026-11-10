@@ -1,7 +1,7 @@
 # Upgrading
 
 For operators. The schema is defined in one file, [migrations.ts](../packages/detect/src/migrations.ts):
-35 migrations, forward-only, numbered from 1, each safe to run again.
+36 migrations, forward-only, numbered from 1, each safe to run again.
 
 ## How a migration runs
 

@@ -1,8 +1,8 @@
 # The console
 
-For people reading verdicts in the console: what each page shows, the words it uses, and how to write a lens of
-your own. The console runs on port 8080 (see the README's [Quick start](../README.md#quick-start)); everything it
-shows is also in the [API](api.md).
+For people reading verdicts in the console: what each page shows and how to write a lens of your own. The words
+it uses are in the [glossary](glossary.md). The console runs on port 8080 (see the README's
+[Quick start](../README.md#quick-start)); everything it shows is also in the [API](api.md).
 
 ## Pages
 
@@ -47,37 +47,8 @@ Times are clock times in the reader's time zone, changeable at the foot of the s
 
 ## Words it uses
 
-### Reading a verdict
-
-- **Lens.** One rule for what counts as a wash trade: the three methods, and [yours](#your-own-lenses).
-- **Share.** The part of the trades a lens judged that it flags. The collection page leads with sales; the
-  analysis also gives changes of owner and volume.
-- **Judged.** Looked at by a lens. "Not judged yet" is a trade past the block the latest analysis or run read to,
-  never shown as clean. Burns and moves into or out of custody are not trades and are never judged.
-- **So far / at least.** "So far": reads still running can move the share. "At least": waiting will not close it
-  (a search cap, a missing Etherscan key, a limit).
-
-### Reading money
-
-- **Money read.** How many traders are checked, and how many wallets out the worker follows.
-- **Wallets out.** Hops of money followed out of a trader (`follow.hops`, "Follow money (wallets out)"), so a
-  payment can return through wallets that never traded the collection.
-- **Wallets between.** The wallets on a loop between seller and buyer.
-- **Reach.** The wallets a collection's money has been walked to. The console says "Finding the wallets up to N
-  wallets out".
-- **Read again.** Reading a trader's money and other tokens a second time after it trades again
-  (`follow.reread`, off by default; see [operating.md](operating.md#reading-traders-again)).
-- **Other tokens.** An edge type for payments in a fixed list of tokens (USDC, USDT, DAI and APE on Ethereum; USDC
-  and DAI on Base; none elsewhere), with no smallest amount: washtrace has no prices.
-- **Payees.** The wallets a trader paid in those tokens; reading their tokens too is off by default
-  (`tokens.payees`).
-
-### In a token's graph
-
-- **Custody.** A contract holding a token without owning it, such as a Blur Blend loan. A → escrow → B is one hop
-  A → B; A → escrow → A is none.
-- **Bridge.** The paper's fix for missing transfers: an unobserved edge from a token's last holder to the next
-  sender. Never flagged or counted; the console does not name it.
+Every word the console uses with a meaning of its own (lens, judged, share, so far and at least, loop and cycles,
+ring, funder and payee, wallets out, custody) is in the [glossary](glossary.md).
 
 ## Your own lenses
 
@@ -109,5 +80,5 @@ histories, and the money of its sellers and buyers, without watching the collect
   again**.
 - Where this console may not be written to, the button is greyed out, as Save is.
 
-What a spot check can and cannot say is in the README's [Not watched yet?](../README.md#not-watched-yet), and its
-routes in [api.md](api.md#spot-checks).
+What a spot check can and cannot say is in [methods.md](methods.md#a-spot-check), and its routes in
+[api.md](api.md#spot-checks).

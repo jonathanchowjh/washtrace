@@ -6,7 +6,7 @@ import { cardSrc, lensTabHref, listHref, txHref, venues, walletHref } from '@/li
 import type { Stage, StageState } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { KindIcon, TierMark } from './kit';
+import { HATCH, KindIcon, TierMark } from './kit';
 import { LensPicture, nextStart } from './methods';
 import { Time } from './time';
 import { HoverCard } from './hover-card';
@@ -98,19 +98,22 @@ export function Facts({ profile: p, creator, base, chainId }: { profile: Collect
  * How sure the range is, as a ladder: the floor (Round trips), what the
  * ceiling adds to it (Linked wallets), and apart from both, never added in,
  * Money loops back. Each rung is its lens's picture, its tier mark, its share
- * of sales, and the sales that make it.
+ * of sales, and the sales that make it. `apart` is how many of Money loops
+ * back's sales no counted lens flags: the strip's and the panel's count, said
+ * here too so the two never read as a contradiction.
  */
-export function HowSure({ totals, base }: { totals: Record<Method, MethodTotals>; base: string }) {
+export function HowSure({ totals, base, apart }: { totals: Record<Method, MethodTotals>; base: string; apart?: number }) {
   const sales = totals.A.sales;
   // Linked wallets is a superset of Round trips; read as one, its rung is what it adds.
   const added = Math.max(0, totals.AC.flaggedSales - totals.A.flaggedSales);
   const rungs: { m: Method; tone: 'cycle' | 'money' | 'apart'; name: string; does: string; share: string; count: string; href: string; note?: string }[] = [
-    { m: 'A', tone: 'cycle', name: 'Floor', does: 'sold back and forth', share: pctTenth(totals.A.flaggedSales, sales),
+    { m: 'A', tone: 'cycle', name: LENSES.A.name, does: 'the floor', share: pctTenth(totals.A.flaggedSales, sales),
       count: plural(totals.A.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['A'] }) },
-    { m: 'AC', tone: 'money', name: 'Ceiling', does: '+ linked by money', share: `+${pctTenth(added, sales)}`,
+    { m: 'AC', tone: 'money', name: LENSES.AC.name, does: 'the ceiling', share: `+${pctTenth(added, sales)}`,
       count: `+${plural(added, 'sale')}`, href: tradesHref(base, { caught: ['AC'], notCaught: ['A'] }) },
-    { m: 'AU', tone: 'apart', name: 'Not counted', does: 'money loops back', share: pctTenth(totals.AU.flaggedSales, sales),
-      count: plural(totals.AU.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['AU'] }), note: 'fails the placebo test' },
+    { m: 'AU', tone: 'apart', name: LENSES.AU.name, does: 'not counted', share: pctTenth(totals.AU.flaggedSales, sales),
+      count: plural(totals.AU.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['AU'] }),
+      note: `${apart === undefined ? '' : `${num(apart)} of them it alone flags · `}fails the placebo test` },
   ];
   return (
     <section aria-label="How sure" className="rounded-lg border bg-card p-4">
@@ -152,11 +155,11 @@ export function saleStanding(lenses: readonly string[]): keyof ReturnType<typeof
 /** Up to this many sales, the strip is a square per sale, in order; past it, a column per period. */
 export const SQUARES = 130;
 
-const WORD = { floor: 'round trip (floor)', ceiling: 'linked by money (ceiling)', apart: 'money loops back only (not counted)', clean: 'not flagged' } as const;
+const WORD = { floor: `${LENSES.A.name} (the floor)`, ceiling: `${LENSES.AC.name} (the ceiling)`, apart: `${LENSES.AU.name} alone (not counted)`, clean: 'not flagged' } as const;
 
 const SEGMENT = {
   floor: 'bg-cycle',
-  ceiling: 'bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,var(--money-surface)_2px_4px)]',
+  ceiling: HATCH,
   apart: 'border border-dashed border-muted-foreground bg-card',
   clean: 'bg-muted',
 } as const;
@@ -197,10 +200,10 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
         <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground"><KindIcon kind="transaction" />{mine === undefined ? `All ${plural(total, 'sale')}, in order` : `Where ${mine.label} sales sit among all ${num(total)}`}</h2>
         <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
           {mine === undefined ? null : <Link href={mine.href} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{num(mine.keys.size)} {mine.label}</Link>}
-          <Link href={tradesHref(base, { caught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} round trip</Link>
-          <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} linked by money</Link>
-          <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} not counted</Link>
-          <Link href={tradesHref(base, { notCaught: ['A', 'AC', 'AU'] })} className="flex items-center gap-1.5 hover:underline"><i aria-hidden className="inline-block size-2.5 rounded-[2px] bg-muted" />{num(sum.clean)} clean</Link>
+          <Link href={tradesHref(base, { caught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} {LENSES.A.name}</Link>
+          <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} + {LENSES.AC.name}</Link>
+          <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} {LENSES.AU.name} alone</Link>
+          <Link href={tradesHref(base, { notCaught: ['A', 'AC', 'AU'] })} className="flex items-center gap-1.5 hover:underline"><TierMark tone="clean" />{num(sum.clean)} not flagged</Link>
         </p>
       </div>
       {sales && total <= SQUARES && sales.length === total ? (
@@ -286,7 +289,7 @@ export function NotCounted({ apart, base }: { apart: number; base: string }) {
       <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
         <TierMark tone="apart" className="mt-1" />
         <span className="text-sm">
-          <span className="font-medium text-foreground">{plural(apart, 'sale')}: money went back to the seller</span>
+          <span className="font-medium text-foreground">{plural(apart, 'sale')} only {LENSES.AU.name} flags: money went back to the seller</span>
           <span className="block text-muted-foreground">Not counted: only {LENSES.AU.name} sees {apart === 1 ? 'it' : 'them'}, and that method fails the placebo test.</span>
         </span>
       </Link>

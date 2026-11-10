@@ -132,7 +132,7 @@ describe('the trade page: one card per lens', () => {
     expect(a.querySelector('figure')).not.toBeNull();
     // Round trips' one pattern holds all three of the token's transfers.
     expect(lit(a)).toEqual(['t0', 't1', 't2']);
-    expect(a.textContent).toContain('2 wallets pass it around in 2 cycles');
+    expect(a.textContent).toContain('2 wallets pass it round in 2 cycles');
     const own = card.get('Fast flips')!;
     // Its loop for this trade (o1): the trade's arrow and the way back through the middle.
     expect(lit(own)).toEqual(['o1e1', 'o1e2', 't2']);
@@ -250,8 +250,8 @@ describe('the trade page: one card per lens', () => {
     const { NOT_CAUGHT } = await import('@/lib/format');
     const c = await txPage();
     const first = cards(c, 'How each lens reads First #7'), second = cards(c, 'How each lens reads Second #8');
-    expect([...first.keys()]).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Fast flips']);
-    expect([...second.keys()]).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Fast flips']);
+    expect([...first.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
+    expect([...second.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
     expect(first.get('Fast flips')!.querySelector('figure')).not.toBeNull();
     // A flag stored on a collection the lens never ran on is not read as a catch.
     expect(second.get('Fast flips')!.textContent).toContain('Fast flips has not run on this collection, so it flags nothing yet.');
@@ -334,6 +334,13 @@ describe('the trade page: one card per lens', () => {
     expect(answer).toContain('no built-in lens that ran flags it.');
     expect(answer).toContain('Your lenses catch it: Fast flips.');
     expect(answer).not.toContain('Slow loops');
+  });
+
+  it('lists the counted lenses that flag it first, and sets Money loops back apart under them as not counted', async () => {
+    roundTrip(['A', 'AU', 'AC']);
+    const c = await txPage();
+    const aside = c.querySelector('p.text-lg')!.closest('div')!.parentElement!.lastElementChild!;
+    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips', 'Linked wallets', 'Money loops back · not counted']);
   });
 
   it('a sale a built-in and your lens both caught says your lens also catches it', async () => {

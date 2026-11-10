@@ -46,25 +46,32 @@ const VERDICT = { cycle: 'Round trips · the floor', money: 'Linked wallets · t
 export function VerdictChip({ tone }: { tone: keyof typeof VERDICT | null }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground">
-      {tone === null || tone === 'clean' ? <i aria-hidden className={cn('inline-block size-2.5 shrink-0 rounded-[2px]', tone === null ? 'border border-dashed border-muted-foreground' : 'bg-muted')} /> : <TierMark tone={tone} />}
+      {tone === null ? <i aria-hidden className="inline-block size-2.5 shrink-0 rounded-[2px] border border-dashed border-muted-foreground" /> : <TierMark tone={tone} />}
       {tone === null ? 'Not judged yet' : VERDICT[tone]}
     </span>
   );
 }
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
+/** Each tone as a flat fill: a share's bar, a lens's pill, a legend's swatch. */
+export const FILL = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
+
+/** The ceiling's hatching, the money hue on its own surface: its mark and its part of the sales strip both draw it. */
+export const HATCH = 'bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,var(--money-surface)_2px_4px)]';
+
 const MARK = {
   cycle: 'rounded-[2px] bg-cycle',
-  money: 'rounded-[2px] bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,var(--money-surface)_2px_4px)]',
+  money: `rounded-[2px] ${HATCH}`,
   apart: 'rounded-full border border-dashed border-muted-foreground',
   own: 'rotate-45 rounded-[1px] bg-flow',
+  clean: 'rounded-[2px] bg-muted',
 } as const;
 
 /**
  * A lens's standing as a shape as well as a hue, so it reads without colour:
  * a solid square for the floor (Round trips), a hatched one for what the
  * ceiling adds (Linked wallets), a dashed ring for a lens never counted, a
- * diamond for a lens of yours.
+ * diamond for a lens of yours, a plain grey square for a sale no lens flags.
  */
 export function TierMark({ tone, className }: { tone: keyof typeof MARK; className?: string }) {
   return <i aria-hidden className={cn('inline-block size-2.5 shrink-0', MARK[tone], className)} />;
@@ -82,7 +89,7 @@ function spots(n: number): [number, number][] {
 /** The words a witness's picture stands for, as its accessible name. */
 export function evidenceLabel(w: Witness): string {
   if (w.kind === 'pair') return w.middle === null ? 'The seller and buyer are joined by money' : 'The seller and buyer are joined by money through one wallet';
-  const many = w.cycles > 1 ? `, ${plural(w.cycles, 'loop')}` : '';
+  const many = w.cycles > 1 ? `, ${plural(w.cycles, 'cycle')}` : '';
   return w.kind === 'scc' ? `The token went round ${plural(w.wallets.length, 'wallet')}${many}` : `A loop among ${plural(w.wallets.length, 'wallet')}, closed by money${many}`;
 }
 

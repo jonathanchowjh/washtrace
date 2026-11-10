@@ -3,8 +3,9 @@ import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from
 import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
+import { FILL } from './kit';
 import { Empty, Ext } from '@/components/ui';
-import { toneOf } from '@/lib/metrics';
+import { toneOf, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 import { HoverCard } from '@/components/hover-card';
@@ -23,9 +24,9 @@ export function Wallet({ chainId, address, within, from }: { chainId: number; ad
 
 /** Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do. */
 export function because(w: Witness, chainId: number, within?: string): React.ReactNode {
-  if (w.kind === 'scc') return `${w.wallets.length} wallets pass it around in ${w.cycles} cycles`;
+  if (w.kind === 'scc') return `${w.wallets.length} wallets pass it round in ${plural(w.cycles, 'cycle')}`;
   if (w.kind === 'scc+flow') {
-    return `${w.wallets.length} wallets in a cycle closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
+    return `${w.wallets.length} wallets in a loop closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
   }
   const [a, b] = w.pair;
   const tx = explorerTx(chainId, w.flowTx);
@@ -61,8 +62,6 @@ export function rowList(rows: readonly number[]): string {
 
 const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
 // A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
-const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground', own: 'bg-flow' } as const;
-
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
  * token page's order: the number is the arrow's label in its graph. A page or
@@ -98,7 +97,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
             const tx = explorerTx(chainId, t.txHash);
-            const keys: LensKey[] = [...METHODS.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
+            const keys: LensKey[] = [...SHOWN.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
             const chipBase = t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base;
             return (
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
@@ -143,7 +142,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
 function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) {
   const info = lensInfo(m, names);
   if (info === null) return null;
-  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[info.tone]);
+  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', FILL[info.tone]);
   return base === undefined ? <span className={cls}>{info.name}</span>
     : <Link href={lensTabHref(base, m, { evidence: true })} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
 }

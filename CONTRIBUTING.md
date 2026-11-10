@@ -35,8 +35,8 @@ server too.
 
 ## Commands
 
-Run from the repo root. `npm test` and the other test commands are the root
-`package.json`'s; the rest of the table is each package's own script.
+Run from the repo root. The `npm run …` commands are the root `package.json`'s
+scripts; the `--workspace` ones are each package's own.
 
 | Command | What it does | Needs Docker |
 |---|---|---|
@@ -111,7 +111,7 @@ The dataset is CC BY-NC 4.0 (credit `MLNTeam-Unical/NFT-70M_transactions`): keep
 
 ```
 packages/detect/          Everything that knows chains, money and graphs. No React, no HTTP.
-  src/                    31 files, by concern:
+  src/                    32 files, by concern:
     Types and the pure engine
       types.ts            Transfer, Flow, Method, Witness, Analysis
       graph.ts            The asset transfer graph of one token (AddressGraph); Tarjan; cycle counting
@@ -120,6 +120,7 @@ packages/detect/          Everything that knows chains, money and graphs. No Rea
       wallets.ts          Wallets: addresses by number, held as bytes
       payments.ts         Payments: the money graph's payments as typed arrays
       moves.ts            Moves: the money edges between numbered wallets, in blocks
+      rings.ts            Rings: the wallets a counted lens's witnesses join, by union-find
     Lenses
       lens-rule.ts        A lens's rule and its checks. Client-safe
       lens-reads.ts       What a collection has read for a rule. Client-safe
@@ -163,8 +164,8 @@ apps/worker/              The worker service: a plain Node process, no Next.
 apps/web/                 The api service: the JSON API and the console, over the store.
   instrumentation.ts      Migrates the schema on boot; never reads a chain
   proxy.ts                Basic auth over every route but /api/health
-  app/api/                The API: collections, lenses, search, settings, status, transfers, wallets, worker, health
-  app/                    One folder per page: c (collection), tx, w (wallet), search, settings, worker; go is a redirect route
+  app/api/                The API: collections, lenses, search, settings, spots, status, transfers, wallets, worker, health
+  app/                    One folder per page: c (collection: its overview, methods, rings, r, tokens, wallets, trades, t, w, tx; flagged redirects), tx, w (wallet), search, lab, settings, worker; go is a redirect route
   components/             The console's React components
   lib/                    What pages and routes share: views.ts (reads a page and its route both serve), settings.ts, layout.ts (the token graph's layout), and so on
   test/                   Vitest with jsdom (the root `web` project)
@@ -176,7 +177,7 @@ scripts/
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
-doc/                      Reference pages: methods.md, console.md, operating.md, api.md, upgrading.md, stored-data.md
+doc/                      Reference pages: glossary.md, methods.md, console.md, operating.md, api.md, upgrading.md, stored-data.md
 paper/                    The paper and its slides (PDF)
 LICENSE, CITATION.cff     MIT for the code; how to cite the paper
 .githooks/pre-commit      See the hook above
@@ -190,8 +191,8 @@ and `node:*`.
 
 ## How a transfer becomes a verdict
 
-Two processes share one Postgres. The worker's `Worker` runs three timers
-(`EVERY` in `worker.ts`): ingest and analyze every minute, fund every 5
+Two processes share one Postgres. The worker's `Worker` runs four timers
+(`EVERY` in `worker.ts`): ingest, analyze and lens every minute, fund every 5
 seconds. Each pass takes its job's advisory lock without waiting, so replicas
 share the work, and a pass that is due while the last is still running is
 skipped.
@@ -251,13 +252,19 @@ skipped.
    `'analysis'`, `'run'` or `'nothing'`: a preview goes first, but not twice in
    a row while an analysis is due; a lens run gives way to a due analysis until
    it has waited `LENS_WAIT_MS` (10 minutes); then an analysis; then any run.
-   Each runs in a worker thread so the main thread keeps ingesting and
-   answering `/health`:
+   Before choosing, `turn` calls `Store.fillRings`, which gives one analysis
+   saved before rings existed its rings from its stored witnesses; a
+   collection whose fill fails is skipped (`ringsFailed`) until the worker
+   restarts. Each job runs in a worker thread so the main thread keeps
+   ingesting and answering `/health`:
    - **Analysis** (`analyzeOne`): `analyzeInThread` starts
      `analysis-thread.ts`, which opens its own connection, reads the input
      (`Store.analysisInput`) and runs `analyze()`. The result is saved with
      `Store.saveAnalysis` against the collection `version` read before it ran,
      so a write that lands mid-analysis leaves the collection due again.
+     The same save joins the witnesses Round trips and Linked wallets point
+     at into rings (`ringsOf` in `rings.ts`, a union-find over shared
+     wallets) and tags each witness with its ring's anchor.
    - **Lens run or preview** (`lensRun`, `preview`): `runLensInThread` or
      `runPreviewInThread` start `lens-thread.ts`, which reads its own input
      (`Store.lensInput`) and runs `runLens`; a preview judges a sample of

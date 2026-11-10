@@ -105,7 +105,7 @@ describe('the lens lists on the collection page', () => {
     expect(named(el, '1 loop')).toEqual([`${BASE}/t/7?method=A`]);
     expect(named(el, '3 wallets')).toEqual([`${BASE}/trades?group=A.t.7&all=1`]);
     expect(linkTo(el, `${BASE}/t/7`)?.textContent).toBe('#7');
-    expect(el.textContent).toContain('1 loop among 3 wallets, 2 laps');
+    expect(el.textContent).toContain('1 loop among 3 wallets, 2 cycles');
     expect(el.textContent).toContain('11 of 14 trades');
     expect(el.textContent).toContain('2.5 ETH');
     expect(el.textContent).toContain('flagged of its counted trades');

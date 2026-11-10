@@ -12,7 +12,7 @@ const wallets = (w: Witness) => render(<EvidenceGlyph witness={w} />).container.
 describe('the evidence picture', () => {
   it('names what it draws, and says nothing a witness does not record', () => {
     expect(evidenceLabel(loop(2))).toBe('The token went round 2 wallets');
-    expect(evidenceLabel(loop(3, 2))).toBe('The token went round 3 wallets, 2 loops');
+    expect(evidenceLabel(loop(3, 2))).toBe('The token went round 3 wallets, 2 cycles');
     expect(evidenceLabel({ kind: 'scc+flow', wallets: ['0xa', '0xb'], cycles: 0, via: [['0xb', '0xa']] })).toBe('A loop among 2 wallets, closed by money');
     // A pair records a link, not who paid whom.
     expect(evidenceLabel(pair(null))).toBe('The seller and buyer are joined by money');

@@ -54,7 +54,7 @@ describe('the layout', () => {
     expect(c.querySelector('input')).toBe(within(c).getByLabelText(/^Name/));
     expect(within(c.querySelector('[aria-labelledby="rule-edges"]') as HTMLElement).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Use', 'Edge type']);
     for (const row of ['Wallets between seller and buyer', 'Every edge happens within', 'Which trades it judges']) expect(within(c).getByText(row)).toBeTruthy();
-    for (const row of ['Loop closes at', 'Order in time', 'Never a middle wallet', 'At least N loops among the wallets involved']) expect(within(c).queryByText(row)).toBeNull();
+    for (const row of ['Loop closes at', 'Order in time', 'Never a middle wallet', 'Fewest cycles among the wallets involved']) expect(within(c).queryByText(row)).toBeNull();
     expect(within(c).getAllByRole('button').map((b) => b.textContent)).toEqual(['Advanced', 'Preview', 'Cancel', 'Save and run']);
     expect(button(c, 'Advanced').getAttribute('aria-expanded')).toBe('false');
   });
@@ -70,7 +70,7 @@ describe('the layout', () => {
     expect(within(c.querySelector('[aria-labelledby="rule-edges"]') as HTMLElement).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Use', 'Edge type', 'Direction in the loop', 'At most in a loop', 'Smallest that counts', 'Repeats between the same 2 wallets',
     ]);
-    for (const row of ['Loop closes at', 'Order in time', 'Never a middle wallet', 'At least N loops among the wallets involved']) expect(within(c).getByText(row)).toBeTruthy();
+    for (const row of ['Loop closes at', 'Order in time', 'Never a middle wallet', 'Fewest cycles among the wallets involved']) expect(within(c).getByText(row)).toBeTruthy();
     fireEvent.click(button(c, 'Advanced'));
     expect(within(c).queryByText('Order in time')).toBeNull();
   });

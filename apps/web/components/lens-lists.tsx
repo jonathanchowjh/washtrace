@@ -7,11 +7,10 @@ import { SORTS } from '@/lib/views';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 import { cn } from '@/lib/utils';
 import { Empty } from './ui';
-import { DOT } from './methods';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
 import { HoverCard } from './hover-card';
-import { FunnelIcon } from './kit';
+import { FILL, FunnelIcon } from './kit';
 import { cardSrc, withFrom } from '@/lib/links';
 
 /**
@@ -128,7 +127,7 @@ export function MatchLine({ n, of, query, clear, children }: { n: number; of: st
 
 /** One row: its number, its name, why in words, its flagged of its trades, its flagged volume, and the share as a bar in the lens's hue. */
 function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }: {
-  n: number; line: TokenLine | WalletLine; tone: keyof typeof DOT; why: WhyPart[]; name: React.ReactNode; loops: string; group: string; trades: string; caught: string; volume: string;
+  n: number; line: TokenLine | WalletLine; tone: keyof typeof FILL; why: WhyPart[]; name: React.ReactNode; loops: string; group: string; trades: string; caught: string; volume: string;
 }) {
   const number = 'font-medium text-foreground hover:underline';
   return (
@@ -153,7 +152,7 @@ function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }:
           ))}
         </p>
         <span aria-hidden className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
-          <i className={cn('block h-full rounded-full', DOT[tone])} style={{ width: `${(line.caught / Math.max(1, line.trades)) * 100}%` }} />
+          <i className={cn('block h-full rounded-full', FILL[tone])} style={{ width: `${(line.caught / Math.max(1, line.trades)) * 100}%` }} />
         </span>
       </div>
     </li>
