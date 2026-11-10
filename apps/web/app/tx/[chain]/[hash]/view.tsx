@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { lensRefusal } from '@washtrace/detect';
+import { HEADLINE, lensRefusal } from '@washtrace/detect';
 import { ConnectedRail, walletRoles } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/where-it-sits';
@@ -20,7 +20,7 @@ import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_C
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
-import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan, SHOWN } from '@/lib/metrics';
+import { APART, APART_WHY, NOT_JUDGED, SHOWN, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
@@ -81,7 +81,16 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
       <Answer
         tone={tone}
         title={title}
-        aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} href={home === null ? undefined : lensTabHref(home, m, { evidence: true })} />)}</span> : undefined}
+        aside={by.length > 0 ? (
+          // The counted lenses in the console's order; one never counted, set apart under them, so it never reads as a flagger.
+          <span className="flex flex-col gap-1">
+            {SHOWN.filter((m) => by.includes(m)).map((m) => (
+              <span key={m} className={APART.includes(m) && by.some((x) => HEADLINE.includes(x)) ? 'mt-1 border-t border-dashed pt-1.5 text-xs text-muted-foreground' : undefined}>
+                <LensName m={m} href={home === null ? undefined : lensTabHref(home, m, { evidence: true })} />{APART.includes(m) ? ' · not counted' : null}
+              </span>
+            ))}
+          </span>
+        ) : undefined}
       >
         {body}{notRunLine && !unread ? ` ${notRunLine}` : ''}{ownLine}
       </Answer>

@@ -336,6 +336,13 @@ describe('the trade page: one card per lens', () => {
     expect(answer).not.toContain('Slow loops');
   });
 
+  it('lists the counted lenses that flag it first, and sets Money loops back apart under them as not counted', async () => {
+    roundTrip(['A', 'AU', 'AC']);
+    const c = await txPage();
+    const aside = c.querySelector('p.text-lg')!.closest('div')!.parentElement!.lastElementChild!;
+    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips', 'Linked wallets', 'Money loops back · not counted']);
+  });
+
   it('a sale a built-in and your lens both caught says your lens also catches it', async () => {
     roundTrip();
     state.lenses = [lens(7, 'Fast flips', { 1: {} })];
