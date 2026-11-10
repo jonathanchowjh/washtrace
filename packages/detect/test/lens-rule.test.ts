@@ -91,7 +91,7 @@ describe('checkRule errors', () => {
     const r = clone();
     r.edges['nft-token'].use = false;
     r.minCycles = 2;
-    expect(errorOf(r)).toBe('Going round at least 2 times needs "NFT: same token" switched on.');
+    expect(errorOf(r)).toBe('At least 2 cycles needs "NFT: same token" switched on.');
   });
 
   it('refuses the unavailable row switched on, and takes other tokens', () => {
@@ -253,7 +253,7 @@ describe('COPIES', () => {
   it('bars a wallet linked to more than 20 of this collection\'s wallets in the money copies, as hubDegree does', () => {
     expect(COPIES.AU.rule.never).toEqual({ marketplaces: true, over: 20, addresses: [] });
     expect(COPIES.AC.rule.never).toEqual({ marketplaces: true, over: 20, addresses: [] });
-    expect(COPIES.AU.differs).toBe('Money loops back also needs the token to go round twice when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.');
+    expect(COPIES.AU.differs).toBe('Money loops back also needs two cycles when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.');
     expect(COPIES.AC.differs).toBe('Linked wallets also counts every round trip; this copy finds only the money link.');
   });
 });

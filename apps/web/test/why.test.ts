@@ -9,9 +9,9 @@ const text = (parts: WhyPart[]) => parts.map((p) => p.text).join('');
 
 describe('why a row is in a lens list', () => {
   it('says loops, pairs, wallets and tails in one form for every lens', () => {
-    expect(text(tokenWhy('A', { ...T, loops: 1, pairs: 0, wallets: 3, laps: 2 }))).toBe('1 loop among 3 wallets, round twice');
+    expect(text(tokenWhy('A', { ...T, loops: 1, pairs: 0, wallets: 3, laps: 2 }))).toBe('1 loop among 3 wallets, 2 cycles');
     expect(text(tokenWhy('A', { ...T, loops: 3, wallets: 4, laps: 3, closedByMoney: 2 }))).toBe('3 loops among 4 wallets, 2 closed by money');
-    expect(text(tokenWhy('A', { ...T, loops: 1, pairs: 1, wallets: 4, laps: 2, middles: 1 }))).toBe('1 loop and 1 linked pair among 4 wallets, round twice, 1 through a middle wallet');
+    expect(text(tokenWhy('A', { ...T, loops: 1, pairs: 1, wallets: 4, laps: 2, middles: 1 }))).toBe('1 loop and 1 linked pair among 4 wallets, 2 cycles, 1 through a middle wallet');
     expect(text(walletWhy('A', { ...W, loops: 1, pairs: 1, partners: 3 }))).toBe('in 1 loop and 1 linked pair with 3 wallets');
   });
 
@@ -26,7 +26,7 @@ describe('why a row is in a lens list', () => {
 
   it('the counts open the loops and the wallets open the wallet group; the rest is words', () => {
     expect(tokenWhy('A', { ...T, loops: 1, wallets: 3, laps: 2 })).toEqual([
-      { text: '1 loop', opens: 'loops' }, { text: ' among ' }, { text: '3 wallets', opens: 'wallets' }, { text: ', round twice' },
+      { text: '1 loop', opens: 'loops' }, { text: ' among ' }, { text: '3 wallets', opens: 'wallets' }, { text: ', 2 cycles' },
     ]);
     expect(walletWhy('A', { ...W, loops: 1, partners: 2 })).toEqual([
       { text: 'in ' }, { text: '1 loop', opens: 'loops' }, { text: ' with ' }, { text: '2 wallets', opens: 'wallets' },

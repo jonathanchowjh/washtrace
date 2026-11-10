@@ -36,7 +36,7 @@ export function configChange(body: Record<string, unknown>): Configure | string 
 
 /** Each rule as a reader names it, from what the rule's doc in detect's methods.ts says it limits. */
 export const RULE_LABELS: Record<keyof Rules, string> = {
-  minCycles: 'times round a pattern needs',
+  minCycles: 'cycles a pattern needs',
   reachDepth: 'longest money path followed',
   hubDegree: 'most wallets one wallet may link before it counts as an exchange or router',
   visitCap: 'wallets one money search may visit',

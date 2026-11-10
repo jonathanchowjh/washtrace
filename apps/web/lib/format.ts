@@ -65,11 +65,6 @@ export function plural(n: number, word: string, many = `${word}s`): string {
   return `${num(n)} ${n === 1 ? word : many}`;
 }
 
-/** How often a token went round a loop: "once", "twice", "5 times". A loop is the pattern; this is its count, never "cycles" or "laps". */
-export function timesRound(n: number): string {
-  return n === 1 ? 'once' : n === 2 ? 'twice' : `${num(n)} times`;
-}
-
 /** A guess at a duration, never shown to the minute: "about 40 min". A bound reads "at least" plus `floorTime` instead. */
 export function about(ms: number): string {
   const min = Math.max(1, Math.round(ms / 60_000));

@@ -1,5 +1,5 @@
 import type { Witness } from '@washtrace/detect';
-import { plural, timesRound } from '@/lib/format';
+import { plural } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
@@ -89,9 +89,8 @@ function spots(n: number): [number, number][] {
 /** The words a witness's picture stands for, as its accessible name. */
 export function evidenceLabel(w: Witness): string {
   if (w.kind === 'pair') return w.middle === null ? 'The seller and buyer are joined by money' : 'The seller and buyer are joined by money through one wallet';
-  const more = w.cycles > 1;
-  return w.kind === 'scc' ? `The token went round ${plural(w.wallets.length, 'wallet')}${more ? ` ${timesRound(w.cycles)}` : ''}`
-    : `A loop among ${plural(w.wallets.length, 'wallet')}, closed by money${more ? `, gone round ${timesRound(w.cycles)}` : ''}`;
+  const many = w.cycles > 1 ? `, ${plural(w.cycles, 'cycle')}` : '';
+  return w.kind === 'scc' ? `The token went round ${plural(w.wallets.length, 'wallet')}${many}` : `A loop among ${plural(w.wallets.length, 'wallet')}, closed by money${many}`;
 }
 
 // Beyond six wallets a ring of dots says no more than six do; the label keeps the count.
