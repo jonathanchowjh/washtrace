@@ -175,7 +175,7 @@ scripts/
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
-doc/                      Reference pages: methods.md, operating.md, api.md, upgrading.md, stored-data.md
+doc/                      Reference pages: methods.md, operating.md, api.md, upgrading.md, stored-data.md; images/ holds the demo screenshots
 paper/                    The paper and its slides (PDF)
 LICENSE, CITATION.cff     MIT for the code; how to cite the paper
 .githooks/pre-commit      See the hook above

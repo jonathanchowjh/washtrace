@@ -1,10 +1,12 @@
 # washtrace
 
-A wash trading detector for NFT collections on any EVM chain. It reads every
-transfer of the collections you watch and who paid whom among the wallets that
-traded them. It flags wash trades by three graph methods and says why each one
-was flagged. It runs as two services over one Postgres: a polling **worker**
-and a JSON **API** with a console.
+Wash trading is trading with yourself: the same person on both sides of a sale,
+to fake volume, prop up a price or farm a marketplace's rewards. washtrace finds
+it in NFT collections on any EVM chain. It reads every transfer of the
+collections you watch and who paid whom among the wallets that traded them. It
+flags wash trades by three graph methods and says why each one was flagged. It
+runs as two services over one Postgres: a polling **worker** and a JSON **API**
+with a console.
 
 It is the 2023 paper [*Detecting and quantifying wash trading of non-fungible
 tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf) (Chow)
@@ -18,6 +20,8 @@ marketplaces and three corrections are new.
   on Hugging Face: six Ethereum collections read from the chain, CC-BY-4.0.
 - **Docs:** [how the methods work](doc/methods.md), [operating it](doc/operating.md),
   the [API](doc/api.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for working on the code.
+
+![The demo's collection page: 18–25% of sales look like wash trading, 10 of 56 as round trips and up to 14 counting wallets linked by money](doc/images/collection.png)
 
 ## Quick start
 
@@ -39,14 +43,14 @@ walks through why each verdict is what it is.
 |---|---|---|---|---|
 | #101 | Sold back and forth between two wallets | flagged | flagged | flagged |
 | #102 | Sold round a ring of three wallets, twice | flagged | flagged | flagged |
-| #111 | The buyer pays the seller back | | flagged | flagged |
-| #112 | The buyer pays the seller back through a third wallet | | flagged | flagged |
-| #113 | The money comes back through three wallets that never traded | | flagged | |
-| #114 | One wallet funded both the seller and the buyer | | | flagged |
-| #116 | The seller and the buyer both paid the same wallet | | | flagged |
-| #1–#40 | Honest sales, every buyer funded by one exchange | | | |
-| #120 | Two loans through Blur Blend, then a sale | | | |
-| #130 | Sold once and bought back once | | | |
+| #111 | The buyer pays the seller back | – | flagged | flagged |
+| #112 | The buyer pays the seller back through a third wallet | – | flagged | flagged |
+| #113 | The money comes back through three wallets that never traded | – | flagged | – |
+| #114 | One wallet funded both the seller and the buyer | – | – | flagged |
+| #116 | The seller and the buyer both paid the same wallet | – | – | flagged |
+| #1–#40 | Honest sales, every buyer funded by one exchange | – | – | – |
+| #120 | Two loans through Blur Blend, then a sale | – | – | – |
+| #130 | Sold once and bought back once | – | – | – |
 
 **Against a real chain**, give it an RPC endpoint and an Etherscan key:
 
@@ -55,41 +59,73 @@ cp .env.example .env    # set WASHTRACE_RPC_1 and WASHTRACE_ETHERSCAN_KEY
 docker compose up --build
 ```
 
-Then watch a collection from the console, or `POST /api/collections`. The worker
-reads it forward to the finalized head, then the funding of every wallet that
-traded it, busiest first.
+Then watch a collection from the console, or `POST /api/collections`. A big
+collection takes days to read from the chain; [how it works](#how-it-works) says
+what the worker reads, in what order.
 
 **With no keys**, skip the `cp` and watch one of the six collections in [the
-dataset](#the-dataset). The worker downloads it and warns that no RPC is set, so
-only stored data is read until one is set in Settings.
+dataset](#the-dataset). Argonauts is the smallest download, about 320 MB:
+
+```sh
+curl -X POST http://localhost:8080/api/collections -H 'content-type: application/json' \
+  -d '{"chainId": 1, "address": "0x387c41b0b2f1128de44db1bcf8baad085f26392c"}'
+```
+
+The worker downloads it and warns that no RPC is set, so only stored data is read
+until one is set in Settings.
 
 The console and API are on port 8080 of this machine only.
 
+## How it works
+
+```mermaid
+flowchart LR
+  rpc["JSON-RPC<br/>transfers, receipts"] --> worker
+  es["Etherscan API V2<br/>who paid whom"] --> worker
+  hf["Hugging Face<br/>stored data"] --> worker
+  worker --> pg[("Postgres")]
+  pg --> api["api and console"]
+  api --> you["browser, JSON clients"]
+```
+
+The worker does the reading, on timers:
+
+1. **Ingest** loads a collection's stored data if the dataset has it, then reads
+   its ERC-721 transfers forward to the finalized head. A transfer in a known
+   marketplace's transaction is a sale, priced from that marketplace's logs
+   where it can be.
+2. **Fund** reads who paid whom for every wallet that traded, busiest first,
+   then follows that money out to wallets that never traded the collection.
+3. **Analyze** runs the three methods, and your lenses, whenever a collection's
+   data has changed.
+
+The api and console only read Postgres; neither calls a chain. So a slow read
+never slows a page, and either service can be restarted or scaled alone.
+
 ## The methods
 
-Each method flags transfers. A collection's **wash trade share** is the flagged
-share of its changes of owner, as in the paper's Tables 3 and 4; the collection
-page leads with sales. The console names the methods Round trips (SCC A), Money
-loops back (SCC AU) and Linked wallets (SCC AC).
+Each method flags transfers. A collection's **share** is the part of its trades
+a method flags: the collection page leads with the share of sales, and the share
+of changes of owner is the paper's Tables 3 and 4. The console uses the names in
+the first column; the paper's are in brackets.
 
-| Method | Flags a transfer when | Needs funding |
+| Method | Flags a transfer when | Needs who paid whom |
 |---|---|---|
-| **SCC A** | It lies in a strongly connected component of the token's own transfer graph with at least two cycles: wallets passing the token back and forth. | No |
-| **SCC AU** | It lies in a component of the token's transfers joined with the directed graph of money between its holders, where the money can run up to 30 wallets deep. A component closed by money counts on one cycle. | Yes |
-| **SCC AC** | SCC A flags it, or its two wallets are joined by money within two hops in either direction: one paid the other, or both share a funder, a sink or a middle. | Yes |
+| **Round trips** (SCC A) | It lies in a strongly connected component of the token's own transfer graph with at least two cycles: wallets passing the token back and forth. | No |
+| **Money loops back** (SCC AU) | It lies in a component of the token's transfers joined with the directed graph of money between its holders, where the money can run up to 30 wallets deep. A component closed by money counts on one cycle. | Yes |
+| **Linked wallets** (SCC AC) | Round trips flags it, or its two wallets are joined by money within two hops in either direction: one paid the other, or both share a funder, a sink or a middle. | Yes |
 
 Every flag carries a witness (the component and its cycle count, or the pair and
 what joins them), shown as a sentence and returned as data. A method that needs
-funding and has none reports itself **not run**, never 0%.
+who paid whom and has none reports itself **not run**, never 0%.
 
-**The headline range is Round trips to Linked wallets.** Money loops back still
-runs and keeps its card, but is not counted. In a placebo test on Terraforms and
-dotdotdot, with buyers relabelled at random among wallets of similar activity,
-it flagged as many sales as with the real buyers (Terraforms 71.7% against
-74–75%, dotdotdot 59.5% against 58–59%), and its share follows `hubDegree` and
-`visitCap` more than the data. Linked wallets clears the same test, though
-between a third and a half of what it adds over Round trips is chance. The test,
-its numbers and the thresholds are in [doc/methods.md](doc/methods.md).
+**The headline is a range, from Round trips to Linked wallets.** Money loops
+back still runs and keeps its card, but is not counted: in a placebo test, with
+buyers relabelled at random among wallets of similar activity, it flagged as many
+sales as with the real buyers (Terraforms 71.7% against 74–75%, dotdotdot 59.5%
+against 58–59%). Linked wallets clears the same test, though between a third and
+a half of what it adds over Round trips is chance. The test, the thresholds and
+each method on a demo token are in [doc/methods.md](doc/methods.md).
 
 ## The paper
 
@@ -107,12 +143,15 @@ above.
 
 ### From the paper to now
 
-Any JSON-RPC endpoint and Etherscan API V2 replace Moralis and Footprint
-Analytics; Seaport 1.1 to 1.6, Blur, LooksRare v2 and X2Y2 replace Seaport 1.4 and
-1.5; any EVM chain replaces Ethereum alone. ETH, internal transfers, WETH and
-Blur Pool replace ETH alone, and funding is followed out of traders so SCC AU's
-depth 30 reaches outside the collection. Only finalized blocks are read, so a
-stored transfer is never retracted.
+| | The paper (2023) | washtrace |
+|---|---|---|
+| Data sources | Moralis, Footprint Analytics | Any JSON-RPC endpoint, Etherscan API V2 |
+| Chains | Ethereum | Any EVM chain |
+| Marketplaces | Seaport 1.4 and 1.5 | Seaport 1.1 to 1.6, Blur, LooksRare v2, X2Y2 |
+| Money | ETH | ETH, internal transfers, WETH, Blur Pool, and Other tokens if read |
+| Whose money | Traders' | Traders', then followed out (`follow.hops`), so SCC AU's depth 30 reaches outside the collection |
+
+Only finalized blocks are read, so a stored transfer is never retracted.
 
 Three corrections, each with a test:
 
@@ -141,16 +180,21 @@ The standards and sources washtrace reads: [ERC-721](https://eips.ethereum.org/E
 
 The console's own words.
 
+**Reading a verdict**
+
 - **Lens.** One rule for what counts as a wash trade: the three methods, and
   [yours](#your-own-lenses).
 - **Share.** The part of the trades a lens judged that it flags. The collection
   page leads with sales; the analysis also gives changes of owner and volume.
-- **So far / at least.** "So far": reads still running can move the share. "At
-  least": waiting will not close it (a search cap, a missing Etherscan key, a
-  limit).
 - **Judged.** Looked at by a lens. "Not judged yet" is a trade past the block the
   latest analysis or run read to, never shown as clean. Burns and moves into or
   out of custody are not trades and are never judged.
+- **So far / at least.** "So far": reads still running can move the share. "At
+  least": waiting will not close it (a search cap, a missing Etherscan key, a
+  limit).
+
+**Reading money**
+
 - **Money read.** How many traders are checked, and how many wallets out the
   worker follows.
 - **Wallets out.** Hops of money followed out of a trader (`follow.hops`, "Follow
@@ -159,18 +203,21 @@ The console's own words.
 - **Wallets between.** The wallets on a loop between seller and buyer.
 - **Reach.** The wallets a collection's money has been walked to. The console
   says "Finding the wallets up to N wallets out".
+- **Read again.** Reading a trader's money and other tokens a second time after
+  it trades again (`follow.reread`, off by default).
 - **Other tokens.** An edge type for payments in a fixed list of tokens (USDC,
   USDT, DAI and APE on Ethereum; USDC and DAI on Base; none elsewhere), with no
   smallest amount: washtrace has no prices.
 - **Payees.** The wallets a trader paid in those tokens; reading their tokens too
   is off by default (`tokens.payees`).
+
+**In a token's graph**
+
+- **Custody.** A contract holding a token without owning it, such as a Blur Blend
+  loan. A → escrow → B is one hop A → B; A → escrow → A is none.
 - **Bridge.** The paper's fix for missing transfers: an unobserved edge from a
   token's last holder to the next sender. Never flagged or counted; the console
   does not name it.
-- **Custody.** A contract holding a token without owning it, such as a Blur Blend
-  loan. A → escrow → B is one hop A → B; A → escrow → A is none.
-- **Read again.** Reading a trader's money and other tokens a second time after
-  it trades again (`follow.reread`, off by default).
 
 ## Pages
 
@@ -207,6 +254,27 @@ reads "so far" meanwhile. **Preview** tries the unsaved rule on a sample of 2,00
 sales (`PREVIEW_SAMPLE`) and compares its catch with Round trips. **Save and
 run** queues the lens's run. The lens routes are in [doc/api.md](doc/api.md).
 
+## The dataset
+
+Reading a big collection from the chain takes days, so its data is cut once and
+published to Hugging Face. When you watch a collection the dataset holds, the
+worker downloads it, loads it, then reads on from the chain. The default dataset
+holds six Ethereum collections, read through block 26299951 (October 2026):
+
+| Collection | Address | Transfers | Money trail |
+|---|---|---|---|
+| Argonauts | [`0x387c…392c`](https://etherscan.io/address/0x387c41b0b2f1128de44db1bcf8baad085f26392c) | 1.3 MB | 321.0 MB |
+| Terraforms | [`0x4e1f…0e56`](https://etherscan.io/address/0x4e1f41613c9084fdb9e34e11fae9412427480e56) | 2.9 MB | 621.8 MB |
+| Meebits | [`0x7bd2…6bc7`](https://etherscan.io/address/0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7) | 6.3 MB | 997.0 MB |
+| Dreadfulz | [`0x81ae…5aa8`](https://etherscan.io/address/0x81ae0be3a8044772d04f32398bac1e1b4b215aa8) | 1.6 MB | 368.2 MB |
+| BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.8 MB |
+| dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.8 MB |
+
+Each file is zstd-compressed CSV; a money trail is two files, and the table adds
+their sizes. The [dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
+gives the columns and a pandas example. How the worker loads it is in
+[doc/stored-data.md](doc/stored-data.md).
+
 ## Configuration
 
 Both services read the same variables; in Compose they share one `.env`. A
@@ -217,7 +285,7 @@ pass.
 |---|---|---|
 | `WASHTRACE_STORE_URL` | | Postgres for the `washtrace` schema. Required; `DATABASE_URL` is read if unset. |
 | `WASHTRACE_RPC_<chainId>` | `rpc.1` (Ethereum only) | JSON-RPC URL per chain, such as `WASHTRACE_RPC_8453`. Finding a deployment block needs archive state; otherwise pass `fromBlock`. |
-| `WASHTRACE_ETHERSCAN_KEY` | `etherscan.key` | Etherscan API V2 key, one for every chain. Without it, SCC AU and AC use only a stored money trail. |
+| `WASHTRACE_ETHERSCAN_KEY` | `etherscan.key` | Etherscan API V2 key, one for every chain. Without it, Money loops back and Linked wallets use only a stored money trail. |
 | `WASHTRACE_ETHERSCAN_RPS` | `etherscan.rps` | Calls per second. Default 4; the free plan allows 5. |
 | `WASHTRACE_ETHERSCAN_URL` | `etherscan.url` | Any API that answers Etherscan's account actions, such as Blockscout. Defaults to Etherscan V2. A console URL never receives a `.env` key ([why](doc/operating.md#etherscan-and-other-explorers)). |
 | `WASHTRACE_FOLLOW_HOPS` | `follow.hops` | Hops of money followed out of a trader. Default 3, at most 10; 0 reads traders only, as the paper did. |
@@ -240,34 +308,13 @@ accepted only from the machine itself. Health checks, scaling, shutdown and the
 worker's four jobs are in [doc/operating.md](doc/operating.md); what each
 migration does at boot is in [doc/upgrading.md](doc/upgrading.md).
 
-### The dataset
-
-Reading a big collection from the chain takes days, so its data is cut once and
-published to Hugging Face. When you watch a collection the dataset holds, the
-worker downloads it, loads it, then reads on from the chain. The default dataset
-holds six Ethereum collections, read through block 26299951 (October 2026):
-
-| Collection | Address | Transfers | Money trail |
-|---|---|---|---|
-| Argonauts | [`0x387c…392c`](https://etherscan.io/address/0x387c41b0b2f1128de44db1bcf8baad085f26392c) | 1.3 MB | 321.0 MB |
-| Terraforms | [`0x4e1f…0e56`](https://etherscan.io/address/0x4e1f41613c9084fdb9e34e11fae9412427480e56) | 2.9 MB | 621.8 MB |
-| Meebits | [`0x7bd2…6bc7`](https://etherscan.io/address/0x7bd29408f11d2bfc23c34f18275bbf23bb716bc7) | 6.3 MB | 997.0 MB |
-| Dreadfulz | [`0x81ae…5aa8`](https://etherscan.io/address/0x81ae0be3a8044772d04f32398bac1e1b4b215aa8) | 1.6 MB | 368.2 MB |
-| BoredApeYachtClub | [`0xbc4c…f13d`](https://etherscan.io/address/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d) | 10.9 MB | 955.8 MB |
-| dotdotdot | [`0xce25…92c3`](https://etherscan.io/address/0xce25e60a89f200b1fa40f6c313047ffe386992c3) | 1.0 MB | 414.8 MB |
-
-Each file is zstd-compressed CSV; a money trail is two files, and the table adds
-their sizes. The [dataset card](https://huggingface.co/datasets/jonathanmiro97/washtrace-data)
-gives the columns and a pandas example. How the worker loads it is in
-[doc/stored-data.md](doc/stored-data.md).
-
 ## Known limits
 
 - **Money is followed one way.** The worker follows money out of each trader,
   `follow.hops` deep, only through wallets that paid at most 25 others
-  (`FOLLOW_FANOUT`). An exchange or a busy trader is not followed, so a path back
-  through one stays unseen. Demo token #113 is the case this exists for: AU flags
-  it, AC cannot.
+  (`FOLLOW_FANOUT`). Following is what finds demo token #113's way back, but an
+  exchange or a busy trader is not followed, so a path back through one stays
+  unseen.
 - **Reads are a snapshot unless read again is on.** A wallet's money and Other
   tokens are read once, so a later payment is not seen. `follow.reread` reads a
   trader again when it trades again; wallets loaded from a stored money trail
