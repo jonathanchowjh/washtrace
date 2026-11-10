@@ -72,7 +72,7 @@ export default async function LabPage() {
         return (
           <Section key={lens.id} id={lens.key} title={lens.name}>
             <div className="mb-3 flex items-start gap-2"><TierMark tone="own" className="mt-1.5" /><RulePicture rule={lens.rule} /></div>
-            <RunsOn lensId={lens.id} rows={rows} writable={writable} />
+            <RunsOn lensId={lens.id} rule={lens.rule} rows={rows} writable={writable} />
           </Section>
         );
       })}

@@ -1,5 +1,7 @@
 'use client';
 
+import type { LensRule } from '@washtrace/detect/lens-rule';
+import { RowPreview } from './row-preview';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -23,10 +25,10 @@ export type RunRow = {
 
 /**
  * Which collections a lens runs on, as a checklist: tick the ones to run it
- * on and Run on N queues each. A preview is never started here: one runs at a
- * time on the worker, so each collection's opens on its own tab, by hand.
+ * on and Run on N queues each. A preview starts only from its row's button:
+ * one runs at a time on the worker, so none is started for the reader.
  */
-export function RunsOn({ lensId, rows, writable }: { lensId: number; rows: readonly RunRow[]; writable: boolean }) {
+export function RunsOn({ lensId, rule, rows, writable }: { lensId: number; rule: LensRule; rows: readonly RunRow[]; writable: boolean }) {
   const router = useRouter();
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -58,7 +60,7 @@ export function RunsOn({ lensId, rows, writable }: { lensId: number; rows: reado
             <th className="px-3 py-2 font-medium">Runs on</th>
             <th className="px-3 py-2 font-medium">Where its run stands</th>
             <th className="px-3 py-2 font-medium">Data it still needs here</th>
-            <th className="px-3 py-2"><span className="sr-only">Edit or preview</span></th>
+            <th className="px-3 py-2"><span className="sr-only">Preview or edit</span></th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -73,7 +75,12 @@ export function RunsOn({ lensId, rows, writable }: { lensId: number; rows: reado
                 {r.state ?? (r.share === null ? null : 'current')}
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">{r.needs ?? '—'}</td>
-              <td className="px-3 py-2 text-right text-xs"><Link href={r.edit} className="text-muted-foreground hover:text-foreground hover:underline">Edit or preview here ›</Link></td>
+              <td className="px-3 py-2 text-right text-xs">
+                <span className="inline-flex flex-wrap items-center justify-end gap-3">
+                  <RowPreview chainId={r.chainId} address={r.address} rule={rule} writable={writable} />
+                  <Link href={r.edit} className="text-muted-foreground hover:text-foreground hover:underline">Edit here ›</Link>
+                </span>
+              </td>
             </tr>
           ))}
         </tbody>

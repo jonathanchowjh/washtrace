@@ -62,7 +62,7 @@ describe('Runs on', () => {
     vi.stubGlobal('fetch', fetchMock);
     const { RunsOn } = await import('@/components/runs-on');
     const row = (address: string, name: string) => ({ chainId: 1, address, name, tab: '/t', edit: '/e', state: 'not run here', share: null, needs: null, busy: false });
-    render(<RunsOn lensId={7} rows={[row(A, 'Demo Apes'), row(B, 'Cats')]} writable />);
+    render(<RunsOn lensId={7} rule={DEFAULT_RULE} rows={[row(A, 'Demo Apes'), row(B, 'Cats')]} writable />);
     fireEvent.click(screen.getByLabelText('Run on Demo Apes'));
     fireEvent.click(screen.getByLabelText('Run on Cats'));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Run on 2 collections' })); });
@@ -76,7 +76,7 @@ describe('Runs on', () => {
     vi.stubGlobal('fetch', fetchMock);
     const { RunsOn } = await import('@/components/runs-on');
     const row = (address: string, name: string) => ({ chainId: 1, address, name, tab: '/t', edit: '/e', state: 'not run here', share: null, needs: null, busy: false });
-    render(<RunsOn lensId={7} rows={[row(A, 'Demo Apes'), row(B, 'Cats')]} writable />);
+    render(<RunsOn lensId={7} rule={DEFAULT_RULE} rows={[row(A, 'Demo Apes'), row(B, 'Cats')]} writable />);
     fireEvent.click(screen.getByLabelText('Run on Demo Apes'));
     fireEvent.click(screen.getByLabelText('Run on Cats'));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Run on 2 collections' })); });
@@ -84,6 +84,25 @@ describe('Runs on', () => {
     expect(screen.getByText(/Demo Apes: Not a watched collection\. Those still ticked are not queued\./)).toBeTruthy();
     expect([A, B].map((a) => (screen.getByLabelText(a === A ? 'Run on Demo Apes' : 'Run on Cats') as HTMLInputElement).checked)).toEqual([true, true]);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('a row\'s preview', () => {
+  it('starts only from its button, with the lens\'s rule on that collection, and says the share once done', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => (init?.method === 'POST'
+      ? { ok: true, status: 202, json: async () => ({ id: 5 }) }
+      : { ok: true, status: 200, json: async () => ({ status: 'done', progress: 1, error: null, result: { caught: 1, sampled: 8, judged: 8 } }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { RowPreview } = await import('@/components/row-preview');
+    render(<RowPreview chainId={1} address={A} rule={DEFAULT_RULE} writable />);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ chainId: 1, address: A, rule: DEFAULT_RULE });
+    expect(String(fetchMock.mock.calls[1]![0])).toBe('/api/lenses/previews/5');
+    expect(screen.getByText('Caught 12.5% of 8 sales judged')).toBeTruthy();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 });
 

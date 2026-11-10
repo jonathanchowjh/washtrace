@@ -149,7 +149,8 @@ export default async function MethodsPage({ params, searchParams }: Props) {
           <LensTabs
             base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyReasons={moneyReasons} tokens={tokensFloor}
             coverage={{ trail: c.trailImportedSha !== null, funded, funding: config.funding, coming, silent: silent !== null }} writable={writable}
-            editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing} /> : null}
+            editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing}
+              others={all.filter((o) => o.id !== c.id).map((o) => ({ chainId: o.chainId, address: o.address, name: o.name ?? short(o.address) }))} /> : null}
           >
             {comparing ? <Compare base={base} both={grid?.both ?? {}} not={grid?.not ?? {}} keys={ctx.ran} own={own} left={leftOut(a, runs, ctx.ran, { trail: c.trailImportedSha !== null, funded, coming, silent: silent !== null })} /> : null}
             {t && !comparing ? <LensStats m={method} t={t} own={own} loops={!yours && a?.loops && ctx.ran.includes(method) ? a.loops[method as Method] : null} base={base}
