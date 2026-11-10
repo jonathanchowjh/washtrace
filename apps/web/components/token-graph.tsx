@@ -36,7 +36,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
 }) {
   // Its own arrowheads: a page can draw several (the trade page one a transfer), and ids must not repeat on a page. Only an id's letters and digits, so it reads the same inside url(#…).
   const marker = `${useId().replace(/[^a-zA-Z0-9]/g, '')}-arrow`;
-  const { size, nodes, edges } = drawing;
+  const { view, nodes, edges } = drawing;
   const litEdges = new Set(lit.edges), litNodes = new Set(lit.nodes);
   const any = litEdges.size > 0 || litNodes.size > 0;
   const labels = nodes.length <= 24;
@@ -49,7 +49,8 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   const labelHref = (e: DrawnEdge) => (e.row !== null ? rowHrefs[e.row] : e.token === undefined || base === '' ? undefined : `${base}/t/${e.token}`);
   return (
     <figure className="rounded-lg border bg-card p-3">
-      <svg viewBox={`0 0 ${size} ${size}`} className="mx-auto block h-auto w-full max-w-[560px]" role="group" aria-label={label}>
+      {/* The box round what is drawn, never wider on screen than it is drawn: a two-wallet loop is a short strip, not a square of empty card. */}
+      <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px` }} className="mx-auto block h-auto w-full" role="group" aria-label={label}>
         <defs>
           {(['cycle', 'money', 'apart', 'clean', 'flow'] as const).map((k) => (
             <marker key={k} id={`${marker}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -91,7 +92,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
               <title>{n.id}</title>
               <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
               {labels ? (
-                <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.lx < n.x - 4 ? 'end' : n.lx > n.x + 4 ? 'start' : 'middle'} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
+                <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
               ) : null}
             </>
           );

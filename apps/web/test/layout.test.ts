@@ -101,6 +101,7 @@ describe('layout', () => {
         ],
         "nodes": [
           {
+            "anchor": "middle",
             "first": true,
             "id": "0x00000000000000000000000000000000000000w1",
             "lx": 280,
@@ -110,6 +111,7 @@ describe('layout', () => {
             "y": 100,
           },
           {
+            "anchor": "start",
             "first": false,
             "id": "0x00000000000000000000000000000000000000w2",
             "lx": 458.4012331795944,
@@ -119,6 +121,7 @@ describe('layout', () => {
             "y": 370,
           },
           {
+            "anchor": "end",
             "first": false,
             "id": "0x00000000000000000000000000000000000000w3",
             "lx": 101.59876682040567,
@@ -129,6 +132,12 @@ describe('layout', () => {
           },
         ],
         "size": 560,
+        "view": {
+          "h": 349.00000000000006,
+          "w": 516.8024663591887,
+          "x": 21.59876682040567,
+          "y": 54,
+        },
       }
     `);
   });
@@ -148,6 +157,23 @@ describe('layout', () => {
     const edges = layout(ts, [], []).edges.filter((e) => e.kind === 'asset');
     expect(edges).toHaveLength(1);
     expect(edges[0]!.tone).toBe('cycle');
+  });
+
+  it('draws a small graph in the box round it, not the whole square, its labels inside', () => {
+    const d = layout([t(a, b), t(b, a)], [], []);
+    // Two holders, left and right: a strip, far shorter than the square. Its width is their labels', outside the ring.
+    expect(d.view.h).toBeLessThan(d.size / 3);
+    expect(d.view.h).toBeLessThan(d.view.w / 2);
+    for (const n of d.nodes) {
+      expect(n.x).toBeGreaterThan(d.view.x);
+      expect(n.x).toBeLessThan(d.view.x + d.view.w);
+      expect(n.ly).toBeGreaterThan(d.view.y);
+      expect(n.ly).toBeLessThan(d.view.y + d.view.h);
+    }
+    // The left holder's label ends at it, the right's starts there, so each sits outside the pair.
+    expect(d.nodes.map((n) => n.anchor)).toEqual(['end', 'start']);
+    // A ring of three is drawn taller.
+    expect(layout(LAB, [], []).view.h).toBeGreaterThan(d.view.h);
   });
 
   it('draws no node for the zero address and no edge for a mint', () => {

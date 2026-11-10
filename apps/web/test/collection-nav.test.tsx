@@ -74,6 +74,14 @@ describe('the collection tab bar', () => {
     expect(['Rings', 'Tokens', 'Wallets', 'Trades'].map((t) => other.tab(t).textContent)).toEqual(['Rings6', 'Tokens', 'Wallets', 'Trades56']);
   });
 
+  it('on the Methods page, lights Overview, which it is under, and says Methods in the parent line', () => {
+    const { el, tab } = nav(`${BASE}/methods`);
+    expect(tab('Overview').getAttribute('aria-current')).toBe('page');
+    expect(el.querySelector('p')!.textContent).toContain('Coll›Methods');
+    cleanup();
+    expect(nav(`${BASE}/t/14`).el.querySelector('p')!.textContent).not.toContain('Methods');
+  });
+
   it('names the collection it belongs to, linked to its overview', () => {
     const { el } = nav(`${BASE}/t/14`);
     const up = [...el.querySelectorAll('p a')].map((a) => [a.textContent, a.getAttribute('href')]);

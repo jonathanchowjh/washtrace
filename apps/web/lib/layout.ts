@@ -39,8 +39,8 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 /** Past this many transfers between one pair, the fan's arcs leave the drawing and stop being countable. */
 const FAN_MAX = 6;
 
-/** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it. */
-interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
+/** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it; `anchor`, which end of the label sits there. */
+interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; anchor: 'start' | 'middle' | 'end'; middle: boolean; first: boolean }
 /**
  * `tx` and `row` are the transfer an asset arrow opens and numbers (a bundle's
  * first), and null for money. `from` and `to` are the wallets it joins. Tone
@@ -52,7 +52,8 @@ interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; 
 export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[] }
 /** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. A lens of yours's loop is one reason, of its one lens. */
 export interface DrawnLoop { key: string; methods: LensKey[]; edges: string[]; nodes: string[] }
-export interface Drawing { size: number; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
+/** `view`: the part of the `size` square the drawing covers, its labels included, so a small graph is not drawn in a mostly empty square. */
+export interface Drawing { size: number; view: { x: number; y: number; w: number; h: number }; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
 /** What an edge's title says of its flags: nothing for a clean one, and that an apart lens alone does not count. */
 const flaggedNote = (tone: Tone) => (tone === 'clean' ? '' : tone === 'apart' ? ` · flagged only by ${LENSES.AU.name}, not counted` : ' · flagged');
@@ -135,7 +136,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
       const y = lone ? c : c + r * Math.sin(angle);
       const out = lone ? 0 : middle ? -Math.PI / 2 : angle;
       const gap = lone ? 0 : 26;
-      return { id, x, y, lx: x + gap * Math.cos(out), ly: (lone ? y + 24 : y + gap * Math.sin(out)), middle, first: !middle && i === 0 };
+      const lx = x + gap * Math.cos(out);
+      return { id, x, y, lx, ly: (lone ? y + 24 : y + gap * Math.sin(out)), anchor: lx < x - 4 ? 'end' : lx > x + 4 ? 'start' : 'middle', middle, first: !middle && i === 0 };
     });
   // Room past the ring for a label set outward: an address is about 70 px of mono text.
   const r = c - 100;
@@ -261,7 +263,35 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     if (by.length === 0) continue;
     Object.assign(e, { tone: 'own', yours: by, title: `${e.title} · not flagged by a built-in lens; on a loop of ${andList(by)}` });
   }
-  return { size, nodes, edges, loops };
+  return { size, view: viewOf(nodes, edges, size), nodes, edges, loops };
+}
+
+/** A wallet's label, short(address) in 10 px mono, and one character of an arrow's, in px: enough to keep them inside the view. */
+const NAME_W = 68, CHAR_W = 6;
+
+/**
+ * The box round everything drawn: each wallet and its label, and each arrow by
+ * the points of its path (a curve stays inside them) and its label, padded.
+ * With nothing drawn, the whole square.
+ */
+function viewOf(nodes: readonly DrawnNode[], edges: readonly DrawnEdge[], size: number): Drawing['view'] {
+  const xs: number[] = [], ys: number[] = [];
+  const box = (x0: number, x1: number, y0: number, y1: number) => { xs.push(x0, x1); ys.push(y0, y1); };
+  for (const n of nodes) {
+    box(n.x - 10, n.x + 10, n.y - 10, n.y + 10);
+    const left = n.anchor === 'end' ? n.lx - NAME_W : n.anchor === 'start' ? n.lx : n.lx - NAME_W / 2;
+    box(left, left + NAME_W, n.ly - 8, n.ly + 8);
+  }
+  for (const e of edges) {
+    const v = (e.d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g) ?? []).map(Number);
+    for (let i = 0; i + 1 < v.length; i += 2) box(v[i]!, v[i]!, v[i + 1]!, v[i + 1]!);
+    const half = (e.label.length * CHAR_W) / 2;
+    if (half > 0) box(e.lx - half, e.lx + half, e.ly - 8, e.ly + 8);
+  }
+  if (xs.length === 0) return { x: 0, y: 0, w: size, h: size };
+  const pad = 12;
+  const x = Math.min(...xs) - pad, y = Math.min(...ys) - pad;
+  return { x, y, w: Math.max(...xs) + pad - x, h: Math.max(...ys) + pad - y };
 }
 
 /** A quadratic arc from a to b, bowed by `k` steps; a self-loop is a teardrop pointing away from the centre. */
