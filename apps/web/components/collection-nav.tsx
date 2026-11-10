@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { num } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
@@ -50,6 +51,35 @@ export function revealTab(bar: HTMLElement, tab: HTMLElement) {
   const right = tab.offsetLeft + tab.offsetWidth;
   if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
   else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
+}
+
+/** A tab's count, as a small grey pill. */
+export function Badge({ n }: { n: number }) {
+  return <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{num(n)}</span>;
+}
+
+type Counted = 'tokens' | 'wallets' | 'trades';
+// One answer a page for all three badges, asked again only when a new analysis lands (`src` names it).
+const asked = new Map<string, Promise<Partial<Record<Counted, number | null>>>>();
+
+/**
+ * A tab's count, read from the browser once the page is up: in the layout it
+ * was read again for every prefetch of a tab and every 15 s refresh. A count
+ * that cannot be read shows nothing, as before.
+ */
+export function TabCount({ src, kind }: { src: string; kind: Counted }) {
+  const [n, setN] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    let counts = asked.get(src);
+    if (counts === undefined) {
+      counts = fetch(src).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+      asked.set(src, counts);
+    }
+    void counts.then((c) => { if (live) setN(typeof c[kind] === 'number' ? c[kind] : null); });
+    return () => { live = false; };
+  }, [src, kind]);
+  return n === null ? null : <Badge n={n} />;
 }
 
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
