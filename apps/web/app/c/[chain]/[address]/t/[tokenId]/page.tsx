@@ -26,6 +26,7 @@ import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
+import { collectionOf } from '@/lib/collection-reads';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { StepLine } from '@/components/step-line';
@@ -39,9 +40,14 @@ const SHOW_NAME: Record<Show, string> = { all: 'All', flagged: 'Flagged', sales:
 
 type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string; from?: string }> };
 
+/** The token, then its collection, as a ring's page and the lists name theirs. */
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { tokenId } = await params;
-  return { title: `#${tokenId}` };
+  const p = await params;
+  const chainId = chainOf(p.chain);
+  const address = addressOf(p.address);
+  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const token = `#${tokenIdOf(p.tokenId) === null ? p.tokenId : tokenLabel(p.tokenId)}`;
+  return { title: c === null ? token : `${token} · ${c.name ?? short(c.address)}` };
 }
 
 /**
