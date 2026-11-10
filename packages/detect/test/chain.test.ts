@@ -218,12 +218,30 @@ describe('Chain.tokenTransfers and Chain.receipt', () => {
     expect(got.map((t) => t.blockNumber)).toEqual([1, 251, 501, 751]);
   });
 
-  it('a later token starts at the width the first one was refused down to', async () => {
+  it('a later token of the same check starts at the width the first one was refused down to', async () => {
     const { c, ranges } = node(capped(300));
-    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000);
+    const width = { span: Infinity };
+    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width);
+    expect(width.span).toBe(250);
     ranges.length = 0;
-    await c.tokenTransfers(TERRAFORMS, '8', 1, 1_000);
+    await c.tokenTransfers(TERRAFORMS, '8', 1, 1_000, Infinity, width);
     expect(ranges).toEqual([[1, 250], [251, 500], [501, 750], [751, 1_000]]);
+    // The Chain lives as long as the worker: another check learns afresh.
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '9', 1, 1_000);
+    expect(ranges[0]).toEqual([1, 1_000]);
+  });
+
+  it('an outage teaches no width: only a query answered after a refusal does', async () => {
+    let down = true;
+    const { c, ranges } = node((from) => (down ? new Error('upstream unavailable') : [log(7, from)]));
+    const width = { span: Infinity };
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width)).rejects.toThrow('upstream unavailable');
+    expect(width.span).toBe(Infinity);
+    down = false;
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width);
+    expect(ranges).toEqual([[1, 1_000]]);
   });
 
   it('stops with a sentence once the check\'s time is up', async () => {

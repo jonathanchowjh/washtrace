@@ -54,8 +54,6 @@ export class Chain {
    */
   private readonly checkClient: PublicClient;
   private span = START_SPAN;
-  /** The widest token-filtered log query this provider took: tokenTransfers' own span, as wide as asked until refused. */
-  private tokenSpan = Infinity;
 
   constructor(readonly chainId: number, url: string) {
     this.client = createPublicClient({ transport: http(url, { batch: { batchSize: RECEIPT_WIDTH }, retryCount: 3, timeout: 30_000 }) });
@@ -157,21 +155,27 @@ export class Chain {
    * sales where a marketplace filled them: what a spot check reads instead
    * of the whole collection. Filtered to the token, a query returns few
    * logs, so a refusal is the provider's cap on the range: it asks for the
-   * whole range first, halves on a refusal, and never grows back, and a
-   * later token starts at the width learned. That width is its own: `span`
-   * is learned for whole collections, and a token's narrow query would
-   * teach it a width a collection's query cannot take. Past `until` (epoch
-   * milliseconds) it stops with a sentence.
+   * whole range first, halves on a refusal, and never grows back. `width`
+   * is what one check learns: a query answered after a refusal sets it, so
+   * the check's later tokens start there, and an outage, refused down to
+   * one block, teaches nothing. It is the caller's, not the Chain's: the
+   * worker keeps a Chain for its life, and one bad minute would narrow every
+   * check after it. Nor is it `span`, learned for whole collections, which a
+   * token's narrow query would teach a width a collection's query cannot
+   * take. Past `until` (epoch milliseconds) it stops with a sentence.
    */
-  async tokenTransfers(collection: string, tokenId: string, from: number, to: number, until = Infinity): Promise<Transfer[]> {
+  async tokenTransfers(
+    collection: string, tokenId: string, from: number, to: number, until = Infinity, width = { span: Infinity },
+  ): Promise<Transfer[]> {
     const topic = `0x${BigInt(tokenId).toString(16).padStart(64, '0')}`;
     const transfers: Transfer[] = [];
+    let span = width.span;
+    let refused = false;
     while (from <= to) {
       if (Date.now() > until) {
         throw new Error(`Reading the history of token ${tokenId} took longer than a spot check allows: this RPC answers only narrow log queries.`);
       }
-      const span = Math.min(to - from + 1, this.tokenSpan);
-      const through = from + span - 1;
+      const through = Math.min(to, from + span - 1);
       let logs: RawLog[];
       try {
         logs = await this.client.request({
@@ -179,10 +183,12 @@ export class Chain {
           params: [{ address: collection as `0x${string}`, topics: [TRANSFER, null, null, topic as `0x${string}`], fromBlock: hex(from), toBlock: hex(through) }],
         }) as unknown as RawLog[];
       } catch (err) {
-        if (span === 1 || isTransient(err)) throw err;
-        this.tokenSpan = Math.floor(span / 2);
+        if (through === from || isTransient(err)) throw err;
+        span = Math.floor((through - from + 1) / 2);
+        refused = true;
         continue;
       }
+      if (refused) width.span = Math.min(width.span, span);
       transfers.push(...logs.filter((l) => l.topics.length === 4 && !l.removed).map(toTransfer));
       from = through + 1;
     }

@@ -119,6 +119,8 @@ interface Trade { collection: string; ref: number; seller: string; buyer: string
 export class SpotCheck {
   private deadline = 0;
   private readonly starts = new Map<string, number>();
+  /** The widest token log query the RPC took in this check, so its later tokens start there. */
+  private readonly width = { span: Infinity };
 
   constructor(readonly store: Store, readonly chain: Chain, readonly etherscan: Etherscan | null, readonly chainId: number) {}
 
@@ -144,7 +146,7 @@ export class SpotCheck {
     if (tokens.length > SPOT_TRADES_MAX) atLeast = true;
     const histories = new Map<string, Transfer[]>();
     for (const t of tokens.slice(0, SPOT_TRADES_MAX)) {
-      const read = await this.chain.tokenTransfers(t.collection, t.tokenId, await this.startOf(t.collection), to, this.deadline);
+      const read = await this.chain.tokenTransfers(t.collection, t.tokenId, await this.startOf(t.collection), to, this.deadline, this.width);
       // The checked transfers themselves, should a provider's logs lag its receipts.
       for (const m of moved) {
         if (m.collection === t.collection && m.tokenId === t.tokenId && !read.some((r) => r.txHash === m.txHash && r.logIndex === m.logIndex)) {
