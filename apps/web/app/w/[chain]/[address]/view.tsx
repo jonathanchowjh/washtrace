@@ -12,6 +12,9 @@ import { FLAGGED_ONLY_AU, HEADLINE, NOT_JUDGED, TINT_LEAD, answer, counted, tone
 import { cn } from '@/lib/utils';
 import { COUNTERPARTIES, FLOWS, TRADES, walletOpts, walletView, type WalletOpts } from '@/lib/views';
 import { Time } from '@/components/time';
+import { Suspense } from 'react';
+import { RingChips } from '@/components/rings';
+import { moneyFor } from '@washtrace/detect';
 
 /**
  * This page with `o`'s lists, filter and pages, defaults left out. Every link
@@ -60,7 +63,7 @@ function flaggedTone(page: Tone | null): Tone {
  */
 export async function WalletView({ chainId, address, sp, within }: {
   chainId: number; address: string; sp: Record<string, string | string[] | undefined>;
-  within?: { base: string; collection: string; name: string };
+  within?: { base: string; collection: string; name: string; id: number };
 }) {
   const parsed = walletOpts(sp);
   // Under a collection's tabs the collection is the route's: a ?collection= there narrows nothing further.
@@ -117,8 +120,10 @@ export async function WalletView({ chainId, address, sp, within }: {
   return (
     <>
       <Head
+        kind="wallet"
         title={<span className="font-mono">{short(address)}</span>}
         crumb={scope === undefined ? [{ href: '/', label: 'Collections' }] : []}
+        part={within === undefined ? undefined : <Suspense fallback={null}><RingChips id={within.id} base={within.base} money={moneyFor(chainId)} of={{ wallet: address }} /></Suspense>}
         sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext>
           {scope === undefined ? null : <> · its trades here · <Link href={walletHref(chainId, address)} className="hover:text-foreground hover:underline">in every collection</Link></>}</>}
       >

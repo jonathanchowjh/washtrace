@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-export type CollectionTab = 'overview' | 'tokens' | 'wallets' | 'trades';
+export type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
 
 /**
  * The tab a path under a collection belongs to: a list lights its own tab,
@@ -16,6 +16,7 @@ export type CollectionTab = 'overview' | 'tokens' | 'wallets' | 'trades';
  */
 export function tabOf(base: string, path: string): CollectionTab {
   const rest = path.startsWith(base) ? path.slice(base.length) : '';
+  if (rest.startsWith('/rings') || rest.startsWith('/r/')) return 'rings';
   if (rest.startsWith('/tokens') || rest.startsWith('/t/')) return 'tokens';
   if (rest.startsWith('/wallets') || rest.startsWith('/w/')) return 'wallets';
   if (rest.startsWith('/trades') || rest.startsWith('/tx/')) return 'trades';
@@ -39,6 +40,7 @@ export function lensOf(sp: URLSearchParams, tab: CollectionTab, lenses: readonly
 
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
   { tab: 'overview', label: 'Overview', kind: 'collection' },
+  { tab: 'rings', label: 'Rings', kind: 'ring' },
   { tab: 'tokens', label: 'Tokens', kind: 'token' },
   { tab: 'wallets', label: 'Wallets', kind: 'wallet' },
   { tab: 'trades', label: 'Trades', kind: 'transaction' },
@@ -66,7 +68,7 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
   const defaultLens = method === null || method === 'AC';
   const hrefOf = (tab: CollectionTab) =>
     tab === 'overview' ? base
-      : tab === 'trades' ? `${base}/trades`
+      : tab === 'trades' || tab === 'rings' ? `${base}/${tab}`
         : `${base}/${tab}${method === null ? '' : `?method=${encodeURIComponent(method)}`}`;
   return (
     <div className="pt-4">
@@ -78,9 +80,10 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
         </Link>
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
-      <nav aria-label={`${name}: overview, tokens, wallets and trades`} className="mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
+      <nav aria-label={`${name}: overview, rings, tokens, wallets and trades`} className="mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
         {TABS.map(({ tab, label, kind }) => {
-          const count = tab === 'overview' || (tab !== 'trades' && !defaultLens) ? null : counts[tab];
+          // Rings and Trades are no lens's lists: their counts always stand.
+          const count = tab === 'overview' || ((tab === 'tokens' || tab === 'wallets') && !defaultLens) ? null : counts[tab];
           return (
             <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
               className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',

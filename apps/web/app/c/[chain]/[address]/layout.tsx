@@ -33,13 +33,18 @@ export default async function CollectionLayout({ params, children }: Props) {
   return (
     <>
       <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analysedAt={c.latest?.ranAt ?? null} lenses={lenses}
-        counts={{ tokens: count('tokens'), wallets: count('wallets'), trades: count('trades') }} />
+        counts={{ rings: c.latest?.rings == null ? null : <Badge n={c.latest.rings} />, tokens: count('tokens'), wallets: count('wallets'), trades: count('trades') }} />
       {children}
     </>
   );
 }
 
 type Counted = 'tokens' | 'wallets' | 'trades';
+
+/** A tab's count. Rings' is the analysis's own, saved with it, so it needs no read. */
+function Badge({ n }: { n: number }) {
+  return <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{num(n)}</span>;
+}
 
 /**
  * A tab's count as its list counts it: the trades are every sale, as Trades
@@ -55,7 +60,7 @@ async function Count({ c, kind }: { c: CollectionRow; kind: Counted }) {
       : !ctx.ran.includes('AC') ? null
         : kind === 'tokens' ? (await s.lensTokens(c.id, 'AC', none, ctx)).total
           : (await s.lensWallets(c.id, 'AC', none, ctx)).total;
-    return n === null ? null : <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{num(n)}</span>;
+    return n === null ? null : <Badge n={n} />;
   } catch {
     return null;
   }

@@ -7,15 +7,26 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-/** A page's title, the trail back up to it, and whatever it states on the right. */
-export function Head({ title, crumb = [], sub, children }: {
+const KIND_NAME: Record<Kind, string> = { collection: 'Collection', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
+
+/**
+ * A page's title, the trail back up to it, and whatever it states on the
+ * right. A page about one thing names its `kind` first, as a symbol tile and a
+ * word, so every such page reads the same way: what it is, then which one.
+ * `part` is what it belongs to, such as its ring, as chips under the title.
+ */
+export function Head({ title, crumb = [], sub, kind, part, children }: {
   title: ReactNode;
   crumb?: { href: string; label: string }[];
   sub?: ReactNode;
+  kind?: Kind;
+  part?: ReactNode;
   children?: ReactNode;
 }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pt-6 pb-4">
+      <div className="flex min-w-0 items-start gap-3">
+      {kind ? <span aria-hidden className="mt-0.5 grid size-11 shrink-0 place-items-center rounded-lg border bg-card text-foreground"><KindIcon kind={kind} className="size-6" /></span> : null}
       <div className="min-w-0">
         {crumb.length > 0 ? (
           <nav aria-label="Trail" className="mb-1 flex flex-wrap gap-1 text-xs text-muted-foreground">
@@ -26,8 +37,11 @@ export function Head({ title, crumb = [], sub, children }: {
             ))}
           </nav>
         ) : null}
+        {kind ? <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{KIND_NAME[kind]}</p> : null}
         <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
         {sub ? <p className="mt-1 text-sm text-muted-foreground">{sub}</p> : null}
+        {part ? <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">{part}</div> : null}
+      </div>
       </div>
       {children ? <div className="flex flex-wrap items-center gap-3">{children}</div> : null}
     </header>

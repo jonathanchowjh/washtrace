@@ -168,3 +168,14 @@ describe('your lenses in the URL', () => {
     expect(c.map((x) => x.label)).toEqual(['Flagged by Blur 3-hop']);
   });
 });
+
+describe('a ring in the URL', () => {
+  const RING = '0x' + '12'.repeat(20);
+  it('round-trips a ring\'s anchor, says it in a chip, and drops one that is no address', () => {
+    const href = tradesHref('/c/1/0xabc', { ring: RING, caught: ['A'] });
+    expect(href).toBe(`/c/1/0xabc/trades?caught=A&ring=${RING}`);
+    expect(roundTrip(href).q).toEqual({ ...NO_FILTER, caught: ['A'], ring: RING });
+    expect(chips('/c/1/0xabc', { ...NO_FILTER, ring: RING }, { by: null, page: 1 }, 'UTC').map((c) => [c.label, c.href])).toEqual([[`In the ring of 0x1212…1212`, '/c/1/0xabc/trades']]);
+    expect(parseView({ ring: 'nope' }, 'UTC', OWN).q.ring).toBeNull();
+  });
+});

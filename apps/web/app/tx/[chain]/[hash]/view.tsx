@@ -19,6 +19,9 @@ import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
 import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
+import { Suspense } from 'react';
+import { RingChips } from '@/components/rings';
+import { moneyFor } from '@washtrace/detect';
 
 /**
  * The console's form of GET /api/transfers/<chain>/<tx>: is this sale a wash
@@ -61,7 +64,10 @@ export async function TxView({ chainId, tx, within }: { chainId: number; tx: str
   return (
     <>
       <Head
+        kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
+        part={within !== undefined && collection !== null && collections[collection.address] !== undefined
+          ? <Suspense fallback={null}><RingChips id={collections[collection.address]!.id} base={within} money={moneyFor(chainId)} of={{ tx }} /></Suspense> : undefined}
         crumb={within !== undefined ? [] : [{ href: '/', label: 'Collections' }, ...(home === null ? [] : [{ href: home, label: collection!.name ?? short(collection!.address) }])]}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       />

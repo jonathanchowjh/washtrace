@@ -284,6 +284,8 @@ export interface AnalysisRow {
    * it is not a count of distinct wallet pairs.
    */
   loops: Record<Method, { loops: number; pairs: number }> | null;
+  /** Its rings (rings.ts); null until they are worked out, for an analysis saved before rings were. */
+  rings: number | null;
 }
 
 /** The wallets one collection (or, with a null id, the followed wallets) wants checked, best first. */
@@ -2724,8 +2726,7 @@ export class Store {
 
   /**
    * The rings of a collection, a page at a time, the most ETH first. Only
-   * counted flagged trades add up, as the lens lists count them; a ring none of
-   * whose trades is counted is not listed.
+   * counted flagged trades add up, as the lens lists count them.
    */
   async rings(id: number, ctx: Pick<TradeContext, 'money'>, limit: number, offset: number): Promise<{ rows: RingLine[]; total: number }> {
     const { rows } = await this.pool.query(`${RINGS_SQL} SELECT * FROM ranked ORDER BY rank LIMIT $3 OFFSET $4`, [id, [...ctx.money], limit, offset]);
@@ -2765,12 +2766,26 @@ export class Store {
     };
   }
 
-  /** The anchors of the rings a wallet is in, or a token's counted flagged trades are in, in the latest analysis. */
-  async ringsOf(id: number, of: { wallet: string } | { tokenId: string }): Promise<string[]> {
+  /** Some rings' lines by their anchors, ranked as the list ranks them; an anchor no ring has is left out. */
+  async ringLines(id: number, anchors: readonly string[], ctx: Pick<TradeContext, 'money'>): Promise<RingLine[]> {
+    if (anchors.length === 0) return [];
+    const { rows } = await this.pool.query(`${RINGS_SQL} SELECT * FROM ranked WHERE ring = ANY($3::text[]) ORDER BY rank`, [id, [...ctx.money], [...anchors]]);
+    return rows.map(toRing);
+  }
+
+  /**
+   * The anchors of the rings, in the latest analysis, that a wallet is in, or
+   * that a token's or a transaction's counted flagged trades are in.
+   */
+  async ringsOf(id: number, of: { wallet: string } | { tokenId: string } | { tx: string }): Promise<string[]> {
     const { rows } = 'wallet' in of
       ? await this.pool.query<{ ring: string }>(
         'SELECT DISTINCT ring FROM washtrace.witnesses WHERE collection_id = $1 AND ring IS NOT NULL AND wallets @> ARRAY[$2]::text[] ORDER BY ring', [id, of.wallet])
-      : await this.pool.query<{ ring: string }>(
+      : 'tx' in of
+        ? await this.pool.query<{ ring: string }>(
+          `SELECT DISTINCT w.ring FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
+           WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring IS NOT NULL AND f.tx_hash = $2 ORDER BY w.ring`, [id, of.tx])
+        : await this.pool.query<{ ring: string }>(
         `SELECT DISTINCT w.ring FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
          JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
          WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring IS NOT NULL AND t.token_id = $2::numeric ORDER BY w.ring`, [id, of.tokenId]);
@@ -3998,7 +4013,9 @@ export class Store {
 /**
  * Every ring of collection `$1` with what its counted flagged trades add up
  * to, priced in money `$2`, ranked: a CTE chain that ends in `ranked`, for a
- * SELECT after it. A trade two witnesses of one ring flag counts once.
+ * SELECT after it. A trade two witnesses of one ring flag counts once; a ring
+ * none of whose trades is counted is listed with zeros, so the list holds
+ * every ring the analysis counted in `rings`.
  */
 const RINGS_SQL = `WITH hits AS (
   SELECT w.ring, f.tx_hash, f.log_index, bool_or(f.method = 'A') AS floor
@@ -4018,8 +4035,10 @@ m AS (
   FROM washtrace.witnesses w CROSS JOIN LATERAL unnest(w.wallets) x
   WHERE w.collection_id = $1 AND w.ring IS NOT NULL GROUP BY w.ring),
 ranked AS (
-  SELECT r.*, m.wallets, m.sample, row_number() OVER (ORDER BY r.volume DESC, r.sales DESC, r.ring)::int AS rank, count(*) OVER ()::int AS total
-  FROM r JOIN m USING (ring))`;
+  SELECT m.ring, COALESCE(r.sales, 0) AS sales, COALESCE(r.floor_sales, 0) AS floor_sales, COALESCE(r.tokens, 0) AS tokens, COALESCE(r.volume, 0) AS volume,
+         r.first_at, r.last_at, m.wallets, m.sample,
+         row_number() OVER (ORDER BY COALESCE(r.volume, 0) DESC, COALESCE(r.sales, 0) DESC, m.ring)::int AS rank, count(*) OVER ()::int AS total
+  FROM m LEFT JOIN r USING (ring))`;
 
 function toRing(r: Record<string, unknown>): RingLine {
   return {

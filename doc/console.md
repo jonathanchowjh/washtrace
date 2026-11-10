@@ -11,6 +11,8 @@ shows is also in the [API](api.md).
 | `/` | Watched collections, each with the share of its sales and volume that looks washed (Round trips to Linked wallets) and how complete the reading is. A form to watch another. | 15 s |
 | `/c/{chain}/{address}` | One collection at a glance: the reading in four steps, the answer as that range, how sure each end is (the floor, what the ceiling adds, and Money loops back apart), every sale in order, the tokens and wallets most flagged ETH went through, what looks suspicious but is not counted, and your lenses. | 15 s |
 | `/c/{chain}/{address}/methods` | What the overview stands on: a tab per lens with its tokens and wallets, writing your own, each lens's share over time, and the six stages of the reading. Old `?method=` links to the overview come here. | 15 s |
+| `/c/{chain}/{address}/rings` | Every [ring](methods.md#rings), the most ETH first, 20 a page: its wallets, tokens, flagged sales and ETH, each opening what it counts. | On open |
+| `/c/{chain}/{address}/r/{anchor}` | One ring, named by its smallest wallet: who traded, who only moved the money, its tokens, and its sales (Trades with `?ring=`). A token, wallet or trade page in it says "Part of Ring N". | On open |
 | `/c/{chain}/{address}/tokens`, `/wallets` | Every token or wallet one lens flags, most flagged first. `?method=AU&page=2`. The old `/flagged?kind=` links redirect here. | On open |
 | `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |
@@ -21,8 +23,8 @@ shows is also in the [API](api.md).
 | `/settings` | The settings in [operating.md](operating.md#settings), where each value came from, and a Test for the RPC and Etherscan. | On open |
 | `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
 
-Every page of a collection sits under one line naming it and a tab bar: Overview, Tokens, Wallets and Trades. A
-token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
+Every page of a collection sits under one line naming it and a tab bar: Overview, Rings, Tokens, Wallets and
+Trades. A ring lights Rings; a token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
 while another lens is chosen, since it would not match the list; a lens chosen on one tab is kept on the others.
 
 Times are clock times in the reader's time zone, changeable at the foot of the sidebar.

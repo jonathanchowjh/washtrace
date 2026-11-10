@@ -86,8 +86,9 @@ Notes:
 `GET /api/collections/{chain}/{address}/trades` answers 200 or 404.
 
 The query is the Trades page's address bar. The filters are `caught`, `not`, `market`, `pmin`, `pmax`,
-`heldover`, `heldunder`, `ageover`, `ageunder`, `fmin`, `fmax`, `from`, `to`, `wallet`, `token`, `group`, `q`,
-`sort`, `dir` and `all`, and `page` for JSON. A filter on a lens that did not run holds no trades.
+`heldover`, `heldunder`, `ageover`, `ageunder`, `fmin`, `fmax`, `from`, `to`, `wallet`, `token`, `ring`, `group`,
+`q`, `sort`, `dir` and `all`, and `page` for JSON. A filter on a lens that did not run holds no trades. `ring` is a
+ring's anchor: the trades Round trips or Linked wallets flags through one of its witnesses.
 
 | `format` | Response |
 |---|---|

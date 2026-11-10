@@ -319,6 +319,11 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
     if (WHOLE.test(q.token)) where.push(`t.token_id = ${p(q.token)}::numeric`);
     else none();
   }
+  if (q.ring !== null) {
+    // A trade is the ring's when a counted lens flags it through one of the ring's witnesses.
+    where.push(`EXISTS (SELECT 1 FROM washtrace.flags rf JOIN washtrace.witnesses rw ON rw.collection_id = rf.collection_id AND rw.id = rf.witness_id
+      WHERE rf.collection_id = ${c} AND rf.tx_hash = t.tx_hash AND rf.log_index = t.log_index AND rf.method IN ('A', 'AC') AND rw.ring = ${p(q.ring.toLowerCase())})`);
+  }
   if (q.group !== null) {
     const g = q.group;
     if (!ran(g.method)) none();

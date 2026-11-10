@@ -2648,11 +2648,14 @@ describe('Store', () => {
     expect(rows).toEqual([expect.objectContaining({ anchor, rank: 1, wallets: 2, sales: 3, floorSales: 3, tokens: 1 })]);
     expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [c.id])).rows[0].rings).toBe(1);
     const view = (await store.ring(c.id, anchor, RAN))!;
+    const token = await store.token(c.id, '1');
     expect(view.wallets).toEqual([a, b].sort().map((address) => ({ address, traded: true })));
     expect(view.tokens).toEqual([expect.objectContaining({ tokenId: '1', sales: 3 })]);
     expect(await store.ring(c.id, '0xnone', RAN)).toBeNull();
     expect(await store.ringsOf(c.id, { wallet: b })).toEqual([anchor]);
     expect(await store.ringsOf(c.id, { tokenId: '1' })).toEqual([anchor]);
+    expect(await store.ringsOf(c.id, { tx: token[1]!.txHash })).toEqual([anchor]);
+    expect(await store.ringLines(c.id, [anchor, '0xnone'], RAN)).toEqual([rows[0]]);
     // Past its last page a list still says how many there are.
     expect(await store.rings(c.id, RAN, 10, 5)).toEqual({ rows: [], total: 1 });
   });
@@ -7240,5 +7243,11 @@ describe('rings worked out from an analysis saved before them', () => {
     expect(view.line).toMatchObject({ wallets: 3, sales: 2, floorSales: 2, volumeWei: '2000000000000000000' });
     expect((await store.rings(id, RAN, 10, 0)).total).toBe(1);
     expect(await store.ringsOf(id, { wallet: X })).toEqual([]);
+  });
+
+  it('narrows the trades to a ring\'s: those a counted lens flags through its witnesses', async () => {
+    expect((await store.tradeCount(id, { ...NO_FILTER, ring: S }, RAN)).total).toBe(2);
+    // Sale 3 is flagged, but only by Money loops back, which makes no ring.
+    expect((await store.tradeCount(id, { ...NO_FILTER, ring: X }, RAN)).total).toBe(0);
   });
 });

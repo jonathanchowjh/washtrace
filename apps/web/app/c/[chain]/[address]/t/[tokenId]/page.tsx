@@ -23,6 +23,9 @@ import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
+import { Suspense } from 'react';
+import { RingChips } from '@/components/rings';
+import { moneyFor } from '@washtrace/detect';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -113,8 +116,10 @@ export default async function TokenPage({ params, searchParams }: Props) {
   return (
     <>
       <Head
+        kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
+        part={<Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense>}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
@@ -215,7 +220,7 @@ async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
   const name = c.name ?? short(c.address);
   return (
     <>
-      <Head title={`${name} #${tokenLabel(tokenId)}`} />
+      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} />
       <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
       <MoreLink href={base}>Back to {name}</MoreLink>
     </>

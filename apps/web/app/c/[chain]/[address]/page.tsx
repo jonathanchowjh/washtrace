@@ -7,6 +7,7 @@ import { moneyFor } from '@washtrace/detect';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { Elsewhere, Empty, Ext, Head, Silent } from '@/components/ui';
 import { Facts, HowSure, NotCounted, ReadingStrip, SQUARES, SalesStrip, TopList, YourLenses } from '@/components/overview';
+import { RingsTable } from '@/components/rings';
 import { RangeBar, RangeFigure, RangeKey, VolumeDetail } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { readerZone } from '@/lib/api';
@@ -26,6 +27,9 @@ import { tradesHref } from '@/lib/trades-url';
 
 /** The top tokens and wallets the overview lists; the rest are a click away. */
 const TOP = 5;
+
+/** The top rings, under Who did it. */
+const RINGS_TOP = 3;
 
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -70,11 +74,14 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const top = { sort: 'volume', find: null, limit: TOP, offset: 0 } as const;
   // A small collection's strip is a square per sale, oldest first: every sale is read, and the strip checks it has them all.
   const few = a !== null && a.totals.A.sales <= SQUARES;
-  const [profile, timeline, tokens, wallets, passes, all, sources, settings, entry, sold] = await Promise.all([
+  // Who did it: the top rings, once the latest analysis's are worked out.
+  const ringed = a !== null && (a.rings ?? 0) > 0;
+  const [profile, timeline, tokens, wallets, passes, all, sources, settings, entry, sold, rings] = await Promise.all([
     s.profile(c.id), a ? s.timeline(c.id, zone) : null,
     listed ? s.lensTokens(c.id, 'AC', top, ctx) : null, listed ? s.lensWallets(c.id, 'AC', top, ctx) : null,
     s.passes(), s.collections(), s.sources(), s.settings(), storedEntry(chainId, address),
     few ? s.trades(c.id, { ...NO_FILTER, sort: 'date', dir: 'asc' }, ctx, SQUARES + 1, 0) : null,
+    ringed ? s.rings(c.id, ctx, RINGS_TOP, 0) : null,
   ]);
   const config = configFromSources(sources, settings);
   const rpcChains = new Set(config.chains);
@@ -89,6 +96,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   return (
     <>
       <Head
+        kind="collection"
         title={c.name ?? short(address)}
         sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{short(address)}</Ext></>}
       >
@@ -129,6 +137,16 @@ export default async function CollectionPage({ params, searchParams }: Props) {
           </div>
 
           {timeline ? <SalesStrip timeline={timeline} base={base} zone={zone} chainId={chainId} sales={sold} /> : null}
+
+          {rings && rings.total > 0 ? (
+            <section aria-label="Who did it">
+              <h2 className="mb-2 flex items-baseline justify-between gap-3 text-sm font-medium text-foreground">
+                <span>Who did it</span>
+                <span className="text-xs font-normal text-muted-foreground">Top {Math.min(RINGS_TOP, rings.total)} of {plural(rings.total, 'ring')}: wallets the evidence ties together, not one person</span>
+              </h2>
+              <RingsTable rows={rings.rows} base={base} chainId={chainId} total={rings.total} />
+            </section>
+          ) : null}
 
           {tokens && wallets ? (
             <div className="grid gap-4 md:grid-cols-2">

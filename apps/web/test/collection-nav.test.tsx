@@ -24,6 +24,8 @@ describe('the collection tab bar', () => {
     expect(tabOf(BASE, `${BASE}/t/14`)).toBe('tokens');
     expect(tabOf(BASE, `${BASE}/wallets`)).toBe('wallets');
     expect(tabOf(BASE, `${BASE}/trades`)).toBe('trades');
+    expect(tabOf(BASE, `${BASE}/rings`)).toBe('rings');
+    expect(tabOf(BASE, `${BASE}/r/0xabc`)).toBe('rings');
     // The old flagged page only redirects; it lights nothing of its own.
     expect(tabOf(BASE, `${BASE}/flagged`)).toBe('overview');
   });
@@ -63,12 +65,13 @@ describe('the collection tab bar', () => {
   });
 
   it('shows the default lens\'s counts only while that lens is in view; the trades count always', () => {
-    const counts = { tokens: <b>6</b>, wallets: <b>13</b>, trades: <b>56</b> };
+    const counts = { rings: <b>6</b>, tokens: <b>6</b>, wallets: <b>13</b>, trades: <b>56</b> };
     const plain = nav(BASE, '', counts);
-    expect(['Tokens', 'Wallets', 'Trades'].map((t) => plain.tab(t).textContent)).toEqual(['Tokens6', 'Wallets13', 'Trades56']);
+    expect(['Rings', 'Tokens', 'Wallets', 'Trades'].map((t) => plain.tab(t).textContent)).toEqual(['Rings6', 'Tokens6', 'Wallets13', 'Trades56']);
     cleanup();
+    // Rings are no lens's list: their count stands whatever lens is chosen.
     const other = nav(`${BASE}/tokens`, 'method=A', counts);
-    expect(['Tokens', 'Wallets', 'Trades'].map((t) => other.tab(t).textContent)).toEqual(['Tokens', 'Wallets', 'Trades56']);
+    expect(['Rings', 'Tokens', 'Wallets', 'Trades'].map((t) => other.tab(t).textContent)).toEqual(['Rings6', 'Tokens', 'Wallets', 'Trades56']);
   });
 
   it('names the collection it belongs to, linked to its overview', () => {

@@ -27,5 +27,5 @@ export default async function CollectionWalletPage({ params, searchParams }: Pro
   // The layout read it already: this is the same request's read.
   const c = await collectionOf(chainId, address);
   if (!c) notFound();
-  return WalletView({ chainId, address: wallet, sp: await searchParams, within: { base: `/c/${chainId}/${address}`, collection: address, name: c.name ?? short(address) } });
+  return WalletView({ chainId, address: wallet, sp: await searchParams, within: { base: `/c/${chainId}/${address}`, collection: address, name: c.name ?? short(address), id: c.id } });
 }
