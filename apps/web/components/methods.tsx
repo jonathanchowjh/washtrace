@@ -17,12 +17,9 @@ import { TimeChart, type TimePoint } from './trend';
 /** " (not counted)" after the name of a lens the verdict leaves out; the tooltip says why. */
 const NotCountedTag = () => <span title={APART_WHY_TITLE}> (not counted)</span>;
 
-/** Each built-in's standing in the verdict, in the words the overview's ladder and the trade page's chip use. */
-export const TIER: Record<Method, string> = { A: 'the floor', AC: 'the ceiling', AU: 'not counted' };
-
 /** A built-in's standing as a small line under its name; "not counted" says why on hover. */
 export function TierWord({ m, className }: { m: Method; className?: string }) {
-  return <span title={APART.includes(m) ? APART_WHY_TITLE : undefined} className={cn('block text-[11px] font-normal text-muted-foreground', className)}>{TIER[m]}</span>;
+  return <span title={APART.includes(m) ? APART_WHY_TITLE : undefined} className={cn('block text-[11px] font-normal text-muted-foreground', className)}>{LENSES[m].tier}</span>;
 }
 
 /** A lens by its name, with its verdict hue; `href` makes the name open that lens's tab (leave it off inside a link). */

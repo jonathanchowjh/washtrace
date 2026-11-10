@@ -1,5 +1,5 @@
 import type { Witness } from '@washtrace/detect';
-import { plural } from '@/lib/format';
+import { LENSES, plural } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
@@ -37,7 +37,7 @@ export function FunnelIcon({ className }: { className?: string }) {
 }
 
 // Each verdict by the tier of the lens behind it, in the lenses' own names.
-const VERDICT = { cycle: 'Round trips · the floor', money: 'Linked wallets · the ceiling', apart: 'Money loops back · not counted', clean: 'Not flagged' } as const;
+const VERDICT = { cycle: `${LENSES.A.name} · ${LENSES.A.tier}`, money: `${LENSES.AC.name} · ${LENSES.AC.tier}`, apart: `${LENSES.AU.name} · ${LENSES.AU.tier}`, clean: 'Not flagged' } as const;
 
 /**
  * A detail page's verdict as a chip under its title: the tier's mark and the

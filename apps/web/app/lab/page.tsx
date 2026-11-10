@@ -5,7 +5,7 @@ import { headers } from 'next/headers';
 import { connection } from 'next/server';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
-import { LensName, LensPicture, TIER } from '@/components/methods';
+import { LensName, LensPicture } from '@/components/methods';
 import { RulePicture } from '@/components/rule-picture';
 import { RunsOn, type RunRow } from '@/components/runs-on';
 import { TierMark } from '@/components/kit';
@@ -43,7 +43,7 @@ function BuiltIns({ base, writable }: { base: string | null; writable: boolean }
               <LensPicture m={m} />
               <div className="min-w-0">
                 <LensName m={m} />
-                <span title={APART.includes(m) ? APART_WHY_TITLE : undefined} className="block pl-4 text-xs text-muted-foreground">{TIER[m]}</span>
+                <span title={APART.includes(m) ? APART_WHY_TITLE : undefined} className="block pl-4 text-xs text-muted-foreground">{LENSES[m].tier}</span>
               </div>
             </div>
             <p className="text-sm text-muted-foreground">{LENSES[m].says}</p>

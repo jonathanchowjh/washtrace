@@ -16,7 +16,7 @@ import { LensName } from '@/components/methods';
 import { LensGraph } from '@/components/token-graph';
 import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
-import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
+import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
@@ -92,7 +92,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
           <span className="flex flex-col gap-1">
             {SHOWN.filter((m) => by.includes(m)).map((m) => (
               <span key={m} className={APART.includes(m) && by.some((x) => HEADLINE.includes(x)) ? 'mt-1 border-t border-dashed pt-1.5 text-xs text-muted-foreground' : undefined}>
-                <LensName m={m} href={home === null ? undefined : lensTabHref(home, m, { evidence: true })} /> · {TIER[m]}
+                <LensName m={m} href={home === null ? undefined : lensTabHref(home, m, { evidence: true })} /> · {LENSES[m].tier}
               </span>
             ))}
           </span>
@@ -147,7 +147,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
                       <div className="flex flex-wrap items-center gap-x-1.5">
                         <span data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? lensTabHref(base, card.key, { evidence: true }) : undefined} /></span>
                         {/* Each built-in's tier, so a card never reads Money loops back as counted, nor the others as equals. */}
-                        {isOwnKey(card.key) ? null : <span data-tier className="text-xs text-muted-foreground">· {TIER[card.key]}</span>}
+                        {isOwnKey(card.key) ? null : <span data-tier className="text-xs text-muted-foreground">· {LENSES[card.key].tier}</span>}
                       </div>
                       <p className="mt-1 text-sm">
                         {card.line}
@@ -173,7 +173,6 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
 }
 
 /** Each built-in's tier, as the verdict chip names it: what it adds to the range, or that it never counts. */
-const TIER: Record<Method, string> = { A: 'the floor', AC: 'the ceiling', AU: 'not counted' };
 
 /** The heading and one line of a transfer no lens judges, or none caught: each in place of its lens cards. */
 const ALONE = {

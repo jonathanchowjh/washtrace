@@ -107,11 +107,11 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
   // Linked wallets is a superset of Round trips; read as one, its rung is what it adds.
   const added = Math.max(0, totals.AC.flaggedSales - totals.A.flaggedSales);
   const rungs: { m: Method; tone: 'cycle' | 'money' | 'apart'; name: string; does: string; share: string; count: string; href: string; note?: string }[] = [
-    { m: 'A', tone: 'cycle', name: LENSES.A.name, does: 'the floor', share: pctTenth(totals.A.flaggedSales, sales),
+    { m: 'A', tone: 'cycle', name: LENSES.A.name, does: LENSES.A.tier, share: pctTenth(totals.A.flaggedSales, sales),
       count: plural(totals.A.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['A'] }) },
-    { m: 'AC', tone: 'money', name: LENSES.AC.name, does: 'the ceiling', share: `+${pctTenth(added, sales)}`,
+    { m: 'AC', tone: 'money', name: LENSES.AC.name, does: LENSES.AC.tier, share: `+${pctTenth(added, sales)}`,
       count: `+${plural(added, 'sale')}`, href: tradesHref(base, { caught: ['AC'], notCaught: ['A'] }) },
-    { m: 'AU', tone: 'apart', name: LENSES.AU.name, does: 'not counted', share: pctTenth(totals.AU.flaggedSales, sales),
+    { m: 'AU', tone: 'apart', name: LENSES.AU.name, does: LENSES.AU.tier, share: pctTenth(totals.AU.flaggedSales, sales),
       count: plural(totals.AU.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['AU'] }),
       note: `${apart === undefined ? '' : `${num(apart)} of them it alone flags · `}fails the placebo test` },
   ];

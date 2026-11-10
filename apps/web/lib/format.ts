@@ -196,12 +196,13 @@ const formatters = new Map<string, Intl.DateTimeFormat>();
  * The three methods as lenses, in the order they are shown. The paper's names (SCC A, AU,
  * AC) stay in the API and README; a reader sees only these.
  * `tone` is the lens's standing as a hue: the token's own cycle, a link
- * through money, or apart (never counted, so grey everywhere).
+ * through money, or apart (never counted, so grey everywhere). `tier` is the
+ * same standing in words, the one copy every page says it in.
  */
 export const LENSES = {
-  A: { name: 'Round trips', tone: 'cycle', says: 'The token keeps coming back to wallets that already held it.' },
-  AU: { name: 'Money loops back', tone: 'apart', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
-  AC: { name: 'Linked wallets', tone: 'money', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
+  A: { name: 'Round trips', tone: 'cycle', tier: 'the floor', says: 'The token keeps coming back to wallets that already held it.' },
+  AU: { name: 'Money loops back', tone: 'apart', tier: 'not counted', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
+  AC: { name: 'Linked wallets', tone: 'money', tier: 'the ceiling', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
 } as const;
 
 /**

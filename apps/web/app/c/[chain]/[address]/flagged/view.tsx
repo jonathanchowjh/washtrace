@@ -12,7 +12,7 @@ import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
 import { collectionOf, runsOf } from '@/lib/collection-reads';
-import { NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
 import { behindLine, behindOf } from '@/lib/lens-state';
 import { listHref } from '@/lib/links';
 import { lensContext, ownLenses, SHOWN } from '@/lib/metrics';
@@ -31,7 +31,7 @@ type Props = { params: Promise<{ chain: string; address: string }>; searchParams
 const WORD = { tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' } as const;
 
 /** Each lens's standing in plain words, said after its name wherever the page names it. */
-const TIER = { cycle: 'the floor', money: 'the ceiling', apart: 'not counted', own: 'your lens' } as const;
+const TIER = { cycle: LENSES.A.tier, money: LENSES.AC.tier, apart: LENSES.AU.tier, own: 'your lens' } as const;
 
 /** The lens a list opens on, whose count its tab shows: the title names a lens only when it is another. */
 const OPENS_ON = lensKeyOf(null, {});
