@@ -78,7 +78,7 @@ describe('Settings, each field', () => {
     const payees: FieldView = { key: 'tokens.payees', label: 'Read tokens of wallets paid in tokens', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
     render(<Settings writable fields={[...fields(), payees]} />);
     expect(box('tokens.payees').querySelector('[data-hint]')?.textContent).toBe(
-      `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
+      `On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
       + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`);
   });
 
@@ -212,6 +212,50 @@ describe('Settings, each field', () => {
     await waitFor(() => expect(live('follow.hops').textContent).toContain('Follow money (wallets out) must be a whole number from 0 to 10.'));
     expect(live('follow.hops').querySelector('.text-fault')).toBeTruthy();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('Settings, an on/off setting', () => {
+  const payees = (more: Partial<FieldView> = {}): FieldView[] => [...fields(), { key: 'tokens.payees', label: 'Read tokens of wallets paid in tokens', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null, ...more }];
+  const toggle = () => screen.getByRole('switch', { name: 'Read tokens of wallets paid in tokens' }) as HTMLInputElement;
+  const sent = (fetch: ReturnType<typeof vi.fn>, i: number) => JSON.parse(String((fetch.mock.calls[i] as unknown as [string, RequestInit])[1].body));
+
+  it('is a switch, off by default and on when the saved value is on, with no text box', () => {
+    render(<Settings writable fields={payees()} />);
+    expect(toggle().checked).toBe(false);
+    expect(box('tokens.payees').querySelector('input:not([type=checkbox])')).toBeNull();
+    cleanup();
+    render(<Settings writable fields={payees({ set: true, shown: 'on', source: 'console' })} />);
+    expect(toggle().checked).toBe(true);
+  });
+
+  it('saves on, then off, through the same save as every field, and refreshes', async () => {
+    const fetch = vi.fn(async () => json({ key: 'tokens.payees', set: true }));
+    vi.stubGlobal('fetch', fetch);
+    render(<Settings writable fields={payees()} />);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect((fetch.mock.calls[0] as unknown as [string])[0]).toBe('/api/settings');
+    expect(sent(fetch, 0)).toEqual({ key: 'tokens.payees', value: 'on' });
+    expect(toggle().checked).toBe(true);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(sent(fetch, 1)).toEqual({ key: 'tokens.payees', value: 'off' });
+    expect(toggle().checked).toBe(false);
+  });
+
+  it('flips back and says why when the save is refused', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Read tokens of wallets paid in tokens is on or off.' }, 400)));
+    render(<Settings writable fields={payees()} />);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(live('tokens.payees').textContent).toContain('is on or off.'));
+    expect(toggle().checked).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('is disabled for a reader who may not write', () => {
+    render(<Settings writable={false} fields={payees({ locked: true })} />);
+    expect(toggle().disabled).toBe(true);
   });
 });
 

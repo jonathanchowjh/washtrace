@@ -10,7 +10,14 @@ import { LENSES, STAGES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
 
-const INPUT = 'field font-mono text-xs disabled:opacity-60';
+// Disabled reads as disabled by its dashed edge and grey fill, not by fading: a locked value must still be legible.
+const INPUT = 'field font-mono text-xs disabled:cursor-not-allowed disabled:border-dashed disabled:bg-muted disabled:text-body';
+const BTN = 'btn text-xs disabled:border-dashed disabled:bg-muted! disabled:text-body disabled:opacity-100!';
+/** A text value, which needs the room; a number fits in a short box. */
+const WIDE = 'w-full sm:w-80';
+
+/** The settings that are on or off, drawn as a switch that saves on or off as it is flipped. */
+const SWITCHES = new Set(['tokens.payees']);
 
 /** How often a Test is polled, and how long before the page stops waiting. The worker answers in about a second. */
 const POLL_MS = 500;
@@ -27,7 +34,7 @@ const HINTS: Record<string, string> = {
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls. Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".`,
   'follow.reread': "Read a trader's money and other tokens again when it trades, at most once every this many days. 0 is off. Each re-read is about 4 Etherscan calls, and the token read about 1 more. Turning it off stops new re-reads; any already due are read once.",
   // What it buys, what it costs, and what it never reads, with the fan-out the worker follows by.
-  'tokens.payees': `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
+  'tokens.payees': `On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
     + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`,
 };
 
@@ -70,7 +77,7 @@ async function save(key: string, value: string | null): Promise<string | null> {
  */
 export function Settings({ fields, writable, open = false, trailFunded = false }: { fields: FieldView[]; writable: boolean; open?: boolean; trailFunded?: boolean }) {
   return (
-    <div className="max-w-3xl">
+    <div>
       {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{LOCAL_ONLY}</p>}
       {open ? <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{OPEN}</p> : null}
       {GROUPS.map((g) => (
@@ -110,6 +117,8 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const [editing, setEditing] = useState(false);
   const [armed, setArmed] = useState(false);
   const [draft, setDraft] = useState('');
+  // A switch shows its flip at once, before the refresh brings the saved value; a refused save puts it back.
+  const [flipped, setFlipped] = useState<boolean | null>(null);
   const check = field.key === 'etherscan.key' ? { kind: 'etherscan' as const } : field.key.startsWith('rpc.') ? { kind: 'rpc' as const, chainId: Number(field.key.slice(4)) } : null;
   const test = useTest(check);
   const fallback = FIELDS.find((x) => x.key === field.key)?.fallback;
@@ -122,68 +131,87 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   /** A button's accessible name: what it does, then which field. */
   const named = (verb: string, after = '') => `${verb} ${field.label}${after}`;
 
-  async function put(value: string | null) {
+  /** Saves, or clears with null; whether it was saved. */
+  async function put(value: string | null): Promise<boolean> {
     setBusy(true);
     setSaid(null);
     const failed = await save(field.key, value);
     setBusy(false);
-    if (failed) { setSaid({ ok: false, text: failed }); return; }
+    if (failed) { setSaid({ ok: false, text: failed }); return false; }
     setEditing(false);
     setArmed(false);
     setDraft('');
+    if (value === null) setFlipped(null);
     const gone = reset ? "Back to the .env value from the worker's next pass." : field.secret ? 'The worker stops using it on its next pass.' : 'The worker goes back to its default on its next pass.';
     setSaid({ ok: true, text: value === null ? (reset ? gone : `Cleared. ${gone}`) : 'Saved. The worker uses it from its next pass, within a minute.' });
     // The refresh brings the new source line and, for a secret, its new last 4.
     router.refresh();
+    return true;
   }
 
   // Only a value being typed has an input; otherwise the label is plain text naming the group.
   const hasInput = !field.secret || editing;
+  // The worker reads only 'on' as on.
+  const on = flipped ?? (field.shown ?? fallback) === 'on';
 
   const clearButton = field.source === 'console'
-    ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={reset ? named('Reset', ' to its .env value…') : named('Clear', '…')} className="btn text-xs"
+    ? <button type="button" disabled={field.locked} onClick={() => { setArmed(true); setSaid(null); }} aria-label={reset ? named('Reset', ' to its .env value…') : named('Clear', '…')} className={BTN}
       title={field.locked ? lockedWhy : reset ? 'Drop what is saved here so the worker uses .env again. Asks first.' : 'Remove it from the console. Asks first.'}>{reset ? 'Reset to .env…' : 'Clear…'}</button>
     : null;
 
   let value;
   if (armed) {
     value = (
-      <span className="flex flex-wrap items-center gap-2 text-xs">
-        <span>{reset
+      <span className="contents text-xs">
+        <span className="basis-full text-xs">{reset
           ? `Reset the ${field.label} to its .env value? What is saved here is dropped, and the worker uses .env.`
           : `Clear the ${field.label}? ${unset(field.key, trailFunded) ? `Once cleared, ${unset(field.key, trailFunded)!.replace(/^so /, '')}` : 'The worker stops using it.'}`}</span>
-        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={reset ? named('Reset', ' to its .env value') : named('Clear')} className="btn border-foreground text-xs">{reset ? 'Reset' : 'Clear'}</button>
-        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className="btn text-xs">Keep</button>
+        <button type="button" disabled={busy} onClick={() => put(null)} aria-label={reset ? named('Reset', ' to its .env value') : named('Clear')} className={`${BTN} border-foreground`}>{reset ? 'Reset' : 'Clear'}</button>
+        <button type="button" onClick={() => { setArmed(false); setSaid(null); }} aria-label={named('Keep')} className={BTN}>Keep</button>
+      </span>
+    );
+  } else if (SWITCHES.has(field.key)) {
+    value = (
+      <span className="contents">
+        <input id={id} type="checkbox" role="switch" checked={on} disabled={field.locked || busy} aria-describedby={hintId} title={field.locked ? lockedWhy : undefined}
+          onChange={async (e) => {
+            const next = e.currentTarget.checked;
+            setFlipped(next);
+            if (!(await put(next ? 'on' : 'off'))) setFlipped(null);
+          }}
+          className="relative h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full border bg-muted transition-colors before:absolute before:top-1/2 before:left-0.5 before:size-3.5 before:-translate-y-1/2 before:rounded-full before:bg-card before:shadow-sm before:transition-transform checked:border-foreground checked:bg-foreground checked:before:translate-x-4 focus-visible:ring-2 focus-visible:ring-focus focus-visible:outline-none disabled:cursor-not-allowed disabled:border-dashed" />
+        <span aria-hidden className="text-xs font-medium text-foreground">{busy ? 'Saving…' : on ? 'On' : 'Off'}</span>
+        {clearButton}
       </span>
     );
   } else if (!field.secret) {
     value = (
-      <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => {
+      <form className="contents" onSubmit={(e) => {
         e.preventDefault();
         const v = String(new FormData(e.currentTarget).get('value') ?? '').trim();
         void put(v === '' ? null : v);
       }}>
         <input id={id} name="value" key={field.shown ?? ''} defaultValue={field.shown ?? ''} placeholder={fallback} disabled={field.locked || busy}
-          aria-describedby={hintId} title={field.locked ? lockedWhy : undefined} className={`${INPUT} ${field.key.endsWith('.url') ? 'w-80' : 'w-24'} max-w-full`} />
-        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className="btn text-xs">{busy ? 'Saving…' : 'Save'}</button>
+          aria-describedby={hintId} title={field.locked ? lockedWhy : undefined} className={`${INPUT} ${field.key.endsWith('.url') || field.key === 'stored.repo' ? WIDE : 'w-24'} max-w-full`} />
+        <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className={BTN}>{busy ? 'Saving…' : 'Save'}</button>
         {clearButton}
       </form>
     );
   } else if (editing) {
     // Never prefilled: the browser never holds a saved secret, only one being typed.
     value = (
-      <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); void put(draft.trim()); }}>
+      <form className="contents" onSubmit={(e) => { e.preventDefault(); void put(draft.trim()); }}>
         <input id={id} name="value" autoFocus autoComplete="off" spellCheck={false} value={draft} onChange={(e) => setDraft(e.target.value)} aria-describedby={hintId}
-          placeholder={check?.kind === 'rpc' ? 'https://…' : 'As etherscan.io/myapikey shows it'} className={`${INPUT} w-80 max-w-full`} />
-        <button type="submit" disabled={busy || draft.trim() === ''} aria-label={named('Save')} className="btn text-xs">{busy ? 'Saving…' : 'Save'}</button>
-        <button type="button" onClick={() => { setEditing(false); setDraft(''); setSaid(null); }} aria-label={named('Cancel')} className="btn text-xs">Cancel</button>
+          placeholder={check?.kind === 'rpc' ? 'https://…' : 'As etherscan.io/myapikey shows it'} className={`${INPUT} ${WIDE} max-w-full`} />
+        <button type="submit" disabled={busy || draft.trim() === ''} aria-label={named('Save')} className={BTN}>{busy ? 'Saving…' : 'Save'}</button>
+        <button type="button" onClick={() => { setEditing(false); setDraft(''); setSaid(null); }} aria-label={named('Cancel')} className={BTN}>Cancel</button>
       </form>
     );
   } else {
     value = (
-      <span className="flex flex-wrap items-center gap-2">
-        {field.shown ? <span className="font-mono text-xs text-foreground">{field.shown}</span> : null}
-        <button type="button" disabled={field.locked} onClick={() => { setEditing(true); setSaid(null); }} aria-label={named(field.set ? 'Replace' : 'Set')} className="btn text-xs"
+      <span className="contents">
+        {field.shown ? <span className="basis-full font-mono text-xs text-foreground [overflow-wrap:anywhere] sm:basis-auto">{field.shown}</span> : null}
+        <button type="button" disabled={field.locked} onClick={() => { setEditing(true); setSaid(null); }} aria-label={named(field.set ? 'Replace' : 'Set')} className={BTN}
           title={field.locked ? lockedWhy : field.set ? 'Type a new value in place of this one' : 'Type a value for the worker to use'}>{field.set ? 'Replace' : 'Set'}</button>
         {clearButton}
       </span>
@@ -197,12 +225,13 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
         {hasInput
           ? <label id={labelId} htmlFor={id} className="font-medium text-foreground">{field.label}</label>
           : <p id={labelId} className="font-medium text-foreground">{field.label}</p>}
-        <p id={hintId} data-hint className="text-xs text-muted-foreground">{HINTS[field.key]}</p>
+        <p id={hintId} data-hint className="max-w-3xl text-xs text-muted-foreground">{HINTS[field.key]}</p>
       </div>
+      {/* One row on a wide screen. On a phone a value or a field being typed takes its own line, and every button, Test too, shares the next. */}
       <div className="flex flex-wrap items-center gap-2">
         {value}
         {check
-          ? <button type="button" data-test disabled={testWhy !== null || test.running} onClick={test.run} aria-label={named('Test')} className="btn text-xs"
+          ? <button type="button" data-test disabled={testWhy !== null || test.running} onClick={test.run} aria-label={named('Test')} className={BTN}
             title={testWhy ?? (check.kind === 'rpc'
               ? 'Ask the worker to read the finalized block, an old balance and 50,000 blocks of logs through this RPC'
               : 'Ask the worker to make one cheap Etherscan call with this key')}>{test.running ? 'Testing…' : 'Test'}</button>
