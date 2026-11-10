@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import type { SearchHits, SearchKind } from '@washtrace/detect';
-import { short } from '@/lib/format';
-import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, type Scope } from '@/lib/search';
+import type { SearchKind } from '@washtrace/detect';
+import { short, tokenLabel } from '@/lib/format';
+import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, type Scope, type SearchReply } from '@/lib/search';
 
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
 const SHOWN = 5;
@@ -12,20 +12,40 @@ const WAIT_MS = 200;
 
 const HEADING: Record<SearchKind, string> = { collections: 'Collections', tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' };
 
-type Option = { type: 'option'; key: string; href: string; line: string; address: string };
+/** `sub`: a ring or token the best match is connected to, listed under it; it has no address line. */
+type Option = { type: 'option'; key: string; href: string; line: string; address: string; sub?: boolean };
 type Row = Option | { type: 'heading'; key: string; text: string } | { type: 'more'; key: string; text: string };
 
-/** The list's lines in order, the kind typed first: a heading per kind with hits, its options, and a note when the kind has more than is shown. */
-function listOf(hits: SearchHits, text: string, scope: Scope | null) {
+/**
+ * The list's lines in order, the kind typed first: a heading per kind with
+ * hits, its options, and a note when the kind has more than is shown. The best
+ * match, the first option, is followed by what it is connected to.
+ */
+function listOf(hits: SearchReply, text: string, scope: Scope | null) {
   const rows: Row[] = [];
   for (const kind of kindsFor(parseSearch(text))) {
     const n = Math.min(hits[kind].length, SHOWN);
     if (n === 0) continue;
     rows.push({ type: 'heading', key: `h-${kind}`, text: HEADING[kind] });
-    for (let i = 0; i < n; i++) rows.push({ type: 'option', key: `${kind}-${i}`, ...hitRow(hits, kind, i, scope) });
+    for (let i = 0; i < n; i++) {
+      rows.push({ type: 'option', key: `${kind}-${i}`, ...hitRow(hits, kind, i, scope) });
+      // A heading and one option so far: that option is the best match.
+      if (rows.length === 2) rows.push(...connectedRows(hits, kind, scope));
+    }
     if (hits[kind].length > SHOWN || hits.more[kind]) rows.push({ type: 'more', key: `m-${kind}`, text: 'and more · press Enter to see all' });
   }
   return rows;
+}
+
+/** The rings and tokens a wallet best match is in, under the collection searched; none for any other match. */
+function connectedRows(hits: SearchReply, kind: SearchKind, scope: Scope | null): Option[] {
+  const c = hits.connected;
+  if (c === undefined || scope === null || kind !== 'wallets' || hits.wallets[0]?.address !== c.wallet) return [];
+  const base = `/c/${scope.chainId}/${scope.address}`;
+  return [
+    ...c.rings.map((r) => ({ type: 'option' as const, key: `ring-${r.anchor}`, href: `${base}/r/${r.anchor}`, line: `Part of Ring ${r.rank}`, address: '', sub: true })),
+    ...c.tokens.map((t) => ({ type: 'option' as const, key: `token-${t}`, href: `${base}/t/${t}`, line: `Traded token #${tokenLabel(t)}`, address: '', sub: true })),
+  ];
 }
 
 /** True when a key press is someone typing, which the '/' shortcut must leave alone. */
@@ -55,7 +75,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
   const scope = here !== null && dropped !== path ? here : null;
   const scopeName = scope === null ? null : watched.find((c) => c.chainId === scope.chainId && c.address === scope.address)?.name ?? short(scope.address);
   const [text, setText] = useState('');
-  const [hits, setHits] = useState<SearchHits | null>(null);
+  const [hits, setHits] = useState<SearchReply | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
 
@@ -68,7 +88,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(q)}${scope ? `&scope=${scopeParam(scope)}` : ''}`, { signal: ctl.signal });
-        const body = res.ok ? (await res.json()) as SearchHits : null;
+        const body = res.ok ? (await res.json()) as SearchReply : null;
         if (current) { setHits(body); setActive(-1); }
       } catch {
         if (current) setHits(null);
@@ -146,10 +166,10 @@ export function SearchBox({ id, className, watched = [], wide }: {
             <li
               key={r.key} id={optionId(i)} role="option" aria-selected={i === active}
               onClick={() => go(r.href)} onMouseEnter={() => setActive(i)}
-              className="flex cursor-pointer flex-col gap-0.5 px-2 py-1 text-foreground aria-selected:bg-muted"
+              className={`flex cursor-pointer flex-col gap-0.5 py-1 pr-2 text-foreground aria-selected:bg-muted ${r.sub ? 'pl-5' : 'pl-2'}`}
             >
-              <span className="font-medium">{r.line}</span>
-              <span className="font-mono text-[11px] text-muted-foreground">{short(r.address)}</span>
+              <span className={r.sub ? 'text-muted-foreground' : 'font-medium'}>{r.sub ? <span aria-hidden>↳ </span> : null}{r.line}</span>
+              {r.sub ? null : <span className="font-mono text-[11px] text-muted-foreground">{short(r.address)}</span>}
             </li>
           );
         }) : null}

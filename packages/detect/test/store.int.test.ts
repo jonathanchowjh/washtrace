@@ -4991,6 +4991,12 @@ describe('a wallet', () => {
     expect(await store.walletCollections(CHAIN, W)).toEqual([{ address: ran, name: 'Ran', trades: 4 }, { address: notRan, name: null, trades: 2 }]);
   });
 
+  it('lists the tokens it traded in one collection, not one it never touched, cut at the limit', async () => {
+    // Token 8 moved between P and Q only. One transfer each, so the token number breaks the tie.
+    expect(await store.walletTokens(CHAIN, W, notRan, 5)).toEqual(['1', '7']);
+    expect(await store.walletTokens(CHAIN, W, ran, 2)).toEqual(['1', '2']);
+  });
+
   it('a Find reads a token number, or the other side of the trade by its address or the start of it; anything else matches nothing', async () => {
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '#1' }))).toEqual(['u1', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: P }))).toEqual(['u1', 't2', 't1']);

@@ -162,6 +162,21 @@ describe('the search box under a collection', () => {
     fireEvent.click(options.find((o) => o.textContent?.startsWith('Wallet'))!);
     expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/w/${W}`);
   });
+
+  it('lists what its best match, a wallet, is connected to right under it, each opening there', async () => {
+    const W = '0x' + 'b'.repeat(40), V = '0x' + 'b'.repeat(39) + 'c', RING = '0x' + '1'.repeat(40);
+    fetchMock.mockResolvedValue(reply({
+      ...hits({ wallets: [{ chainId: 1, address: W, transfers: 3 }, { chainId: 1, address: V, transfers: 1 }] }),
+      connected: { wallet: W, rings: [{ anchor: RING, rank: 2 }], tokens: ['101'] },
+    }));
+    under();
+    await type('0xbbbb');
+    const lines = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(lines.slice(1, 3)).toEqual(['↳ Part of Ring 2', '↳ Traded token #101']);
+    expect(lines[3]).toContain('Wallet');
+    fireEvent.click(screen.getAllByRole('option')[1]!);
+    expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/r/${RING}`);
+  });
 });
 
 describe('the / shortcut', () => {

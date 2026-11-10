@@ -119,11 +119,14 @@ leading `'`.
 |---|---|---|---|
 | `GET /api/wallets/{chain}/{address}` | `trades`, `partners`, `flows` (page numbers); `collection` (a collection address); `flagged=1`; `q`; `psort` (`flows`, `sent`, `received` or `watched`); `with` (another wallet) and `dir` (`sent` or `received`, both when left out) | 200, 404 | `chainId`, `address`, `funding`, `collections`, `counterparties`, `transfers`, `counts`, `pages`, `cut`, `between`, and the verdict keys |
 | `GET /api/transfers/{chain}/{tx}` | | 200, 404 | `chainId`, `tx`, `transfers`, and the verdict keys |
-| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page`; `scope` (`<chain>:<address>`) | 200 | `collections`, `tokens`, `wallets`, `trades`, `more` |
+| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page`; `scope` (`<chain>:<address>`) | 200 | `collections`, `tokens`, `wallets`, `trades`, `more`, and with a scope `connected` |
 
 - `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
   address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
   collection narrows nothing.
+- `connected` comes with a scoped search of every kind (no `kind`) whose best match, the first hit of the kind
+  listed first, is a wallet on the scope's chain: `{wallet, rings, tokens}`, its first 3 rings there by rank
+  (`{anchor, rank}`) and the 3 tokens it traded there most. The search box lists them under that wallet.
 
 - A wallet page holds 20 money partners and 20 trades, newest first. `pages` gives each list's
   `{page, pages, total}` (a page past the last reads as the last); `counts` every trade it has and those counted

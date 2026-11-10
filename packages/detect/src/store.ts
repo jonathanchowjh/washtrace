@@ -3043,6 +3043,17 @@ export class Store {
     return rows.map((r) => ({ address: r.address, name: r.name, trades: r.trades }));
   }
 
+  /** The tokens a wallet traded in one collection, the most of its transfers first: what a scoped search lists under it. */
+  async walletTokens(chainId: number, address: string, collection: string, limit: number): Promise<string[]> {
+    const params: unknown[] = [];
+    const { rows } = await this.pool.query<{ token_id: string }>(
+      `SELECT t.token_id ${TRANSFERS} WHERE ${walletWhere(chainId, address, { collection }, params)}
+       GROUP BY t.token_id ORDER BY count(*) DESC, t.token_id LIMIT ${Math.max(0, Math.floor(limit))}`,
+      params,
+    );
+    return rows.map((r) => r.token_id);
+  }
+
   /** A page of who a wallet moved money with, in `sort`'s order; ties by address, so the pages never overlap. */
   async counterparties(chainId: number, address: string, limit: number, offset: number, sort: PartnerSort): Promise<{ address: string; flows: number; sent: number; received: number; watched: boolean }[]> {
     const { rows } = await this.pool.query(

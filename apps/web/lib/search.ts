@@ -46,6 +46,20 @@ export function kindsFor(p: Parsed): readonly SearchKind[] {
   return first === null ? SEARCH_KINDS : [first, ...SEARCH_KINDS.filter((k) => k !== first)];
 }
 
+/** The kind of a search's best match: the first kind, in kindsFor's order, with any hit. Its first hit is the match. */
+export function bestKind(hits: SearchHits, p: Parsed): SearchKind | undefined {
+  return kindsFor(p).find((k) => hits[k].length > 0);
+}
+
+/** Rings and tokens listed under a scoped search's best match: a few, each one Enter away. */
+export const CONNECTED = 3;
+
+/** What a scoped search's best match is connected to in that collection, when it is a wallet: its rings by rank, and the tokens it traded most. */
+export type Connected = { wallet: string; rings: { anchor: string; rank: number }[]; tokens: string[] };
+
+/** What /api/search answers: the hits and, for a scoped search whose best match is a wallet, what it is connected to there. */
+export type SearchReply = SearchHits & { connected?: Connected };
+
 /**
  * Trims, lowercases hex and strips one leading '#'. One or two bare digits are
  * text, so typing "12" never searches every collection's tokens; "#12" does.
