@@ -137,9 +137,10 @@ describe('the figure alone', () => {
     render(<LoopFigure drawing={drawn} chainId={1} base="/c/1/0xc" lit={{ edges: loop.edges, nodes: loop.nodes }} />);
     const href = (sel: string) => document.querySelector(sel)?.closest('a')?.getAttribute('href');
     expect(screen.queryAllByRole('button')).toHaveLength(0);
-    expect(screen.getByRole('link', { name: /^Wallet 0x3/ }).getAttribute('href')).toBe('/w/1/0x3');
-    expect(href('[data-edge="t2"] path[stroke="transparent"]')).toBe('/tx/1/0xs2');
-    expect(href('[data-edge="o0e1"] path[stroke="transparent"]')).toBe('/tx/1/0xc9');
+    // Drawn for a collection, its wallets and trades open under that collection's tabs.
+    expect(screen.getByRole('link', { name: /^Wallet 0x3/ }).getAttribute('href')).toBe('/c/1/0xc/w/0x3');
+    expect(href('[data-edge="t2"] path[stroke="transparent"]')).toBe('/c/1/0xc/tx/0xs2');
+    expect(href('[data-edge="o0e1"] path[stroke="transparent"]')).toBe('/c/1/0xc/tx/0xc9');
     expect([...document.querySelectorAll('svg text a')].find((a) => a.textContent === '#9')?.getAttribute('href')).toBe('/c/1/0xc/t/9');
     expect(litKeys()).toEqual(['o0e1', 't1']);
     expect(document.querySelector('[data-edge="t3"]')?.getAttribute('class')).toContain('opacity-25');

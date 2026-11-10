@@ -120,8 +120,8 @@ const PAGES: Record<string, Draw> = {
   'flagged Tokens': () => flagged({ method: 'A', kind: 'tokens' }),
   'flagged Wallets': () => flagged({ method: 'A', kind: 'wallets' }),
 };
-async function flagged(sp: Record<string, string>): Promise<HTMLElement> {
-  const { default: P } = await import('@/app/c/[chain]/[address]/flagged/page');
+async function flagged({ kind, ...sp }: Record<string, string>): Promise<HTMLElement> {
+  const { default: P } = kind === 'wallets' ? await import('@/app/c/[chain]/[address]/wallets/page') : await import('@/app/c/[chain]/[address]/tokens/page');
   return render(await P({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 const hrefs = (c: Element) => [...c.querySelectorAll('a')].map((a) => a.getAttribute('href'));

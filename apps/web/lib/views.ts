@@ -270,25 +270,29 @@ function paged(asked: number, total: number, size: number): { page: number; page
  * A wallet: its funding, a page of its money partners, a page of its trades
  * under the filter, with the one verdict of the trades shown, and with
  * `filter.with` what passed between it and that wallet. Its counts are over
- * every trade: the title's flagged count is the flagged-only list's.
+ * every trade: the title's flagged count is the flagged-only list's. With
+ * `home`, a collection's address, every trade count and list is of its trades
+ * in that collection alone; its money is the wallet's, wherever it went.
  */
-export async function walletView(chainId: number, address: string, opts: WalletOpts) {
+export async function walletView(chainId: number, address: string, opts: WalletOpts, home?: string) {
   const s = store();
-  const { with: other, ...narrow } = opts.filter;
-  const narrowed = Object.keys(narrow).length > 0;
+  const inHome = home === undefined ? {} : { collection: home };
+  const { with: other, ...asked } = opts.filter;
+  const narrowed = Object.keys(asked).length > 0;
+  const narrow = { ...asked, ...inHome };
   const [funding, collections, all, flagged, matched, counterpartiesTotal, flowsTotal, betweenTotal] = await Promise.all([
     s.wallet(chainId, address), s.walletCollections(chainId, address),
-    s.walletTradeCount(chainId, address), s.walletTradeCount(chainId, address, { flaggedOnly: true }),
+    s.walletTradeCount(chainId, address, inHome), s.walletTradeCount(chainId, address, { flaggedOnly: true, ...inHome }),
     narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
     other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),
-    other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other }),
+    other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other, ...inHome }),
   ]);
   const pages = { trades: paged(opts.trades, matched ?? all, TRADES), partners: paged(opts.partners, counterpartiesTotal, COUNTERPARTIES), flows: paged(opts.flows, flowsTotal, FLOWS) };
   const offset = (p: { page: number }, size: number) => (p.page - 1) * size;
   const [shown, counterparties, betweenShown, flows] = await Promise.all([
     s.walletTransfers(chainId, address, TRADES, offset(pages.trades, TRADES), narrow),
     s.counterparties(chainId, address, COUNTERPARTIES, offset(pages.partners, COUNTERPARTIES), opts.psort),
-    other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other }),
+    other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other, ...inHome }),
     other === undefined ? [] : s.flowsBetween(chainId, address, other, opts.dir, FLOWS, offset(pages.flows, FLOWS)),
   ]);
   const latest = await latestByAddress(s, chainId, [...shown, ...betweenShown]);

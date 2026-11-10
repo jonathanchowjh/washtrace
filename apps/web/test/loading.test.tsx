@@ -6,6 +6,11 @@ import CollectionLoading from '@/app/c/[chain]/[address]/loading';
 import TokenLoading from '@/app/c/[chain]/[address]/t/[tokenId]/loading';
 import WalletLoading from '@/app/w/[chain]/[address]/loading';
 import TxLoading from '@/app/tx/[chain]/[hash]/loading';
+import TokensLoading from '@/app/c/[chain]/[address]/tokens/loading';
+import WalletsLoading from '@/app/c/[chain]/[address]/wallets/loading';
+import TradesLoading from '@/app/c/[chain]/[address]/trades/loading';
+import InWalletLoading from '@/app/c/[chain]/[address]/w/[wallet]/loading';
+import InTxLoading from '@/app/c/[chain]/[address]/tx/[hash]/loading';
 
 afterEach(cleanup);
 
@@ -23,6 +28,9 @@ describe('a page still loading', () => {
     };
     expect([<CollectionLoading key="c" />, <TokenLoading key="t" />, <WalletLoading key="w" />, <TxLoading key="x" />].map(named))
       .toEqual(['Loading this collection', 'Loading this token', 'Loading this wallet', 'Loading this transaction']);
+    // A collection's lists and the things opened from them say the kind they list or are.
+    expect([<TokensLoading key="t" />, <WalletsLoading key="w" />, <TradesLoading key="x" />, <InWalletLoading key="iw" />, <InTxLoading key="ix" />].map(named))
+      .toEqual(['Loading these tokens', 'Loading these wallets', 'Loading these transactions', 'Loading this wallet', 'Loading this transaction']);
   });
 
   it('pulses only when the reader allows motion', () => {

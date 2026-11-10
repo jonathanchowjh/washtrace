@@ -1,6 +1,7 @@
 import type { Parsed, SearchHits, SearchKind } from '@washtrace/detect';
 import { chainName } from './chains';
 import { plural, short } from './format';
+import { txHref } from './links';
 import { MAX_TEXT, pageOf, tokenIdOf } from './params';
 
 /**
@@ -69,5 +70,6 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number): { href: s
     return { href: `/w/${h.chainId}/${h.address}`, line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
   }
   const h = hits.trades[i]!;
-  return { href: `/tx/${h.chainId}/${h.txHash}`, line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
+  // A trade hit is one transfer in one collection: it opens under that collection's tabs.
+  return { href: txHref(h.chainId, h.txHash, `/c/${h.chainId}/${h.address}`), line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
 }

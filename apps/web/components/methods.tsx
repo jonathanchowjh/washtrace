@@ -5,6 +5,7 @@ import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals,
 import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
 import type { Qualifier } from '@/lib/lens-state';
 import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metrics';
+import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
@@ -136,7 +137,7 @@ export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
   const s = part(t, 'sales'), o = part(t, 'owners');
   const caught = tradesHref(base, { caught: [m] });
   const priciest = { sort: 'price', dir: 'desc' } as const;
-  const flagged = (kind: 'tokens' | 'wallets') => `${base}/flagged?method=${m}&kind=${kind}`;
+  const flagged = (kind: 'tokens' | 'wallets') => listHref(base, kind, { method: m });
   return (
     <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>

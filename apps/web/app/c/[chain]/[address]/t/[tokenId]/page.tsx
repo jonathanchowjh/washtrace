@@ -114,7 +114,6 @@ export default async function TokenPage({ params, searchParams }: Props) {
     <>
       <Head
         title={`${name} #${tokenLabel(tokenId)}`}
-        crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
@@ -157,7 +156,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         items={[
           ...why.map((r, i) => ({
             key: drawing.loops[i]!.key,
-            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId)}</span></span>,
+            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId, base)}</span></span>,
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
@@ -196,7 +195,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <Empty>None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</Empty>
         ) : (
           <>
-            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} own={ownByRow} names={ownLenses} />
+            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} within={base} own={ownByRow} names={ownLenses} />
             {pageCount > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}
@@ -216,7 +215,7 @@ async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
   const name = c.name ?? short(c.address);
   return (
     <>
-      <Head title={`${name} #${tokenLabel(tokenId)}`} crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]} />
+      <Head title={`${name} #${tokenLabel(tokenId)}`} />
       <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
       <MoreLink href={base}>Back to {name}</MoreLink>
     </>

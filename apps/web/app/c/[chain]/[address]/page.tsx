@@ -25,7 +25,8 @@ import { chainName } from '@/lib/chains';
 import { NOT_RUN_LATEST, lensInfo, pct, pctTenth, plural, short, num } from '@/lib/format';
 import { builtinCauses, runStateWords, shareQualifier } from '@/lib/lens-state';
 import { moneyFor, type CollectionProfile, type Method, type MethodTotals, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
-import { collectionLinks, explorerAddress, explorerTx, venues } from '@/lib/links';
+import { collectionLinks, explorerAddress, explorerTx, listHref, venues } from '@/lib/links';
+import { collectionOf, runsOf } from '@/lib/collection-reads';
 import { analyzingOn, coverage, unread, analysisWaitText } from '@/lib/coverage';
 import { chartLenses, evidenceLead, leftOut, lensContext, ownLenses, range, summary, type Range } from '@/lib/metrics';
 import { pipeline, trailComing } from '@/lib/pipeline';
@@ -63,11 +64,11 @@ export default async function CollectionPage({ params, searchParams }: Props) {
   const address = addressOf(p.address);
   if (chainId === null || address === null) notFound();
   const s = store();
-  const c = await s.collection(chainId, address);
+  const c = await collectionOf(chainId, address);
   if (!c) notFound();
   const sp = await searchParams;
   // Your lenses on this collection with their runs: ?method=L<id> picks one that exists, and an unknown or deleted one falls back like an unknown method.
-  const runs = await s.lensRuns(c.id);
+  const runs = await runsOf(c.id);
   const own = ownLenses(runs);
   const method = lensKeyOf(sp.method, own);
   // Compare is a tab, not a lens: lensKeyOf reads it as the default lens, which the panel then does not list.
@@ -108,8 +109,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
     ];
     return `${base}?${pairs.filter(([, x]) => x !== null).map(([k, x]) => `${k}=${encodeURIComponent(x!)}`).join('&')}#evidence`;
   };
-  const flagged = (kind: 'tokens' | 'wallets', view: { sort: string; find: string | null }) =>
-    `${base}/flagged?method=${method}&kind=${kind}${view.sort === 'caught' ? '' : `&sort=${view.sort}`}${view.find === null ? '' : `&q=${encodeURIComponent(view.find)}`}`;
+  const flagged = (kind: 'tokens' | 'wallets', view: { sort: string; find: string | null }) => listHref(base, kind, { method, sort: view.sort, q: view.find });
   const a = c.latest;
   const rules = rulesNote(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
@@ -135,7 +135,6 @@ export default async function CollectionPage({ params, searchParams }: Props) {
     <>
       <Head
         title={name}
-        crumb={[{ href: '/', label: 'Collections' }]}
         sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext></>}
       >
         <Refresh />

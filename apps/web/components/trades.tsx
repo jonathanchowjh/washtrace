@@ -7,6 +7,7 @@ import { NotCounted } from '@/components/methods';
 import { TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
+import { txHref } from '@/lib/links';
 import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
@@ -279,7 +280,7 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
     <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
   );
   const wallet = (a: string) => (
-    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
+    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
   );
   return (
     <div className="mt-4 overflow-x-auto rounded-lg border bg-card">
@@ -295,11 +296,11 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
             const venue = r.marketplace === null ? null : venueOf(r.marketplace);
             const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
             // The price opens the trade, as a price does in the transfer tables.
-            const trade = (v: string) => (v === '—' ? v : <Link href={`/tx/${chainId}/${r.txHash}`} title="Open this trade" className="hover:underline">{v}</Link>);
+            const trade = (v: string) => (v === '—' ? v : <Link href={txHref(chainId, r.txHash, base)} title="Open this trade" className="hover:underline">{v}</Link>);
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={`/tx/${chainId}/${r.txHash}`} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
+                  <Link href={txHref(chainId, r.txHash, base)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
                   <Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link>

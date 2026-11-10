@@ -77,7 +77,7 @@ vi.mock('@/lib/store', () => ({
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
-vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
+vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
 afterEach(() => { cleanup(); Object.assign(state, fresh()); });
 
@@ -85,8 +85,9 @@ async function collectionPage(sp: Record<string, string> = {}): Promise<HTMLElem
   const { default: Page } = await import('@/app/c/[chain]/[address]/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
-async function flaggedPage(sp: Record<string, string> = {}): Promise<HTMLElement> {
-  const { default: Page } = await import('@/app/c/[chain]/[address]/flagged/page');
+/** The Tokens or Wallets list, as `kind` picks, with the rest of `sp` as its address bar. */
+async function flaggedPage({ kind, ...sp }: Record<string, string> = {}): Promise<HTMLElement> {
+  const { default: Page } = kind === 'wallets' ? await import('@/app/c/[chain]/[address]/wallets/page') : await import('@/app/c/[chain]/[address]/tokens/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 const links = (c: Element) => [...c.querySelectorAll('a')];
@@ -182,8 +183,8 @@ describe('the lens lists on the collection page', () => {
   it('beneath each list, all of them on the flagged page, keeping sort and Find', async () => {
     state.wallets = { rows: [wallet(WAL)], total: 37 };
     const el = await collectionPage({ method: 'A', ts: 'share', tq: '14' });
-    expect(named(el, 'All 644 tokens →')).toEqual([`${BASE}/flagged?method=A&kind=tokens&sort=share&q=14`]);
-    expect(named(el, 'All 37 wallets →')).toEqual([`${BASE}/flagged?method=A&kind=wallets`]);
+    expect(named(el, 'All 644 tokens →')).toEqual([`${BASE}/tokens?method=A&sort=share&q=14`]);
+    expect(named(el, 'All 37 wallets →')).toEqual([`${BASE}/wallets?method=A`]);
     // Only the list with a Find is counted again without it.
     expect(state.calls.counts).toEqual([['tokens', 1, 'A', { sort: 'caught', find: null, limit: 0, offset: 0 }, expect.objectContaining({ ran: ['A', 'AU', 'AC'] })]]);
   });
@@ -224,8 +225,8 @@ describe('the lens lists on the flagged page', () => {
     const el = await flaggedPage({ method: 'A', kind: 'tokens', sort: 'volume', q: '1', page: '2' });
     expect(state.calls.tokens[0]![2]).toEqual({ sort: 'volume', find: '1', limit: 20, offset: 20 });
     const l = list(el, 'tokens');
-    expect(named(l, 'share')).toEqual([`${BASE}/flagged?method=A&kind=tokens&sort=share&q=1`]);
-    expect(named(l, 'Next ›')).toEqual([`${BASE}/flagged?method=A&kind=tokens&sort=volume&q=1&page=3`]);
+    expect(named(l, 'share')).toEqual([`${BASE}/tokens?method=A&sort=share&q=1`]);
+    expect(named(l, 'Next ›')).toEqual([`${BASE}/tokens?method=A&sort=volume&q=1&page=3`]);
     expect((l.querySelector('input[name=q]') as HTMLInputElement).value).toBe('1');
     expect(l.textContent).toContain('120 of 644 tokens match “1”');
     // The row numbers go on from the page before.
@@ -257,16 +258,18 @@ describe('the lens lists on the flagged page', () => {
     expect(state.calls.wallets).toHaveLength(0);
   });
 
-  it('the Tokens and Wallets tabs drop the other list\'s sort and Find', async () => {
-    const el = await flaggedPage({ method: 'A', kind: 'tokens', sort: 'share', q: '7' });
-    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === name)?.getAttribute('href');
-    expect(tab('Wallets')).toBe(`${BASE}/flagged?method=A&kind=wallets`);
-    expect(tab('Tokens')).toBe(`${BASE}/flagged?method=A&kind=tokens&sort=share&q=7`);
+  it('sends an old flagged link on to its list, with its lens, order, Find and page', async () => {
+    const { default: Old } = await import('@/app/c/[chain]/[address]/flagged/page');
+    const old = (sp: Record<string, string>) => Old({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) });
+    await expect(old({ method: 'A', kind: 'tokens', sort: 'share', q: '7', page: '2' })).rejects.toThrow(`redirect:${BASE}/tokens?method=A&sort=share&q=7&page=2`);
+    await expect(old({ kind: 'wallets' })).rejects.toThrow(`redirect:${BASE}/wallets?method=AC`);
   });
 
   it('titles its tab with its heading', async () => {
-    const { generateMetadata } = await import('@/app/c/[chain]/[address]/flagged/page');
-    const title = async (sp: Record<string, string>) => (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).title;
+    const title = async ({ kind, ...sp }: Record<string, string>) => {
+      const { generateMetadata } = kind === 'wallets' ? await import('@/app/c/[chain]/[address]/wallets/page') : await import('@/app/c/[chain]/[address]/tokens/page');
+      return (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).title;
+    };
     expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens flagged by Round trips');
     expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets flagged by Linked wallets');
     const { generateMetadata: tradesTitle } = await import('@/app/c/[chain]/[address]/trades/page');
@@ -274,7 +277,8 @@ describe('the lens lists on the flagged page', () => {
     // No such collection: each page keeps its own word.
     const missing = { params: Promise.resolve({ chain: '1', address: 'nope' }), searchParams: Promise.resolve({}) };
     expect((await tradesTitle(missing)).title).toBe('Trades');
-    expect((await generateMetadata({ ...missing, searchParams: Promise.resolve({ kind: 'tokens' }) })).title).toBe('Flagged');
+    const { generateMetadata: tokensTitle } = await import('@/app/c/[chain]/[address]/tokens/page');
+    expect((await tokensTitle(missing)).title).toBe('Tokens');
   });
 });
 

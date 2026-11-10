@@ -42,9 +42,9 @@ const BONE = 'rounded bg-muted motion-safe:animate-pulse';
  * kind of thing it will be already named, so a slow store reads as on its way
  * and the reader knows where they are going before it lands.
  */
-export function Loading({ kind }: { kind: Kind }) {
+export function Loading({ kind, list = false }: { kind: Kind; list?: boolean }) {
   return (
-    <div role="status" aria-label={`Loading this ${kind}`}>
+    <div role="status" aria-label={list ? `Loading these ${kind}s` : `Loading this ${kind}`}>
       <header className="pt-6 pb-4">
         <div className={cn('mb-2 h-3 w-32', BONE)} />
         <div className="flex items-center gap-2">

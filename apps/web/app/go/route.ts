@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { connection } from 'next/server';
+import { txHref } from '@/lib/links';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { parseSearch } from '@/lib/search';
 import { store } from '@/lib/store';
@@ -45,7 +46,8 @@ export async function GET(req: NextRequest): Promise<Response> {
     ...hits.collections.map((h) => `/c/${h.chainId}/${h.address}`),
     ...hits.tokens.map((h) => `/c/${h.chainId}/${h.address}/t/${h.tokenId}`),
     ...hits.wallets.map((h) => `/w/${h.chainId}/${h.address}`),
-    ...hits.trades.map((h) => `/tx/${h.chainId}/${h.txHash}`),
+    // Under its collection's tabs when every transfer of it is in that one collection; past one page of hits that is not known.
+    ...hits.trades.map((h) => txHref(h.chainId, h.txHash, !hits.more.trades && hits.trades.every((o) => o.txHash !== h.txHash || o.address === h.address) ? `/c/${h.chainId}/${h.address}` : null)),
   ]);
   return to(found.size === 1 ? [...found][0]! : results);
 }

@@ -10,14 +10,19 @@ shows is also in the [API](api.md).
 |---|---|---|
 | `/` | Watched collections, each with the share of its sales and volume that looks washed (Round trips to Linked wallets) and how complete the reading is. A form to watch another. | 15 s |
 | `/c/{chain}/{address}` | One collection: how far it has been read, the answer as that range, a tab per lens, each lens's share over time, and the six stages of the reading. | 15 s |
-| `/c/{chain}/{address}/flagged` | Every token or wallet one lens flags, most flagged first. `?method=AU&kind=wallets&page=2`. | On open |
+| `/c/{chain}/{address}/tokens`, `/wallets` | Every token or wallet one lens flags, most flagged first. `?method=AU&page=2`. The old `/flagged?kind=` links redirect here. | On open |
 | `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |
 | `/w/{chain}/{address}` | One wallet: how many of its trades are flagged, whether its money has been read, and who it moved money with. | On open |
+| `/c/{chain}/{address}/w/{wallet}`, `/tx/{hash}` | A wallet or a transaction opened from a collection: the same page under its tabs, with the wallet's trades and counts in that collection alone. Links from a collection's pages open these. | On open |
 | `/tx/{chain}/{hash}` | One transaction's verdict, and [Check this transaction](#checking-a-transaction-you-do-not-watch) where washtrace has not read or judged it. | On open |
 | `/search?q=` | A collection name, token number (`#1234`), wallet address or transaction hash. The sidebar search goes to the one thing it finds (via `/go`), else here. A hash nothing watched matches links to its transaction page on each chain the worker has an RPC for. | On open |
 | `/settings` | The settings in [operating.md](operating.md#settings), where each value came from, and a Test for the RPC and Etherscan. | On open |
 | `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
+
+Every page of a collection sits under one line naming it and a tab bar: Overview, Tokens, Wallets and Trades. A
+token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
+while another lens is chosen, since it would not match the list; a lens chosen on one tab is kept on the others.
 
 Times are clock times in the reader's time zone, changeable at the foot of the sidebar.
 

@@ -88,8 +88,8 @@ describe('the lens panel on the collection page', () => {
     const stats = (await draw({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
     expect(stats).not.toBeNull();
     expect(stats.closest('nav')).toBeNull();
-    expect(named(stats, '120 loops and 300 linked pairs')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
-    expect(named(stats, '644 tokens')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
+    expect(named(stats, '120 loops and 300 linked pairs')).toEqual([`${BASE}/tokens?method=AC`]);
+    expect(named(stats, '644 tokens')).toEqual([`${BASE}/tokens?method=AC`]);
   });
 
   it('leaves the loops out of the stat line for an analysis that did not count them', async () => {

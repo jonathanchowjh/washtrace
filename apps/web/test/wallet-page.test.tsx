@@ -351,3 +351,39 @@ describe('the wallet page', () => {
     expect(body).toMatchObject({ cut: { trades: false, counterparties: false }, washTrade: true, judged: true, methods: ['A'], between: null });
   });
 });
+
+describe('the wallet under a collection\'s tabs', () => {
+  const inColl = `/c/1/${COLL}`;
+  async function scoped(sp: Record<string, string> = {}): Promise<HTMLElement> {
+    const { default: Page } = await import('@/app/c/[chain]/[address]/w/[wallet]/page');
+    return render(await Page({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve(sp) })).container;
+  }
+
+  it('counts and lists only its trades in that collection, whatever ?collection= says', async () => {
+    // Ten trades: the last four in another collection, two flagged here.
+    trades = 10; unjudgedTrades = 4; flaggedTrades = 2;
+    const el = await scoped({ collection: OTHER });
+    expect(el.textContent).toContain('In 2 flagged trades out of 6');
+    expect(el.querySelector('select[name="collection"]')).toBeNull();
+    // The plain page under the tabs is no filter of the reader's.
+    expect(el.textContent).toContain('Every transfer it sent or received in this collection.');
+  });
+
+  it('keeps its links inside the collection, and offers the wallet across every one', async () => {
+    trades = 2; counterparties = 1;
+    const el = await scoped();
+    const hrefs = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+    expect(hrefs).toContain(`${inColl}/w/0x1`);
+    expect(hrefs).toContain(`${inColl}/w/${partner(0)}`);
+    expect(hrefs.filter((h) => h.startsWith('/w/'))).toEqual([here]);
+    expect(linkTo(el, 'in every collection')).toBe(here);
+    // Its own links (a sort, a page) stay on this page.
+    expect(hrefs.some((h) => h.startsWith(`${inColl}/w/${SELF}?`))).toBe(true);
+  });
+
+  it('names the wallet\'s own page as the canonical one', async () => {
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/w/[wallet]/page');
+    expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve({}) }))
+      .toEqual({ title: short(SELF), alternates: { canonical: here } });
+  });
+});

@@ -91,7 +91,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ))
             : (rows as WalletLine[]).map((l, i) => (
               <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
-                name={<Wallet chainId={chainId} address={l.address} />}
+                name={<Wallet chainId={chainId} address={l.address} within={base} />}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}
                 trades={tradesHref(base, { kind: 'all', wallet: l.address })}

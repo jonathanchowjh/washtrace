@@ -47,7 +47,7 @@ describe('the search page', () => {
     expect(t).toContain('Trade in Meebits, token #14022');
     expect(c.querySelector(`a[href="/c/1/${ADDR}/t/1234"]`)).not.toBeNull();
     expect(c.querySelector(`a[href="/w/1/${ADDR}"]`)).not.toBeNull();
-    expect(c.querySelector(`a[href="/tx/1/${TX}"]`)).not.toBeNull();
+    expect(c.querySelector(`a[href="/c/1/${ADDR}/tx/${TX}"]`)).not.toBeNull();
     expect([...c.querySelectorAll('h2')].map((h) => h.textContent).join('|')).toMatch(/\(1\)/);
   });
 
