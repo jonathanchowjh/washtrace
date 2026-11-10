@@ -96,7 +96,7 @@ describe('the trades page', () => {
     const el = await dom({ caught: 'A' });
     expect(el.textContent).toContain('2 trades match');
     expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops backnot counted', 'Linked wallets']));
-    expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
+    expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe('not counted');
     expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
   });
