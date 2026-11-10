@@ -39,7 +39,8 @@ export function Head({ title, crumb = [], sub, kind, part, children }: {
         ) : null}
         {kind ? <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{KIND_NAME[kind]}</p> : null}
         <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
-        {sub ? <p className="mt-1 text-sm text-muted-foreground">{sub}</p> : null}
+        {/* A full hash or address breaks where it must, so a phone never scrolls sideways for it. */}
+        {sub ? <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">{sub}</p> : null}
         {part ? <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">{part}</div> : null}
       </div>
       </div>

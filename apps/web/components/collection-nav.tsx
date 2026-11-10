@@ -82,8 +82,17 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
   const current = tabOf(base, path);
   const bar = useRef<HTMLElement>(null);
   useEffect(() => {
-    const lit = bar.current?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (bar.current && lit) revealTab(bar.current, lit);
+    const nav = bar.current;
+    const reveal = () => {
+      const lit = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (nav && lit) revealTab(nav, lit);
+    };
+    reveal();
+    // The counts stream in after this runs and widen the tabs, moving the lit one: reveal it again whenever a tab changes size.
+    if (nav === null || typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(reveal);
+    for (const a of nav.querySelectorAll('a')) watch.observe(a);
+    return () => watch.disconnect();
   }, [current]);
   const method = lensOf(useSearchParams(), current, lenses);
   const defaultLens = method === null || method === 'AC';
