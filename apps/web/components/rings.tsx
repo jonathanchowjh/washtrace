@@ -92,28 +92,54 @@ export function RingsTable({ rows, base, chainId, total, from }: { rows: readonl
 // Past a dozen wallets a ring of dots says no more; the count beside it keeps the number.
 const DRAWN = 12;
 
+/** One wallet as the ring's picture and its legend draw it: the wallet symbol, solid for a trader, dashed in the money hue for one that only moved the money. */
+function walletMark(x: number, y: number, r: number, traded: boolean) {
+  return (
+    <>
+      <circle cx={x} cy={y} r={r} strokeWidth={1.5} className={traded ? 'fill-card stroke-foreground' : 'fill-card stroke-flow'} {...(traded ? {} : { strokeDasharray: '3 2' })} />
+      <circle cx={x} cy={y} r={r * 0.3} className={traded ? 'fill-foreground' : 'fill-flow'} />
+    </>
+  );
+}
+
 /**
- * A ring's wallets on a circle: those that traded solid, those that only
- * moved the money in the money hue, dashed. It draws who is in it, not who
- * paid whom: the ring records membership, and the token pages draw the moves.
+ * A ring's wallets on a circle, each in the wallet symbol the list below uses:
+ * those that traded in the text colour, those that only moved the money in
+ * the money hue and dashed, each kind together on its own arc, the count in
+ * the middle and a legend under it. It draws who is in it, not who paid
+ * whom: the ring records membership, and the token pages draw the moves.
  */
 export function RingFigure({ wallets, total }: { wallets: readonly { address: string; traded: boolean }[]; total: number }) {
-  const shown = wallets.slice(0, DRAWN);
+  const traders = wallets.filter((w) => w.traded), movers = wallets.filter((w) => !w.traded);
+  // Past a dozen, each kind keeps its share of the dots, and one at least, so a picture never drops a kind the ring has.
+  const room = Math.min(wallets.length, DRAWN);
+  const kept = Math.min(movers.length, Math.max(movers.length > 0 ? 1 : 0, Math.round((room * movers.length) / Math.max(wallets.length, 1))));
+  const t = Math.min(traders.length, room - kept);
+  const shown = [...traders.slice(0, t), ...movers.slice(0, room - t)];
   const n = Math.max(shown.length, 1);
+  const r = shown.length > 8 ? 5 : 7;
   const at = (i: number) => {
     const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
     return [60 + 44 * Math.cos(a), 52 + 38 * Math.sin(a)] as const;
   };
   return (
-    <svg viewBox="0 0 120 104" role="img" aria-label={`${plural(total, 'wallet')}: ${wallets.filter((w) => w.traded).length} traded, ${wallets.filter((w) => !w.traded).length} only moved the money`} className="h-28 w-32 shrink-0">
-      <ellipse cx="60" cy="52" rx="44" ry="38" fill="none" strokeWidth={1.2} className="stroke-muted-foreground/40" />
-      {shown.map((w, i) => {
-        const [x, y] = at(i);
-        return <circle key={w.address} cx={x} cy={y} r={shown.length > 8 ? 5 : 7} strokeWidth={1.5}
-          className={w.traded ? 'fill-card stroke-foreground' : 'fill-card stroke-flow'} {...(w.traded ? {} : { strokeDasharray: '3 2' })} />;
-      })}
-      {total > shown.length ? <text x="60" y="56" textAnchor="middle" className="fill-muted-foreground text-[11px]">+{num(total - shown.length)}</text> : null}
-    </svg>
+    <figure className="flex shrink-0 flex-col items-center gap-1">
+      <svg viewBox="0 0 120 104" role="img" aria-label={`${plural(total, 'wallet')}: ${traders.length} traded, ${movers.length} only moved the money`} className="h-28 w-32">
+        <ellipse cx="60" cy="52" rx="44" ry="38" fill="none" strokeWidth={1.2} className="stroke-muted-foreground/40" />
+        {shown.map((w, i) => {
+          const [x, y] = at(i);
+          return <g key={w.address} data-traded={w.traded ? '' : undefined}>{walletMark(x, y, r, w.traded)}</g>;
+        })}
+        <text x="60" y="52" textAnchor="middle" className="fill-foreground text-[20px] font-semibold tabular-nums">{num(total)}</text>
+        <text x="60" y="66" textAnchor="middle" className="fill-muted-foreground text-[10px]">{total === 1 ? 'wallet' : 'wallets'}</text>
+      </svg>
+      {/* The picture's label says these counts already; the legend is for the eye. */}
+      <figcaption aria-hidden className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, true)}</svg>{num(traders.length)} traded</span>
+        <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, false)}</svg>{num(movers.length)} only moved the money</span>
+        {total > shown.length ? <span>{num(shown.length)} of {num(total)} drawn</span> : null}
+      </figcaption>
+    </figure>
   );
 }
 

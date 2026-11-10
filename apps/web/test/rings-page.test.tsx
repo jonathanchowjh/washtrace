@@ -162,6 +162,31 @@ describe('a ring', () => {
   });
 });
 
+describe('the ring’s picture', () => {
+  const ws = (traders: number, movers: number) => [
+    ...Array.from({ length: traders }, (_, i) => ({ address: `0xt${i}`, traded: true })),
+    ...Array.from({ length: movers }, (_, i) => ({ address: `0xm${i}`, traded: false })),
+  ];
+
+  it('draws traders and money-only wallets in their two styles, the count in the middle, with a legend', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(2, 1)} total={3} />).container;
+    expect(c.querySelector('svg[role=img]')!.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
+    expect(c.querySelectorAll('svg[role=img] g[data-traded]')).toHaveLength(2);
+    expect(c.querySelectorAll('svg[role=img] g:not([data-traded]) circle[stroke-dasharray]')).toHaveLength(1);
+    expect([...c.querySelectorAll('svg[role=img] text')].map((t) => t.textContent)).toEqual(['3', 'wallets']);
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 only moved the money']);
+  });
+
+  it('past a dozen, keeps each kind’s share of the dots, never dropping one, and says how many are drawn', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(30, 1)} total={31} />).container;
+    expect(c.querySelectorAll('svg[role=img] g')).toHaveLength(12);
+    expect(c.querySelectorAll('svg[role=img] g:not([data-traded])')).toHaveLength(1);
+    expect(c.querySelector('figcaption')!.textContent).toContain('12 of 31 drawn');
+  });
+});
+
 describe('the ring chips', () => {
   it('say each ring a thing is in, by rank, and nothing for a thing in none', async () => {
     const { RingChips } = await import('@/components/rings');
