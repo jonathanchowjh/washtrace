@@ -44,7 +44,7 @@ export function RingsTable({ rows, base, chainId, total, from }: { rows: readonl
                   <HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={href} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link></HoverCard>
                 </td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<Link href={walletHref(chainId, a, base)} className="font-mono hover:underline">{short(a)}</Link></span>)}
+                  {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<HoverCard src={cardSrc(base, 'wallet', a)}><Link href={walletHref(chainId, a, base)} className="font-mono hover:underline">{short(a)}</Link></HoverCard></span>)}
                   {r.wallets > r.sample.length ? <Link href={href} className="hover:underline"> +{num(r.wallets - r.sample.length)}</Link> : null}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums"><Link href={href} className="hover:underline">{num(r.tokens)}</Link></td>

@@ -9,7 +9,8 @@ import { RingFigure, ringName, ringTone } from '@/components/rings';
 import { Time } from '@/components/time';
 import { collectionOf } from '@/lib/collection-reads';
 import { eth, num, plural, short, tokenLabel } from '@/lib/format';
-import { walletHref } from '@/lib/links';
+import { cardSrc, walletHref } from '@/lib/links';
+import { HoverCard } from '@/components/hover-card';
 import { addressOf, chainOf } from '@/lib/params';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
@@ -92,9 +93,11 @@ export default async function RingPage(props: Props) {
                 <ul className="divide-y">
                   {g.list.map((w) => (
                     <li key={w.address}>
-                      <Link href={walletHref(chainId, w.address, base)} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
-                        <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
-                      </Link>
+                      <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
+                        <Link href={walletHref(chainId, w.address, base)} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
+                          <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
+                        </Link>
+                      </HoverCard>
                     </li>
                   ))}
                 </ul>
@@ -109,7 +112,7 @@ export default async function RingPage(props: Props) {
           <ul className="divide-y rounded-lg border bg-card">
             {tokens.map((t) => (
               <li key={t.tokenId} className="flex items-center gap-3 px-4 py-2 text-sm">
-                <Link href={`${base}/t/${t.tokenId}`} className="flex flex-1 items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link>
+                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={`${base}/t/${t.tokenId}`} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId })} className="text-xs text-muted-foreground tabular-nums hover:underline">{plural(t.sales, 'sale')}</Link>
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId, sort: 'price', dir: 'desc' })} className="w-20 text-right tabular-nums hover:underline">{eth(t.volumeWei)}</Link>
               </li>
