@@ -53,6 +53,22 @@ describe('the rings list', () => {
     expect(links(rows[0]!)).toContainEqual([short(M), `${BASE}/w/${M}`]);
   });
 
+  it('on a phone each ring is a card with the row’s links, its counts named, and the table is hidden there', async () => {
+    const c = await list();
+    const cards = [...c.querySelectorAll('ul[aria-label=Rings] > li')];
+    expect(c.querySelector('ul[aria-label=Rings]')!.className).toContain('sm:hidden');
+    expect(c.querySelector('table')!.parentElement!.className).toMatch(/^hidden .*sm:block/);
+    const rows = [...c.querySelectorAll('tbody tr')];
+    expect(cards).toHaveLength(rows.length);
+    cards.forEach((card, i) => expect(links(card)).toEqual(links(rows[i]!)));
+    expect(cards[0]!.querySelector('p.tabular-nums')!.textContent!.replace(/\s+/g, ' ')).toBe('1 token3 sales9 ETH');
+  });
+
+  it('marks each sampled wallet with the wallet symbol, as other wallet links are', async () => {
+    const c = await list();
+    expect([...c.querySelectorAll('tbody tr')][0]!.querySelectorAll('td:nth-child(2) a[href*="/w/"] svg')).toHaveLength(3);
+  });
+
   it('says why it is empty: no analysis, rings not worked out yet, or none', async () => {
     state.latest = false;
     expect((await list()).textContent).toContain('No analysis yet, so no ring.');

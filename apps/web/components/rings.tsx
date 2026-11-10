@@ -18,40 +18,72 @@ import { HoverCard } from './hover-card';
 /** A ring's mark: the floor's when Round trips flags any of its sales, else the ceiling's. */
 export const ringTone = (r: Pick<RingLine, 'floorSales'>) => (r.floorSales > 0 ? 'cycle' : 'money');
 
-/** Rings as rows: its name and mark, a few of its wallets, then what its flagged sales add up to. Each row opens the ring. */
+/**
+ * Rings as rows: its name and mark, a few of its wallets, then what its
+ * flagged sales add up to. Each row opens the ring. Below `sm` the table is
+ * too wide for the screen, so each ring is a card there instead, as a trade is
+ * on Trades: both draw the same cells and the breakpoint shows one.
+ */
 export function RingsTable({ rows, base, chainId, total, from }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string }) {
+  // Each ring's cells, made once: the table row and the card both draw these.
+  const rings = rows.map((r) => {
+    const href = withFrom(`${base}/r/${r.anchor}`, from);
+    return {
+      key: r.anchor,
+      name: <HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={href} prefetch={false} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link></HoverCard>,
+      wallets: (
+        <>
+          {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<HoverCard src={cardSrc(base, 'wallet', a)}><Link href={walletHref(chainId, a, base)} prefetch={false} className="inline-flex items-center gap-1 font-mono hover:underline"><KindIcon kind="wallet" className="size-3.5" />{short(a)}</Link></HoverCard></span>)}
+          {r.wallets > r.sample.length ? <Link href={href} prefetch={false} className="hover:underline"> +{num(r.wallets - r.sample.length)}</Link> : null}
+        </>
+      ),
+      tokens: <Link href={href} prefetch={false} className="hover:underline">{num(r.tokens)}</Link>,
+      sales: <Link href={tradesHref(base, { ring: r.anchor })} prefetch={false} className="hover:underline">{num(r.sales)}</Link>,
+      eth: <Link href={tradesHref(base, { ring: r.anchor, sort: 'price', dir: 'desc' })} prefetch={false} className="hover:underline">{eth(r.volumeWei, '')}</Link>,
+      // A card names its counts, having no column heads to.
+      tokensWord: r.tokens === 1 ? 'token' : 'tokens',
+      salesWord: r.sales === 1 ? 'sale' : 'sales',
+    };
+  });
   return (
-    <div className="overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full min-w-[36rem] text-left text-sm">
-        <thead className="text-xs text-muted-foreground">
-          <tr className="border-b">
-            <th className="px-3 py-2 font-medium">Ring</th>
-            <th className="px-3 py-2 font-medium">Wallets</th>
-            <th className="px-3 py-2 text-right font-medium">Tokens</th>
-            <th className="px-3 py-2 text-right font-medium">Sales</th>
-            <th className="px-3 py-2 text-right font-medium">ETH</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {rows.map((r) => {
-            const href = withFrom(`${base}/r/${r.anchor}`, from);
-            return (
-              <tr key={r.anchor} className="hover:bg-muted/50">
-                <td className="px-3 py-2 whitespace-nowrap">
-                  <HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={href} prefetch={false} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link></HoverCard>
-                </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<HoverCard src={cardSrc(base, 'wallet', a)}><Link href={walletHref(chainId, a, base)} prefetch={false} className="font-mono hover:underline">{short(a)}</Link></HoverCard></span>)}
-                  {r.wallets > r.sample.length ? <Link href={href} prefetch={false} className="hover:underline"> +{num(r.wallets - r.sample.length)}</Link> : null}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums"><Link href={href} prefetch={false} className="hover:underline">{num(r.tokens)}</Link></td>
-                <td className="px-3 py-2 text-right tabular-nums"><Link href={tradesHref(base, { ring: r.anchor })} prefetch={false} className="hover:underline">{num(r.sales)}</Link></td>
-                <td className="px-3 py-2 text-right tabular-nums"><Link href={tradesHref(base, { ring: r.anchor, sort: 'price', dir: 'desc' })} prefetch={false} className="hover:underline">{eth(r.volumeWei, '')}</Link></td>
+    <div className="rounded-lg border bg-card">
+      <ul aria-label="Rings" className="divide-y text-sm sm:hidden">
+        {rings.map((r) => (
+          <li key={r.key} data-ring-card className="space-y-1 px-3 py-2">
+            <div>{r.name}</div>
+            <div className="text-xs text-muted-foreground">{r.wallets}</div>
+            <p className="flex flex-wrap gap-x-3 tabular-nums">
+              <span>{r.tokens} {r.tokensWord}</span>
+              <span>{r.sales} {r.salesWord}</span>
+              <span>{r.eth} ETH</span>
+            </p>
+          </li>
+        ))}
+      </ul>
+      <div className="hidden overflow-x-auto sm:block">
+        <table className="w-full min-w-[36rem] text-left text-sm">
+          <thead className="text-xs text-muted-foreground">
+            <tr className="border-b">
+              <th className="px-3 py-2 font-medium">Ring</th>
+              <th className="px-3 py-2 font-medium">Wallets</th>
+              <th className="px-3 py-2 text-right font-medium">Tokens</th>
+              <th className="px-3 py-2 text-right font-medium">Sales</th>
+              <th className="px-3 py-2 text-right font-medium">ETH</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {rings.map((r) => (
+              <tr key={r.key} className="hover:bg-muted/50">
+                <td className="px-3 py-2 whitespace-nowrap">{r.name}</td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">{r.wallets}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.tokens}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.sales}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{r.eth}</td>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {total !== undefined && total > rows.length ? <Link href={`${base}/rings`} className="block border-t px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline">All {plural(total, 'ring')} ›</Link> : null}
     </div>
   );
