@@ -4,7 +4,7 @@ import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
 import { Empty, Ext } from '@/components/ui';
-import { toneOf } from '@/lib/metrics';
+import { toneOf, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
 import { HoverCard } from '@/components/hover-card';
@@ -98,7 +98,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
             const tx = explorerTx(chainId, t.txHash);
-            const keys: LensKey[] = [...METHODS.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
+            const keys: LensKey[] = [...SHOWN.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
             const chipBase = t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base;
             return (
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>

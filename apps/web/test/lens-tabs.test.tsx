@@ -104,7 +104,7 @@ const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-l
 describe('the tab strip', () => {
   it('lists the built-ins and yours by name with their shares, and then + New lens and Compare', async () => {
     state.runs = [run('done')];
-    expect(tabs(await draw())).toEqual(['Round trips 4.1%', 'Money loops back 9.8%', 'Linked wallets 17.2%', 'Blur 3-hop 12.6%', '+ New lens', 'Compare']);
+    expect(tabs(await draw())).toEqual(['Round trips 4.1%', 'Linked wallets 17.2%', 'Money loops back 9.8%', 'Blur 3-hop 12.6%', '+ New lens', 'Compare']);
   });
 
   it('marks the chosen tab and opens yours by its key', async () => {
@@ -153,7 +153,7 @@ describe('the tab strip', () => {
 
   it('a built-in the latest analysis did not run reads as not run, in the same words', async () => {
     state.off = ['AU'];
-    expect(tabs(await draw())[1]).toBe('Money loops back not run');
+    expect(tabs(await draw())[2]).toBe('Money loops back not run');
   });
 
   it('shows the tabs before the first analysis, with yours waiting on it', async () => {
@@ -231,12 +231,12 @@ describe("your lens's panel", () => {
     state.runs = [run('done')];
     state.checked = 30;
     const c = await draw({ method: 'L7' });
-    expect(tabs(c).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back at least 9.8%', 'Linked wallets at least 17.2%', 'Blur 3-hop at least 12.6%']);
+    expect(tabs(c).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets at least 17.2%', 'Money loops back at least 9.8%', 'Blur 3-hop at least 12.6%']);
     expect(panel(c).textContent).toContain('Its share is at least this, because money past the stored trail is not read without an Etherscan key.');
     cleanup();
     state.keyed = true;
     const keyed = await draw({ method: 'L7' });
-    expect(tabs(keyed).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back 9.8% so far', 'Linked wallets 17.2% so far', 'Blur 3-hop 12.6% so far']);
+    expect(tabs(keyed).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets 17.2% so far', 'Money loops back 9.8% so far', 'Blur 3-hop 12.6% so far']);
     expect(panel(keyed).textContent).toContain('Its share can still rise while reads finish: money is not fully read yet.');
   });
 
@@ -645,7 +645,7 @@ describe('a lens\'s share is at least while the money it needs is not read that 
     const nft = needing(4);
     for (const k of ['eth', 'internal', 'weth'] as const) nft.edges[k].use = false;
     state.runs = [run('done', {}, { rule: nft })];
-    expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1%', 'Money loops back 9.8%', 'Linked wallets 17.2%', 'Blur 3-hop 12.6%']);
+    expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets 17.2%', 'Money loops back 9.8%', 'Blur 3-hop 12.6%']);
   });
 
   it('reads at least, listing both causes in order, when a cap and unread money apply together', async () => {

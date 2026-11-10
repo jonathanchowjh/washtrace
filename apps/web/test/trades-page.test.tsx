@@ -393,7 +393,7 @@ describe('the trades page', () => {
       const el = await dom({ caught: 'L7', by: 'marketplace' });
       expect(el.querySelector('nav[aria-label=Lens]')?.textContent).toContain('Blur 3-hop');
       const boxes = [...el.querySelectorAll('fieldset')].find((f) => f.querySelector('legend')?.textContent === 'Flagged by')!;
-      expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Blur 3-hop']);
+      expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Blur 3-hop']);
       expect([...el.querySelectorAll('thead th')].map((t) => t.textContent).filter((t) => t === 'Blur 3-hop')).toHaveLength(2);
       expect(el.querySelector('[aria-label="Flagged by Blur 3-hop"] i')?.className).toContain('bg-flow');
       expect(el.textContent).toContain('Flagged by Blur 3-hop');

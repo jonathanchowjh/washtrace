@@ -4,7 +4,7 @@ import type { LensKey, TradeQuery } from '@washtrace/detect/trades';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
 import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
 import type { Qualifier } from '@/lib/lens-state';
-import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metrics';
+import { APART, APART_WHY_TITLE, part, rangeEnds, type Range, SHOWN } from '@/lib/metrics';
 import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
@@ -223,7 +223,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
         <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
       </summary>
       <div className="grid gap-4 border-t px-4 py-4 md:grid-cols-3">
-        {METHODS.map((m) => (
+        {SHOWN.map((m) => (
           <div key={m} className="flex gap-3">
             <LensPicture m={m} />
             <div>

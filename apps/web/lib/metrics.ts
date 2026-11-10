@@ -31,6 +31,13 @@ export { HEADLINE };
 /** The lenses that run and are shown but never counted: all but HEADLINE. */
 export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes(m));
 
+/**
+ * The built-ins in the order the console shows them: the floor (Round trips),
+ * the ceiling (Linked wallets), then the one never counted, set apart.
+ * METHODS keeps the paper's order, which the API's and CSV's columns keep.
+ */
+export const SHOWN: readonly Method[] = [...HEADLINE, ...APART];
+
 /** Why they are not counted, said wherever a page names one. */
 export const APART_WHY = 'on real data it flags as many sales as it does with buyers relabelled at random among wallets of similar activity, so it is not counted';
 /** APART_WHY as a sentence, for the tooltip on each "(not counted)". */

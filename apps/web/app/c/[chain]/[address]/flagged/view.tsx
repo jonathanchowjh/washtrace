@@ -14,7 +14,7 @@ import { collectionOf, runsOf } from '@/lib/collection-reads';
 import { NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
 import { behindLine, behindOf } from '@/lib/lens-state';
 import { listHref } from '@/lib/links';
-import { lensContext, ownLenses } from '@/lib/metrics';
+import { lensContext, ownLenses, SHOWN } from '@/lib/metrics';
 import { addressOf, chainOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
@@ -129,7 +129,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
 
       <div className="flex flex-wrap items-center gap-3">
         <nav aria-label="Lens" className="flex flex-wrap gap-1.5">
-          {[...METHODS, ...Object.keys(own) as LensKey[]].map((m) => (
+          {[...SHOWN, ...Object.keys(own) as LensKey[]].map((m) => (
             <Link key={m} href={lensHref(m)} aria-current={lensOn(m) ? 'page' : undefined}
               className={cn('rounded-md border px-2.5 py-1 text-sm', lensOn(m) ? 'bg-card ring-1 ring-foreground' : 'bg-muted/50 hover:bg-card')}>
               <LensName m={m} own={own} />

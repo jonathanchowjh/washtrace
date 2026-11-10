@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { METHODS, type TradeRow } from '@washtrace/detect';
+import { type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/ui';
 import { NotCounted } from '@/components/methods';
@@ -8,7 +8,7 @@ import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
-import { judgedBy } from '@/lib/metrics';
+import { judgedBy, SHOWN } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -26,7 +26,7 @@ interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: L
 const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <>{i.name}{i.tone === 'apart' ? <NotCounted /> : null}</>; };
 
 /** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
-const withOwn = (ran: readonly LensKey[]) => [...METHODS.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
+const withOwn = (ran: readonly LensKey[]) => [...SHOWN.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
 
 /** The current view's parameters as hidden inputs, less the ones a form shows itself or must not keep. */
 function carried({ base, q, view }: Where, keep: (key: string) => boolean) {
@@ -104,7 +104,7 @@ function Checks({ title, name, options, on }: { title: string; name: string; opt
 /** Find, the filters in play as chips that each remove one, and the form that adds more. */
 export function FilterBar(w: Where) {
   const { base, q, view, zone, own = {} } = w;
-  const lenses = [...METHODS, ...Object.keys(own)].flatMap((k): [string, string][] => { const i = lensInfo(k, own); return i === null ? [] : [[k, i.name]]; });
+  const lenses = [...SHOWN, ...Object.keys(own)].flatMap((k): [string, string][] => { const i = lensInfo(k, own); return i === null ? [] : [[k, i.name]]; });
   const names = Object.fromEntries(Object.entries(own).map(([k, i]) => [k, i.name]));
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
@@ -189,7 +189,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
 }) {
   const by = view.by;
   // The built-ins always, with NOT_RUN where one did not run; yours only once they have run.
-  const cols = [...METHODS, ...ran.filter(isOwnKey)];
+  const cols = [...SHOWN, ...ran.filter(isOwnKey)];
   return (
     <section aria-label="Group by" className="mt-6">
       <nav className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">

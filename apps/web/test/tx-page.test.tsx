@@ -250,8 +250,8 @@ describe('the trade page: one card per lens', () => {
     const { NOT_CAUGHT } = await import('@/lib/format');
     const c = await txPage();
     const first = cards(c, 'How each lens reads First #7'), second = cards(c, 'How each lens reads Second #8');
-    expect([...first.keys()]).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Fast flips']);
-    expect([...second.keys()]).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Fast flips']);
+    expect([...first.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
+    expect([...second.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
     expect(first.get('Fast flips')!.querySelector('figure')).not.toBeNull();
     // A flag stored on a collection the lens never ran on is not read as a catch.
     expect(second.get('Fast flips')!.textContent).toContain('Fast flips has not run on this collection, so it flags nothing yet.');

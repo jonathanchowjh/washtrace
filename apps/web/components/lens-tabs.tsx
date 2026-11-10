@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { METHODS, type Lens, type LensRun, type Method, type MethodTotals } from '@washtrace/detect';
+import { type Lens, type LensRun, type Method, type MethodTotals } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, floorPct, pctTenth, type Lenses } from '@/lib/format';
 import type { MoneyReason } from '@washtrace/detect/lens-reads';
 import { behindOf, builtinCauses, causeSentence, runStateWords, shareCauses, shareQualifier, type Behind, type Qualifier, type TokensFloor } from '@/lib/lens-state';
-import { APART, APART_WHY, ownLenses, part } from '@/lib/metrics';
+import { APART, APART_WHY, ownLenses, part, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
 import { LensName, LensPicture } from './methods';
@@ -70,7 +70,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   return (
     <div>
       <nav aria-label="Lens" className="flex flex-wrap gap-2">
-        {METHODS.map((m) => {
+        {SHOWN.map((m) => {
           const t = totals?.[m];
           const on = m === selected;
           return (

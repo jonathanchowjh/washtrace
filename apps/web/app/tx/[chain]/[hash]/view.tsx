@@ -9,7 +9,7 @@ import { WhereItSits } from '@/components/where-it-sits';
 import { SpotCheck } from '@/components/spot-check';
 import { mayWrite } from '@/lib/auth';
 import { store } from '@/lib/store';
-import { METHODS, ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
+import { ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { Answer, Ext, Head, MoreLink, Section } from '@/components/ui';
 import { LensName } from '@/components/methods';
@@ -20,7 +20,7 @@ import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_C
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
-import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
+import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan, SHOWN } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
@@ -190,7 +190,7 @@ function lensCards(t: FlaggedTransfer, c: TxCollection, g: { graph: TokenDrawing
   const same = (x: { txHash: string; logIndex: number }) => x.txHash === t.txHash && x.logIndex === t.logIndex;
   const row = g === null ? 0 : g.graph.transfers.findIndex(same) + 1;
   const why = g === null ? [] : reasons(g.graph.transfers);
-  const builtIns = METHODS.map((m): Card => {
+  const builtIns = SHOWN.map((m): Card => {
     if (c.latest !== null && !c.latest.totals[m].available) return { key: m, line: notRunAll([m]), caught: false, loop: null, tab: 'See why on its tab →' };
     if (!judged(t, c.latest)) return { key: m, line: BUILT_IN_BEHIND, caught: false, loop: null };
     const w = t.flags[m];
