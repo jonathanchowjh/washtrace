@@ -414,7 +414,7 @@ describe('a money trail loaded from stored data', () => {
     const c = lensTabs(all, 'AU', { notFinal: ['AU', 'AC'], funded: true, funding: true });
     expect(c.textContent).not.toContain('at least');
     const tabs = [...c.querySelector('nav')!.children].map((x) => x.textContent);
-    expect(tabs).toEqual(['Round trips 10.0%', 'Linked wallets 30.0% so far', 'Money loops back 25.0% so far', '+ New lens', 'Compare']);
+    expect(tabs).toEqual(['Round trips 10.0% the floor', 'Linked wallets 30.0% so far the ceiling', 'Money loops back 25.0% so far not counted', '+ New lens', 'Compare']);
     expect(c.textContent).toContain(`Not in the range above: ${APART_WHY}.`);
   });
 
@@ -422,7 +422,7 @@ describe('a money trail loaded from stored data', () => {
     const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', tokens: 1, wallets: 1, transfers: 100, flagged: flaggedSales });
     const all = { A: t(10), AU: t(25), AC: t(30) } as unknown as Totals;
     const tabs = [...lensTabs(all, 'AU', { notFinal: ['AU', 'AC'], funded: false }).querySelector('nav')!.children].map((x) => x.textContent);
-    expect(tabs).toEqual(['Round trips 10.0%', 'Linked wallets at least 30.0%', 'Money loops back at least 25.0%', '+ New lens', 'Compare']);
+    expect(tabs).toEqual(['Round trips 10.0% the floor', 'Linked wallets at least 30.0% the ceiling', 'Money loops back at least 25.0% not counted', '+ New lens', 'Compare']);
   });
 
   it('keeps a money lens that has not run on the trail yet from saying no funding source is set', () => {

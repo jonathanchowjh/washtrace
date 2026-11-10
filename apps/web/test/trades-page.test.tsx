@@ -95,7 +95,7 @@ describe('the trades page', () => {
   it('shows matching trades with a dot per lens that ran, named by lens, and the date opens the trade', async () => {
     const el = await dom({ caught: 'A' });
     expect(el.textContent).toContain('2 trades match');
-    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops backnot counted', 'Linked wallets']));
+    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round tripsthe floor', 'Money loops backnot counted', 'Linked walletsthe ceiling']));
     expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe('not counted');
     expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
@@ -118,8 +118,8 @@ describe('the trades page', () => {
   it('draws only the lenses that ran', async () => {
     state.moneyRan = false;
     const th = [...(await dom()).querySelectorAll('thead th')].map((t) => t.textContent);
-    expect(th).toContain('Round trips');
-    expect(th).not.toContain('Linked wallets');
+    expect(th).toContain('Round tripsthe floor');
+    expect(th.join()).not.toContain('Linked wallets');
     expect(th.join()).not.toContain('Money loops back');
   });
 
@@ -170,6 +170,14 @@ describe('the trades page', () => {
     expect(unknown).toBeDefined();
     expect(unknown!.querySelectorAll('a')).toHaveLength(0);
     expect([...el.querySelectorAll('th')].filter((t) => t.textContent === 'Money loops backnot counted').length).toBe(2);
+  });
+
+  it('every built-in column, in both tables, says its standing under its name', async () => {
+    const el = await dom({ by: 'marketplace' });
+    const tiers = [...el.querySelectorAll('thead th span.block')].map((s) => s.textContent);
+    expect(tiers.filter((t) => t === 'the floor')).toHaveLength(2);
+    expect(tiers.filter((t) => t === 'the ceiling')).toHaveLength(2);
+    expect(tiers.filter((t) => t === 'not counted')).toHaveLength(2);
   });
 
   it('a lens that did not run shows not run in a group row', async () => {
@@ -235,7 +243,7 @@ describe('the trades page', () => {
     const el = await dom({ sort: 'price', dir: 'asc' });
     const link = (name: string) => [...el.querySelectorAll('thead th a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(link('Price')).toBe(`${BASE}/trades?sort=price`);
-    expect(link('Round trips')).toBe(`${BASE}/trades?sort=lens-A`);
+    expect(link('Round tripsthe floor')).toBe(`${BASE}/trades?sort=lens-A`);
     expect(link('Seller → buyer')).toContain('sort=seller');
     expect(link('Date')).toBe(`${BASE}/trades`);
   });

@@ -10,7 +10,7 @@ import { behindOf, builtinCauses, causeSentence, runStateWords, shareCauses, sha
 import { APART, APART_WHY, ownLenses, part, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
-import { LensName, LensPicture } from './methods';
+import { LensName, LensPicture, TierWord } from './methods';
 import { RuleTable } from './rule-table';
 import { Time } from './time';
 import { lensTabHref } from '@/lib/links';
@@ -73,8 +73,14 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           const on = m === selected;
           return (
             <Tab key={m} href={href(m)} on={on} tone={LENSES[m].tone} title={`Show what ${LENSES[m].name} flags`}>
-              <LensName m={m} />
-              {t?.available ? <>{' '}<Share t={t} qualifier={shareQualifier(builtinCauses(m, notFinal, coverage.funded, coverage.funding))} /></> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
+              {/* Its standing under the name, as the overview's ladder says it, so a tab never reads as just another lens. */}
+              <span className="flex flex-col">
+                <span className="flex items-baseline gap-2">
+                  <LensName m={m} />
+                  {t?.available ? <>{' '}<Share t={t} qualifier={shareQualifier(builtinCauses(m, notFinal, coverage.funded, coverage.funding))} /></> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
+                </span>
+                {' '}<TierWord m={m} className="pl-4" />
+              </span>
             </Tab>
           );
         })}

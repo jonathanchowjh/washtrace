@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { type TradeRow } from '@washtrace/detect';
+import { type Method, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { Time } from '@/components/time';
 import { SortHead } from '@/components/ui';
@@ -8,11 +8,12 @@ import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
-import { APART_WHY_TITLE, judgedBy, SHOWN } from '@/lib/metrics';
+import { judgedBy, SHOWN } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { MEDIAN, bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { HoverCard } from './hover-card';
+import { TierWord } from './methods';
 
 /**
  * The Trades view's three parts: the Find box, chips and filter form; the
@@ -23,8 +24,8 @@ import { HoverCard } from './hover-card';
 /** `own` is your lenses by key, for their names and hues; the built-ins need no entry. */
 interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: Lenses }
 
-// One item in a header's row, so a lens not counted says so under its name rather than in what reads as a column of its own.
-const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <span>{i.name}{i.tone === 'apart' ? <span title={APART_WHY_TITLE} className="block text-[11px] font-normal text-muted-foreground">not counted</span> : null}</span>; };
+// One item in a header's row, so each built-in's standing sits under its name rather than in what reads as a column of its own; yours have none.
+const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <span>{i.name}{isOwnKey(m) ? null : <TierWord m={m as Method} />}</span>; };
 
 /** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
 const withOwn = (ran: readonly LensKey[]) => [...SHOWN.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
