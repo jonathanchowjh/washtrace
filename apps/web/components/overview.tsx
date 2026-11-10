@@ -2,13 +2,14 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { Bucket, CollectionProfile, LensRun, Lens, Method, MethodTotals, TimelinePoint, TokenLine, TradeRow, WalletLine } from '@washtrace/detect';
 import { LENSES, NOT_RUN, eth, num, pctTenth, plural, short, tokenLabel } from '@/lib/format';
-import { lensTabHref, listHref, txHref, venues, walletHref } from '@/lib/links';
+import { cardSrc, lensTabHref, listHref, txHref, venues, walletHref } from '@/lib/links';
 import type { Stage, StageState } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { KindIcon, TierMark } from './kit';
 import { LensPicture, nextStart } from './methods';
 import { Time } from './time';
+import { HoverCard } from './hover-card';
 
 /**
  * The collection overview's parts, top down: the reading in four steps, how
@@ -237,12 +238,14 @@ export function TopList({ kind, rows, total, base, chainId }: {
             const href = 'tokenId' in r ? `${base}/t/${r.tokenId}` : walletHref(chainId, r.address, base);
             return (
               <li key={'tokenId' in r ? r.tokenId : r.address}>
+                <HoverCard className="block" src={'tokenId' in r ? cardSrc(base, 'token', r.tokenId) : cardSrc(base, 'wallet', r.address)}>
                 <Link href={href} className="flex items-center gap-2.5 px-4 py-2 text-sm hover:bg-muted/60">
                   <TierMark tone={(r.loops ?? 0) > 0 ? 'cycle' : 'money'} />
                   <span className="flex-1 truncate font-mono text-foreground">{'tokenId' in r ? `#${tokenLabel(r.tokenId)}` : short(r.address)}</span>
                   <span className="tabular-nums text-foreground">{eth(r.volumeWei)}</span>
                   <span aria-hidden className="text-muted-foreground">›</span>
                 </Link>
+                </HoverCard>
               </li>
             );
           })}

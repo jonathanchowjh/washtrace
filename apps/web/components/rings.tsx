@@ -2,11 +2,12 @@ import Link from 'next/link';
 import { cache } from 'react';
 import type { RingLine } from '@washtrace/detect';
 import { eth, num, plural, short } from '@/lib/format';
-import { walletHref } from '@/lib/links';
+import { cardSrc, walletHref } from '@/lib/links';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { KindIcon, TierMark } from './kit';
+import { HoverCard } from './hover-card';
 
 /**
  * Rings (methods.md, Rings) as the console draws them: a table of them, a
@@ -40,7 +41,7 @@ export function RingsTable({ rows, base, chainId, total }: { rows: readonly Ring
             return (
               <tr key={r.anchor} className="hover:bg-muted/50">
                 <td className="px-3 py-2 whitespace-nowrap">
-                  <Link href={href} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link>
+                  <HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={href} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link></HoverCard>
                 </td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">
                   {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<Link href={walletHref(chainId, a, base)} className="font-mono hover:underline">{short(a)}</Link></span>)}

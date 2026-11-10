@@ -2,11 +2,12 @@ import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
-import { explorerTx, lensTabHref, txHref, walletHref } from '@/lib/links';
+import { cardSrc, explorerTx, lensTabHref, txHref, walletHref } from '@/lib/links';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
+import { HoverCard } from '@/components/hover-card';
 
 /**
  * A wallet, linked to its page: under `within`'s tabs when it is given (a
@@ -15,7 +16,9 @@ import { Time } from '@/components/time';
  */
 export function Wallet({ chainId, address, within }: { chainId: number; address: string; within?: string }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  return <Link href={walletHref(chainId, address, within)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={walletHref(chainId, address, within)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  // Inside a collection there is a card to show: its trades there and its ring.
+  return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }
 
 /** Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do. */

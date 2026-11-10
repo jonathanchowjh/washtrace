@@ -1,8 +1,8 @@
 # API reference
 
 The console's HTTP API, for clients that read verdicts or manage what is watched. It is served by the
-`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 27 route files under
-`apps/web/app/api` with 32 method handlers, and `/go`.
+`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 28 route files under
+`apps/web/app/api` with 33 method handlers, and `/go`.
 
 Paths below use `{chain}` for a chain id (digits, such as `1`), `{address}` for a 0x address (any case; stored
 lowercase), and `{tx}` for a 0x transaction hash (64 hex digits).
@@ -59,6 +59,7 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | | 200, 404 (no such path, not watched, or no transfer of the token) | `collection`, `tokenId`, `transfers`, `middles`, `flows`, and the verdict keys |
 | `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
 | `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
+| `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`; for a token `transfers`, `flagged`; for a ring `ring` |
 
 Notes:
 
@@ -73,6 +74,9 @@ Notes:
   the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
   Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one that only moved the money,
   at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
+- `.../card` is the console's hover card: a few counts, never a verdict. A wallet's `trades` and `flagged` are in
+  this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or
+  Linked wallets flags. `judged` is false before the first analysis.
 - Stored-data fields on a collection in `GET /api/collections`: `restoreNote` and `analysisError` say why its
   stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`,
   `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress`

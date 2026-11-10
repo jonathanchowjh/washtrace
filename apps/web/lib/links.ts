@@ -113,3 +113,8 @@ export function txHref(chainId: number, hash: string, within?: string | null): s
 export function lensTabHref(base: string, method: string, o: { lens?: string; evidence?: boolean } = {}): string {
   return `${base}/methods?method=${encodeURIComponent(method)}${o.lens === undefined ? '' : `&lens=${o.lens}`}${o.evidence ? '#evidence' : ''}`;
 }
+
+/** The hover card's read for one wallet, token or ring of the collection at `base` (its `/c/<chain>/<address>`). */
+export function cardSrc(base: string, of: 'wallet' | 'token' | 'ring', value: string): string {
+  return `/api/collections/${base.slice('/c/'.length)}/card?${of}=${encodeURIComponent(value)}`;
+}

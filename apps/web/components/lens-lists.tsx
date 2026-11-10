@@ -10,6 +10,8 @@ import { Empty } from './ui';
 import { DOT } from './methods';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
+import { HoverCard } from './hover-card';
+import { cardSrc } from '@/lib/links';
 
 /**
  * The tokens or wallets one lens flagged trades of, each saying why in words,
@@ -81,7 +83,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ? (rows as TokenLine[]).map((l, i) => (
               <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
                 // A lens of yours opens the token page with its loops lit, down at the why section.
-                name={<Link href={yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link>}
+                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link></HoverCard>}
                 loops={`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}

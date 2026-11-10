@@ -7,11 +7,12 @@ import { NotCounted } from '@/components/methods';
 import { TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
-import { txHref } from '@/lib/links';
+import { cardSrc, txHref } from '@/lib/links';
 import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
+import { HoverCard } from './hover-card';
 
 /**
  * The Trades view's three parts: the Find box, chips and filter form; the
@@ -303,7 +304,7 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
                   <Link href={txHref(chainId, r.txHash, base)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
-                  <Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link>
+                  <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>
                   {only({ token: r.tokenId }, 'Only trades with this token')}
                 </td>
                 <td className="px-3 py-2">{wallet(r.from)} → {wallet(r.to)}</td>

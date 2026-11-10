@@ -27,6 +27,9 @@ Every page of a collection sits under one line naming it and a tab bar: Overview
 Trades. A ring lights Rings; a token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
 while another lens is chosen, since it would not match the list; a lens chosen on one tab is kept on the others.
 
+Resting the pointer on (or tabbing to) a wallet, token or ring link inside a collection shows a small card: its trades
+here and how many are flagged, its ring, or a ring's size. Clicking still opens the page.
+
 Times are clock times in the reader's time zone, changeable at the foot of the sidebar.
 
 ## Words it uses
