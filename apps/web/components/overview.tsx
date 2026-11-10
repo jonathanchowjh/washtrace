@@ -120,17 +120,19 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
       <h2 className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">How sure</h2>
       <ol className="space-y-2">
         {rungs.map((r) => (
-          <li key={r.m} data-rung={r.m} className={cn('flex items-center gap-3', r.tone === 'apart' && 'mt-3 border-t border-dashed pt-3')}>
+          // Below md the figures' fixed widths left the lens's name a sliver, so there
+          // the name keeps the first line and the figures move to the next, at its right.
+          <li key={r.m} data-rung={r.m} className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 md:flex-nowrap', r.tone === 'apart' && 'mt-3 border-t border-dashed pt-3')}>
             <TierMark tone={r.tone} />
             <LensPicture m={r.m} className="h-7 w-14" />
-            <span className="min-w-0 flex-1 text-sm"><span className="font-medium text-foreground">{r.name}</span> <span className="text-muted-foreground">· {r.does}</span></span>
+            <span className="min-w-0 flex-1 text-sm max-md:min-w-48"><span className="font-medium text-foreground">{r.name}</span> <span className="text-muted-foreground">· {r.does}</span></span>
             {totals[r.m].available ? (
               <>
-                <Link href={r.href} className="w-16 text-right text-base font-semibold tabular-nums text-foreground hover:underline">{r.share}</Link>
+                <Link href={r.href} className="w-16 text-right text-base font-semibold tabular-nums text-foreground hover:underline max-md:ml-auto">{r.share}</Link>
                 <Link href={r.href} className="w-24 text-right text-xs text-muted-foreground tabular-nums hover:underline">{r.count}</Link>
               </>
-            ) : <span className="w-40 text-right text-xs text-muted-foreground" title={`${LENSES[r.m].name}: ${NOT_RUN}`}>{NOT_RUN}</span>}
-            {r.note ? <span className="hidden w-36 text-xs text-muted-foreground sm:block">{r.note}</span> : <span className="hidden w-36 sm:block" />}
+            ) : <span className="w-40 text-right text-xs text-muted-foreground max-md:ml-auto" title={`${LENSES[r.m].name}: ${NOT_RUN}`}>{NOT_RUN}</span>}
+            {r.note ? <span className="hidden w-36 text-xs text-muted-foreground sm:block max-md:ml-auto">{r.note}</span> : <span className="hidden w-36 md:block" />}
           </li>
         ))}
       </ol>
