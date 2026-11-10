@@ -7,11 +7,12 @@ import { ConnectedRail } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/sales-strip';
 import { Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, VerdictChip } from '@/components/kit';
-import { RingFigure, ringName, ringTone } from '@/components/rings';
+import { RingFigure, ringTone } from '@/components/rings';
 import { Time } from '@/components/time';
 import { collectionOf } from '@/lib/collection-reads';
-import { eth, num, plural, short, tokenLabel } from '@/lib/format';
-import { cardSrc, txHref, walletHref } from '@/lib/links';
+import { eth, num, plural, ringName, short, tokenLabel } from '@/lib/format';
+import { cardSrc, txHref, walletHref, withFrom } from '@/lib/links';
+import { fromParam } from '@/lib/step';
 import { layout } from '@/lib/layout';
 import { ringDrawing } from '@/lib/views';
 import { LoopFigure } from '@/components/token-graph';
@@ -74,6 +75,8 @@ export default async function RingPage(props: Props) {
   const traders = wallets.filter((w) => w.traded);
   const movers = wallets.filter((w) => !w.traded);
   const sales = tradesHref(base, { ring: anchor });
+  // A member opened from here steps through the ring's wallets or tokens, and leads back to it.
+  const member = (of: 'wallets' | 'tokens') => fromParam('ring', new URLSearchParams({ anchor, of }), 1);
   // Its loops drawn as a token's are, for a ring small enough to read; the list below holds every wallet either way.
   const drawn = walletsCut ? null : await ringDrawing(store(), chainId, r.c, ring);
   const drawing = drawn === null ? null : layout(drawn.transfers, drawn.flows, drawn.middles);
@@ -116,7 +119,7 @@ export default async function RingPage(props: Props) {
                   {g.list.map((w) => (
                     <li key={w.address}>
                       <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
-                        <Link href={walletHref(chainId, w.address, base)} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
+                        <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
                           <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
                         </Link>
                       </HoverCard>
@@ -134,7 +137,7 @@ export default async function RingPage(props: Props) {
           <ul className="divide-y rounded-lg border bg-card">
             {tokens.map((t) => (
               <li key={t.tokenId} className="flex items-center gap-3 px-4 py-2 text-sm">
-                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={`${base}/t/${t.tokenId}`} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
+                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={withFrom(`${base}/t/${t.tokenId}`, member('tokens'))} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId })} className="text-xs text-muted-foreground tabular-nums hover:underline">{plural(t.sales, 'sale')}</Link>
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId, sort: 'price', dir: 'desc' })} className="w-20 text-right tabular-nums hover:underline">{eth(t.volumeWei)}</Link>
               </li>

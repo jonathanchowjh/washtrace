@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { cache } from 'react';
 import type { RingLine } from '@washtrace/detect';
-import { eth, num, plural, short } from '@/lib/format';
+import { eth, num, plural, ringName, short } from '@/lib/format';
 import { cardSrc, walletHref, withFrom } from '@/lib/links';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
@@ -17,9 +17,6 @@ import { HoverCard } from './hover-card';
 
 /** A ring's mark: the floor's when Round trips flags any of its sales, else the ceiling's. */
 export const ringTone = (r: Pick<RingLine, 'floorSales'>) => (r.floorSales > 0 ? 'cycle' : 'money');
-
-/** "Ring 3": its place among the collection's, the most ETH first. A new analysis can move it; its anchor names it in a link. */
-export const ringName = (r: Pick<RingLine, 'rank'>) => `Ring ${r.rank}`;
 
 /** Rings as rows: its name and mark, a few of its wallets, then what its flagged sales add up to. Each row opens the ring. */
 export function RingsTable({ rows, base, chainId, total, from }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string }) {

@@ -60,6 +60,9 @@ export function pctTenth(part: number, whole: number): string {
   return p >= 10 ? `${p.toFixed(1)}%` : pct(part, whole);
 }
 
+/** "Ring 3": a ring's place among the collection's, the most ETH first. A new analysis can move it; its anchor names it in a link. */
+export const ringName = (r: { rank: number }) => `Ring ${r.rank}`;
+
 /** "1 wallet", "2 wallets": `many` for a word whose plural is not an added s ("searches"). */
 export function plural(n: number, word: string, many = `${word}s`): string {
   return `${num(n)} ${n === 1 ? word : many}`;

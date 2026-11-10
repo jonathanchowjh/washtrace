@@ -78,7 +78,9 @@ describe('a ring', () => {
     const groups = [...c.querySelectorAll('h3')].map((h) => h.textContent);
     expect(groups).toEqual(['Traded (2)', 'Only moved the money (1)']);
     expect(links(c)).toContainEqual(['All its 3 sales →', tradesHref(BASE, { ring: A })]);
-    expect(links(c)).toContainEqual(['#114', `${BASE}/t/114`]);
+    // A member opened from here steps through the ring's tokens or wallets, and leads back to it.
+    expect(links(c)).toContainEqual(['#114', `${BASE}/t/114?from=${encodeURIComponent(`ring?anchor=${A}&of=tokens`)}`]);
+    expect(links(c)).toContainEqual([`${A.slice(0, 6)}…${A.slice(-4)}`, `${BASE}/w/${A}?from=${encodeURIComponent(`ring?anchor=${A}&of=wallets`)}`]);
     expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
   });
 
