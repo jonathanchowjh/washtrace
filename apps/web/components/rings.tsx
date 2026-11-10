@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { cache } from 'react';
-import type { RingLine } from '@washtrace/detect';
+import { moneyFor, type RingLine } from '@washtrace/detect';
+import { collectionOf, type Item } from '@/lib/collection-reads';
 import { eth, num, plural, ringName, short } from '@/lib/format';
 import { cardSrc, walletHref, withFrom } from '@/lib/links';
 import { store } from '@/lib/store';
@@ -95,16 +96,12 @@ const CHIPS = 3;
  * analysis it is in, by rank. Rendered in a Suspense of its own by the page,
  * since ranking reads every ring of the collection: a slow read holds no page.
  */
-/** The rings of the latest analysis a token, wallet or trade is in, by rank: the chips and the Connected to rail both list them. */
-export async function ringsIn(id: number, money: ReadonlySet<string>, of: Parameters<ReturnType<typeof store>['ringsOf']>[1]): Promise<RingLine[]> {
-  const anchors = await store().ringsOf(id, of);
-  return anchors.length === 0 ? [] : linesOf(id, anchors.join(','), [...money].join(','));
-}
-
-export async function RingChips({ id, base, money, of }: {
-  id: number; base: string; money: ReadonlySet<string>; of: Parameters<ReturnType<typeof store>['ringsOf']>[1];
-}) {
-  const lines = await ringsIn(id, money, of);
+export async function RingChips({ chainId, address, of }: { chainId: number; address: string; of: Exclude<Item, { ring: string }> }) {
+  const c = await collectionOf(chainId, address);
+  if (!c) return null;
+  const base = `/c/${chainId}/${address}`;
+  const anchors = await store().ringsOf(c.id, 'token' in of ? { tokenId: of.token } : of);
+  const lines = anchors.length === 0 ? [] : await linesOf(c.id, anchors.join(','), [...moneyFor(chainId)].join(','));
   if (lines.length === 0) return null;
   return (
     <>

@@ -28,9 +28,7 @@ import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
-import { moneyFor } from '@washtrace/detect';
 import { StepLine } from '@/components/step-line';
-import { collectionOf } from '@/lib/collection-reads';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -119,15 +117,14 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const ownLoops = drawing.loops.slice(why.length);
 
   // The list it was opened from, if any: its stepper reads that list in a Suspense of its own.
-  const c = sp.from === undefined ? null : await collectionOf(chainId, address);
   return (
     <>
-      {c ? <Suspense fallback={null}><StepLine c={c} from={sp.from} id={tokenId} /></Suspense> : null}
+      <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={sp.from} of={{ token: tokenId }} /></Suspense>
       <Head
         kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
-        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense></>}
+        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense></>}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
@@ -161,7 +158,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : null}
       </Answer>
 
-      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense>
       <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
       <ConnectedRail chainId={chainId} address={address} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
 

@@ -24,9 +24,7 @@ import { APART, APART_WHY, NOT_JUDGED, SHOWN, TINT_LEAD, answer, judged, ownRan 
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
-import { moneyFor } from '@washtrace/detect';
 import { StepLine } from '@/components/step-line';
-import { collectionOf } from '@/lib/collection-reads';
 
 /**
  * The console's form of GET /api/transfers/<chain>/<tx>: is this sale a wash
@@ -66,15 +64,14 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
     drawings.set(g, d);
     return d;
   };
-  const c = within !== undefined && from !== undefined && collection !== null ? await collectionOf(chainId, collection.address) : null;
   return (
     <>
-      {c ? <Suspense fallback={null}><StepLine c={c} from={from} id={tx} /></Suspense> : null}
+      {within === undefined || collection === null ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={collection.address} from={from} of={{ tx }} /></Suspense>}
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
-        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{within !== undefined && collection !== null && collections[collection.address] !== undefined
-          ? <Suspense fallback={null}><RingChips id={collections[collection.address]!.id} base={within} money={moneyFor(chainId)} of={{ tx }} /></Suspense> : null}</>}
+        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{within !== undefined && collection !== null
+          ? <Suspense fallback={null}><RingChips chainId={chainId} address={collection.address} of={{ tx }} /></Suspense> : null}</>}
         crumb={within !== undefined ? [] : [{ href: '/', label: 'Collections' }, ...(home === null ? [] : [{ href: home, label: collection!.name ?? short(collection!.address) }])]}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       />
@@ -95,7 +92,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
         {body}{notRunLine && !unread ? ` ${notRunLine}` : ''}{ownLine}
       </Answer>
 
-      {within === undefined || collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ find: tx }} label="this trade's" /></Suspense>}
+      {within === undefined || collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ tx }} /></Suspense>}
       {within === undefined || collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
       {unread || washTrade === null ? (
         <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}

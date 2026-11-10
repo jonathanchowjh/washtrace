@@ -104,9 +104,9 @@ describe('a ring', () => {
 describe('the ring chips', () => {
   it('say each ring a thing is in, by rank, and nothing for a thing in none', async () => {
     const { RingChips } = await import('@/components/rings');
-    const c = render(<>{await RingChips({ id: 1, base: BASE, money: new Set(['']), of: { wallet: M } })}</>).container;
+    const c = render(<>{await RingChips({ chainId: 1, address: ADDR, of: { wallet: M } })}</>).container;
     expect(links(c)).toEqual([['Part of Ring 3 ›', `${BASE}/r/${A}`]]);
     cleanup();
-    expect(await RingChips({ id: 1, base: BASE, money: new Set(['']), of: { wallet: B } })).toBeNull();
+    expect(await RingChips({ chainId: 1, address: ADDR, of: { wallet: B } })).toBeNull();
   });
 });

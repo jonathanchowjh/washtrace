@@ -1,12 +1,11 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { moneyFor, type Flow, type Transfer } from '@washtrace/detect';
-import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
-import { readerZone } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import type { Flow, Transfer } from '@washtrace/detect';
+import { NO_FILTER } from '@washtrace/detect/trades';
+import { collectionOf, tradeContextOf, tradesOf, type Item } from '@/lib/collection-reads';
 import { short, tokenLabel } from '@/lib/format';
 import { cardSrc, txHref, walletHref } from '@/lib/links';
-import { lensContext, range, rangeEnds } from '@/lib/metrics';
+import { range, rangeEnds } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { HoverCard } from './hover-card';
 import { KindIcon } from './kit';
@@ -86,14 +85,14 @@ export async function ConnectedRail({ chainId, address, token, wallets = [], txs
   /** The token a trade is of. */
   token?: string;
   wallets?: readonly RailWallet[]; txs?: readonly RailTx[];
-  /** A page without its transactions to hand (a ring's): its first sales, by this filter, read here. */
-  salesOf?: Partial<TradeQuery>;
+  /** A page without its transactions to hand (a ring's): this item's first sales, read here. */
+  salesOf?: Item;
 }) {
   const c = await collectionOf(chainId, address);
   if (!c) return null;
   if (salesOf !== undefined && c.latest !== null) {
-    const ctx = { money: moneyFor(chainId), zone: await readerZone(), ...lensContext(c.latest, await runsOf(c.id)) };
-    txs = railTxs(await store().trades(c.id, { ...NO_FILTER, ...salesOf, sort: 'date', dir: 'asc' }, ctx, SHOWN + 1, 0), []);
+    const ctx = await tradeContextOf(c);
+    txs = railTxs(await store().trades(c.id, { ...NO_FILTER, ...tradesOf(salesOf), sort: 'date', dir: 'asc' }, ctx, SHOWN + 1, 0), []);
   }
   const base = `/c/${chainId}/${address}`;
   const share = c.latest === null ? null : range(c.latest.totals, 'sales');

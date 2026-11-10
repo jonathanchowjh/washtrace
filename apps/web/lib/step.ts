@@ -1,9 +1,9 @@
-import { moneyFor, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
-import { lensKeyOf, readerZone } from './api';
-import { runsOf } from './collection-reads';
+import type { CollectionRow, TokenSort, WalletSort } from '@washtrace/detect';
+import { lensKeyOf } from './api';
+import { runsOf, tradeContextOf } from './collection-reads';
 import { eth, localTime, ringName, short, tokenLabel } from './format';
 import { txHref, walletHref, withFrom } from './links';
-import { lensContext, ownLenses } from './metrics';
+import { ownLenses } from './metrics';
 import { addressOf, pageOf } from './params';
 import { store } from './store';
 import { TRADES_PAGE, holdsNothing, parseView } from './trades-url';
@@ -56,8 +56,8 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
   const base = `/c/${c.chainId}/${c.address}`;
   const runs = await runsOf(c.id);
   const own = ownLenses(runs);
-  const zone = await readerZone();
-  const ctx = { money: moneyFor(c.chainId), zone, ...lensContext(c.latest, runs) };
+  const ctx = await tradeContextOf(c);
+  const zone = ctx.zone;
   const offset = (page - 1) * SIZE[kind];
   const from = (p: number) => fromParam(kind, params, p);
   const placed = <T extends Item>(xs: T[]): (T & { at: number })[] => xs.map((x, i) => ({ ...x, at: offset + i + 1 }));

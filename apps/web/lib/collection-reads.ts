@@ -1,4 +1,8 @@
 import { cache } from 'react';
+import { moneyFor, type CollectionRow } from '@washtrace/detect';
+import type { TradeQuery } from '@washtrace/detect/trades';
+import { readerZone } from './api';
+import { lensContext } from './metrics';
 import { store } from './store';
 
 /**
@@ -8,3 +12,31 @@ import { store } from './store';
 export const collectionOf = cache((chainId: number, address: string) => store().collection(chainId, address));
 
 export const runsOf = cache((collectionId: number) => store().lensRuns(collectionId));
+
+/**
+ * What a page's trade reads of a collection take: the chain's money, the
+ * reader's zone, and the lenses that ran there. Once per request, for `c` as
+ * collectionOf read it. A route answers in a zone it is given, so it builds its own.
+ */
+export const tradeContextOf = cache(async (c: CollectionRow) => ({ money: moneyFor(c.chainId), zone: await readerZone(), ...lensContext(c.latest, await runsOf(c.id)) }));
+
+/**
+ * One item of a collection, as every panel about it is told which: the
+ * stepper, the ring chips, the strip and Connected to.
+ */
+export type Item = { wallet: string } | { token: string } | { tx: string } | { ring: string };
+
+/** Its id, as a list finds it: a wallet's address, a token's number, a transaction's hash, a ring's anchor. */
+export function itemId(of: Item): string {
+  return 'wallet' in of ? of.wallet : 'token' in of ? of.token : 'tx' in of ? of.tx : of.ring;
+}
+
+/** Its trades, as the Trades tab filters them: a transaction's by its hash. */
+export function tradesOf(of: Item): Partial<Pick<TradeQuery, 'wallet' | 'token' | 'ring' | 'find'>> {
+  return 'tx' in of ? { find: of.tx } : of;
+}
+
+/** "this wallet's", as the strip names an item's own sales. */
+export function whose(of: Item): string {
+  return `this ${'wallet' in of ? 'wallet' : 'token' in of ? 'token' : 'tx' in of ? 'trade' : 'ring'}'s`;
+}

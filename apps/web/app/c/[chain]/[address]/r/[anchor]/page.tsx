@@ -82,7 +82,7 @@ export default async function RingPage(props: Props) {
   const drawing = drawn === null ? null : layout(drawn.transfers, drawn.flows, drawn.middles);
   return (
     <>
-      {from === undefined ? null : <Suspense fallback={null}><StepLine c={r.c} from={from} id={anchor} /></Suspense>}
+      <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={from} of={{ ring: anchor }} /></Suspense>
       <Head
         kind="ring" title={ringName(line)}
         sub={<>{plural(line.wallets, 'wallet')} · {plural(line.tokens, 'token')} · {line.firstAt === null ? null : line.lastAt! - line.firstAt < DAY ? <><Time ms={line.firstAt} style="date" /> · </> : <><Time ms={line.firstAt} style="date" /> to <Time ms={line.lastAt!} style="date" /> · </>}named by <span className="font-mono">{short(anchor)}</span></>}
@@ -99,7 +99,7 @@ export default async function RingPage(props: Props) {
         <MoreLink href={sales} className="basis-full">All its {plural(line.sales, 'sale')} →</MoreLink>
       </section>
 
-      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} label="this ring's" /></Suspense>
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} /></Suspense>
       <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} salesOf={{ ring: anchor }} /></Suspense>
 
       {drawing === null || drawn === null ? null : (

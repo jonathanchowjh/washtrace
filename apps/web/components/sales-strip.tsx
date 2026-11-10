@@ -1,11 +1,9 @@
 import Link from 'next/link';
-import { moneyFor, type Bucket, type TimelinePoint, type TradeRow } from '@washtrace/detect';
-import { NO_FILTER, type TradeQuery } from '@washtrace/detect/trades';
-import { readerZone } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import type { Bucket, TimelinePoint, TradeRow } from '@washtrace/detect';
+import { NO_FILTER } from '@washtrace/detect/trades';
+import { collectionOf, tradeContextOf, tradesOf, whose, type Item } from '@/lib/collection-reads';
 import { LENSES, num, plural } from '@/lib/format';
 import { txHref } from '@/lib/links';
-import { lensContext } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -123,17 +121,15 @@ const MINE = 2000;
 /**
  * The collection's strip of every sale on a token, wallet, ring or trade page,
  * that item's sales outlined, so where it sits among the rest stays on screen.
- * `of` picks its sales as the Trades tab's filter does. Nothing before the
+ * `of` is the item, whose sales are picked as the Trades tab's filter picks them. Nothing before the
  * first analysis, or for an item with no sale. Rendered in a Suspense of its
  * own by the page: it reads the collection's timeline.
  */
-export async function WhereItSits({ chainId, address, of, label }: {
-  chainId: number; address: string; of: Partial<Pick<TradeQuery, 'wallet' | 'token' | 'ring' | 'find'>>; label: string;
-}) {
+export async function WhereItSits({ chainId, address, of }: { chainId: number; address: string; of: Item }) {
   const c = await collectionOf(chainId, address);
   if (!c?.latest) return null;
-  const [runs, zone] = await Promise.all([runsOf(c.id), readerZone()]);
-  const ctx = { money: moneyFor(chainId), zone, ...lensContext(c.latest, runs) };
+  const ctx = await tradeContextOf(c);
+  const zone = ctx.zone;
   const s = store();
   const asc = { ...NO_FILTER, sort: 'date', dir: 'asc' } as const;
   // As on the overview: a small collection's strip is a square per sale, every sale read.
@@ -141,14 +137,14 @@ export async function WhereItSits({ chainId, address, of, label }: {
   const [timeline, sold, own] = await Promise.all([
     s.timeline(c.id, zone),
     few ? s.trades(c.id, asc, ctx, SQUARES + 1, 0) : null,
-    s.trades(c.id, { ...asc, ...of }, ctx, MINE, 0),
+    s.trades(c.id, { ...asc, ...tradesOf(of) }, ctx, MINE, 0),
   ]);
   if (own.length === 0) return null;
   const base = `/c/${chainId}/${address}`;
   const mine = {
     keys: new Set(own.map((r) => `${r.txHash}:${r.logIndex}`)),
     times: own.flatMap((r) => (r.blockTime === null ? [] : [r.blockTime * 1000])),
-    label, href: tradesHref(base, of),
+    label: whose(of), href: tradesHref(base, tradesOf(of)),
   };
   return <SalesStrip timeline={timeline} base={base} zone={zone} chainId={chainId} sales={sold} mine={mine} />;
 }
