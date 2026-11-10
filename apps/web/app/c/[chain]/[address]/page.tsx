@@ -99,8 +99,11 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         title={c.name ?? short(address)}
         sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{short(address)}</Ext></>}
       >
-        <Elsewhere links={collectionLinks(chainId, address)} />
-        <Refresh />
+        {/* On a phone this row wraps under the address: room above it, and between the links and the live stamp. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 sm:pt-0">
+          <Elsewhere links={collectionLinks(chainId, address)} />
+          <Refresh />
+        </div>
       </Head>
       <div className="-mt-2 mb-4"><Facts profile={profile} creator={c.contract?.creator ?? null} base={base} chainId={chainId} /></div>
 
@@ -139,8 +142,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
           {rings && rings.total > 0 ? (
             <section aria-label="Who did it">
-              <h2 className="mb-2 flex items-baseline justify-between gap-3 text-sm font-medium text-foreground">
-                <span>Who did it</span>
+              {/* Stacked on a phone, so the caption never squeezes the heading onto two lines. */}
+              <h2 className="mb-2 flex flex-col gap-0.5 text-sm font-medium text-foreground sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+                <span className="whitespace-nowrap">Who did it</span>
                 <span className="text-xs font-normal text-muted-foreground">Top {Math.min(RINGS_TOP, rings.total)} of {plural(rings.total, 'ring')}: wallets the evidence ties together, not one person</span>
               </h2>
               <RingsTable rows={rings.rows} base={base} chainId={chainId} total={rings.total} />
