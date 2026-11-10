@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
-import type { LensKey } from '@washtrace/detect/trades';
+import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
-import { FILL } from './kit';
+import { TierMark } from './kit';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
@@ -61,7 +61,10 @@ export function rowList(rows: readonly number[]): string {
   return run && sorted.length > 2 ? `${sorted[0]}–${sorted[sorted.length - 1]}` : sorted.join(', ');
 }
 
-const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
+/** A marketplace by the name Trades and the overview give it ("OpenSea", not "seaport-1.6"); one no venue lists keeps its own. */
+const marketName = (raw: string) => VENUES[venueOf(raw)]?.name ?? raw;
+
+const ROW_TONE ={ cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
 // A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
@@ -127,7 +130,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                 <td className="whitespace-nowrap sm:px-3 sm:py-2"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
                 <td className="whitespace-nowrap sm:px-3 sm:py-2">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
+                    <>{marketName(t.marketplace)}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
                 <td className={cn('basis-full sm:px-3 sm:py-2', keys.length === 0 && 'max-sm:hidden')}>
@@ -147,11 +150,15 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
   );
 }
 
-/** A lens's name on a coloured chip in its own tone; a link to that lens's tab where the collection is known. A lens no longer saved has no chip. */
+/**
+ * A lens's name on a chip with its tier's mark, as a lens is tagged on every
+ * other page; a link to that lens's tab where the collection is known. A lens
+ * no longer saved has no chip.
+ */
 function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) {
   const info = lensInfo(m, names);
   if (info === null) return null;
-  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', FILL[info.tone]);
-  return base === undefined ? <span className={cls}>{info.name}</span>
-    : <Link href={lensTabHref(base, m, { evidence: true })} prefetch={false} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
+  const body = <><TierMark tone={info.tone} />{info.name}</>;
+  return base === undefined ? <span className="chip whitespace-nowrap">{body}</span>
+    : <Link href={lensTabHref(base, m, { evidence: true })} prefetch={false} title={`Open the evidence for ${info.name}`} className="chip whitespace-nowrap hover:bg-muted">{body}</Link>;
 }

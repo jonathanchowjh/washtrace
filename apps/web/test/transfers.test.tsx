@@ -61,3 +61,47 @@ describe('the transfer table on a phone', () => {
     ]));
   });
 });
+
+describe('the transfer table’s lens tags and marketplaces', () => {
+  const ALL = {
+    ...ROUND,
+    AC: { kind: 'pair' as const, pair: [S, B] as [string, string], middle: null, flowTx: '0x' + 'f'.repeat(64) },
+    AU: { kind: 'pair' as const, pair: [S, B] as [string, string], middle: null, flowTx: '0x' + 'f'.repeat(64) },
+  };
+
+  it('tags each lens as a chip with its tier’s mark, linking its tab, as every other page does', () => {
+    const own = new Map([[`${sale(1).txHash}:0`, ['L7' as const]]]);
+    const names = { L7: { name: 'Fast flips', tone: 'own' as const, says: '' } };
+    const el = render(<Transfers chainId={1} transfers={[sale(1, ALL)]} base={BASE} own={own} names={names} />).container;
+    const chips = [...el.querySelectorAll('tbody a.chip')];
+    expect(chips.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['Round trips', `${BASE}/methods?method=A#evidence`],
+      ['Linked wallets', `${BASE}/methods?method=AC#evidence`],
+      ['Money loops back', `${BASE}/methods?method=AU#evidence`],
+      ['Fast flips', `${BASE}/methods?method=L7#evidence`],
+    ]);
+    // The mark is the tier's shape: the floor solid, the ceiling hatched, the uncounted a dashed ring, yours a diamond.
+    const marks = chips.map((a) => a.querySelector('i')!.className);
+    expect(marks[0]).toContain('bg-cycle');
+    expect(marks[1]).toContain('repeating-linear-gradient');
+    expect(marks[2]).toContain('border-dashed');
+    expect(marks[3]).toContain('rotate-45');
+    // No solid filled badge is left.
+    expect(el.querySelector('tbody .text-background')).toBeNull();
+  });
+
+  it('a chip with no collection to open is a chip still, with no link', () => {
+    const el = render(<Transfers chainId={1} transfers={[{ ...sale(1, ROUND), collection: undefined }]} />).container;
+    const chip = el.querySelector('tbody span.chip')!;
+    expect(chip.textContent).toBe('Round trips');
+    expect(chip.querySelector('i')!.className).toContain('bg-cycle');
+    expect(el.querySelector('tbody a.chip')).toBeNull();
+  });
+
+  it('names a marketplace as Trades does, and keeps a name no venue lists', () => {
+    const el = render(<Transfers chainId={1} transfers={[sale(1), sale(2, {}, 'blur-v2'), sale(3, {}, 'Elsewhere')]} collection base={BASE} />).container;
+    const sold = [...el.querySelectorAll('tbody tr')].map((r) => r.querySelectorAll('td')[3]!.firstChild!.textContent);
+    expect(sold).toEqual(['OpenSea', 'Blur', 'Elsewhere']);
+    expect(el.textContent).not.toContain('seaport');
+  });
+});

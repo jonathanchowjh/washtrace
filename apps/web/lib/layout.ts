@@ -1,5 +1,5 @@
 import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
-import type { LensKey } from '@washtrace/detect/trades';
+import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
 import { LENSES, andList, weiToEth, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
 
@@ -183,7 +183,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const tone = toneOf(t);
     edges.push({
       key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: String(i + 1),
-      title: `#${i + 1} ${t.marketplace ? `sale on ${t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
+      title: `#${i + 1} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
     edgeOf.set(i, `t${i}`);

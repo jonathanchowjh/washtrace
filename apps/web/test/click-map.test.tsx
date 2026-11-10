@@ -147,8 +147,9 @@ describe('lens names and chips', () => {
   it('on a row both lenses flag, each chip wears its own lens’s colour and opens its tab', async () => {
     const c = await PAGES.trade!();
     const chip = (name: string) => [...c.querySelectorAll('tbody a')].find((a) => a.textContent === name)!;
-    expect(chip('Money loops back').className).toContain('bg-muted-foreground');
-    expect(chip('Round trips').className).toContain('bg-cycle');
+    // The colour is the chip's tier mark, as on every other page's lens tags.
+    expect(chip('Money loops back').querySelector('i')!.className).toContain('border-muted-foreground');
+    expect(chip('Round trips').querySelector('i')!.className).toContain('bg-cycle');
     expect(chip('Round trips').getAttribute('href')).toBe(`${BASE}/methods?method=A#evidence`);
     expect(chip('Money loops back').getAttribute('href')).toBe(`${BASE}/methods?method=AU#evidence`);
   });
