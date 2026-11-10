@@ -118,7 +118,7 @@ export default async function WorkerPage() {
         </ul>
       </Section>
 
-      <Section title="How far along is each collection?" lead="One row per collection, one column per stage of its reading. Open a row for what each stage means and what feeds what.">
+      <Section title="How far along is each collection?" lead="Each collection, and how far each stage of its reading has got. Open one for what each stage means and what feeds what.">
         <PipelineTable rows={v.collections} />
         <PipelineErrors rows={v.collections.map((c) => ({ ...c, paused: c.turn === 'paused', rpc: v.rpcChains.includes(c.chainId) }))} />
       </Section>

@@ -18,6 +18,7 @@ import { range } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedManifest } from '@/lib/store';
+import { addressOf, chainOf } from '@/lib/params';
 
 export const metadata: Metadata = { title: 'Collections' };
 
@@ -114,6 +115,14 @@ function FindAndSort({ view, sort, dir, find, matched, of }: { view: View; sort:
   );
 }
 
+/** `?watch=<chain>:<address>`, from a not-watched collection's Watch it; anything else fills nothing in. */
+function startOf(watch: string | undefined): { chainId: number; address: string } | undefined {
+  const [c, a] = (watch ?? '').split(':');
+  const chainId = chainOf(c ?? '');
+  const address = addressOf(a ?? '');
+  return chainId === null || address === null ? undefined : { chainId, address };
+}
+
 /**
  * Every watched collection with its answer: how much of its trading looks
  * like wash trading, as a range from Round trips to Linked wallets, and how far the
@@ -174,7 +183,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
           <Suggested writable={writable} watched={rows.map((c) => `${c.chainId}/${c.address}`)} stored={stored} />
           <div>
             <p className="mb-2 text-xs text-muted-foreground">Or any collection, by its contract address.</p>
-            <AddCollection writable={writable} stored={stored} />
+            <AddCollection writable={writable} stored={stored} start={startOf(q.watch)} />
           </div>
         </div>
       </WatchPanel>

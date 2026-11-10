@@ -142,6 +142,11 @@ describe('the collections page', () => {
     expect(panel(await draw()).open).toBe(false);
     cleanup();
     expect(panel(await draw({ watch: `1:0x${'0'.repeat(39)}1` })).open).toBe(true);
+    // And fills the form in for it; a bad value fills nothing.
+    const field = (c: Element) => c.querySelector<HTMLInputElement>('input[name=address]')!;
+    expect(field(document.body).value).toBe(`0x${'0'.repeat(39)}1`);
+    cleanup();
+    expect(field(await draw({ watch: '1:nope' })).value).toBe('');
   });
 
   it('a tab link keeps find, sort and dir', async () => {

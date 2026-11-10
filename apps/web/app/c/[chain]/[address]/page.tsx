@@ -40,7 +40,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const chainId = chainOf(p.chain);
   const address = addressOf(p.address);
   const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
-  return { title: c?.name ?? short(p.address) };
+  // No row: the page is the not-watched one, and its tab says so.
+  return { title: c === null ? 'Not watched' : (c.name ?? short(p.address)) };
 }
 
 /**

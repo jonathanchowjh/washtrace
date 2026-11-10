@@ -7,7 +7,7 @@ const BASE = `/c/1/${ADDR}`;
 
 // Round trips flags 41 of 1,000 sales, Money loops back 300, Linked wallets 120.
 const FLAGGED = { A: 41, AU: 300, AC: 120 } as const;
-const state = { moneyRan: true, loops: true, lensRuns: [] as unknown[], history: [] as unknown[], rings: 0 };
+const state = { moneyRan: true, loops: true, lensRuns: [] as unknown[], history: [] as unknown[], rings: 0, missing: false };
 const totals = (m: 'A' | 'AU' | 'AC') => ({
   transfers: 5000, flagged: 400, sales: 1000, flaggedSales: FLAGGED[m], volumeWei: String(19_032n * 10n ** 18n),
   flaggedVolumeWei: String(BigInt(FLAGGED[m]) * 20n * 10n ** 18n), wallets: 1207, tokens: 644, available: m === 'A' || state.moneyRan,
@@ -28,7 +28,7 @@ const collection = () => ({
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => collection(),
+    collection: async () => (state.missing ? null : collection()),
     lensRuns: async () => state.lensRuns ?? [],
     history: async () => state.history,
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
@@ -157,5 +157,15 @@ describe('the overview on a phone', () => {
     expect(h.className).toContain('sm:flex-row');
     const live = [...c.querySelectorAll('header span')].find((x) => x.textContent?.startsWith('live · every'))!;
     expect(live.parentElement!.className).toMatch(/(^| )pt-2( |$)/);
+  });
+});
+
+describe('the tab title', () => {
+  it('names the collection, and says Not watched for one nobody watches', async () => {
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/page');
+    const title = async () => (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title;
+    expect(await title()).toBe('Coll');
+    state.missing = true;
+    try { expect(await title()).toBe('Not watched'); } finally { state.missing = false; }
   });
 });
