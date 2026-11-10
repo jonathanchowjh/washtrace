@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
+import { ConnectedRail } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/where-it-sits';
 import { Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, VerdictChip } from '@/components/kit';
@@ -90,6 +91,7 @@ export default async function RingPage(props: Props) {
       </section>
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} label="this ring's" /></Suspense>
+      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} salesOf={{ ring: anchor }} /></Suspense>
 
       <Section title="Who is in it" lead={`Those that traded, then those that only moved the money: a funder, a middle, a payee. A ring is wallets the evidence joins, not one person.${walletsCut ? ` The first ${num(wallets.length)} of ${num(line.wallets)} are listed.` : ''}`}>
         <div className="grid gap-4 md:grid-cols-2">

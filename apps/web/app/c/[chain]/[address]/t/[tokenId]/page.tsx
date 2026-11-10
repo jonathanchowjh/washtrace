@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
+import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
@@ -160,6 +161,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
       </Answer>
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
+      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} of={{ tokenId }} wallets={walletRoles(transfers, flows, middles)} txs={railTxs(transfers, flows)} /></Suspense>
 
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}

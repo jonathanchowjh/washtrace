@@ -99,12 +99,17 @@ const CHIPS = 3;
  * analysis it is in, by rank. Rendered in a Suspense of its own by the page,
  * since ranking reads every ring of the collection: a slow read holds no page.
  */
+/** The rings of the latest analysis a token, wallet or trade is in, by rank: the chips and the Connected to rail both list them. */
+export async function ringsIn(id: number, money: ReadonlySet<string>, of: Parameters<ReturnType<typeof store>['ringsOf']>[1]): Promise<RingLine[]> {
+  const anchors = await store().ringsOf(id, of);
+  return anchors.length === 0 ? [] : linesOf(id, anchors.join(','), [...money].join(','));
+}
+
 export async function RingChips({ id, base, money, of }: {
   id: number; base: string; money: ReadonlySet<string>; of: Parameters<ReturnType<typeof store>['ringsOf']>[1];
 }) {
-  const anchors = await store().ringsOf(id, of);
-  if (anchors.length === 0) return null;
-  const lines = await linesOf(id, anchors.join(','), [...money].join(','));
+  const lines = await ringsIn(id, money, of);
+  if (lines.length === 0) return null;
   return (
     <>
       {lines.slice(0, CHIPS).map((r) => (

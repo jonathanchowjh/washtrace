@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { lensRefusal } from '@washtrace/detect';
+import { ConnectedRail, walletRoles } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/where-it-sits';
 import { SpotCheck } from '@/components/spot-check';
@@ -86,6 +87,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
       </Answer>
 
       {within === undefined || collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ find: tx }} label="this trade's" /></Suspense>}
+      {within === undefined || collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} of={{ tx }} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
       {unread || washTrade === null ? (
         <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}
           lenses={(await store().lenses()).map((l) => ({ key: l.key, name: l.name, refusal: lensRefusal(l.rule) }))} />

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
+import { ConnectedRail, partnersOf, railTxs } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
@@ -146,6 +147,7 @@ export async function WalletView({ chainId, address, sp, within }: {
       </Answer>
 
       {within === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={within.collection} of={{ wallet: address }} label="this wallet's" /></Suspense>}
+      {within === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={within.collection} of={{ wallet: address }} wallets={partnersOf(transfers, counterparties, address)} txs={railTxs(transfers, [])} /></Suspense>}
 
       <Section title="Which of its trades?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (

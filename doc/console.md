@@ -28,6 +28,13 @@ Every page of a collection sits under one line naming it and a tab bar: Overview
 Trades. A ring lights Rings; a token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
 while another lens is chosen, since it would not match the list; a lens chosen on one tab is kept on the others.
 
+A token, wallet, trade or ring page under a collection says what it is the same way. Under its title are its
+kind, a verdict chip naming the lens tier behind it (Round trips, the floor; Linked wallets, the ceiling; Money
+loops back, not counted) and the rings it is part of. Below its answer is the strip of every sale of the
+collection, with its own sales outlined, then a **Connected to** panel in one order. It shows what it is part of
+(the collection and its washed share, its rings, a trade's token), the wallets here with their role (seller,
+buyer, funder, payee, in between), and the sales and payments that tie them, by block.
+
 A token, wallet, ring or trade opened from a collection's list carries `?from=`, the list it came from. A line above
 its title leads back to that list, says where the item sits in it, and steps to the item before and after, across
 pages too (‹ ›, or K and J). The item is found in the list by what it is, so after a new analysis reorders the list,
