@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 // Types only: the package's values (the store, the chain client) must stay out of the browser bundle.
 import type { Bucket, Method } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { builtinCauses, shareQualifier, type Qualifier } from '@/lib/lens-state';
-import { LENSES as LENS_INFO, NOT_RUN, localTime, pct, num } from '@/lib/format';
+import { LENSES as LENS_INFO, NOT_RUN, localTime, pct, plural, num } from '@/lib/format';
 import { dateIn, midnight, offsetAt } from '@/lib/zone';
 import { cn } from '@/lib/utils';
 
@@ -73,7 +73,13 @@ function seriesOf(own: { key: Lens; name: string; qualifier: Qualifier | null; f
   ];
 }
 
-const W = 720, H = 230, L = 48, R = 16, T = 12, B = 30;
+// WIDE is the drawing's width until the chart is measured; once it is, the drawing is as wide as the screen draws it,
+// so its 11px labels stay 11px on a phone rather than shrinking with a 720-wide drawing.
+const WIDE = 720, H = 230, L = 48, R = 16, T = 12, B = 30;
+// Narrower than this the plot has no room for its own gutters.
+const NARROWEST = 280;
+// About what a date label and the gap after it take, so the ticks never run into each other.
+const TICK_ROOM = 90;
 const SH = 64, ST = 8, SB = 22;
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const SPAN: Record<Bucket, number> = { hour: HOUR, day: DAY, week: 7 * DAY, month: 30.44 * DAY };
@@ -92,16 +98,16 @@ function yTicks(max: number): number[] {
 }
 
 /**
- * Up to seven ticks, on boundaries of the reader's own calendar, the same
- * one the store bucketed by: the first of a month, midnight, or a round
- * minute. Each says only as much as it needs to.
+ * Up to `most` ticks (seven at most), on boundaries of the reader's own
+ * calendar, the same one the store bucketed by: the first of a month,
+ * midnight, or a round minute. Each says only as much as it needs to.
  */
-function xTicks(from: number, to: number, zone: string): { at: number; label: string }[] {
+function xTicks(from: number, to: number, zone: string, most = 7): { at: number; label: string }[] {
   const span = to - from;
   const out: { at: number; label: string }[] = [];
   if (span > 120 * DAY) {
     const months = span / (30.44 * DAY);
-    const step = [1, 2, 3, 6, 12, 24].find((m) => months / m <= 7) ?? 24;
+    const step = [1, 2, 3, 6, 12, 24].find((m) => months / m <= most) ?? 24;
     const start = dateIn(from, zone);
     let y = start.y, m = start.m + 1;
     if (step >= 12) { y += 1; m = 0; } else m = Math.ceil(m / step) * step;
@@ -111,7 +117,7 @@ function xTicks(from: number, to: number, zone: string): { at: number; label: st
     return out;
   }
   if (span > 3 * DAY) {
-    const step = [1, 2, 7, 14, 28].find((s) => span / (s * DAY) <= 7) ?? 28;
+    const step = [1, 2, 7, 14, 28].find((s) => span / (s * DAY) <= most) ?? 28;
     const start = dateIn(from, zone);
     for (let k = 1, t = midnight(start.y, start.m, start.d + 1, zone); t <= to; k += step, t = midnight(start.y, start.m, start.d + k, zone)) {
       out.push({ at: t, label: localTime(t, 'date', zone) });
@@ -119,7 +125,7 @@ function xTicks(from: number, to: number, zone: string): { at: number; label: st
     return out;
   }
   const steps = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720].map((m) => m * 60_000);
-  const step = steps.find((s) => span / s <= 6) ?? 720 * 60_000;
+  const step = steps.find((s) => span / s <= Math.min(6, most)) ?? 720 * 60_000;
   // Round on the reader's clock, not UTC's: a zone at +5:30 still ticks on its own round hours.
   const offset = offsetAt(from, zone);
   for (let t = Math.ceil((from + offset) / step) * step - offset; t <= to; t += step) out.push({ at: t, label: localTime(t, 'time', zone) });
@@ -132,6 +138,14 @@ function periodText(at: number, bucket: Bucket, zone: string): string {
   if (bucket === 'week') return `Week of ${localTime(at, 'date', zone)}`;
   if (bucket === 'day') return localTime(at, 'date', zone);
   return localTime(at, 'datetime', zone);
+}
+
+/** The one period a history falls in, as a phrase: "in one hour, 3 Apr 2023, 14:00". */
+function oneWhen(at: number, bucket: Bucket, zone: string): string {
+  if (bucket === 'hour') return `in one hour, ${localTime(at, 'datetime', zone)}`;
+  if (bucket === 'day') return `on one day, ${localTime(at, 'date', zone)}`;
+  if (bucket === 'week') return `in one week, from ${localTime(at, 'date', zone)}`;
+  return `in one month, ${localTime(at, 'month', zone)}`;
 }
 
 function Marker({ s, x, y, r = 4 }: { s: Series; x: number; y: number; r?: number }) {
@@ -155,6 +169,12 @@ function Key({ s }: { s: Series }) {
   );
 }
 
+/** "(at least)" or "(so far)" after a lens's name, saying on hover why its share reads so. */
+function QualifierTag({ s }: { s: Series }) {
+  if (s.qualifier === null) return null;
+  return <span title={`${s.name}'s share ${s.qualifier === 'at least' ? 'is a floor' : 'can still rise'}${s.floorWhy ? `: ${s.floorWhy}` : ''}`}>({s.qualifier})</span>;
+}
+
 /** A series as runs of polyline: a bucket with no sale has no share, and breaks the line rather than dropping it to zero. */
 function runs(pts: ({ x: number; y: number } | null)[]): string[] {
   const out: string[][] = [[]];
@@ -172,6 +192,57 @@ function TabLinks({ lenses }: { lenses: { key: string; name: string }[] }) {
   ));
 }
 
+/** Your lenses the chart has no line for, by name, each opening its tab; nothing when there are none. */
+function OwnLeft({ ownLeft, ownNotRun }: { ownLeft: { key: string; name: string }[]; ownNotRun: { key: string; name: string; why: string }[] }) {
+  if (ownLeft.length === 0 && ownNotRun.length === 0) return null;
+  return (
+    <p data-own-left className="mt-2 space-y-1 text-xs text-muted-foreground">
+      {ownLeft.length > 0 ? <span className="block">Lenses of yours not drawn, to keep the chart readable (it draws three at most): <TabLinks lenses={ownLeft} />.</span> : null}
+      {ownNotRun.length > 0 ? <span className="block">No line for these lenses of yours:{ownNotRun.map((o) => <span key={o.key}> <TabLinks lenses={[o]} /> {o.why}</span>)}</span> : null}
+    </p>
+  );
+}
+
+/**
+ * A history whose trades all fall in one period: a line needs two points, so
+ * rather than a dot on a long empty axis it says when, and each lens's share
+ * of those sales, every figure opening what it counts.
+ */
+function OnePeriod({ q, bucket, zone, unread, lenses, href, lensHref, noShare, children }: {
+  q: TimePoint; bucket: Bucket; zone: string; unread: number | null; lenses: Series[];
+  href?: string; lensHref?: Partial<Record<Lens, string>>; noShare: (q: TimePoint, k: Lens) => string; children: ReactNode;
+}) {
+  const when = oneWhen(q.at, bucket, zone);
+  const lead = q.sales > 1 ? `All ${num(q.sales)} sales ${when}` : q.sales === 1 ? `One sale, ${periodText(q.at, bucket, zone)}` : `${plural(q.transfers, 'transfer')} ${when}, and none a sale`;
+  return (
+    <figure data-one-period className="rounded-lg border bg-card p-4">
+      <p className="text-sm font-medium text-foreground">{href ? <Link href={href} prefetch={false} className="hover:underline">{lead}</Link> : lead}</p>
+      <ul className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-3">
+        {lenses.map((m) => {
+          const v = q.lens[m.key] ?? null;
+          const s = share(v);
+          const h = lensHref?.[m.key];
+          return (
+            <li key={m.key} className="flex items-start gap-2 text-sm">
+              <span className="pt-1.5"><Key s={m} /></span>
+              <span className="min-w-0">
+                <span className="font-semibold text-foreground tabular-nums">{v === null ? NOT_RUN : s === null ? noShare(q, m.key) : h ? <Link href={h} prefetch={false} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</span>{' '}
+                <span className="text-muted-foreground">{m.name}{v !== null && m.qualifier ? <> <QualifierTag s={m} /></> : null}</span>
+                {v && v.whole > 0 ? <span className="block text-xs text-muted-foreground tabular-nums">{num(v.part)} of {num(v.whole)} sales</span> : null}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <figcaption className="mt-3 text-xs text-muted-foreground">
+        {unread === null ? null : <>The chain is read through {localTime(unread, 'datetime', zone)}; anything later is not read yet. </>}
+        Times in {zone.replaceAll('_', ' ')}.
+      </figcaption>
+      {children}
+    </figure>
+  );
+}
+
 /**
  * Each lens's share of sales over time, with a strip under it on the same
  * axis that says how much there was to judge: sales per bucket for history,
@@ -185,6 +256,22 @@ export function TimeChart(props: TimeChartProps) {
   const [at, setAt] = useState<number | null>(null);
   // Tick labels are local times, which the server cannot know: draw in the browser only.
   const browser = useSyncExternalStore(never, () => true, () => false);
+  // The drawing's width is the chart's own, measured before paint and on every resize; 0 (not laid out) keeps WIDE.
+  const box = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState<number | null>(null);
+  // A single period draws no chart, so the box to measure comes and goes with a second one.
+  const charted = points.length > 1;
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el === null) return;
+    const read = () => setMeasured(el.clientWidth > 0 ? Math.max(NARROWEST, Math.round(el.clientWidth)) : null);
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(read);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [browser, charted]);
+  const W = measured ?? WIDE;
   const { zone } = props;
   const hrefs = props.kind === 'history' ? props.periodHrefs : undefined;
   const lensHrefs = props.kind === 'history' ? props.lensHrefs : undefined;
@@ -194,15 +281,23 @@ export function TimeChart(props: TimeChartProps) {
   const isOwn = (k: Lens) => lenses.some((m) => m.key === k && m.stroke === 'stroke-flow');
   // A lens of yours has a share only of the sales its run has judged; none judged in a period that has sales is "not judged yet", not "no sale".
   const noShare = (q: TimePoint, k: Lens) => (isOwn(k) && q.sales > 0 ? 'not judged yet' : 'no sale');
-  if (!browser) return <figure className="aspect-[720/330] rounded-lg border bg-card" />;
+  // Held at about the height of what replaces it: the chart, or the few lines of a single period.
+  if (!browser) return <figure className={props.kind === 'history' && points.length === 1 ? 'h-32 rounded-lg border bg-card' : 'aspect-[720/330] rounded-lg border bg-card'} />;
 
   const history = props.kind === 'history';
+  const unread = history && props.readThrough !== null && props.now - props.readThrough > 2 * SPAN[props.bucket] ? props.readThrough : null;
+  if (history && points.length === 1) {
+    return (
+      <OnePeriod q={points[0]!} bucket={props.bucket} zone={zone} unread={unread} lenses={lenses} href={hrefs?.[0]} lensHref={lensHrefs?.[0]} noShare={noShare}>
+        <OwnLeft ownLeft={ownLeft} ownNotRun={ownNotRun} />
+      </OnePeriod>
+    );
+  }
   const half = history ? SPAN[props.bucket] / 2 : 0;
   const from = points[0]!.at;
   const lastAt = points[points.length - 1]!.at + 2 * half;
   const to = history ? Math.max(lastAt, props.now) : lastAt;
   const span = Math.max(1, to - from);
-  const unread = history && props.readThrough !== null && props.now - props.readThrough > 2 * SPAN[props.bucket] ? props.readThrough : null;
   const max = Math.max(0.01, ...points.flatMap((p) => lenses.map((m) => share(p.lens[m.key]) ?? 0)));
   const ys = yTicks(max);
   const top = ys[ys.length - 1]!;
@@ -212,7 +307,7 @@ export function TimeChart(props: TimeChartProps) {
   const strip = (p: TimePoint) => (history ? p.sales : p.wallets ? (p.funded ?? 0) / p.wallets : 0);
   const stripMax = history ? Math.max(1, ...points.map((p) => p.sales)) : 1;
   const sy = (v: number) => ST + (1 - v / stripMax) * (SH - ST - SB);
-  const ticks = xTicks(from, to, zone);
+  const ticks = xTicks(from, to, zone, Math.max(2, Math.min(7, Math.floor((W - L - R) / TICK_ROOM))));
 
   function nearest(clientX: number): number {
     const box = svg.current!.getBoundingClientRect();
@@ -239,6 +334,7 @@ export function TimeChart(props: TimeChartProps) {
     <figure className="rounded-lg border bg-card p-4">
       {history ? null : <p className="mb-3 text-xs text-muted-foreground">This shows the built-in lenses only: a lens of yours keeps only its latest run, so it has no earlier analyses to draw.</p>}
       <div
+        ref={box}
         className="relative rounded outline-none focus-visible:ring-2 focus-visible:ring-focus"
         tabIndex={0} role="group"
         aria-label={`${history ? 'Share of each period’s sales' : 'Share of sales at each analysis'} flagged by each lens. Use the arrow keys to step through.`}
@@ -344,17 +440,12 @@ export function TimeChart(props: TimeChartProps) {
         {lenses.map((m) => (
           <span key={m.key} className="flex items-center gap-1.5">
             <Key s={m} />{m.name}
-            {m.qualifier ? <span title={`${m.name}'s share ${m.qualifier === 'at least' ? 'is a floor' : 'can still rise'}${m.floorWhy ? `: ${m.floorWhy}` : ''}`}>({m.qualifier})</span> : null}
+<QualifierTag s={m} />
           </span>
         ))}
-        <span>{points.length} {history ? `${props.bucket}s with trades` : 'analyses'} · times in {zone.replaceAll('_', ' ')} · hover or use ← → for each</span>
+        <span>{history ? `${plural(points.length, props.bucket)} with trades` : plural(points.length, 'analysis', 'analyses')} · times in {zone.replaceAll('_', ' ')} · hover or use ← → for each</span>
       </figcaption>
-      {ownLeft.length > 0 || ownNotRun.length > 0 ? (
-        <p data-own-left className="mt-2 space-y-1 text-xs text-muted-foreground">
-          {ownLeft.length > 0 ? <span className="block">Lenses of yours not drawn, to keep the chart readable (it draws three at most): <TabLinks lenses={ownLeft} />.</span> : null}
-          {ownNotRun.length > 0 ? <span className="block">No line for these lenses of yours:{ownNotRun.map((o) => <span key={o.key}> <TabLinks lenses={[o]} /> {o.why}</span>)}</span> : null}
-        </p>
-      ) : null}
+      <OwnLeft ownLeft={ownLeft} ownNotRun={ownNotRun} />
 
       <details className="mt-3 text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Show as a table</summary>
