@@ -1,8 +1,8 @@
 # The methods
 
 For readers who want to know what a flag means before they trust one. It covers the two graphs washtrace builds,
-the three methods of the paper, what is never counted, the thresholds, and why the headline leaves Money loops
-back out. Each method is shown on a token of the [demo](../README.md#quick-start), so you can open the same
+the three methods of the paper, what is never counted, rings, the thresholds, why the headline leaves Money loops
+back out, what a read cannot see, and how a spot check is narrower. Each method is shown on a token of the [demo](../README.md#quick-start), so you can open the same
 token in the console and see the verdict described here.
 
 ## Two graphs
@@ -12,7 +12,7 @@ token in the console and see the verdict described here.
   joins them. A bridge is never flagged and never counted, and the share of bridges is the paper's
   missing-data share. Mints and burns are not trades.
 - **The money graph**, one per collection. Each payment between two wallets is an edge from payer to payee: ETH,
-  internal ETH, WETH and Blur Pool, and, when they are read, payments in [Other tokens](console.md#reading-money).
+  internal ETH, WETH and Blur Pool, and, when they are read, payments in [Other tokens](glossary.md#reading-money).
   The worker reads who paid whom for every trader, then follows the money out `follow.hops` wallets (default 3),
   so a payment can return through wallets that never traded the collection.
 
@@ -167,3 +167,47 @@ Read the volume share with care. Sales on Blur, LooksRare v2 and X2Y2 are marked
 Terraforms, Meebits, Dreadfulz and BAYC only 56–68% of sales carry an ETH or WETH price. Wash trading pumps
 prices, so a few washed sales dominate the sum, and a collection with any wash trading has a volume share near
 100%.
+
+## What it cannot see
+
+- **Money is followed one way.** The worker follows money out of each trader, `follow.hops` deep, only through
+  wallets that paid at most 25 others (`FOLLOW_FANOUT`). Following is what finds #113's way back, but an exchange
+  or a busy trader is not followed, so a path back through one stays unseen.
+- **Reads are a snapshot unless read again is on.** A wallet's money and Other tokens are read once, so a later
+  payment is not seen. `follow.reread` reads a trader again when it trades again; wallets loaded from a stored
+  money trail and wallets past Etherscan's 10,000-row page limit are never read again. See
+  [operating.md](operating.md#reading-traders-again).
+- **Other tokens are a fixed list** in the code, not the settings, and without `tokens.payees` a loop whose middle
+  wallet was only paid in tokens can be missed.
+- **Searches have caps.** A trade's money search stops at 5,000 edges and the share reads "at least". Every cap is
+  in [operating.md](operating.md#limits).
+- **Sales on Blur, LooksRare v2 and X2Y2 are marked but not priced.** Blur v2 packs the price into bit fields
+  washtrace does not decode, and a guess would count as read volume. Their sales count; their volume does not
+  ([Shares](#shares)).
+- **ERC-1155 is not read.** The methods depend on one token, one holder.
+
+## A spot check
+
+A [spot check](console.md#checking-a-transaction-you-do-not-watch) judges one transaction without watching its
+collection: its receipt, each of its tokens' histories, and the money of its sellers and buyers and of any wallet
+that paid or was paid by both. It is narrower than a full read, and says so:
+
+- **Round trips** reads the token's whole history to the finalized head, so it gives the answer a full read gives
+  with the default rules.
+- **Linked wallets** finds a link a full read would. It can't count how many of the collection's wallets a middle
+  wallet is linked to, so a middle that moved money with more than 20 wallets makes the answer `atLeast`, never
+  clean.
+- **Money loops back** needs money followed several wallets out, so it is not run. Neither is a lens using Other
+  tokens or the collection's other tokens.
+
+## The work it builds on
+
+- Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM: SCC detection on each token's transfer graph, flagged by cycle count: the basis of SCC A.
+- Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543): SCC detection over sales as well as transfers.
+- hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune: a buyer and seller first funded by the same wallet, which SCC AC generalises.
+- Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001): SCC detection over the user transaction graph, here applied to money between NFT traders.
+- Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451): wash trades as cycles in a directed graph; its volume matching does not carry over, as NFTs are not fungible.
+
+The standards and sources washtrace reads: [ERC-721](https://eips.ethereum.org/EIPS/eip-721),
+[Seaport](https://github.com/ProjectOpenSea/seaport) (whose sales it prices) and
+[Etherscan API V2](https://docs.etherscan.io/) (who paid whom).

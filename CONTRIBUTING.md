@@ -177,7 +177,7 @@ scripts/
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
-doc/                      Reference pages: methods.md, console.md, operating.md, api.md, upgrading.md, stored-data.md
+doc/                      Reference pages: glossary.md, methods.md, console.md, operating.md, api.md, upgrading.md, stored-data.md
 paper/                    The paper and its slides (PDF)
 LICENSE, CITATION.cff     MIT for the code; how to cite the paper
 .githooks/pre-commit      See the hook above
@@ -252,13 +252,19 @@ skipped.
    `'analysis'`, `'run'` or `'nothing'`: a preview goes first, but not twice in
    a row while an analysis is due; a lens run gives way to a due analysis until
    it has waited `LENS_WAIT_MS` (10 minutes); then an analysis; then any run.
-   Each runs in a worker thread so the main thread keeps ingesting and
-   answering `/health`:
+   Before choosing, `turn` calls `Store.fillRings`, which gives one analysis
+   saved before rings existed its rings from its stored witnesses; a
+   collection whose fill fails is skipped (`ringsFailed`) until the worker
+   restarts. Each job runs in a worker thread so the main thread keeps
+   ingesting and answering `/health`:
    - **Analysis** (`analyzeOne`): `analyzeInThread` starts
      `analysis-thread.ts`, which opens its own connection, reads the input
      (`Store.analysisInput`) and runs `analyze()`. The result is saved with
      `Store.saveAnalysis` against the collection `version` read before it ran,
      so a write that lands mid-analysis leaves the collection due again.
+     The same save joins the witnesses Round trips and Linked wallets point
+     at into rings (`ringsOf` in `rings.ts`, a union-find over shared
+     wallets) and tags each witness with its ring's anchor.
    - **Lens run or preview** (`lensRun`, `preview`): `runLensInThread` or
      `runPreviewInThread` start `lens-thread.ts`, which reads its own input
      (`Store.lensInput`) and runs `runLens`; a preview judges a sample of
