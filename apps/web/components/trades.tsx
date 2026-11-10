@@ -4,7 +4,7 @@ import { METHODS, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/ui';
 import { NotCounted } from '@/components/methods';
-import { TierMark } from '@/components/kit';
+import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
@@ -111,6 +111,7 @@ export function FilterBar(w: Where) {
     <section aria-label="Filters" className="mt-4 space-y-3">
       <form action={`${base}/trades`} method="get" role="search" className="flex flex-wrap items-center gap-2">
         {carried(w, (k) => k !== 'q')}
+        <FunnelIcon className="text-muted-foreground" />
         <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
         <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
@@ -122,7 +123,7 @@ export function FilterBar(w: Where) {
           </Link>
         ))}
         <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium">+ Filter</summary>
+          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium"><FunnelIcon className="mr-1 inline size-3.5 align-[-2px] text-muted-foreground" />+ Filter</summary>
           <form action={`${base}/trades`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
             {carried(w, (k) => ['wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}

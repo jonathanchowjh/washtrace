@@ -25,6 +25,16 @@ export function KindIcon({ kind, className }: { kind: Kind; className?: string }
   );
 }
 
+/** On a list's Find and filters: they narrow what the list shows, where the search box finds a thing anywhere, so the two look apart. */
+export function FunnelIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
+      className={cn('size-4 shrink-0', className)}>
+      <path d="M2 3h12l-4.5 5.5V13l-3-1.5v-3z" />
+    </svg>
+  );
+}
+
 // Literal class names: Tailwind generates only the classes it can read in the source.
 const MARK = {
   cycle: 'rounded-[2px] bg-cycle',
