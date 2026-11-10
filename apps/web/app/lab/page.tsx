@@ -88,12 +88,12 @@ export default async function LabPage() {
             {start === null ? (
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <Link href="/" className="btn text-sm">Watch a collection</Link>
-                <span>first: a lens is written against a collection&rsquo;s data, on its Methods page.</span>
+                <span>One is watched first, because a lens is written against a collection&rsquo;s data, on its Methods page.</span>
               </div>
             ) : (
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <Action href={start} writable={writable} className="btn text-sm">Write a lens</Action>
-                <span>on {firstName}&rsquo;s Methods page, where its preview runs on that collection&rsquo;s sales.</span>
+                <span>It opens on {firstName}&rsquo;s Methods page, where its preview runs on that collection&rsquo;s sales.</span>
               </div>
             )}
           </div>

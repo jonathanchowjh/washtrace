@@ -132,7 +132,8 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
                 <Link href={r.href} prefetch={false} className="w-24 text-right text-xs text-muted-foreground tabular-nums hover:underline">{r.count}</Link>
               </>
             ) : <span className="w-40 text-right text-xs text-muted-foreground max-md:ml-auto" title={`${LENSES[r.m].name}: ${NOT_RUN}`}>{NOT_RUN}</span>}
-            {r.note ? <span className="hidden w-36 text-xs text-muted-foreground sm:block max-md:ml-auto">{r.note}</span> : <span className="hidden w-36 md:block" />}
+            {/* On a phone the note takes a line of its own under the figures, rather than being left out. */}
+            {r.note ? <span data-note className="w-36 text-xs text-muted-foreground max-sm:w-full max-sm:text-right max-md:ml-auto">{r.note}</span> : <span className="hidden w-36 md:block" />}
           </li>
         ))}
       </ol>

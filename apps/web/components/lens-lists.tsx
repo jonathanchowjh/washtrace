@@ -10,7 +10,7 @@ import { Empty } from './ui';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
 import { HoverCard } from './hover-card';
-import { FILL, FunnelIcon, KindIcon } from './kit';
+import { FILL, KindIcon, SearchIcon } from './kit';
 import { cardSrc, withFrom } from '@/lib/links';
 
 /**
@@ -64,7 +64,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
         </nav>
         <form action={`${first.pathname}${first.hash}`} method="get" role="search" className="flex items-center gap-1.5">
           {kept.map(([k, v], i) => <input key={i} type="hidden" name={k} value={v} />)}
-          <FunnelIcon className="text-muted-foreground" />
+          <SearchIcon className="text-muted-foreground" />
           <input
             type="search" name={findParam} defaultValue={find ?? ''} placeholder={kind === 'tokens' ? 'Find a token number' : 'Find a wallet (0x…)'}
             aria-label={kind === 'tokens' ? `Find a token ${lens.name} flagged, by its number` : `Find a wallet ${lens.name} flagged, by its address or the start of it`}

@@ -4,7 +4,7 @@ import { type Method, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { Time } from '@/components/time';
 import { SortHead } from '@/components/ui';
-import { FunnelIcon, TierMark } from '@/components/kit';
+import { FunnelIcon, SearchIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
@@ -111,10 +111,11 @@ export function FilterBar(w: Where) {
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
     <section aria-label="Filters" className="mt-4 space-y-3">
-      <form action={`${base}/trades`} method="get" role="search" className="flex flex-wrap items-center gap-2">
+      {/* Find looks one trade up, so it wears the magnifier; the funnel is Filter's alone. The box gives way on a phone so Find stays beside it. */}
+      <form action={`${base}/trades`} method="get" role="search" className="flex items-center gap-2">
         {carried(w, (k) => k !== 'q')}
-        <FunnelIcon className="text-muted-foreground" />
-        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
+        <SearchIcon className="text-muted-foreground" />
+        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field min-w-0 flex-1 sm:w-72 sm:flex-none" />
         <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
 

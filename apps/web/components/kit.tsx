@@ -36,6 +36,16 @@ export function FunnelIcon({ className }: { className?: string }) {
   );
 }
 
+/** Finding one row, as against the funnel's narrowing of the list: a box that looks things up, not a filter. */
+export function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"
+      className={cn('size-4 shrink-0', className)}>
+      <circle cx="7" cy="7" r="4.25" /><path d="M10.25 10.25 13.5 13.5" />
+    </svg>
+  );
+}
+
 // Each verdict by the tier of the lens behind it, in the lenses' own names.
 const VERDICT = { cycle: `${LENSES.A.name} · ${LENSES.A.tier}`, money: `${LENSES.AC.name} · ${LENSES.AC.tier}`, apart: `${LENSES.AU.name} · ${LENSES.AU.tier}`, clean: 'Not flagged' } as const;
 
