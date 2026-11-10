@@ -79,7 +79,7 @@ vi.mock('@/lib/store', () => ({
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'localhost:8080' }) }));
-vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => {
   cleanup();
@@ -599,5 +599,28 @@ describe('the trade page: a spot check', () => {
     roundTrip();
     const judged = await txPage();
     expect(judged.querySelector('#spot-check')).toBeNull();
+  });
+});
+
+describe('a transaction under a collection\'s tabs', () => {
+  const under = async (address: string) => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    return render(await P({ params: Promise.resolve({ chain: '1', address, hash: TX }) })).container;
+  };
+
+  it('sits there when every transfer it moved is in that collection, its links kept inside', async () => {
+    state.tx = [transfer(A1, '5', TX, 0, 5)];
+    const hrefs = [...(await under(A1)).querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain(`/c/1/${A1}/w/${S}`);
+    expect(hrefs).toContain(`/c/1/${A1}/tx/${TX}`);
+  });
+
+  it('is sent to its own page when it is another collection\'s, or more than one\'s, or unread', async () => {
+    state.tx = [transfer(A2, '5', TX, 0, 5)];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
+    state.tx = [transfer(A1, '5', TX, 0, 5), transfer(A2, '6', TX, 1, 5)];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
+    state.tx = [];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
   });
 });

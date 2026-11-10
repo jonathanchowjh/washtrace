@@ -5,13 +5,14 @@ import { listHref } from '@/lib/links';
 
 const BASE = `/c/1/0x${'b'.repeat(40)}`;
 const at = { path: BASE, search: '' };
+const LENSES = ['A', 'AU', 'AC', 'L7'];
 vi.mock('next/navigation', () => ({ usePathname: () => at.path, useSearchParams: () => new URLSearchParams(at.search) }));
 
 afterEach(() => { cleanup(); Object.assign(at, { path: BASE, search: '' }); });
 
 function nav(path: string, search = '', counts = {}) {
   Object.assign(at, { path, search });
-  const el = render(<CollectionNav base={BASE} name="Coll" analysedAt={null} counts={counts} />).container;
+  const el = render(<CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} counts={counts} />).container;
   const tab = (label: string) => [...el.querySelectorAll('nav a')].find((a) => a.textContent?.startsWith(label))!;
   return { el, tab };
 }
@@ -34,14 +35,24 @@ describe('the collection tab bar', () => {
   });
 
   it('carries the chosen lens to Tokens and Wallets, and on Trades the first lens it is filtered by, a built-in first', () => {
-    expect(lensOf(new URLSearchParams('method=A'), 'overview')).toBe('A');
-    expect(lensOf(new URLSearchParams('caught=L7,AC,A'), 'trades')).toBe('A');
-    expect(lensOf(new URLSearchParams('caught=L7'), 'trades')).toBe('L7');
+    const of = (q: string, tab: Parameters<typeof lensOf>[1]) => lensOf(new URLSearchParams(q), tab, LENSES);
+    expect(of('method=A', 'overview')).toBe('A');
+    expect(of('caught=L7,AC,A', 'trades')).toBe('A');
+    expect(of('caught=L7', 'trades')).toBe('L7');
     // A caught filter means nothing off Trades.
-    expect(lensOf(new URLSearchParams('caught=A'), 'tokens')).toBeNull();
+    expect(of('caught=A', 'tokens')).toBeNull();
     const { tab } = nav(`${BASE}/trades`, 'caught=AC,A');
     expect(tab('Tokens').getAttribute('href')).toBe(`${BASE}/tokens?method=A`);
     expect(tab('Wallets').getAttribute('href')).toBe(`${BASE}/wallets?method=A`);
+  });
+
+  it('carries no lens that is not one: the overview\'s Compare tab, a deleted lens, junk', () => {
+    const of = (q: string, tab: Parameters<typeof lensOf>[1]) => lensOf(new URLSearchParams(q), tab, LENSES);
+    expect([of('method=compare', 'overview'), of('method=L9', 'tokens'), of('caught=L9,nope', 'trades')]).toEqual([null, null, null]);
+    // So the default lens's counts stay, as its list is what the tabs open.
+    const { tab } = nav(BASE, 'method=compare', { tokens: <b>6</b> });
+    expect(tab('Tokens').textContent).toBe('Tokens6');
+    expect(tab('Tokens').getAttribute('href')).toBe(`${BASE}/tokens`);
   });
 
   it('drops a list\'s order and Find on the way to another tab', () => {

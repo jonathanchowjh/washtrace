@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { lensRefusal } from '@washtrace/detect';
 import { SpotCheck } from '@/components/spot-check';
 import { mayWrite } from '@/lib/auth';
@@ -14,7 +15,7 @@ import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
 import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
-import { explorerTx } from '@/lib/links';
+import { explorerTx, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
 import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
@@ -22,7 +23,9 @@ import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/vi
 /**
  * The console's form of GET /api/transfers/<chain>/<tx>: is this sale a wash
  * trade, and by which lens. `within`, a collection's base, is the page under
- * that collection's tabs: its links stay inside the collection.
+ * that collection's tabs: its links stay inside the collection. Only a
+ * transaction whose every transfer is in that collection sits there; any other
+ * is sent to its own page, so no row reads as another collection's.
  */
 export async function TxView({ chainId, tx, within }: { chainId: number; tx: string; within?: string }) {
   const v = await txView(chainId, tx);
@@ -43,6 +46,7 @@ export async function TxView({ chainId, tx, within }: { chainId: number; tx: str
   // The lens names open that lens's tab when the transaction belongs to one collection; across several there is no one tab.
   const homes = new Set(transfers.flatMap((t) => (t.collection ? [`/c/${t.collection.chainId}/${t.collection.address}`] : [])));
   const home = homes.size === 1 ? [...homes][0]! : null;
+  if (within !== undefined && home !== within) redirect(txHref(chainId, tx));
   const collection = home === null ? null : transfers.find((t) => t.collection)!.collection!;
   const notRunLine = notRun.length === 0 ? '' : homes.size > 1 ? notRunAcross(notRun, Object.values(collections)) : notRunAll(notRun);
   // One drawing per token, however many of its transfers the transaction moved.

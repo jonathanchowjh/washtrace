@@ -369,16 +369,26 @@ describe('the wallet under a collection\'s tabs', () => {
     expect(el.textContent).toContain('Every transfer it sent or received in this collection.');
   });
 
-  it('keeps its links inside the collection, and offers the wallet across every one', async () => {
+  it('keeps its trades\' links inside the collection, and its money partners\' across every one', async () => {
     trades = 2; counterparties = 1;
     const el = await scoped();
     const hrefs = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
     expect(hrefs).toContain(`${inColl}/w/0x1`);
-    expect(hrefs).toContain(`${inColl}/w/${partner(0)}`);
-    expect(hrefs.filter((h) => h.startsWith('/w/'))).toEqual([here]);
+    // Each trade still opens its token.
+    expect(hrefs).toContain(`/c/1/${COLL}/t/0`);
+    // A money partner need not have traded here: its link is its own page.
+    expect(hrefs).toContain(`/w/1/${partner(0)}`);
+    expect(hrefs).not.toContain(`${inColl}/w/${partner(0)}`);
     expect(linkTo(el, 'in every collection')).toBe(here);
     // Its own links (a sort, a page) stay on this page.
     expect(hrefs.some((h) => h.startsWith(`${inColl}/w/${SELF}?`))).toBe(true);
+  });
+
+  it('with no trade in the collection says so, and not that it is in none', async () => {
+    trades = 3; unjudgedTrades = 3;
+    const text = (await scoped()).textContent ?? '';
+    expect(text).toContain(`No trade in ${short(COLL)}`);
+    expect(text).not.toContain('Not in any watched collection');
   });
 
   it('names the wallet\'s own page as the canonical one', async () => {

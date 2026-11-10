@@ -41,3 +41,20 @@ describe('searchArgs', () => {
     expect(searchArgs({ page: '3' })).toEqual({ only: undefined, page: 1 });
   });
 });
+
+describe('where a trade hit opens', () => {
+  const A = '0x' + 'a'.repeat(40), B = '0x' + 'b'.repeat(40), TX = '0x' + 'c'.repeat(64);
+  const none = { collections: [], tokens: [], wallets: [], trades: [], more: { collections: false, tokens: false, wallets: false, trades: false } };
+  const hit = (address: string, tokenId = '1') => ({ chainId: 1, txHash: TX, address, name: null, tokenId });
+
+  it('under its collection\'s tabs when every transfer of it found is there; else its own page, as /go sends it', async () => {
+    const { tradeHref } = await import('@/lib/search');
+    const one = { ...none, trades: [hit(A), hit(A, '2')] };
+    expect(tradeHref(one, one.trades[0]!)).toBe(`/c/1/${A}/tx/${TX}`);
+    const two = { ...none, trades: [hit(A), hit(B)] };
+    expect(two.trades.map((h) => tradeHref(two, h))).toEqual([`/tx/1/${TX}`, `/tx/1/${TX}`]);
+    // Past one page of hits the rest could be anywhere.
+    const cut = { ...one, more: { ...none.more, trades: true } };
+    expect(tradeHref(cut, cut.trades[0]!)).toBe(`/tx/1/${TX}`);
+  });
+});

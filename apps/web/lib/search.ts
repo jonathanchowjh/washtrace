@@ -56,6 +56,16 @@ export function searchArgs(q: { kind?: string; page?: string }): { only: SearchK
  * address. The results page and the search box's list both draw this, so a hit
  * reads the same in both.
  */
+/**
+ * Where a trade hit opens: under its collection's tabs when every transfer of
+ * its transaction found is in that collection and none were cut off, else the
+ * transaction's own page, as the page under a collection requires.
+ */
+export function tradeHref(hits: SearchHits, h: SearchHits['trades'][number]): string {
+  const one = !hits.more.trades && hits.trades.every((o) => o.txHash !== h.txHash || o.address === h.address);
+  return txHref(h.chainId, h.txHash, one ? `/c/${h.chainId}/${h.address}` : null);
+}
+
 export function hitRow(hits: SearchHits, kind: SearchKind, i: number): { href: string; line: string; address: string } {
   if (kind === 'collections') {
     const h = hits.collections[i]!;
@@ -70,6 +80,5 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number): { href: s
     return { href: `/w/${h.chainId}/${h.address}`, line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
   }
   const h = hits.trades[i]!;
-  // A trade hit is one transfer in one collection: it opens under that collection's tabs.
-  return { href: txHref(h.chainId, h.txHash, `/c/${h.chainId}/${h.address}`), line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
+  return { href: tradeHref(hits, h), line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
 }

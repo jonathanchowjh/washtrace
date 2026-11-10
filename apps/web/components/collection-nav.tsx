@@ -22,19 +22,19 @@ export function tabOf(base: string, path: string): CollectionTab {
   return 'overview';
 }
 
-// The built-ins in METHODS' order, written out: the detect package's root is not for the browser.
-const BUILT_INS = ['A', 'AU', 'AC'];
-
 /**
  * The lens the Tokens and Wallets tabs open on: the one the address bar
  * names, or on Trades the first lens its "flagged by" filter holds, a
- * built-in before yours. Null leaves the default.
+ * built-in before yours. `lenses` are the keys that exist, the built-ins
+ * first in METHODS' order: anything else (the overview's Compare tab, a
+ * deleted lens) is no lens, and null leaves the default.
  */
-export function lensOf(sp: URLSearchParams, tab: CollectionTab): string | null {
+export function lensOf(sp: URLSearchParams, tab: CollectionTab, lenses: readonly string[]): string | null {
   const named = sp.get('method');
-  if (named !== null || tab !== 'trades') return named;
-  const caught = (sp.get('caught') ?? '').split(',').filter((k) => k !== '');
-  return BUILT_INS.find((m) => caught.includes(m)) ?? caught[0] ?? null;
+  if (named !== null) return lenses.includes(named) ? named : null;
+  if (tab !== 'trades') return null;
+  const caught = (sp.get('caught') ?? '').split(',');
+  return lenses.find((m) => caught.includes(m)) ?? null;
 }
 
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
@@ -48,17 +48,21 @@ const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
  * The collection's parent line and its tabs, on every page under it. The
  * counts are Linked wallets' lists, the default lens, so they are hidden while
  * the address bar picks another: a count beside a list of a different size
- * would contradict it. A chosen lens is carried to the Tokens and Wallets tabs.
+ * would contradict it. Trades counts every sale, the collection's own figure:
+ * a filter's matches are said by the list's own line. A chosen lens is carried
+ * to the Tokens and Wallets tabs.
  */
-export function CollectionNav({ base, name, analysedAt, counts }: {
+export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
   base: string;
   name: string;
   analysedAt: number | null;
+  /** Every lens key that exists here, the built-ins first in METHODS' order. */
+  lenses: readonly string[];
   /** Each tab's count badge, streamed in: nothing shows until it is read, or when there is none to show. */
   counts: Partial<Record<Exclude<CollectionTab, 'overview'>, ReactNode>>;
 }) {
   const current = tabOf(base, usePathname());
-  const method = lensOf(useSearchParams(), current);
+  const method = lensOf(useSearchParams(), current, lenses);
   const defaultLens = method === null || method === 'AC';
   const hrefOf = (tab: CollectionTab) =>
     tab === 'overview' ? base

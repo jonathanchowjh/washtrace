@@ -1,7 +1,7 @@
 import { Suspense, type ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { moneyFor, type CollectionRow } from '@washtrace/detect';
+import { METHODS, moneyFor, type CollectionRow } from '@washtrace/detect';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { CollectionNav } from '@/components/collection-nav';
 import { readerZone } from '@/lib/api';
@@ -28,9 +28,11 @@ export default async function CollectionLayout({ params, children }: Props) {
   const c = await collectionOf(chainId, address);
   if (!c) notFound();
   const count = (kind: Counted) => <Suspense fallback={null}><Count c={c} kind={kind} /></Suspense>;
+  // The page under it reads the same runs, from the same request's cache.
+  const lenses = [...METHODS, ...(await runsOf(c.id)).map((r) => r.lens.key)];
   return (
     <>
-      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analysedAt={c.latest?.ranAt ?? null}
+      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analysedAt={c.latest?.ranAt ?? null} lenses={lenses}
         counts={{ tokens: count('tokens'), wallets: count('wallets'), trades: count('trades') }} />
       {children}
     </>

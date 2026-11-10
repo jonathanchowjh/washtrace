@@ -60,7 +60,7 @@ function flaggedTone(page: Tone | null): Tone {
  */
 export async function WalletView({ chainId, address, sp, within }: {
   chainId: number; address: string; sp: Record<string, string | string[] | undefined>;
-  within?: { base: string; collection: string };
+  within?: { base: string; collection: string; name: string };
 }) {
   const parsed = walletOpts(sp);
   // Under a collection's tabs the collection is the route's: a ?collection= there narrows nothing further.
@@ -86,7 +86,7 @@ export async function WalletView({ chainId, address, sp, within }: {
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
   const flaggedTitle = <>In <Link href={`${base}?flagged=1`} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} className="hover:underline">{num(counts.trades)}</Link></>;
-  const { title, tone } = counts.trades === 0 ? { title: 'Not in any watched collection', tone: 'clean' as const }
+  const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No trade in ${within.name}`, tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
     : transfers.length === 0 ? { title: 'No trade of it matches these filters', tone: 'clean' as const }
     : answer(view, flaggedTitle);
@@ -165,7 +165,7 @@ export async function WalletView({ chainId, address, sp, within }: {
             {unreadable ? <> · “{narrow.find}” is not a token number, or a wallet address or the start of one, so it matches nothing.</> : null}
           </MatchLine>
         ) : null}
-        {narrowed && transfers.length === 0 ? <Empty>No trade of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection={scope === undefined} within={scope} />}
+        {narrowed && transfers.length === 0 ? <Empty>No trade of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
         {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="trades" pageParam="trades" /> : null}
       </Section>
 
@@ -191,7 +191,7 @@ export async function WalletView({ chainId, address, sp, within }: {
                     : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} className="font-medium hover:underline">{num(n)}</Link>;
                   return (
                     <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
-                      <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} within={scope} /></td>
+                      <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
                       <td className="px-3 py-1.5">{c.watched ? <span className="font-medium text-foreground">yes</span> : <span className="text-muted-foreground">no</span>}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{opens(c.flows, 'both')}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{opens(c.sent, 'sent')}</td>
@@ -208,11 +208,11 @@ export async function WalletView({ chainId, address, sp, within }: {
 
       {between === null || other === undefined ? null : (
         <Section id="between" title={`What passed between this wallet and ${short(other)}?`}
-          lead={<>The trades where one sold to the other, either way, and the payments between them. <Wallet chainId={chainId} address={other} within={scope} /> opens its own page.</>}>
+          lead={<>The trades where one sold to the other, either way, and the payments between them. <Wallet chainId={chainId} address={other} /> opens its own page.</>}>
           <h3 className="mb-1.5 text-sm font-medium">Which trades were between them?</h3>
           {between.tradesTotal === 0 ? <Empty>Neither sold the other a token in a watched collection.</Empty> : (
             <>
-              <Transfers chainId={chainId} transfers={between.trades} collection={scope === undefined} within={scope} />
+              <Transfers chainId={chainId} transfers={between.trades} collection within={scope} />
               {between.tradesTotal > TRADES ? (
                 <p className="mt-2 text-sm text-muted-foreground">
                   The latest {TRADES} of {num(between.tradesTotal)} are shown. <Link href={href({ filter: { find: other, with: other }, trades: 1 })} className="font-medium text-foreground hover:underline">Page through all of them</Link> in its trades above.

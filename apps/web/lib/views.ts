@@ -272,7 +272,8 @@ function paged(asked: number, total: number, size: number): { page: number; page
  * `filter.with` what passed between it and that wallet. Its counts are over
  * every trade: the title's flagged count is the flagged-only list's. With
  * `home`, a collection's address, every trade count and list is of its trades
- * in that collection alone; its money is the wallet's, wherever it went.
+ * in that collection alone, and `collections` (the picker's) is empty; its
+ * money is the wallet's, wherever it went.
  */
 export async function walletView(chainId: number, address: string, opts: WalletOpts, home?: string) {
   const s = store();
@@ -281,7 +282,7 @@ export async function walletView(chainId: number, address: string, opts: WalletO
   const narrowed = Object.keys(asked).length > 0;
   const narrow = { ...asked, ...inHome };
   const [funding, collections, all, flagged, matched, counterpartiesTotal, flowsTotal, betweenTotal] = await Promise.all([
-    s.wallet(chainId, address), s.walletCollections(chainId, address),
+    s.wallet(chainId, address), home === undefined ? s.walletCollections(chainId, address) : [],
     s.walletTradeCount(chainId, address, inHome), s.walletTradeCount(chainId, address, { flaggedOnly: true, ...inHome }),
     narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
     other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),

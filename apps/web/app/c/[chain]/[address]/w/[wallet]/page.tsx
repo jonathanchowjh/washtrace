@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
+import { collectionOf } from '@/lib/collection-reads';
 import { short } from '@/lib/format';
 import { addressOf, chainOf } from '@/lib/params';
 import { WalletView } from '@/app/w/[chain]/[address]/view';
@@ -23,5 +24,8 @@ export default async function CollectionWalletPage({ params, searchParams }: Pro
   const address = addressOf(p.address);
   const wallet = addressOf(p.wallet);
   if (chainId === null || address === null || wallet === null) notFound();
-  return WalletView({ chainId, address: wallet, sp: await searchParams, within: { base: `/c/${chainId}/${address}`, collection: address } });
+  // The layout read it already: this is the same request's read.
+  const c = await collectionOf(chainId, address);
+  if (!c) notFound();
+  return WalletView({ chainId, address: wallet, sp: await searchParams, within: { base: `/c/${chainId}/${address}`, collection: address, name: c.name ?? short(address) } });
 }
