@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { send } from '@/lib/send';
 
-export const BUTTON = 'rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
-
 /**
  * Deletes one of your lenses, its runs and its flags on every collection. It
  * asks first, in place, by the lens's name: there is no undo.
@@ -26,13 +24,13 @@ export function DeleteLens({ id, name, writable }: { id: number; name: string; w
   }
 
   if (!asking) {
-    return <button type="button" className={BUTTON} disabled={!writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => setAsking(true)}>Delete</button>;
+    return <button type="button" className="btn text-xs" disabled={!writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => setAsking(true)}>Delete</button>;
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-2 text-sm">
       <span>Delete {name} and its results? This cannot be undone.</span>
-      <button type="button" className={BUTTON} disabled={busy} onClick={remove}>Delete</button>
-      <button type="button" className={BUTTON} disabled={busy} onClick={() => { setAsking(false); setError(null); }}>Keep it</button>
+      <button type="button" className="btn text-xs" disabled={busy} onClick={remove}>Delete</button>
+      <button type="button" className="btn text-xs" disabled={busy} onClick={() => { setAsking(false); setError(null); }}>Keep it</button>
       {error ? <span role="alert" className="text-sm text-fault">{error}</span> : null}
     </span>
   );
@@ -60,7 +58,7 @@ export function RunHere({ id, chainId, address, writable }: { id: number; chainI
 
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
-      <button type="button" className={BUTTON} disabled={!writable || busy} title={writable ? undefined : LOCAL_ONLY} onClick={queue}>Run here</button>
+      <button type="button" className="btn text-xs" disabled={!writable || busy} title={writable ? undefined : LOCAL_ONLY} onClick={queue}>Run here</button>
       {error ? <span role="alert" className="text-sm text-fault">{error}</span> : null}
     </span>
   );

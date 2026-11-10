@@ -70,7 +70,7 @@ export function railTxs(transfers: readonly Transfer[], flows: readonly Flow[]):
   return [...out.values()].sort((a, b) => a.block - b.block || a.hash.localeCompare(b.hash));
 }
 
-const CHIP = 'inline-flex max-w-full items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs text-foreground hover:bg-muted';
+const CHIP = 'chip max-w-full hover:bg-muted';
 
 /**
  * "Connected to", on a token, wallet, trade or ring page: what it is part of,

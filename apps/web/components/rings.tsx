@@ -5,7 +5,6 @@ import { eth, num, plural, ringName, short } from '@/lib/format';
 import { cardSrc, walletHref, withFrom } from '@/lib/links';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
-import { cn } from '@/lib/utils';
 import { KindIcon, TierMark } from './kit';
 import { HoverCard } from './hover-card';
 
@@ -110,7 +109,7 @@ export async function RingChips({ id, base, money, of }: {
   return (
     <>
       {lines.slice(0, CHIPS).map((r) => (
-        <Link key={r.anchor} href={`${base}/r/${r.anchor}`} className={cn('inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted')}>
+        <Link key={r.anchor} href={`${base}/r/${r.anchor}`} className="chip font-medium hover:bg-muted">
           <TierMark tone={ringTone(r)} /><KindIcon kind="ring" className="size-3.5" />Part of {ringName(r)} ›
         </Link>
       ))}
