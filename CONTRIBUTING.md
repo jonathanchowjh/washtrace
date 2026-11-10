@@ -35,8 +35,8 @@ server too.
 
 ## Commands
 
-Run from the repo root. `npm test` and the other test commands are the root
-`package.json`'s; the rest of the table is each package's own script.
+Run from the repo root. The `npm run …` commands are the root `package.json`'s
+scripts; the `--workspace` ones are each package's own.
 
 | Command | What it does | Needs Docker |
 |---|---|---|
@@ -111,7 +111,7 @@ The dataset is CC BY-NC 4.0 (credit `MLNTeam-Unical/NFT-70M_transactions`): keep
 
 ```
 packages/detect/          Everything that knows chains, money and graphs. No React, no HTTP.
-  src/                    31 files, by concern:
+  src/                    32 files, by concern:
     Types and the pure engine
       types.ts            Transfer, Flow, Method, Witness, Analysis
       graph.ts            The asset transfer graph of one token (AddressGraph); Tarjan; cycle counting
@@ -120,6 +120,7 @@ packages/detect/          Everything that knows chains, money and graphs. No Rea
       wallets.ts          Wallets: addresses by number, held as bytes
       payments.ts         Payments: the money graph's payments as typed arrays
       moves.ts            Moves: the money edges between numbered wallets, in blocks
+      rings.ts            Rings: the wallets a counted lens's witnesses join, by union-find
     Lenses
       lens-rule.ts        A lens's rule and its checks. Client-safe
       lens-reads.ts       What a collection has read for a rule. Client-safe
@@ -163,8 +164,8 @@ apps/worker/              The worker service: a plain Node process, no Next.
 apps/web/                 The api service: the JSON API and the console, over the store.
   instrumentation.ts      Migrates the schema on boot; never reads a chain
   proxy.ts                Basic auth over every route but /api/health
-  app/api/                The API: collections, lenses, search, settings, status, transfers, wallets, worker, health
-  app/                    One folder per page: c (collection), tx, w (wallet), search, settings, worker; go is a redirect route
+  app/api/                The API: collections, lenses, search, settings, spots, status, transfers, wallets, worker, health
+  app/                    One folder per page: c (collection: its overview, methods, rings, r, tokens, wallets, trades, t, w, tx; flagged redirects), tx, w (wallet), search, lab, settings, worker; go is a redirect route
   components/             The console's React components
   lib/                    What pages and routes share: views.ts (reads a page and its route both serve), settings.ts, layout.ts (the token graph's layout), and so on
   test/                   Vitest with jsdom (the root `web` project)
@@ -190,8 +191,8 @@ and `node:*`.
 
 ## How a transfer becomes a verdict
 
-Two processes share one Postgres. The worker's `Worker` runs three timers
-(`EVERY` in `worker.ts`): ingest and analyze every minute, fund every 5
+Two processes share one Postgres. The worker's `Worker` runs four timers
+(`EVERY` in `worker.ts`): ingest, analyze and lens every minute, fund every 5
 seconds. Each pass takes its job's advisory lock without waiting, so replicas
 share the work, and a pass that is due while the last is still running is
 skipped.

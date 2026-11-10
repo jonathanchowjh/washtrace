@@ -2,7 +2,7 @@
 
 The console's HTTP API, for clients that read verdicts or manage what is watched. It is served by the
 `api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 28 route files under
-`apps/web/app/api` with 33 method handlers, and `/go`.
+`apps/web/app/api` with 34 method handlers, and `/go`.
 
 Paths below use `{chain}` for a chain id (digits, such as `1`), `{address}` for a 0x address (any case; stored
 lowercase), and `{tx}` for a 0x transaction hash (64 hex digits).
