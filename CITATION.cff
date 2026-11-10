@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use washtrace, please cite the paper it implements."
+title: washtrace
+type: software
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/jonathanchowjh/washtrace"
+authors:
+  - family-names: Chow
+    given-names: Jonathan
+preferred-citation:
+  type: report
+  title: "Detecting and quantifying wash trading of non-fungible tokens"
+  authors:
+    - family-names: Chow
+      given-names: Jonathan
+  institution:
+    name: Singapore Management University
+  year: 2023
+  url: "https://github.com/jonathanchowjh/washtrace/blob/main/paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf"

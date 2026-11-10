@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "NFT wash trading detector. A polling worker and an API, in one container.",
+  "license": "MIT",
   "type": "module",
   "workspaces": [
     "packages/*",
