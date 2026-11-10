@@ -245,7 +245,7 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
     ['price', price && `Price ${price} ETH`, { priceMinWei: null, priceMaxWei: null }],
     ['held', held && `Held ${held}`, { heldOverS: null, heldUnderS: null }],
     ['age', age && `Bought by a wallet ${age} old`, { buyerAgeOverS: null, buyerAgeUnderS: null }],
-    ['floor', floor && `Price vs floor ${floor}`, { floorMin: null, floorMax: null }],
+    ['floor', floor && `Price vs floor price ${floor}`, { floorMin: null, floorMax: null }],
     ['when', when, { fromMs: null, toMs: null }],
     ['wallet', q.wallet && `Wallet ${short(q.wallet)}`, { wallet: null }],
     ['token', q.token && `Token #${q.token}`, { token: null }],

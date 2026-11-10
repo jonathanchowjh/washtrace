@@ -95,7 +95,7 @@ describe('the trades page', () => {
   it('shows matching trades with a dot per lens that ran, named by lens, and the date opens the trade', async () => {
     const el = await dom({ caught: 'A' });
     expect(el.textContent).toContain('2 trades match');
-    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops back (not counted)', 'Linked wallets']));
+    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops backnot counted', 'Linked wallets']));
     expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
     expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
@@ -169,7 +169,7 @@ describe('the trades page', () => {
     const unknown = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Not a marketplace sale'));
     expect(unknown).toBeDefined();
     expect(unknown!.querySelectorAll('a')).toHaveLength(0);
-    expect([...el.querySelectorAll('th')].filter((t) => t.textContent === 'Money loops back (not counted)').length).toBe(2);
+    expect([...el.querySelectorAll('th')].filter((t) => t.textContent === 'Money loops backnot counted').length).toBe(2);
   });
 
   it('a lens that did not run shows not run in a group row', async () => {

@@ -41,6 +41,14 @@ describe('how sure', () => {
     expect(rung('AU').textContent).toContain('fails the placebo test');
   });
 
+  it('names each rung by its lens, tier after, and says how many of the not-counted sales it alone flags, as the strip counts them', () => {
+    const c = render(<HowSure totals={totals(10, 14, 30)} base={BASE} apart={1} />).container;
+    const rung = (m: string) => c.querySelector(`[data-rung="${m}"]`)!.textContent;
+    expect([rung('A'), rung('AC'), rung('AU')].map((t) => t!.split('·')[0]!.trim())).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
+    expect(rung('AU')).toContain('30 sales');
+    expect(rung('AU')).toContain('1 of them it alone flags');
+  });
+
   it('says a lens that did not run did not, with no share', () => {
     const c = render(<HowSure totals={totals(10, 10, 0, { A: true, AC: false, AU: false })} base={BASE} />).container;
     expect(c.querySelector('[data-rung="AC"]')!.textContent).not.toMatch(/%/);
@@ -66,8 +74,8 @@ describe('every sale, in order', () => {
     const cols = [...c.querySelectorAll('a[aria-label]')];
     expect(cols.map((a) => a.getAttribute('href'))).toEqual([tradesHref(BASE, { fromMs: 0, toMs: hour }), tradesHref(BASE, { fromMs: 2 * hour, toMs: 3 * hour })]);
     expect(c.textContent).toContain('All 10 sales, in order');
-    expect(links(c)).toContainEqual(['1 not counted', tradesHref(BASE, { caught: ['AU'], notCaught: ['A', 'AC'] })]);
-    expect(links(c)).toContainEqual(['7 clean', tradesHref(BASE, { notCaught: ['A', 'AC', 'AU'] })]);
+    expect(links(c)).toContainEqual(['1 Money loops back alone', tradesHref(BASE, { caught: ['AU'], notCaught: ['A', 'AC'] })]);
+    expect(links(c)).toContainEqual(['7 not flagged', tradesHref(BASE, { notCaught: ['A', 'AC', 'AU'] })]);
   });
 
   it('colours a sale by the strongest lens that caught it', () => {
@@ -79,7 +87,7 @@ describe('every sale, in order', () => {
     const timeline = { bucket: 'hour' as const, points: [point(0, 3, 1, 2, 1, 0)] };
     const c = render(<SalesStrip timeline={timeline} base={BASE} zone="UTC" chainId={1} sales={[row(1, ['A', 'AC']), row(2, ['AC']), row(3, [])]} />).container;
     const squares = [...c.querySelectorAll('ol[aria-label="Each sale, oldest first"] a')];
-    expect(squares.map((a) => a.getAttribute('title'))).toEqual(['Sale 1 of 3: round trip (floor)', 'Sale 2 of 3: linked by money (ceiling)', 'Sale 3 of 3: not flagged']);
+    expect(squares.map((a) => a.getAttribute('title'))).toEqual(['Sale 1 of 3: Round trips (the floor)', 'Sale 2 of 3: Linked wallets (the ceiling)', 'Sale 3 of 3: not flagged']);
     expect(squares[0]!.getAttribute('href')).toBe(`${BASE}/tx/0x1`);
     cleanup();
     // One sale short (an untimed one, say): the squares would not be every sale, so it draws the periods.
@@ -94,7 +102,7 @@ describe('every sale, in order', () => {
     const c = render(<SalesStrip timeline={timeline} base={BASE} zone="UTC" chainId={1} sales={[row(1, ['A']), row(2, ['AC']), row(3, [])]} mine={mine} />).container;
     const squares = [...c.querySelectorAll('ol[aria-label="Each sale, oldest first"] a')];
     expect(squares.map((a) => a.className.includes('ring-2'))).toEqual([false, true, false]);
-    expect(squares[1]!.getAttribute('title')).toBe('Sale 2 of 3: linked by money (ceiling), this token\'s');
+    expect(squares[1]!.getAttribute('title')).toBe('Sale 2 of 3: Linked wallets (the ceiling), this token\'s');
     expect(c.textContent).toContain('Where this token\'s sales sit among all 3');
     expect(links(c)).toContainEqual(['1 this token\'s', tradesHref(BASE, { token: '7' })]);
   });
@@ -129,7 +137,7 @@ describe('looks suspicious, not counted', () => {
     expect(render(<NotCounted apart={0} base={BASE} />).container.innerHTML).toBe('');
     cleanup();
     const c = render(<NotCounted apart={3} base={BASE} />).container;
-    expect(c.textContent).toContain('3 sales: money went back to the seller');
+    expect(c.textContent).toContain('3 sales only Money loops back flags: money went back to the seller');
     expect(c.querySelector('a')?.getAttribute('href')).toBe(tradesHref(BASE, { caught: ['AU'], notCaught: ['A', 'AC'] }));
   });
 });
