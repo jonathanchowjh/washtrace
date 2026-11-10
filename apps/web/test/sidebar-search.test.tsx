@@ -179,6 +179,20 @@ describe('the search box under a collection', () => {
   });
 });
 
+describe('the search box on a collection nobody watches', () => {
+  it('searches everything: no scope in the placeholder, on a chip, or in the request', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    const missing = '0x' + '0'.repeat(39) + '1';
+    nav.path = `/c/1/${missing}`;
+    render(<Sidebar watched={[terra]} />);
+    expect(box().getAttribute('placeholder')).not.toContain('0x0000');
+    expect(screen.queryByRole('button', { name: /^In / })).toBeNull();
+    expect(document.querySelector('input[name=scope]')).toBeNull();
+    await type('#7');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
+  });
+});
+
 describe('the / shortcut', () => {
   it('focuses the box on show, and leaves a key typed into a field alone', () => {
     render(<><input aria-label="other" /><Sidebar watched={[]} /></>);

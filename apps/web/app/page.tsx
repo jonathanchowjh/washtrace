@@ -119,7 +119,7 @@ function FindAndSort({ view, sort, dir, find, matched, of }: { view: View; sort:
  * like wash trading, as a range from Round trips to Linked wallets, and how far the
  * reading under that answer has got. The paper's Table 3, kept current.
  */
-export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string; find?: string; sort?: string; dir?: string }> }) {
+export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string; find?: string; sort?: string; dir?: string; watch?: string }> }) {
   await connection();
   const q = await searchParams;
   const asked = q.tab;
@@ -165,7 +165,8 @@ export default async function Collections({ searchParams }: { searchParams: Prom
       {/* Said once, for the Watch panel and every row's controls alike: each control only carries it as its title. Pulled close to the panel's button, under the panel's own top margin. */}
       {writable ? null : <p className="mt-6 -mb-4 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
 
-      <WatchPanel startOpen={rows.length === 0}>
+      {/* `watch` is set by a not-watched collection's Watch it: the form opens for it. */}
+      <WatchPanel startOpen={rows.length === 0 || q.watch !== undefined}>
         <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted [&::-webkit-details-marker]:hidden">
           <span aria-hidden className="text-muted-foreground group-open:rotate-45 transition-transform">+</span> Watch a collection
         </summary>

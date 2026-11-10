@@ -136,6 +136,14 @@ describe('the collections page', () => {
     expect(c.querySelectorAll('a a').length).toBe(0);
   });
 
+  it('opens the Watch panel for a not-watched collection\'s Watch it, and keeps it shut otherwise', async () => {
+    state.rows = [analysed(1, 'Ape', 10, 20)];
+    const panel = (c: Element) => [...c.querySelectorAll('details')].find((d) => d.textContent?.includes('Watch a collection'))!;
+    expect(panel(await draw()).open).toBe(false);
+    cleanup();
+    expect(panel(await draw({ watch: `1:0x${'0'.repeat(39)}1` })).open).toBe(true);
+  });
+
   it('a tab link keeps find, sort and dir', async () => {
     state.rows = [analysed(1, 'Ape', 10, 20)];
     const c = await draw({ find: 'ape', sort: 'name', dir: 'asc' });

@@ -54,8 +54,9 @@ function connectedRows(hits: SearchReply, kind: SearchKind, scope: Scope | null)
  * finds none or several. While typing, a list under the input suggests hits;
  * Enter with none highlighted is the plain form submit, as without JavaScript.
  *
- * Under a collection it searches that collection, said in the placeholder and
- * on a chip that drops the scope; '/' anywhere else on the page focuses it.
+ * Under a watched collection it searches that collection, said in the
+ * placeholder and on a chip that drops the scope; '/' anywhere else on the
+ * page focuses it.
  */
 export function SearchBox({ id, className, watched = [], wide }: {
   id: string; className: string; watched?: readonly { chainId: number; address: string; name: string | null }[];
@@ -65,11 +66,14 @@ export function SearchBox({ id, className, watched = [], wide }: {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const path = usePathname();
-  const here = scopeOfPath(path);
+  const under = scopeOfPath(path);
+  // Only a watched collection scopes the box: the not-found page of one that is not has nothing to search.
+  const watchedHere = under === null ? undefined : watched.find((c) => c.chainId === under.chainId && c.address === under.address);
+  const here = watchedHere === undefined ? null : under;
   // The scope follows the page: dropped by its chip, it comes back on the next collection page.
   const [dropped, setDropped] = useState<string | null>(null);
   const scope = here !== null && dropped !== path ? here : null;
-  const scopeName = scope === null ? null : watched.find((c) => c.chainId === scope.chainId && c.address === scope.address)?.name ?? short(scope.address);
+  const scopeName = scope === null ? null : watchedHere?.name ?? short(scope.address);
   const [text, setText] = useState('');
   const [hits, setHits] = useState<SearchReply | null>(null);
   const [open, setOpen] = useState(false);
