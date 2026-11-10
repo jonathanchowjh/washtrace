@@ -124,8 +124,12 @@ export function FilterBar(w: Where) {
             {c.label} <span aria-hidden className="text-muted-foreground">×</span>
           </Link>
         ))}
-        <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium"><FunnelIcon className="mr-1 inline size-3.5 align-[-2px] text-muted-foreground" />+ Filter</summary>
+        {/* One control: the funnel says it narrows the list, the chevron that it opens; the browser's own triangle is hidden. A plain <details>, so it opens with no script. */}
+        <details className="group rounded-md border bg-card">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium hover:bg-muted group-open:rounded-b-none [&::-webkit-details-marker]:hidden">
+            <FunnelIcon className="size-3.5 text-muted-foreground" />Filter
+            <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
+          </summary>
           <form action={`${base}/trades`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
             {carried(w, (k) => ['wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}

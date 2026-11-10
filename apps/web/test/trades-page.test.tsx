@@ -180,6 +180,16 @@ describe('the trades page', () => {
     expect(tiers.filter((t) => t === 'not counted')).toHaveLength(2);
   });
 
+  it('opens its filters from one control, a funnel and a word, with the browser\'s triangle hidden and no script needed', async () => {
+    const el = await dom();
+    const summary = el.querySelector('details > summary')!;
+    expect(summary.textContent).toBe('Filter›');
+    expect(summary.className).toContain('list-none');
+    expect(summary.className).toContain('[&::-webkit-details-marker]:hidden');
+    expect(summary.querySelectorAll('svg')).toHaveLength(1);
+    expect(summary.closest('details')!.querySelector('form[aria-label="Filter trades"]')).not.toBeNull();
+  });
+
   it('a lens that did not run shows not run in a group row', async () => {
     state.moneyRan = false;
     const el = await dom({ by: 'marketplace' });
