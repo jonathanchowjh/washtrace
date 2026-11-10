@@ -101,6 +101,26 @@ describe('Store.schemaVersion', () => {
   });
 });
 
+describe('the counted trades index, built concurrently', () => {
+  const index = async () => (await store.pool.query(
+    `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS def FROM pg_index i
+     JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'washtrace' AND c.relname = 'trade_facts_counted_idx'`,
+  )).rows;
+
+  it('holds the counted rows’ keys, so a lens list’s counted join reads the index alone, and is built again when missing', async () => {
+    const step = MIGRATIONS.at(-1)!;
+    expect(typeof step).toBe('object');
+    await store.migrate();
+    const built = [{ valid: true, def: 'CREATE INDEX trade_facts_counted_idx ON washtrace.trade_facts USING btree (collection_id, tx_hash, log_index) WHERE counted' }];
+    expect(await index()).toEqual(built);
+    await store.pool.query('DROP INDEX washtrace.trade_facts_counted_idx');
+    await store.pool.query('UPDATE washtrace.schema_version SET version = $1', [MIGRATIONS.length - 1]);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
+    expect(await index()).toEqual(built);
+  });
+});
+
 describe('migration #28: the money-edge index, built concurrently', () => {
   const isValid = async () => (await store.pool.query(
     `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS def, i.indexrelid::int AS oid FROM pg_index i

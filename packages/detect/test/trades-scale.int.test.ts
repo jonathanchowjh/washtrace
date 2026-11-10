@@ -180,10 +180,10 @@ describe.skipIf(process.env.WASHTRACE_SCALE !== '1')('trades at a million transf
   });
   it('lists the wallets Round trips caught', async () => {
     // Each of these is in some 50 loops of the same 300 wallets: the widest a wallet's partners get.
-    // The closest to its budget: 730-970 ms wall when measured. About a third is ranking (every flag joined to
-    // its transfer and facts), a third the page's counted trades (each wallet here has some 1,000), and the
-    // rest its partners. If it creeps over, a partial index on trade_facts WHERE counted would make the
-    // second third index-only.
+    // The closest to its budget. About a third is ranking (every flag joined to its transfer and facts), a third
+    // the page's counted trades (each wallet here has some 1,000), and the rest its partners. The counted trades
+    // read trade_facts_counted_idx alone (some 50,000 index-only lookups, no heap fetch): with the heap fetches
+    // they took 1.1 s of 2.3 s executed on a loaded machine, without them 0.5 s of 1.2 s.
     const { rows, total } = await probe('lensWallets default', () => store.lensWallets(id, 'A', { sort: 'caught', find: null, limit: PAGE, offset: 0 }, CTX));
     expect(rows).toHaveLength(PAGE);
     expect(total).toBeGreaterThan(PAGE);
