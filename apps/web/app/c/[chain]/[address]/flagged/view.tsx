@@ -7,6 +7,7 @@ import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy
 import { Empty, Head } from '@/components/ui';
 import { LensList } from '@/components/lens-lists';
 import { LensName } from '@/components/methods';
+import { TierMark } from '@/components/kit';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
@@ -27,9 +28,17 @@ import { fromParam } from '@/lib/step';
 type Kind = 'tokens' | 'wallets' | 'trades';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 
-/** The page's heading, which is also its tab title. */
-function headingOf(kind: Kind, name: string, lens: string): string {
-  return kind === 'trades' ? `Trades in ${name}` : `${kind === 'tokens' ? 'Tokens' : 'Wallets'} flagged by ${lens}`;
+const WORD = { tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' } as const;
+
+/** Each lens's standing in plain words, said after its name wherever the page names it. */
+const TIER = { cycle: 'the floor', money: 'the ceiling', apart: 'not counted', own: 'your lens' } as const;
+
+/** The lens a list opens on, whose count its tab shows: the title names a lens only when it is another. */
+const OPENS_ON = lensKeyOf(null, {});
+
+/** The tab title as every page under a collection writes it, "<Page> · <Collection>", with a chosen lens between. */
+function titleOf(kind: Kind, name: string, method: LensKey, lens: string): string {
+  return kind === 'trades' || method === OPENS_ON ? `${WORD[kind]} · ${name}` : `${WORD[kind]} · ${lens} · ${name}`;
 }
 
 /** The kind and lens the URL asks for, as the page reads them. */
@@ -46,10 +55,11 @@ export async function metadataOf(kind: Kind, { params, searchParams }: Props): P
   const chainId = chainOf(p.chain);
   const address = addressOf(p.address);
   const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
-  if (!c) return { title: kind === 'trades' ? 'Trades' : kind === 'tokens' ? 'Tokens' : 'Wallets' };
+  if (!c) return { title: WORD[kind] };
   const { one } = askedOf(await searchParams);
   const own = ownLenses(await runsOf(c.id));
-  return { title: headingOf(kind, c.name ?? short(c.address), lensInfo(lensKeyOf(one('method'), own), own)!.name) };
+  const method = lensKeyOf(one('method'), own);
+  return { title: titleOf(kind, c.name ?? short(c.address), method, lensInfo(method, own)!.name) };
 }
 
 /**
@@ -87,7 +97,6 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   // On Trades, sort, q and page are the Trades list's own, so the lists' are their defaults.
   const lv = listView(list, kind === 'trades' ? {} : { page: one('page'), sort: one('sort'), find: one('q') });
   const base = `/c/${chainId}/${address}`;
-  const name = c.name ?? short(address);
   const lens = lensInfo(method, own)!;
   // Only a lens that ran is listed: when funding did not, the money lenses hold Round trips' flags, copied.
   const ctx = { money: moneyFor(chainId), zone, ...lenses };
@@ -119,11 +128,13 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
 
   return (
     <>
+      {/* The tab bar names the collection, so the heading names the list; the count is said once, by the pager under it. */}
       <Head
-        title={headingOf(kind, name, lens.name)}
+        title={kind === 'trades' ? WORD.trades : `${WORD[kind]} flagged by ${lens.name}`}
+        part={kind === 'trades' ? undefined : <span className="chip font-medium"><TierMark tone={lens.tone} />{lens.name} · {TIER[lens.tone]}</span>}
         sub={kind === 'trades'
           ? `${query.kind === 'all' ? 'Every change of owner' : 'Every sale'}, filtered by what you ask: a lens, a marketplace, a price, a wallet. Open a date to see the trade itself.`
-          : `${num(of)} in all. Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}
+          : `Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -131,7 +142,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
           {[...SHOWN, ...Object.keys(own) as LensKey[]].map((m) => (
             <Link key={m} href={lensHref(m)} prefetch={false} aria-current={lensOn(m) ? 'page' : undefined}
               className={cn('rounded-md border px-2.5 py-1 text-sm', lensOn(m) ? 'bg-card ring-1 ring-foreground' : 'bg-muted/50 hover:bg-card')}>
-              <LensName m={m} own={own} />
+              <LensName m={m} own={own} /><span className="text-muted-foreground"> · {TIER[lensInfo(m, own)?.tone ?? 'own']}</span>
             </Link>
           ))}
         </nav>
@@ -175,9 +186,10 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
           )}
         </>
       ) : (
-        <div className="mt-4 max-w-3xl">
+        // As wide as the tab bar over it, like every other page's list; only a sentence keeps to a reading width.
+        <div className="mt-4">
           {rows === null ? (
-            <Empty>{notRun(method)}</Empty>
+            <div className="max-w-3xl"><Empty>{notRun(method)}</Empty></div>
           ) : (
             <LensList
               kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of}

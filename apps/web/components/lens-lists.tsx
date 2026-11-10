@@ -10,7 +10,7 @@ import { Empty } from './ui';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
 import { HoverCard } from './hover-card';
-import { FILL, FunnelIcon } from './kit';
+import { FILL, FunnelIcon, KindIcon } from './kit';
 import { cardSrc, withFrom } from '@/lib/links';
 
 /**
@@ -86,7 +86,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ? (rows as TokenLine[]).map((l, i) => (
               <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
                 // A lens of yours opens the token page with its loops lit, down at the why section.
-                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} prefetch={false} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link></HoverCard>}
+                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} prefetch={false} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="inline-flex items-center gap-1.5 font-mono font-medium text-foreground hover:underline"><KindIcon kind="token" className="size-3.5 text-muted-foreground" />#{tokenLabel(l.tokenId)}</Link></HoverCard>}
                 loops={withFrom(`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`, from)}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
@@ -96,7 +96,8 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ))
             : (rows as WalletLine[]).map((l, i) => (
               <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
-                name={<Wallet chainId={chainId} address={l.address} within={base} from={from} />}
+                // Wallet draws the link alone, so its mark sits just before it.
+                name={<span className="inline-flex items-center gap-1.5"><KindIcon kind="wallet" className="size-3.5 text-muted-foreground" /><Wallet chainId={chainId} address={l.address} within={base} from={from} /></span>}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}
                 trades={tradesHref(base, { kind: 'all', wallet: l.address })}

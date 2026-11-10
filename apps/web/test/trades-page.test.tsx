@@ -276,7 +276,7 @@ describe('the trades page', () => {
 
   it('a lens link replaces the caught filter', async () => {
     const el = await dom({ caught: 'AC,A' });
-    const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets');
+    const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets · the ceiling');
     expect(lens?.getAttribute('href')).toBe(`${BASE}/trades?caught=AC`);
   });
   it.each([
@@ -472,7 +472,8 @@ describe('the trades page', () => {
       const el = await flaggedDom({ kind: 'tokens', method: 'L7' });
       expect(el.textContent).toContain('Tokens flagged by Blur 3-hop');
       const { generateMetadata } = await import('@/app/c/[chain]/[address]/tokens/page');
-      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });
+      expect(el.textContent).toContain('Blur 3-hop · your lens');
+      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'L7' }) })).toEqual({ title: 'Tokens · Blur 3-hop · Coll' });
     });
   });
 });
