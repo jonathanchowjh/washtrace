@@ -2542,7 +2542,7 @@ describe('Worker heartbeat', () => {
     const store: any = {
       locked: async (_key: number, _wait: boolean, fn: (c: unknown) => Promise<void>) => { await fn(lockClient()); return 'ran'; },
       passStarted: async () => {}, passFinished: async () => {}, settings: async () => new Map(), reportSources: async () => {},
-      sweepPreviews: async () => 0, nextPreview: async () => null, nextLensRun: async () => null,
+      sweepPreviews: async () => 0, fillRings: async () => false, nextPreview: async () => null, nextLensRun: async () => null,
       heartbeat: async (job: string, doing: string | null, id: number | null) => { beats.push([job, doing, id]); },
     };
     const w = new Worker(store, config, '');
@@ -2589,7 +2589,7 @@ describe('Worker settings', () => {
       passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
       settings: async () => new Map([['follow.hops', '2']]),
       reportSources: async (s: unknown) => { reported.push(s); },
-      sweepPreviews: async () => 0, nextPreview: async () => null, nextLensRun: async () => null,
+      sweepPreviews: async () => 0, fillRings: async () => false, nextPreview: async () => null, nextLensRun: async () => null,
       ...more,
     };
     return { store, reported };
@@ -3311,7 +3311,7 @@ describe('Worker.lensRun', () => {
       heartbeat: record('beat'),
       // No analysis is due, so the lens run goes on; no preview is queued, and none is old enough to sweep.
       stale: async () => [], collections: async () => [],
-      sweepPreviews: async () => 0, nextPreview: async () => null,
+      sweepPreviews: async () => 0, fillRings: async () => false, nextPreview: async () => null,
       // An analysis, when one is due, is saved at once.
       importedMoney: async () => false, analysisStarted: async () => {}, saveAnalysis: async () => {},
       ...more,
@@ -3402,6 +3402,17 @@ describe('Worker.lensRun', () => {
     expect(await swept.pass()).toBe('Lab analyzed');
     expect(asked).not.toHaveBeenCalled();
     expect(swept.finished[0]).toEqual(['lens', 'failed', 'sweep failed']);
+  });
+
+  it('fills one collection\'s rings a turn, and a failure there is logged and holds up no analysis', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const filled = vi.fn(async () => true);
+    const ok = setup({ ...analysisDue, fillRings: filled });
+    expect(await ok.pass()).toBe('Lab analyzed');
+    expect(filled).toHaveBeenCalledTimes(1);
+    const broken = setup({ ...analysisDue, fillRings: async () => { throw new Error('witnesses gone'); } });
+    expect(await broken.pass()).toBe('Lab analyzed');
+    expect(logged.mock.calls.map((c) => [c[1], c[2]])).toContainEqual(['analyze', 'witnesses gone']);
   });
 
   it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long', async () => {
@@ -3597,7 +3608,7 @@ describe('Worker.lensRun', () => {
       const s = setup({ ...analysisDue, nextLensRun: async () => ({ ...due, dueAt }), ...more });
       const record = (name: string, answer?: unknown) => async (...args: unknown[]) => { s.calls.push([name, ...args]); return answer; };
       Object.assign(s.store, {
-        sweepPreviews: record('sweep', 0), nextPreview: record('nextPreview', queuedPreview),
+        sweepPreviews: record('sweep', 0), fillRings: async () => false, nextPreview: record('nextPreview', queuedPreview),
         previewProgress: record('previewProgress'), savePreview: record('savePreview'), previewFailed: record('previewFailed'),
         nextLensRun: (() => { const next = s.store.nextLensRun; return async (...args: unknown[]) => { s.calls.push(['next']); return next(...args); }; })(),
         ...more,
@@ -3771,7 +3782,7 @@ describe('Worker hears preview requests', () => {
       locked: async (key: number, _wait: boolean, fn: (c: unknown) => Promise<unknown>) => { if (key === LOCKS.analyze) passes.push(key); return fn(lockClient()); },
       settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
       expireChecks: async () => 0, pendingChecks: async () => [],
-      sweepPreviews: async () => 0, nextPreview: async () => null, nextLensRun: async () => null, stale: async () => [],
+      sweepPreviews: async () => 0, fillRings: async () => false, nextPreview: async () => null, nextLensRun: async () => null, stale: async () => [],
     };
     const w = new Worker(store, () => ({ rpc: new Map(), etherscanKey: null, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d' }), '', '/nonexistent');
     w.sync.storedManifest = async () => null;
@@ -3872,7 +3883,7 @@ describe('Worker: a due analysis waits at most one preview', () => {
       },
       settings: async () => new Map(), reportSources: async () => {}, passStarted: async () => {}, passFinished: async () => {}, heartbeat: async () => {},
       expireChecks: async () => 0, pendingChecks: async () => [],
-      sweepPreviews: async () => 0,
+      sweepPreviews: async () => 0, fillRings: async () => false,
       nextPreview: async () => (queued.length === 0 ? null : { id: queued[0], collectionId: 4, chainId: 1, name: 'Terraforms', rule: {}, through: 99 }),
       previewProgress: async () => {},
       savePreview: async (id: number) => { queued = queued.filter((q) => q !== id); },
@@ -4074,7 +4085,7 @@ function passWorker(answers: Record<string, unknown> = {}) {
     locked: async (_key: number, _wait: boolean, fn: (c: unknown) => Promise<unknown>) => fn(client),
     settings: async () => new Map(),
     passFinished: async (job: string, _ms: number, outcome: string, detail: string) => { finished.push([job, outcome, detail]); },
-    collections: async () => [], stale: async () => [], nextPreview: async () => null, nextLensRun: async () => null, sweepPreviews: async () => 0,
+    collections: async () => [], stale: async () => [], nextPreview: async () => null, nextLensRun: async () => null, sweepPreviews: async () => 0, fillRings: async () => false,
     nextSpot: async () => null, nextCount: async () => null, seedReach: async () => 0, moneyLanes: async () => ({ lanes: [] }), tokenLanes: async () => ({ lanes: [] }),
     importedMoney: async () => false, saveLensRun: async () => 'saved',
     ...answers,

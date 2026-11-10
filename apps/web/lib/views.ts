@@ -42,6 +42,9 @@ export type TokenView = {
   ownLenses: Lenses;
 } & TokenDrawing & Verdict;
 
+/** A collection's rings to a page, in its list and the API's, so a page number means the same rings in both. */
+export const RINGS_PAGE = 20;
+
 /** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
 export const TRADES = 20;
 export const COUNTERPARTIES = 20;

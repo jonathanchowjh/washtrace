@@ -471,6 +471,9 @@ export class Worker {
     const now = Date.now();
     const failed = new Map<Job, unknown>();
     const swept = await this.store.sweepPreviews(now).then(() => true, (err) => { failed.set('lens', err); return false; });
+    // Rings for an analysis saved before they were (Store.fillRings): one collection a turn, under the lock saveAnalysis is under.
+    // A failure is the analyze row's, and is logged: an analysis that runs after it would otherwise write over it with ok.
+    await this.store.fillRings().catch((err) => { failed.set('analyze', err); this.logFailed('analyze', this.scrubbed(err)); });
     const due = await this.dueAnalysis(now).catch((err) => { failed.set('analyze', err); return null; });
     const analysisFirst = this.last === 'preview' && due !== null;
     let preview: Awaited<ReturnType<Store['nextPreview']>> = null;

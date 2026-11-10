@@ -63,6 +63,7 @@ migration creates is built empty, so it costs nothing and is not listed as a wai
 | 33 | `collections.analysis_started_at`. | |
 | 34 | Reading a trader again (`follow.reread`): adds `read_block bigint` and `stale_at timestamptz` to `wallets` and to `token_reads`. | `wallets_stale_idx` on `wallets` and `token_reads_stale_idx` on `token_reads`, both plain and partial (`WHERE stale_at IS NOT NULL`), so they hold no rows on upgrade. Each still scans its table, and the `ADD COLUMN`s before it hold an ACCESS EXCLUSIVE lock until commit, so reads of `wallets` and `token_reads` wait for the scans. |
 | 35 | Spot checks: creates `spot_checks`, one row per transaction judged without watching its collection. | On the new table: `spot_checks_queued_idx`, `spot_checks_tx_idx` and the unique `spot_checks_open_idx`, built empty. |
+| 36 | Rings: adds `witnesses.ring` and `analyses.rings`. Analyses saved before it have `rings` NULL; the worker works their rings out from the stored witnesses, one collection a turn, and analyses nothing again. | `witnesses_ring_idx` on `witnesses`, plain and partial (`WHERE ring IS NOT NULL`), so it holds no rows on upgrade, though it still scans the table. |
 
 A wallet due a read again keeps `status = 'done'` and gets `stale_at` set, so every reader of a done wallet still
 counts it. With `follow.reread` at 0, the default, nothing is marked and #34 changes no behaviour.

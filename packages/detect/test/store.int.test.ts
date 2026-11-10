@@ -2640,6 +2640,23 @@ describe('Store', () => {
     expect(await store.history(c.id)).toHaveLength(1);
   });
 
+  it('saves the analysis\'s rings with it: its wallets, its counted sales, and the ring a wallet or token is in', async () => {
+    const c = (await store.collection(1, collection))!;
+    const anchor = [a, b].sort()[0]!;
+    const { rows, total } = await store.rings(c.id, RAN, 10, 0);
+    expect(total).toBe(1);
+    expect(rows).toEqual([expect.objectContaining({ anchor, rank: 1, wallets: 2, sales: 3, floorSales: 3, tokens: 1 })]);
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [c.id])).rows[0].rings).toBe(1);
+    const view = (await store.ring(c.id, anchor, RAN))!;
+    expect(view.wallets).toEqual([a, b].sort().map((address) => ({ address, traded: true })));
+    expect(view.tokens).toEqual([expect.objectContaining({ tokenId: '1', sales: 3 })]);
+    expect(await store.ring(c.id, '0xnone', RAN)).toBeNull();
+    expect(await store.ringsOf(c.id, { wallet: b })).toEqual([anchor]);
+    expect(await store.ringsOf(c.id, { tokenId: '1' })).toEqual([anchor]);
+    // Past its last page a list still says how many there are.
+    expect(await store.rings(c.id, RAN, 10, 5)).toEqual({ rows: [], total: 1 });
+  });
+
   it('pages the ranked reads', async () => {
     const c = (await store.collection(1, collection))!;
     const all = (await store.lensWallets(c.id, 'A', LIST, RAN)).rows;
@@ -7168,5 +7185,60 @@ describe('the timeline\'s sales apart', () => {
     await flag('AU', 3);
     const [p] = (await store.timeline(id)).points;
     expect(p).toMatchObject({ sales: 4, apartSales: 1, flaggedSales: { A: 1, AC: 2, AU: 3 } });
+  });
+});
+
+describe('rings worked out from an analysis saved before them', () => {
+  const CHAIN = 912;
+  const coll = '0x' + 'e2'.padEnd(40, '0');
+  const w = (s: string) => '0x' + s.padEnd(40, '0');
+  const S = w('a1'), B = w('b1'), M = w('c1'), X = w('d1'), Y = w('e1');
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  const RAN = { money: new Set(['']), ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
+  let id = 0;
+  afterAll(() => drop(CHAIN, coll));
+
+  beforeAll(async () => {
+    await store.migrate();
+    id = (await store.addCollection(CHAIN, coll, null, 1)).id;
+    const sale = (n: number, from: string, to: string) => transfer(String(n), from, to, { txHash: tx(n), blockNumber: n, blockTime: 1_700_000_000 + n, marketplace: 'Seaport', priceWei: '1000000000000000000', currency: '' });
+    await store.ingest(id, CHAIN, [sale(1, S, B), sale(2, B, S), sale(3, X, Y)], 100, [S, B, X, Y]);
+    // Saved before rings: loops counted, rings not.
+    await store.pool.query(
+      `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches, loops)
+       VALUES ($1, 1, 100, $2, 0, 0, 0, 0, '{}')`,
+      [id, JSON.stringify({ A: { available: true }, AU: { available: true }, AC: { available: true } })]);
+    // 0: S and B's round trip. 1: B and a new seller linked through middle M, by Linked wallets. 2: X and Y, by Money loops back alone.
+    const witness = (wid: number, kind: string, wallets: string[], middle: string | null = null) => store.pool.query(
+      'INSERT INTO washtrace.witnesses (collection_id, id, kind, wallets, cycles, middle) VALUES ($1, $2, $3, $4, $5, $6)', [id, wid, kind, wallets, kind === 'pair' ? null : 1, middle]);
+    await witness(0, 'scc', [S, B]);
+    await witness(1, 'pair', [B, S, M], M);
+    await witness(2, 'pair', [X, Y]);
+    const flag = (m: Method, n: number, wid: number) => store.pool.query(
+      `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness, witness_id) VALUES ($1, $2, $3, 0, '{"kind":"scc","wallets":[],"cycles":1}', $4)`, [id, m, tx(n), wid]);
+    // Sale 2 is Round trips' through the loop and Linked wallets' through the pair: two witnesses, one ring.
+    await flag('A', 1, 0);
+    await flag('AC', 1, 0);
+    await flag('A', 2, 0);
+    await flag('AC', 2, 1);
+    await flag('AU', 3, 2);
+    // Counted, as an analysis's trade facts count a sale.
+    await store.pool.query(`INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) SELECT $1, tx_hash, log_index, true FROM washtrace.transfers WHERE collection_id = $1`, [id]);
+  });
+
+  it('fills them once, from the witnesses a counted lens points at, and leaves Money loops back\'s in none', async () => {
+    while (await store.fillRings()) { /* other collections' first */ }
+    const rings = (await store.pool.query('SELECT id, ring FROM washtrace.witnesses WHERE collection_id = $1 ORDER BY id', [id])).rows;
+    expect(rings).toEqual([{ id: 0, ring: S }, { id: 1, ring: S }, { id: 2, ring: null }]);
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].rings).toBe(1);
+    expect(await store.fillRings()).toBe(false);
+  });
+
+  it('lists a middle as a wallet of its ring that only moved the money, and counts a trade two witnesses flag once', async () => {
+    const view = (await store.ring(id, S, RAN))!;
+    expect(view.wallets).toEqual([{ address: S, traded: true }, { address: B, traded: true }, { address: M, traded: false }]);
+    expect(view.line).toMatchObject({ wallets: 3, sales: 2, floorSales: 2, volumeWei: '2000000000000000000' });
+    expect((await store.rings(id, RAN, 10, 0)).total).toBe(1);
+    expect(await store.ringsOf(id, { wallet: X })).toEqual([]);
   });
 });

@@ -635,4 +635,14 @@ CREATE INDEX IF NOT EXISTS spot_checks_tx_idx ON washtrace.spot_checks (chain_id
 CREATE UNIQUE INDEX IF NOT EXISTS spot_checks_open_idx ON washtrace.spot_checks
   (chain_id, tx_hash, coalesce(lens, ''), coalesce(lens_version, 0)) WHERE status IN ('queued', 'running');
 `,
+  `
+-- Rings (rings.ts): the wallets the counted evidence joins. Each witness a
+-- counted lens points at gets its ring's anchor, the smallest wallet in it;
+-- one only Money loops back points at gets none. analyses.rings counts them:
+-- NULL on an analysis saved before this, which the worker fills from its
+-- witnesses (Store.fillRings), so no collection is analysed again for it.
+ALTER TABLE washtrace.witnesses ADD COLUMN IF NOT EXISTS ring text;
+ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS rings int;
+CREATE INDEX IF NOT EXISTS witnesses_ring_idx ON washtrace.witnesses (collection_id, ring) WHERE ring IS NOT NULL;
+`,
 ];

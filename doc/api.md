@@ -1,8 +1,8 @@
 # API reference
 
 The console's HTTP API, for clients that read verdicts or manage what is watched. It is served by the
-`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 25 route files under
-`apps/web/app/api` with 30 method handlers, and `/go`.
+`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 27 route files under
+`apps/web/app/api` with 32 method handlers, and `/go`.
 
 Paths below use `{chain}` for a chain id (digits, such as `1`), `{address}` for a 0x address (any case; stored
 lowercase), and `{tx}` for a 0x transaction hash (64 hex digits).
@@ -57,6 +57,8 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `POST /api/collections/{chain}/{address}/follow` | `{hops}`: a whole number from 1 to 10, above the global `follow.hops`. | 202 set, 200 already set (`set: false`), 400, 404 | `set` |
 | `POST /api/collections/{chain}/{address}/tokens` | `{}` | 202 started, 200 already started (`started: false`), 404 | `started` |
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | | 200, 404 (no such path, not watched, or no transfer of the token) | `collection`, `tokenId`, `transfers`, `middles`, `flows`, and the verdict keys |
+| `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
+| `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
 
 Notes:
 
@@ -66,6 +68,11 @@ Notes:
 - `GET /api/collections/{chain}/{address}` lists the 50 tokens and 50 wallets with the most trades caught
   under `method`, each `{rows, total}`. A lens that did not run lists none. `lenses` holds each lens of yours
   with its `run` on this collection (`run` is null when it has none).
+- Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
+  sample, sales, floorSales, tokens, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
+  the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
+  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one that only moved the money,
+  at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
 - Stored-data fields on a collection in `GET /api/collections`: `restoreNote` and `analysisError` say why its
   stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`,
   `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress`
