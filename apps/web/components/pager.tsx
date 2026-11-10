@@ -46,8 +46,8 @@ export function Pager({ total, page: asked, size, href, label = 'results', pageP
   );
 }
 
-/** A link to a page, or the same box greyed out when there is none that way. */
+/** A link to a page, or the same box greyed out when there is none that way. Not prefetched: four of them would render the list four more times. */
 function PageLink({ to, children }: { to: string | null; children: React.ReactNode }) {
   if (to === null) return <span className="rounded-md border px-2.5 py-1 text-muted-foreground opacity-50">{children}</span>;
-  return <Link href={to} className="rounded-md border bg-card px-2.5 py-1 font-medium text-foreground hover:bg-muted">{children}</Link>;
+  return <Link href={to} prefetch={false} className="rounded-md border bg-card px-2.5 py-1 font-medium text-foreground hover:bg-muted">{children}</Link>;
 }

@@ -20,7 +20,7 @@ export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_
 function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: ReactNode; href: string }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
   const end = (text: string, lens: Range['low']) => (
-    <Link href={lensTabHref(href, lens, { evidence: true })} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
+    <Link href={lensTabHref(href, lens, { evidence: true })} prefetch={false} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
   );
   return (
     <div className="min-w-0">
@@ -54,12 +54,12 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
     <li className={`relative grid gap-x-6 gap-y-3 px-4 py-4 hover:bg-muted/40 ${COLS}`}>
       <div className="min-w-0">
         {/* The whole row opens the collection; the name is the link a screen reader announces. */}
-        <Link href={href} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
+        <Link href={href} prefetch={false} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         {/* Above the row's overlay like the range ends: sales open the sales list. The transfer count is plain:
             no list holds every transfer, as every change of owner leaves out mints and custody moves. */}
         <p className="mt-1 text-xs text-muted-foreground">
-          {a ? <><Link href={tradesHref(href, {})} className="relative z-10 hover:underline">{plural(a.totals.A.sales, 'sale')}</Link> among </> : null}
+          {a ? <><Link href={tradesHref(href, {})} prefetch={false} className="relative z-10 hover:underline">{plural(a.totals.A.sales, 'sale')}</Link> among </> : null}
           {plural(c.transfers, 'transfer')}
         </p>
         {/* A "No RPC" left from before stored data loaded is no fault: the pill says where the data stops. */}

@@ -26,7 +26,7 @@ export function LensName({ m, className, href, own = {} }: { m: string; classNam
     <span className={cn('inline-flex items-center gap-1.5', className)}>
       <TierMark tone={info.tone} />
       {href === undefined ? <span className="font-medium text-foreground">{name}</span>
-        : <Link href={href} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
+        : <Link href={href} prefetch={false} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
     </span>
   );
 }
@@ -108,7 +108,7 @@ export function RangeFigure({ range, end }: { range: Range; end: (text: string, 
  */
 export function VolumeDetail({ volume: r, totals, base, overlay = false }: { volume: Range; totals: Record<Method, MethodTotals>; base: string; overlay?: boolean }) {
   const priciest = { sort: 'price', dir: 'desc' } as const;
-  const link = (q: Partial<TradeQuery>, text: string) => <Link href={tradesHref(base, { ...q, ...priciest })} className={cn('hover:underline', overlay && 'relative z-10')}>{text}</Link>;
+  const link = (q: Partial<TradeQuery>, text: string) => <Link href={tradesHref(base, { ...q, ...priciest })} prefetch={false} className={cn('hover:underline', overlay && 'relative z-10')}>{text}</Link>;
   const lo = totals[r.low].flaggedVolumeWei, hi = totals[r.high].flaggedVolumeWei;
   return <>
     {lo === hi ? link({ caught: [r.high] }, eth(hi)) : <>{link({ caught: [r.low] }, eth(lo, '').trim())}–{link({ caught: [r.high] }, eth(hi))}</>}
@@ -140,17 +140,17 @@ export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
   return (
     <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>
-        {qualifier === 'at least' ? 'at least ' : null}<Link href={caught} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
+        {qualifier === 'at least' ? 'at least ' : null}<Link href={caught} prefetch={false} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
         {(APART as readonly string[]).includes(m) ? <NotCountedTag /> : null}{qualifier === 'so far' ? ' so far' : ''}
-        {' · '}<Link href={caught} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} className={FIGURE}>{num(t.sales)}</Link>
-        {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} className={FIGURE}>{eth(t.volumeWei)}</Link>
+        {' · '}<Link href={caught} prefetch={false} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} prefetch={false} className={FIGURE}>{num(t.sales)}</Link>
+        {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} prefetch={false} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} prefetch={false} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
       <p>
-        <Link href={flagged('tokens')} className={FIGURE}>{plural(t.tokens, 'token')}</Link>
-        {' · '}<Link href={flagged('wallets')} className={FIGURE}>{plural(t.wallets, 'wallet')}</Link>
-        {loops ? <>{' · '}<Link href={flagged('tokens')} className={FIGURE}>{loops.pairs > 0 ? `${plural(loops.loops, 'loop')} and ${plural(loops.pairs, 'linked pair')}` : plural(loops.loops, 'loop')}</Link></> : null}
+        <Link href={flagged('tokens')} prefetch={false} className={FIGURE}>{plural(t.tokens, 'token')}</Link>
+        {' · '}<Link href={flagged('wallets')} prefetch={false} className={FIGURE}>{plural(t.wallets, 'wallet')}</Link>
+        {loops ? <>{' · '}<Link href={flagged('tokens')} prefetch={false} className={FIGURE}>{loops.pairs > 0 ? `${plural(loops.loops, 'loop')} and ${plural(loops.pairs, 'linked pair')}` : plural(loops.loops, 'loop')}</Link></> : null}
       </p>
-      <p><Link href={tradesHref(base, { caught: [m], kind: 'all' })} className={FIGURE}>{pct(o.part, o.whole)}</Link> of every change of owner, sold or not</p>
+      <p><Link href={tradesHref(base, { caught: [m], kind: 'all' })} prefetch={false} className={FIGURE}>{pct(o.part, o.whole)}</Link> of every change of owner, sold or not</p>
     </div>
   );
 }

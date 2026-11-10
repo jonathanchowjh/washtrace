@@ -93,7 +93,7 @@ export async function WalletView({ chainId, address, sp, within }: {
   // The title counts every trade it has: the flagged count opens the flagged-only list, the total all of them.
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
-  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} className="hover:underline">{num(counts.trades)}</Link></>;
+  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
   const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No trade in ${within.name}`, tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
     : transfers.length === 0 ? { title: 'No trade of it matches these filters', tone: 'clean' as const }
@@ -203,7 +203,7 @@ export async function WalletView({ chainId, address, sp, within }: {
               <tbody>
                 {counterparties.map((c) => {
                   const opens = (n: number, dir: FlowDir) => n === 0 ? <span className="text-muted-foreground">0</span>
-                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} className="font-medium hover:underline">{num(n)}</Link>;
+                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} prefetch={false} className="font-medium hover:underline">{num(n)}</Link>;
                   return (
                     <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
                       <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
@@ -241,7 +241,7 @@ export async function WalletView({ chainId, address, sp, within }: {
               {([['sent', 'it sent'], ['received', 'it received'], ['both', 'both ways']] as const).map(([d, label], i) => (
                 <span key={d}>
                   {i > 0 ? ' · ' : ''}
-                  <Link href={`${href({ dir: d, flows: 1 })}#between`} aria-current={o.dir === d ? 'true' : undefined} className={cn('hover:underline', o.dir === d ? 'font-medium text-foreground' : '')}>{label}</Link>
+                  <Link href={`${href({ dir: d, flows: 1 })}#between`} prefetch={false} aria-current={o.dir === d ? 'true' : undefined} className={cn('hover:underline', o.dir === d ? 'font-medium text-foreground' : '')}>{label}</Link>
                 </span>
               ))}
             </nav>

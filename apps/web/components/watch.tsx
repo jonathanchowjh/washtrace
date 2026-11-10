@@ -101,7 +101,7 @@ export function Suggested({ writable, watched, stored }: { writable: boolean; wa
                 </div>
               </div>
               {watched.includes(key)
-                ? <Link href={`/c/${key}`} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
+                ? <Link href={`/c/${key}`} prefetch={false} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
                 : <button type="button" disabled={busy !== null || !writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => add(s)} className="btn">{busy === s.address ? 'Adding…' : 'Watch'}</button>}
             </li>
           );

@@ -168,7 +168,7 @@ function runs(pts: ({ x: number; y: number } | null)[]): string[] {
 /** Lenses of yours by name, each opening its own tab on this page. */
 function TabLinks({ lenses }: { lenses: { key: string; name: string }[] }) {
   return lenses.map((o, i) => (
-    <span key={o.key}>{i > 0 ? ', ' : ''}<Link href={`?method=${o.key}`} title={`Open ${o.name}'s tab, for its own figures`} className="text-foreground hover:underline">{o.name}</Link></span>
+    <span key={o.key}>{i > 0 ? ', ' : ''}<Link href={`?method=${o.key}`} prefetch={false} title={`Open ${o.name}'s tab, for its own figures`} className="text-foreground hover:underline">{o.name}</Link></span>
   ));
 }
 
@@ -371,10 +371,10 @@ export function TimeChart(props: TimeChartProps) {
               {points.map((q, i) => [q, i] as const).reverse().map(([q, i]) => (
                 <tr key={q.at} className="border-b last:border-b-0">
                   <td className="px-2 py-1" data-time={history ? undefined : ''}>
-                    {history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{periodText(q.at, props.bucket, zone)}</Link> : periodText(q.at, props.bucket, zone)) : localTime(q.at, 'datetime', zone)}
+                    {history ? (hrefs?.[i] ? <Link href={hrefs[i]!} prefetch={false} className="hover:underline">{periodText(q.at, props.bucket, zone)}</Link> : periodText(q.at, props.bucket, zone)) : localTime(q.at, 'datetime', zone)}
                   </td>
-                  {lenses.map((m) => { const s = share(q.lens[m.key] ?? null); const h = lensHrefs?.[i]?.[m.key]; return <td key={m.key} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? (q.lens[m.key] != null && isOwn(m.key) && q.sales > 0 ? <span className="text-muted-foreground">not judged yet<span className="block text-[11px]">its run has not read this far yet</span></span> : '—') : h ? <Link href={h} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
-                  <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} className="hover:underline">{num(q.sales)}</Link> : num(q.sales)) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
+                  {lenses.map((m) => { const s = share(q.lens[m.key] ?? null); const h = lensHrefs?.[i]?.[m.key]; return <td key={m.key} className="px-2 py-1 text-right" data-snapshot={history ? undefined : ''}>{s === null ? (q.lens[m.key] != null && isOwn(m.key) && q.sales > 0 ? <span className="text-muted-foreground">not judged yet<span className="block text-[11px]">its run has not read this far yet</span></span> : '—') : h ? <Link href={h} prefetch={false} className="hover:underline">{pctText(s)}</Link> : pctText(s)}</td>; })}
+                  <td className="px-2 py-1 text-right" data-progress={history ? undefined : ''}>{history ? (hrefs?.[i] ? <Link href={hrefs[i]!} prefetch={false} className="hover:underline">{num(q.sales)}</Link> : num(q.sales)) : !q.wallets ? '—' : pctText((q.funded ?? 0) / q.wallets)}</td>
                 </tr>
               ))}
             </tbody>

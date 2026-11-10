@@ -13,11 +13,12 @@ import { HoverCard } from '@/components/hover-card';
 /**
  * A wallet, linked to its page: under `within`'s tabs when it is given (a
  * collection's base), so a link from inside a collection stays inside it. The
- * zero address is a mint or a burn, not a wallet.
+ * zero address is a mint or a burn, not a wallet. It sits in rows of many, so
+ * it does not prefetch: each prefetch renders a wallet page.
  */
 export function Wallet({ chainId, address, within, from }: { chainId: number; address: string; within?: string; from?: string }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} prefetch={false} title={address} className="font-mono hover:underline">{short(address)}</Link>;
   // Inside a collection there is a card to show: its trades there and its ring.
   return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }
@@ -103,14 +104,14 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
                 {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
                 <td className="px-3 py-2 whitespace-nowrap">
-                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} title="Open this trade">
+                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade">
                     {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
                   {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
                 </td>
                 {collection && t.collection ? (
                   <td className="px-3 py-2">
-                    <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`}>
+                    <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`} prefetch={false}>
                       {t.collection.name ?? short(t.collection.address)} #{tokenLabel(t.tokenId)}
                     </Link>
                   </td>
@@ -118,7 +119,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                 <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
+                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -144,5 +145,5 @@ function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) 
   if (info === null) return null;
   const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', FILL[info.tone]);
   return base === undefined ? <span className={cls}>{info.name}</span>
-    : <Link href={lensTabHref(base, m, { evidence: true })} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
+    : <Link href={lensTabHref(base, m, { evidence: true })} prefetch={false} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
 }

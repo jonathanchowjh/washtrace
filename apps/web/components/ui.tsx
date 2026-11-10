@@ -219,12 +219,15 @@ export function MoreLink({ href, className, children }: { href: string; classNam
   return <Link href={href} className={cn('inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline', className)}>{children}</Link>;
 }
 
-/** An exclusive choice among views of the same thing, as one bar of links. `label` says what is chosen. */
+/**
+ * An exclusive choice among views of the same thing, as one bar of links. `label` says what is chosen.
+ * The links do not prefetch: each is this page again, and a prefetch renders all of it.
+ */
 export function Segmented({ label, items }: { label: string; items: { key: string; href: string; label: string; current: boolean }[] }) {
   return (
     <nav aria-label={label} className="flex rounded-md border bg-card p-0.5 text-sm">
       {items.map((i) => (
-        <Link key={i.key} href={i.href} aria-current={i.current ? 'page' : undefined}
+        <Link key={i.key} href={i.href} prefetch={false} aria-current={i.current ? 'page' : undefined}
           className={cn('rounded px-3 py-1', i.current ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
           {i.label}
         </Link>
@@ -259,11 +262,12 @@ export function Bar({ share, paused = false, name, className }: { share: number;
 
 /**
  * A link that sorts by one thing. On the sort in force it says which way it runs (`dir`) with an arrow; elsewhere `dir` is null.
- * `href` is the page re-sorted, so the caller decides what a second press does.
+ * `href` is the page re-sorted, so the caller decides what a second press does. It does not prefetch: a
+ * header row of them would render the page once a column.
  */
 export function SortLink({ href, dir, title, className, children }: { href: string; dir: 'asc' | 'desc' | null; title?: string; className?: string; children: ReactNode }) {
   return (
-    <Link href={href} title={title} aria-current={dir === null ? undefined : 'true'}
+    <Link href={href} prefetch={false} title={title} aria-current={dir === null ? undefined : 'true'}
       className={cn('inline-flex items-center gap-1.5 hover:text-foreground hover:underline', dir !== null && `font-medium text-foreground after:text-[0.6rem] ${dir === 'asc' ? "after:content-['▲']" : "after:content-['▼']"}`, className)}>
       {children}
     </Link>

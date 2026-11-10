@@ -84,7 +84,7 @@ export default async function SearchPage({ searchParams }: Props) {
           {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
           {checkOn.length > 0 ? (
             <> Check it on{' '}
-              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={`/tx/${c}/${tx}`}>{chainName(c)}</Link></span>)}
+              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={`/tx/${c}/${tx}`} prefetch={false}>{chainName(c)}</Link></span>)}
               : washtrace reads that one transaction, without watching its collection.
             </>
           ) : null}
@@ -122,7 +122,7 @@ function Row({ hits, kind, i, scope }: { hits: SearchHits; kind: SearchKind; i: 
   const { href, line, address } = hitRow(hits, kind, i, scope);
   return (
     <li>
-      <Link href={href} className="flex flex-wrap items-center justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
+      <Link href={href} prefetch={false} className="flex flex-wrap items-center justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
         <span className="flex items-center gap-2 font-medium text-foreground"><KindIcon kind={KIND[kind]} className="text-muted-foreground" />{line}</span>
         <span className="font-mono text-xs text-muted-foreground">{short(address)}</span>
       </Link>

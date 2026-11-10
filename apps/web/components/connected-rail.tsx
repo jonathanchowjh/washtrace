@@ -106,14 +106,14 @@ export async function ConnectedRail({ chainId, address, token, wallets = [], txs
   return (
     <section aria-label="Connected to" className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-[auto_1fr_1fr]">
       {group('Part of', [
-        <li key="c"><Link href={base} className={CHIP}><KindIcon kind="collection" className="size-3.5" />{c.name ?? short(address)}{ends === null ? null : <span className="text-muted-foreground">{ends.same ? ends.high : `${ends.low}–${ends.high}`} washed</span>}</Link></li>,
-        ...(token === undefined ? [] : [<li key="t"><HoverCard src={cardSrc(base, 'token', token)}><Link href={`${base}/t/${token}`} className={CHIP}><KindIcon kind="token" className="size-3.5" />#{tokenLabel(token)}</Link></HoverCard></li>]),
+        <li key="c"><Link href={base} prefetch={false} className={CHIP}><KindIcon kind="collection" className="size-3.5" />{c.name ?? short(address)}{ends === null ? null : <span className="text-muted-foreground">{ends.same ? ends.high : `${ends.low}–${ends.high}`} washed</span>}</Link></li>,
+        ...(token === undefined ? [] : [<li key="t"><HoverCard src={cardSrc(base, 'token', token)}><Link href={`${base}/t/${token}`} prefetch={false} className={CHIP}><KindIcon kind="token" className="size-3.5" />#{tokenLabel(token)}</Link></HoverCard></li>]),
       ], 0)}
       {group('Wallets', wallets.slice(0, SHOWN).map((w) => (
-        <li key={w.address}><HoverCard src={cardSrc(base, 'wallet', w.address)}><Link href={walletHref(chainId, w.address, base)} className={CHIP}><KindIcon kind="wallet" className="size-3.5" /><span className="font-mono">{short(w.address)}</span><span className="text-muted-foreground">{w.role}</span></Link></HoverCard></li>
+        <li key={w.address}><HoverCard src={cardSrc(base, 'wallet', w.address)}><Link href={walletHref(chainId, w.address, base)} prefetch={false} className={CHIP}><KindIcon kind="wallet" className="size-3.5" /><span className="font-mono">{short(w.address)}</span><span className="text-muted-foreground">{w.role}</span></Link></HoverCard></li>
       )), wallets.length - SHOWN)}
       {group('Transactions', txs.slice(0, SHOWN).map((t) => (
-        <li key={t.hash}><Link href={txHref(chainId, t.hash, base)} className={CHIP}><KindIcon kind="transaction" className="size-3.5" />{t.what}<span className="font-mono text-muted-foreground">{short(t.hash)}</span></Link></li>
+        <li key={t.hash}><Link href={txHref(chainId, t.hash, base)} prefetch={false} className={CHIP}><KindIcon kind="transaction" className="size-3.5" />{t.what}<span className="font-mono text-muted-foreground">{short(t.hash)}</span></Link></li>
       )), txs.length - SHOWN)}
     </section>
   );

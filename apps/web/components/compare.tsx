@@ -53,7 +53,7 @@ export function Compare({ base, both, not, keys, own, left }: {
                       if (r === c) {
                         return (
                           <td key={c} data-cell={`${r}.${c}`} title={`${name(r)} caught ${num(total)} sales in all.`} className="border p-2 tabular-nums">
-                            <Link href={tradesHref(base, { caught: [r] })} className="font-semibold hover:underline">{num(total)}</Link>
+                            <Link href={tradesHref(base, { caught: [r] })} prefetch={false} className="font-semibold hover:underline">{num(total)}</Link>
                           </td>
                         );
                       }
@@ -63,8 +63,8 @@ export function Compare({ base, both, not, keys, own, left }: {
                       return (
                         <td key={c} data-cell={`${r}.${c}`} className={`border p-2 tabular-nums ${shade}`}
                           title={`Of the ${num(total)} sales ${name(r)} caught, ${name(c)} also caught ${num(cell)} (${Math.round(share * 100)}%).`}>
-                          <Link href={tradesHref(base, { caught: [r, c] })} className="font-semibold hover:underline">{num(cell)}</Link>
-                          <Link href={tradesHref(base, { caught: [r], notCaught: [c] })} title={`Sales ${name(r)} caught that ${name(c)} judged and did not flag`} className="block text-xs text-muted-foreground hover:underline">{num(n(not, r, c))} not</Link>
+                          <Link href={tradesHref(base, { caught: [r, c] })} prefetch={false} className="font-semibold hover:underline">{num(cell)}</Link>
+                          <Link href={tradesHref(base, { caught: [r], notCaught: [c] })} prefetch={false} title={`Sales ${name(r)} caught that ${name(c)} judged and did not flag`} className="block text-xs text-muted-foreground hover:underline">{num(n(not, r, c))} not</Link>
                         </td>
                       );
                     })}

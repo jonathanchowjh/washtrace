@@ -119,7 +119,7 @@ export function FilterBar(w: Where) {
 
       <div className="flex flex-wrap items-start gap-2">
         {chips(base, q, view, zone, names).map((c) => (
-          <Link key={c.key} href={c.href} title="Remove this filter" className="rounded-full border bg-muted/50 px-2.5 py-1 text-sm hover:bg-card">
+          <Link key={c.key} href={c.href} prefetch={false} title="Remove this filter" className="rounded-full border bg-muted/50 px-2.5 py-1 text-sm hover:bg-card">
             {c.label} <span aria-hidden className="text-muted-foreground">×</span>
           </Link>
         ))}
@@ -196,12 +196,12 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
       <nav className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
         <span className="text-muted-foreground">Group by</span>
         {BYS.map(([b, label]) => (
-          <Link key={b} href={tradesHref(base, q, { by: b })} aria-current={b === by ? 'page' : undefined}
+          <Link key={b} href={tradesHref(base, q, { by: b })} prefetch={false} aria-current={b === by ? 'page' : undefined}
             className={cn('rounded-md px-2 py-0.5', b === by ? 'bg-foreground text-background' : 'border bg-card hover:bg-muted')}>
             {label}
           </Link>
         ))}
-        {by === null ? null : <Link href={tradesHref(base, q)} className="px-1 text-muted-foreground hover:underline">No grouping</Link>}
+        {by === null ? null : <Link href={tradesHref(base, q)} prefetch={false} className="px-1 text-muted-foreground hover:underline">No grouping</Link>}
       </nav>
       {by === null || groups === null ? null : (
         <div className="mt-3 overflow-x-auto rounded-lg border bg-card">
@@ -239,7 +239,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
 }
 
 function Cell({ href, children }: { href: string | null; children: React.ReactNode }) {
-  return href === null ? <>{children}</> : <Link href={href} className="hover:underline">{children}</Link>;
+  return href === null ? <>{children}</> : <Link href={href} prefetch={false} className="hover:underline">{children}</Link>;
 }
 
 // ---- trades -----------------------------------------------------------------
@@ -280,6 +280,8 @@ function verdictOf(r: TradeRow, m: LensKey, through: TradeContext['through']): '
  * column, as a trade no analysis covered reads across them all. Below `sm` the
  * table is too wide for the screen, so each trade is a card there instead:
  * both draw the same cells and the breakpoint shows one, so it needs no script.
+ * Its links do not prefetch: each one renders the collection's layout, counts
+ * and all, and a page of them queues the click that matters behind them.
  */
 export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
@@ -289,7 +291,7 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
   const { base, q, view, own = {} } = where;
   const lenses = withOwn(ran);
   const only = (extra: Partial<TradeQuery>, title: string) => (
-    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
+    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} prefetch={false} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
   );
   const wallet = (a: string) => (
     <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
@@ -313,11 +315,11 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
       key: `${r.txHash}-${r.logIndex}`,
       judged: r.judged,
       verdicts,
-      date: <Link href={href} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>,
-      token: <><HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>{only({ token: r.tokenId }, 'Only trades with this token')}</>,
+      date: <Link href={href} prefetch={false} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>,
+      token: <><HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} prefetch={false} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>{only({ token: r.tokenId }, 'Only trades with this token')}</>,
       parties: <>{wallet(r.from)} → {wallet(r.to)}</>,
       // The price opens the trade, as a price does in the transfer tables.
-      price: priced ? <Link href={href} title="Open this trade" className="hover:underline">{eth(r.priceWei)}</Link> : '—',
+      price: priced ? <Link href={href} prefetch={false} title="Open this trade" className="hover:underline">{eth(r.priceWei)}</Link> : '—',
       market: venue === null ? '—' : VENUES[venue]?.name ?? venue,
       held: span(r.heldS),
       buyerAge: span(r.buyerAgeS),

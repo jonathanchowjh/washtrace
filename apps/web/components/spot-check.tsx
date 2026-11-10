@@ -131,7 +131,7 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
                     <span key={k}>
                       {nameOf(k)}: {whyOf(f)} (
                       {walletsOf(f).map((a, i) => (
-                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={`/w/${chainId}/${a}`}>{short(a)}</Link></span>
+                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={`/w/${chainId}/${a}`} prefetch={false}>{short(a)}</Link></span>
                       ))}
                       ){' '}
                     </span>

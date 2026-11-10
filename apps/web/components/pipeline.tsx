@@ -69,7 +69,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
           {rows.map((r) => (
             <tr key={`${r.chainId}/${r.address}`} className="hover:bg-muted/50">
               <td className="p-0">
-                <Link href={`/c/${r.chainId}/${r.address}#reading`} className="block px-4 py-2.5 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
+                <Link href={`/c/${r.chainId}/${r.address}#reading`} prefetch={false} className="block px-4 py-2.5 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
               </td>
               {r.stages.map((x) => (
                 <td key={x.n} className="p-0">
@@ -103,7 +103,7 @@ export function PipelineErrors({ rows }: { rows: { chainId: number; address: str
       {shown.map((r) => (
         <li key={`${r.chainId}/${r.address}`} className={cn('flex items-start gap-1 text-xs', r.paused ? 'text-muted-foreground' : 'text-fault')}>
           {r.paused ? null : <Warn className="size-3.5" />}
-          <span><Link href={`/c/${r.chainId}/${r.address}#reading`} className="font-medium hover:underline">{r.name ?? short(r.address)}</Link> · {r.paused ? pausedError(r.error!, r.rpc, r.chainId) : lastReadFailed(r.error!)}</span>
+          <span><Link href={`/c/${r.chainId}/${r.address}#reading`} prefetch={false} className="font-medium hover:underline">{r.name ?? short(r.address)}</Link> · {r.paused ? pausedError(r.error!, r.rpc, r.chainId) : lastReadFailed(r.error!)}</span>
         </li>
       ))}
     </ul>

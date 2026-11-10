@@ -116,16 +116,16 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                   <p className="text-sm font-medium text-foreground">{sales.highShare === 0 ? 'Nothing looks like wash trading' : 'Looks like wash trading'}</p>
                   <p className="mt-1 flex items-baseline gap-2">
                     <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
-                      <RangeFigure range={sales} end={(text, m) => <Link href={tradesHref(base, { caught: [m] })} className="hover:underline">{text}</Link>} />
+                      <RangeFigure range={sales} end={(text, m) => <Link href={tradesHref(base, { caught: [m] })} prefetch={false} className="hover:underline">{text}</Link>} />
                     </span>
                     <span className="text-sm text-muted-foreground">of sales</span>
                   </p>
                   <RangeBar range={sales} className="mt-2" />
                   <div className="mt-1.5"><RangeKey range={sales} /></div>
                   <p className="mt-3 text-sm tabular-nums text-muted-foreground">
-                    <Link href={tradesHref(base, { caught: [sales.low] })} className="hover:underline">{num(a.totals[sales.low].flaggedSales)}</Link>
-                    {sales.low === sales.high ? null : <>–<Link href={tradesHref(base, { caught: [sales.high] })} className="hover:underline">{num(a.totals[sales.high].flaggedSales)}</Link></>}
-                    {' of '}<Link href={tradesHref(base, {})} className="hover:underline">{num(a.totals.A.sales)}</Link> sales
+                    <Link href={tradesHref(base, { caught: [sales.low] })} prefetch={false} className="hover:underline">{num(a.totals[sales.low].flaggedSales)}</Link>
+                    {sales.low === sales.high ? null : <>–<Link href={tradesHref(base, { caught: [sales.high] })} prefetch={false} className="hover:underline">{num(a.totals[sales.high].flaggedSales)}</Link></>}
+                    {' of '}<Link href={tradesHref(base, {})} prefetch={false} className="hover:underline">{num(a.totals.A.sales)}</Link> sales
                     {volume === null ? null : <> · <VolumeDetail volume={volume} totals={a.totals} base={base} /></>}
                   </p>
                 </>

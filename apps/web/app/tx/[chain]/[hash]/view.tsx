@@ -137,7 +137,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
                       <div data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? lensTabHref(base, card.key, { evidence: true }) : undefined} /></div>
                       <p className="mt-1 text-sm">
                         {card.line}
-                        {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} className="font-medium text-foreground underline">{card.tab}</Link></>}
+                        {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} prefetch={false} className="font-medium text-foreground underline">{card.tab}</Link></>}
                       </p>
                     </li>
                   ))}

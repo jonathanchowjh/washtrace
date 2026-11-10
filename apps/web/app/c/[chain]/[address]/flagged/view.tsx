@@ -129,7 +129,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
       <div className="flex flex-wrap items-center gap-3">
         <nav aria-label="Lens" className="flex flex-wrap gap-1.5">
           {[...SHOWN, ...Object.keys(own) as LensKey[]].map((m) => (
-            <Link key={m} href={lensHref(m)} aria-current={lensOn(m) ? 'page' : undefined}
+            <Link key={m} href={lensHref(m)} prefetch={false} aria-current={lensOn(m) ? 'page' : undefined}
               className={cn('rounded-md border px-2.5 py-1 text-sm', lensOn(m) ? 'bg-card ring-1 ring-foreground' : 'bg-muted/50 hover:bg-card')}>
               <LensName m={m} own={own} />
             </Link>

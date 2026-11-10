@@ -82,10 +82,10 @@ export function Facts({ profile: p, creator, base, chainId }: { profile: Collect
     <span key="h" data-supply>{plural(p.holders, 'holder')}</span>,
     p.firstMint === null ? null : <>minted <Time ms={p.firstMint} style="date" /></>,
     sales === 0 ? 'no sale yet' : <>
-      <Link href={tradesHref(base, { sort: 'date', dir: 'asc' })} className="hover:underline">{plural(sales, 'sale')}</Link>
-      {sold.length === 1 ? `, all on ${sold[0]!.name}` : <>: {sold.slice(0, 3).map((v, i) => <span key={v.key}>{i > 0 ? ', ' : ''}{v.name} <Link href={tradesHref(base, { venues: [v.key] })} className="hover:underline">{num(v.sales)}</Link></span>)}{sold.length > 3 ? ` and ${sold.length - 3} more` : ''}</>}
+      <Link href={tradesHref(base, { sort: 'date', dir: 'asc' })} prefetch={false} className="hover:underline">{plural(sales, 'sale')}</Link>
+      {sold.length === 1 ? `, all on ${sold[0]!.name}` : <>: {sold.slice(0, 3).map((v, i) => <span key={v.key}>{i > 0 ? ', ' : ''}{v.name} <Link href={tradesHref(base, { venues: [v.key] })} prefetch={false} className="hover:underline">{num(v.sales)}</Link></span>)}{sold.length > 3 ? ` and ${sold.length - 3} more` : ''}</>}
     </>,
-    creator === null ? 'deployer unknown' : <>deployed by <Link href={walletHref(chainId, creator)} className="font-mono hover:underline">{short(creator)}</Link></>,
+    creator === null ? 'deployer unknown' : <>deployed by <Link href={walletHref(chainId, creator)} prefetch={false} className="font-mono hover:underline">{short(creator)}</Link></>,
   ];
   return (
     <p aria-label="The collection" className="text-sm text-muted-foreground tabular-nums">
@@ -128,8 +128,8 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
             <span className="min-w-0 flex-1 text-sm max-md:min-w-48"><span className="font-medium text-foreground">{r.name}</span> <span className="text-muted-foreground">· {r.does}</span></span>
             {totals[r.m].available ? (
               <>
-                <Link href={r.href} className="w-16 text-right text-base font-semibold tabular-nums text-foreground hover:underline max-md:ml-auto">{r.share}</Link>
-                <Link href={r.href} className="w-24 text-right text-xs text-muted-foreground tabular-nums hover:underline">{r.count}</Link>
+                <Link href={r.href} prefetch={false} className="w-16 text-right text-base font-semibold tabular-nums text-foreground hover:underline max-md:ml-auto">{r.share}</Link>
+                <Link href={r.href} prefetch={false} className="w-24 text-right text-xs text-muted-foreground tabular-nums hover:underline">{r.count}</Link>
               </>
             ) : <span className="w-40 text-right text-xs text-muted-foreground max-md:ml-auto" title={`${LENSES[r.m].name}: ${NOT_RUN}`}>{NOT_RUN}</span>}
             {r.note ? <span className="hidden w-36 text-xs text-muted-foreground sm:block max-md:ml-auto">{r.note}</span> : <span className="hidden w-36 md:block" />}
@@ -144,7 +144,8 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
 /**
  * The few tokens or wallets most of the flagged ETH went through, under
  * Linked wallets, each with the mark of its strongest evidence: a loop is a
- * round trip (the floor), a linked pair alone is money (the ceiling).
+ * round trip (the floor), a linked pair alone is money (the ceiling). Rows
+ * do not prefetch, as no list on the overview does: each would render a page.
  */
 export function TopList({ kind, rows, total, base, chainId }: {
   kind: 'tokens' | 'wallets'; rows: readonly (TokenLine | WalletLine)[]; total: number; base: string; chainId: number;
@@ -163,7 +164,7 @@ export function TopList({ kind, rows, total, base, chainId }: {
             return (
               <li key={'tokenId' in r ? r.tokenId : r.address}>
                 <HoverCard className="block" src={'tokenId' in r ? cardSrc(base, 'token', r.tokenId) : cardSrc(base, 'wallet', r.address)}>
-                <Link href={href} className="flex items-center gap-2.5 px-4 py-2 text-sm hover:bg-muted/60">
+                <Link href={href} prefetch={false} className="flex items-center gap-2.5 px-4 py-2 text-sm hover:bg-muted/60">
                   <TierMark tone={(r.loops ?? 0) > 0 ? 'cycle' : 'money'} />
                   <span className="flex-1 truncate font-mono text-foreground">{'tokenId' in r ? `#${tokenLabel(r.tokenId)}` : short(r.address)}</span>
                   <span className="tabular-nums text-foreground">{eth(r.volumeWei)}</span>
@@ -190,7 +191,7 @@ export function NotCounted({ apart, base }: { apart: number; base: string }) {
     <section aria-label="Looks suspicious, not counted" className="rounded-lg border border-dashed bg-card p-4">
       <h2 className="text-sm font-medium text-foreground">Looks suspicious, not counted</h2>
       <p className="mb-3 text-xs text-muted-foreground">Why the number is not higher</p>
-      <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} className="flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
+      <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
         <TierMark tone="apart" className="mt-1" />
         <span className="text-sm">
           <span className="font-medium text-foreground">{plural(apart, 'sale')} only {LENSES.AU.name} flags: money went back to the seller</span>
@@ -212,7 +213,7 @@ export function YourLenses({ runs, base, writable }: { runs: readonly { lens: Le
           const t = run?.totals ?? null;
           return (
             <li key={lens.key}>
-              <Link href={lensTabHref(base, lens.key, { evidence: true })} className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted/60">
+              <Link href={lensTabHref(base, lens.key, { evidence: true })} prefetch={false} className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted/60">
                 <TierMark tone="own" />
                 <span className="font-medium text-foreground">{lens.name}</span>
                 <span className="text-xs text-muted-foreground tabular-nums">{t === null ? 'not run yet' : `${pctTenth(t.flaggedSales, t.sales)} · ${plural(t.flaggedSales, 'sale')}`}</span>

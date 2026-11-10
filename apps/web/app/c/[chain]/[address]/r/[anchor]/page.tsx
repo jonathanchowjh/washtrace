@@ -92,9 +92,9 @@ export default async function RingPage(props: Props) {
       <section aria-label="What it adds up to" className="flex flex-wrap items-center gap-6 rounded-lg border bg-card p-4">
         <RingFigure wallets={wallets} total={line.wallets} />
         <dl className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-          <div><dt className="text-xs text-muted-foreground">Flagged sales</dt><dd className="text-xl font-semibold tabular-nums"><Link href={sales} className="hover:underline">{num(line.sales)}</Link></dd></div>
-          <div><dt className="text-xs text-muted-foreground">Of them round trips</dt><dd className="text-xl font-semibold tabular-nums"><Link href={tradesHref(base, { ring: anchor, caught: ['A'] })} className="hover:underline">{num(line.floorSales)}</Link></dd></div>
-          <div><dt className="text-xs text-muted-foreground">ETH they moved</dt><dd className="text-xl font-semibold tabular-nums"><Link href={tradesHref(base, { ring: anchor, sort: 'price', dir: 'desc' })} className="hover:underline">{eth(line.volumeWei, '')}</Link></dd></div>
+          <div><dt className="text-xs text-muted-foreground">Flagged sales</dt><dd className="text-xl font-semibold tabular-nums"><Link href={sales} prefetch={false} className="hover:underline">{num(line.sales)}</Link></dd></div>
+          <div><dt className="text-xs text-muted-foreground">Of them round trips</dt><dd className="text-xl font-semibold tabular-nums"><Link href={tradesHref(base, { ring: anchor, caught: ['A'] })} prefetch={false} className="hover:underline">{num(line.floorSales)}</Link></dd></div>
+          <div><dt className="text-xs text-muted-foreground">ETH they moved</dt><dd className="text-xl font-semibold tabular-nums"><Link href={tradesHref(base, { ring: anchor, sort: 'price', dir: 'desc' })} prefetch={false} className="hover:underline">{eth(line.volumeWei, '')}</Link></dd></div>
         </dl>
         <MoreLink href={sales} className="basis-full">All its {plural(line.sales, 'sale')} →</MoreLink>
       </section>
@@ -119,7 +119,7 @@ export default async function RingPage(props: Props) {
                   {g.list.map((w) => (
                     <li key={w.address}>
                       <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
-                        <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
+                        <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} prefetch={false} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
                           <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
                         </Link>
                       </HoverCard>
@@ -137,9 +137,9 @@ export default async function RingPage(props: Props) {
           <ul className="divide-y rounded-lg border bg-card">
             {tokens.map((t) => (
               <li key={t.tokenId} className="flex items-center gap-3 px-4 py-2 text-sm">
-                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={withFrom(`${base}/t/${t.tokenId}`, member('tokens'))} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
-                <Link href={tradesHref(base, { ring: anchor, token: t.tokenId })} className="text-xs text-muted-foreground tabular-nums hover:underline">{plural(t.sales, 'sale')}</Link>
-                <Link href={tradesHref(base, { ring: anchor, token: t.tokenId, sort: 'price', dir: 'desc' })} className="w-20 text-right tabular-nums hover:underline">{eth(t.volumeWei)}</Link>
+                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={withFrom(`${base}/t/${t.tokenId}`, member('tokens'))} prefetch={false} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
+                <Link href={tradesHref(base, { ring: anchor, token: t.tokenId })} prefetch={false} className="text-xs text-muted-foreground tabular-nums hover:underline">{plural(t.sales, 'sale')}</Link>
+                <Link href={tradesHref(base, { ring: anchor, token: t.tokenId, sort: 'price', dir: 'desc' })} prefetch={false} className="w-20 text-right tabular-nums hover:underline">{eth(t.volumeWei)}</Link>
               </li>
             ))}
           </ul>

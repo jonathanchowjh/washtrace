@@ -202,7 +202,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           {/* With more than one page the pager below says which rows these are; the flagged count is all that is left to say here. */}
           <p className="text-sm text-muted-foreground tabular-nums">
             {pageCount > 1 ? null : <>Showing {num(shown[0] === undefined ? 0 : 1)}–{num(shown.length)} of {num(kept.length)} transfers</>}
-            {shownFlagged === 0 ? null : <>{pageCount > 1 ? null : ' · '}{show === 'all' ? <Link href={hrefFor(1, 'flagged')} className="hover:underline">{num(shownFlagged)} flagged</Link> : `${num(shownFlagged)} flagged`}</>}
+            {shownFlagged === 0 ? null : <>{pageCount > 1 ? null : ' · '}{show === 'all' ? <Link href={hrefFor(1, 'flagged')} prefetch={false} className="hover:underline">{num(shownFlagged)} flagged</Link> : `${num(shownFlagged)} flagged`}</>}
           </p>
         </div>
         {kept.length === 0 ? (
