@@ -12,7 +12,7 @@ token in the console and see the verdict described here.
   joins them. A bridge is never flagged and never counted, and the share of bridges is the paper's
   missing-data share. Mints and burns are not trades.
 - **The money graph**, one per collection. Each payment between two wallets is an edge from payer to payee: ETH,
-  internal ETH, WETH and Blur Pool, and, when they are read, payments in [Other tokens](../README.md#concepts).
+  internal ETH, WETH and Blur Pool, and, when they are read, payments in [Other tokens](console.md#reading-money).
   The worker reads who paid whom for every trader, then follows the money out `follow.hops` wallets (default 3),
   so a payment can return through wallets that never traded the collection.
 

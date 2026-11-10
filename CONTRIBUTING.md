@@ -6,8 +6,8 @@ flags, on the demo's tokens, is in [doc/methods.md](doc/methods.md). The routes
 are in [doc/api.md](doc/api.md), the tables and files a dataset user sees in
 [doc/stored-data.md](doc/stored-data.md), and upgrading in
 [doc/upgrading.md](doc/upgrading.md). Every environment variable
-and console setting is in the README's [Configuration](README.md#configuration)
-table; [.env.example](.env.example) is the same list as a template.
+and console setting is in [doc/operating.md](doc/operating.md#settings);
+[.env.example](.env.example) is the same list as a template.
 
 ## Setup
 
@@ -79,7 +79,7 @@ for a checkpoint that does not typecheck yet.
 
 ### Dev-only environment variables
 
-These are read by scripts, not by the product, and are not in the README's table
+These are read by scripts, not by the product, and are not in the settings table
 or `.env.example`.
 
 | Variable | Read by | Meaning |
@@ -175,7 +175,7 @@ scripts/
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
-doc/                      Reference pages: methods.md, operating.md, api.md, upgrading.md, stored-data.md; images/ holds the demo screenshots
+doc/                      Reference pages: methods.md, console.md, operating.md, api.md, upgrading.md, stored-data.md; images/ holds the demo screenshots
 paper/                    The paper and its slides (PDF)
 LICENSE, CITATION.cff     MIT for the code; how to cite the paper
 .githooks/pre-commit      See the hook above

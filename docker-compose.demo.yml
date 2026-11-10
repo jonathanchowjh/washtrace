@@ -3,8 +3,9 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 #
-# Then http://localhost:8080. The worker reads the collection on its next
-# ingest pass and analyzes it on the analyze pass after: about two minutes.
+# Then http://localhost:8080. The worker reads the collection within a minute;
+# its verdicts arrive about seven minutes after the seeder finishes, since
+# analyses of one collection are spaced five minutes apart (ANALYZE_GAP_MS).
 services:
   anvil:
     image: ghcr.io/foundry-rs/foundry:v1.5.1

@@ -1,0 +1,70 @@
+# The console
+
+For people reading verdicts in the console: what each page shows, the words it uses, and how to write a lens of
+your own. The console runs on port 8080 (see the README's [Quick start](../README.md#quick-start)); everything it
+shows is also in the [API](api.md).
+
+## Pages
+
+| Route | Content | Refresh |
+|---|---|---|
+| `/` | Watched collections, each with the share of its sales and volume that looks washed (Round trips to Linked wallets) and how complete the reading is. A form to watch another. | 15 s |
+| `/c/{chain}/{address}` | One collection: how far it has been read, the answer as that range, a tab per lens, each lens's share over time, and the six stages of the reading. | 15 s |
+| `/c/{chain}/{address}/flagged` | Every token or wallet one lens flags, most flagged first. `?method=AU&kind=wallets&page=2`. | On open |
+| `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
+| `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |
+| `/w/{chain}/{address}` | One wallet: how many of its trades are flagged, whether its money has been read, and who it moved money with. | On open |
+| `/tx/{chain}/{hash}` | One transaction's verdict. | On open |
+| `/search?q=` | A collection name, token number (`#1234`), wallet address or transaction hash. The sidebar search goes to the one thing it finds (via `/go`), else here. | On open |
+| `/settings` | The settings in [operating.md](operating.md#settings), where each value came from, and a Test for the RPC and Etherscan. | On open |
+| `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
+
+Times are clock times in the reader's time zone, changeable at the foot of the sidebar.
+
+## Words it uses
+
+### Reading a verdict
+
+- **Lens.** One rule for what counts as a wash trade: the three methods, and [yours](#your-own-lenses).
+- **Share.** The part of the trades a lens judged that it flags. The collection page leads with sales; the
+  analysis also gives changes of owner and volume.
+- **Judged.** Looked at by a lens. "Not judged yet" is a trade past the block the latest analysis or run read to,
+  never shown as clean. Burns and moves into or out of custody are not trades and are never judged.
+- **So far / at least.** "So far": reads still running can move the share. "At least": waiting will not close it
+  (a search cap, a missing Etherscan key, a limit).
+
+### Reading money
+
+- **Money read.** How many traders are checked, and how many wallets out the worker follows.
+- **Wallets out.** Hops of money followed out of a trader (`follow.hops`, "Follow money (wallets out)"), so a
+  payment can return through wallets that never traded the collection.
+- **Wallets between.** The wallets on a loop between seller and buyer.
+- **Reach.** The wallets a collection's money has been walked to. The console says "Finding the wallets up to N
+  wallets out".
+- **Read again.** Reading a trader's money and other tokens a second time after it trades again
+  (`follow.reread`, off by default; see [operating.md](operating.md#reading-traders-again)).
+- **Other tokens.** An edge type for payments in a fixed list of tokens (USDC, USDT, DAI and APE on Ethereum; USDC
+  and DAI on Base; none elsewhere), with no smallest amount: washtrace has no prices.
+- **Payees.** The wallets a trader paid in those tokens; reading their tokens too is off by default
+  (`tokens.payees`).
+
+### In a token's graph
+
+- **Custody.** A contract holding a token without owning it, such as a Blur Blend loan. A → escrow → B is one hop
+  A → B; A → escrow → A is none.
+- **Bridge.** The paper's fix for missing transfers: an unobserved edge from a token's last holder to the next
+  sender. Never flagged or counted; the console does not name it.
+
+## Your own lenses
+
+A lens of yours sits beside the three methods on a collection's page; **Copy to new lens** starts from one of
+them. The editor sets which edges may carry the way back to the seller (NFT transfers, ETH, internal ETH, WETH
+including Blur Pool, Other tokens), the wallets between seller and buyer, a time window, and which trades it
+judges (sales, or every change of owner). **Advanced** shows the rest: each edge's direction, limit, smallest
+payment and repeat rule, where the loop closes, the order in time, how many loops a trade needs, and wallets a
+loop never passes through.
+
+**Data this lens needs** says which reads the rule is short of, money that many wallets out or Other tokens; a
+button asks the worker for them, and the share reads "so far" meanwhile. **Preview** tries the unsaved rule on a
+sample of 2,000 sales (`PREVIEW_SAMPLE`) and compares its catch with Round trips. **Save and run** queues the
+lens's run. The lens routes are in [api.md](api.md).
