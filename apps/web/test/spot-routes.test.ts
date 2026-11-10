@@ -107,4 +107,11 @@ describe('fromVerdict', () => {
       transfers: [{ ...sale, collection: C, flags: { A: { kind: 'scc', wallets: [A, B], cycles: 2 } } }],
     });
   });
+
+  it('a stored clean answer without Linked wallets is not judged, as a spot check would say', () => {
+    const clean = { ...judgedView, transfers: [{ ...judgedView.transfers[0]!, flags: {} }], washTrade: false, by: [] };
+    expect(fromVerdict({ ...clean, notRun: ['AU', 'AC'] } as never).washTrade).toBeNull();
+    // Money loops back is not counted, so without it a clean answer stands.
+    expect(fromVerdict({ ...clean, notRun: ['AU'] } as never).washTrade).toBe(false);
+  });
 });

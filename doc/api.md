@@ -184,8 +184,9 @@ and between wallets in one. The console's Check this transaction button uses the
 | `GET /api/spots/{id}` | | 200, 404 | `id`, `chainId`, `tx`, `lens`, `status` (`queued`, `running`, `done`, `failed`), `result`, `error`, `requestedAt`, `finishedAt` |
 
 - **200 at once.** With no `lens`, a transaction every transfer of which a watched collection's latest analysis
-  judged is answered from the store, `result.source: 'watched'`. With a lens it is always queued: stored verdicts
-  hold only the built-ins.
+  judged is answered from the store, `result.source: 'watched'`. That answer holds only the transfers of
+  collections you watch: a token of another collection in the same transaction is not in it. With a lens it is
+  always queued: stored verdicts hold only the built-ins.
 - **Reuse.** A check of the same transaction, with the same lens at the same version, that is queued or running is
   shared (`reused: true`), so two requests at once make one check. A done one is answered again for an hour when
   its block was final. A failed one is asked again.
@@ -195,7 +196,8 @@ and between wallets in one. The console's Check this transaction button uses the
 - **A failed check's `error`** says why: `No such transaction on chain N.`, `This transaction reverted.`, `This
   transaction moved only ERC-1155 tokens, which washtrace does not read.`, `This transaction moved no ERC-721
   token.`, `This transaction holds no trade: a mint, a burn or a move into or out of custody.`, `No RPC is configured
-  for chain N. Set WASHTRACE_RPC_N.`, `That lens was removed.`, `That lens was edited; ask again.`
+  for chain N. Set WASHTRACE_RPC_N.`, `Reading the history of token N took longer than a spot check allows: this RPC
+  answers only narrow log queries.`, `That lens was removed.`, `That lens was edited; ask again.`
 
 **The result** has the verdict keys' meaning, in one shape for both sources:
 
@@ -204,7 +206,7 @@ and between wallets in one. The console's Check this transaction button uses the
 | `washTrade` | `true` when a counted method flags a trade (Round trips or Linked wallets; with a lens, that lens). `false` only when each of them ran on every trade, nothing is `atLeast`, and none flagged. Otherwise `null`. |
 | `methods` | The counted methods, or the lens, that flagged. |
 | `notRun` | What could not run: `AU` always on a spot check; `AC` (or the lens) without an Etherscan key or when a seller's or buyer's money could not be read. |
-| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, or a lens needs money further out than the sellers and buyers. |
+| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, more than 200 other transactions joined the wallets (a payment whose receipt is not read is left out, since it may be another sale's price), a lens needs money further out than the sellers and buyers, or a lens skipped a trade (one no marketplace filled, when it judges sales; an untimed one, under a window or loop order) or its search hit its cap. |
 | `finalized` | The transaction's block was final when read. A check of one that was not is never reused. |
 | `source` | `spot` or `watched`. |
 | `transfers` | The transaction's transfers, each with its `collection` and `flags`: a built-in's witness as in the verdict keys, or a lens's `{path, wallets}`. |

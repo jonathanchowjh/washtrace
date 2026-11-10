@@ -72,6 +72,15 @@ describe('SpotCheck', () => {
     expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ chainId: 1, tx: TX, lens: 'L7' });
   });
 
+  it('choosing another lens clears the last answer, which was not that lens\'s', async () => {
+    routes({ status: 200, body: { status: 'done', result: { ...linked, source: 'watched' } } });
+    const c = view();
+    await check(c);
+    expect(c.container.textContent).toContain('Flagged as a wash trade by Linked wallets.');
+    fireEvent.change(c.getByLabelText('Judge with'), { target: { value: 'L7' } });
+    expect(c.container.textContent).not.toContain('Flagged as a wash trade');
+  });
+
   it('an at-least answer never reads as clean', async () => {
     routes({ status: 202, body: { id: 43, status: 'queued' } }, [
       { status: 200, body: { id: 43, status: 'done', result: { ...linked, washTrade: null, methods: [], atLeast: true, transfers: [{ ...sale, flags: {} }] } } },

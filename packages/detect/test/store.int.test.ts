@@ -7110,11 +7110,12 @@ describe('spot checks', () => {
     await store.saveMoney(77, empty, [], false, undefined, null);
     const at = await store.moneyCovering(77, [covered, older, empty, waiting], 40_000);
     expect(at.get(covered)).toEqual({ from: null, truncated: false });
-    // A day of blocks (7,200) before the one after its last read.
-    expect(at.get(older)).toEqual({ from: 30_000 + 1 - 7_200, truncated: true });
+    // A truncated read is a hub either way, and reading on could save it as untruncated over its gap: never read on.
+    expect(at.get(older)).toEqual({ from: null, truncated: true });
     // A read that found no rows has no block: it reads again from 0.
     expect(at.get(empty)).toEqual({ from: 0, truncated: false });
     expect(at.has(waiting)).toBe(false);
+    // A day of blocks (7,200) before the one after its last read.
     expect((await store.moneyCovering(77, [covered], 90_000)).get(covered)).toEqual({ from: 50_000 + 1 - 7_200, truncated: false });
     // Floored at 0 near the chain's start.
     await store.saveMoney(77, waiting, [flow(waiting, x, { blockNumber: 100 })], false, undefined, 100);

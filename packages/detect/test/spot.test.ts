@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toEventSelector, type Log } from 'viem';
 import type pg from 'pg';
-import { SPOT_TRADES_MAX, SpotCheck, counterparties, lensRefusal, middlesOf, receiptTrades } from '../src/spot.js';
+import { SPOT_CHECK_MS, SPOT_RECEIPTS_MAX, SPOT_TRADES_MAX, SpotCheck, counterparties, lensRefusal, middlesOf, receiptTrades } from '../src/spot.js';
 import { Store } from '../src/store.js';
 import { Chain } from '../src/chain.js';
 import { Etherscan } from '../src/etherscan.js';
@@ -49,7 +49,7 @@ interface Setup {
 
 /** A SpotCheck over a chain, an Etherscan and a store that answer from `s`, recording what was asked. */
 function setup(s: Setup) {
-  const asked = { read: [] as [string, number | undefined][], added: [] as string[], saved: [] as string[], histories: [] as string[] };
+  const asked = { read: [] as [string, number | undefined][], added: [] as string[], saved: [] as string[], histories: [] as string[], untils: [] as number[] };
   const db = new Map<string, Flow[]>(Object.entries(s.stored ?? {}).map(([a, r]) => [a, r.flows]));
 
   const store = new Store(null as unknown as pg.Pool);
@@ -72,8 +72,9 @@ function setup(s: Setup) {
     logs: s.logs ?? all.filter((t) => t.txHash === TX).map((t) => nftLog(t)),
   });
   chain.finalized = async () => 1_000;
-  chain.tokenTransfers = async (collection, tokenId) => {
+  chain.tokenTransfers = async (collection, tokenId, _from, _to, until) => {
     asked.histories.push(`${collection}:${tokenId}`);
+    asked.untils.push(until ?? Infinity);
     return (s.history[collection] ?? []).filter((t) => t.tokenId === tokenId).map((t) => ({ ...t }));
   };
   chain.receipts = async (txs) => new Map(txs.map((t) => [t, s.legs?.[t] ?? []]));
@@ -237,6 +238,37 @@ describe('SpotCheck.run', () => {
     expect(asked.histories).toHaveLength(SPOT_TRADES_MAX);
     expect(r.atLeast).toBe(true);
     expect(r.washTrade).toBeNull();
+  });
+
+  it('reads each token\'s history within the check\'s deadline', async () => {
+    const { check, asked } = setup({ history: plainSale(), etherscan: false });
+    const before = Date.now();
+    await check.run(TX, null);
+    expect(asked.untils).toHaveLength(1);
+    expect(asked.untils[0]).toBeGreaterThanOrEqual(before + SPOT_CHECK_MS);
+    expect(asked.untils[0]).toBeLessThanOrEqual(Date.now() + SPOT_CHECK_MS);
+  });
+
+  it('a payment whose receipt was not read is no link: unread, it may be another sale\'s price', async () => {
+    // Every payment is the price of another sale of the collection; past the cap the last receipt is never read.
+    const legs = Array.from({ length: SPOT_RECEIPTS_MAX + 1 }, (_, i) => flow(B, S, { txHash: pad(`1e${i}`), blockNumber: 100 + i }));
+    const receipts = Object.fromEntries(legs.map((f, i) => [f.txHash, [nftLog(transfer(String(100 + i), S, B, { txHash: f.txHash, blockNumber: f.blockNumber }))]]));
+    const r = await setup({ history: plainSale(), money: { [S]: { flows: legs }, [B]: { flows: legs } }, legs: receipts }).check.run(TX, null);
+    expect(r.methods).toEqual([]);
+    expect(r.atLeast).toBe(true);
+    expect(r.washTrade).toBeNull();
+  });
+
+  it('a lens that skipped a trade is at least, never clean', async () => {
+    const back = flow(B, S, { blockNumber: 510, blockTime: 2_000 });
+    const money = { [S]: { flows: [back] }, [B]: { flows: [back] } };
+    // A lens judging sales only skips a transfer no marketplace filled; a window cannot be measured from an untimed trade.
+    for (const rule of [{ ...COPIES.AC.rule, judges: 'sales' as const }, { ...COPIES.AC.rule, window: { days: 30, side: 'either' as const } }]) {
+      const r = await setup({ history: plainSale(), money }).check.run(TX, { key: 'L9', rule });
+      expect(r.methods).toEqual([]);
+      expect(r.atLeast).toBe(true);
+      expect(r.washTrade).toBeNull();
+    }
   });
 
   it('a saved lens runs on the transaction\'s trades only', async () => {

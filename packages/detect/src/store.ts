@@ -3825,7 +3825,7 @@ export class Store {
 
   /**
    * The wallets among `wallets` whose money read is done, each with `from`:
-   * null when its read reached `block` (it covers the trade), else the block
+   * null when its read reached `block` (it covers the trade) or was truncated (a hub, never read on), else the block
    * to read on from, as rereadFrom gives (a day of blocks back, floored at
    * 0; 0 for a read with no rows, which recorded no block).
    */
@@ -3837,7 +3837,8 @@ export class Store {
     const out = new Map<string, { from: number | null; truncated: boolean }>();
     for (const r of rows) {
       const reached = r.read_block === null ? null : Number(r.read_block);
-      const from = reached !== null && reached >= block ? null : reached === null ? 0 : Math.max(0, reached + 1 - REREAD_OVERLAP_BLOCKS);
+      // A truncated read is a hub whatever more is read, and reading on could save it untruncated over its gap.
+      const from = r.truncated || (reached !== null && reached >= block) ? null : reached === null ? 0 : Math.max(0, reached + 1 - REREAD_OVERLAP_BLOCKS);
       out.set(r.address, { from, truncated: r.truncated });
     }
     return out;

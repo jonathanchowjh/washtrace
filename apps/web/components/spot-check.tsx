@@ -93,7 +93,8 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-sm" htmlFor="spot-lens">Judge with</label>
-        <select id="spot-lens" className="rounded-md border px-2 py-1 text-sm" value={lens} onChange={(e) => setLens(e.target.value)} disabled={running}>
+        <select id="spot-lens" className="rounded-md border px-2 py-1 text-sm" value={lens}
+          onChange={(e) => { setLens(e.target.value); setResult(null); setError(null); setStatus(null); }} disabled={running}>
           <option value="">Built-in methods</option>
           {lenses.map((l) => (
             <option key={l.key} value={l.key} disabled={l.refusal !== null} title={l.refusal ?? undefined}>

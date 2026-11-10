@@ -144,7 +144,7 @@ export class SpotCheck {
     if (tokens.length > SPOT_TRADES_MAX) atLeast = true;
     const histories = new Map<string, Transfer[]>();
     for (const t of tokens.slice(0, SPOT_TRADES_MAX)) {
-      const read = await this.chain.tokenTransfers(t.collection, t.tokenId, await this.startOf(t.collection), to);
+      const read = await this.chain.tokenTransfers(t.collection, t.tokenId, await this.startOf(t.collection), to, this.deadline);
       // The checked transfers themselves, should a provider's logs lag its receipts.
       for (const m of moved) {
         if (m.collection === t.collection && m.tokenId === t.tokenId && !read.some((r) => r.txHash === m.txHash && r.logIndex === m.logIndex)) {
@@ -218,14 +218,16 @@ export class SpotCheck {
     const near = new Set([...wallets, ...state.keys()]);
     const legs = [...new Set(flows.filter((f) => (pairs.has(f.from) && near.has(f.to)) || (pairs.has(f.to) && near.has(f.from)))
       .map((f) => f.txHash).filter((h) => !histTxs.has(h)))];
-    if (legs.length > SPOT_RECEIPTS_MAX) atLeast = true;
+    // A leg whose receipt is not read may be a sale's price, so its flows are dropped: that can only lose a flag.
+    const unread = new Set(legs.slice(SPOT_RECEIPTS_MAX));
+    if (unread.size > 0) atLeast = true;
     const saleLegs = new Set<string>();
     if (legs.length > 0) {
       for (const [h, logs] of await this.chain.receipts(legs.slice(0, SPOT_RECEIPTS_MAX))) {
         if (logs.some((l) => l.topics.length === 4 && l.topics[0] === TRANSFER && histories.has(l.address.toLowerCase()))) saleLegs.add(h);
       }
     }
-    const money = flows.filter((f) => !saleLegs.has(f.txHash));
+    const money = flows.filter((f) => !saleLegs.has(f.txHash) && !unread.has(f.txHash));
 
     const flags = new Map<string, Record<string, Witness | Pick<LensFlag, 'path' | 'wallets'>>>();
     const flag = (collection: string, logIndex: number, key: string, witness: Witness | Pick<LensFlag, 'path' | 'wallets'>) => {
@@ -266,6 +268,9 @@ export class SpotCheck {
         };
         const mine = trades.filter((t) => t.collection === collection);
         const r = runLens(lens.rule, input, undefined, new Set(mine.map((t) => `${tx}:${hist[t.ref]!.logIndex}`)));
+        // A trade the lens skipped (no marketplace under "judges sales", untimed under a window or loop order) or
+        // whose search hit its cap was never judged, so it is never called clean.
+        if (r.judged < mine.length || r.totals.truncated > 0) atLeast = true;
         for (const f of r.flags) {
           if (f.txHash !== tx) continue;
           flag(collection, f.logIndex, lens.key, { path: f.path, wallets: f.wallets });

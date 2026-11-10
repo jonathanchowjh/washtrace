@@ -207,12 +207,30 @@ describe('Chain.tokenTransfers and Chain.receipt', () => {
     expect(got).toMatchObject([{ tokenId: '7', from: A, to: B, blockNumber: 100 }]);
   });
 
-  it('halves on a refusal, reads every part in order, and grows back', async () => {
-    let refusals = 2;
-    const { c, ranges } = node((from, to) => (refusals-- > 0 ? new Error('block range is too wide') : [log(7, from), log(7, to)]));
+  /** A provider that refuses any range wider than `cap` blocks, as many cap eth_getLogs. */
+  const capped = (cap: number) => (from: number, to: number) => (to - from + 1 > cap ? new Error('block range is too wide') : [log(7, from)]);
+
+  it('halves on a refusal and reads every part in order, never again as wide as a refused range', async () => {
+    const { c, ranges } = node(capped(300));
     const got = await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000);
-    expect(ranges).toEqual([[1, 1_000], [1, 500], [1, 250], [251, 750], [751, 1_000]]);
-    expect(got.map((t) => t.blockNumber)).toEqual([1, 250, 251, 750, 751, 1_000]);
+    // Growing back to 500 would be refused on every other query against a provider's fixed cap.
+    expect(ranges).toEqual([[1, 1_000], [1, 500], [1, 250], [251, 500], [501, 750], [751, 1_000]]);
+    expect(got.map((t) => t.blockNumber)).toEqual([1, 251, 501, 751]);
+  });
+
+  it('a later token starts at the width the first one was refused down to', async () => {
+    const { c, ranges } = node(capped(300));
+    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000);
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '8', 1, 1_000);
+    expect(ranges).toEqual([[1, 250], [251, 500], [501, 750], [751, 1_000]]);
+  });
+
+  it('stops with a sentence once the check\'s time is up', async () => {
+    const { c, ranges } = node(capped(300));
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Date.now() - 1))
+      .rejects.toThrow('Reading the history of token 7 took longer than a spot check allows: this RPC answers only narrow log queries.');
+    expect(ranges).toHaveLength(0);
   });
 
   it('rethrows a rate limit at once', async () => {

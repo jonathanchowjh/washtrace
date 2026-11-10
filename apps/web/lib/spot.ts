@@ -8,8 +8,10 @@ import type { TxVerdict } from './views';
  * reasons, and its blocks were final when ingest read them.
  */
 export function fromVerdict(v: TxVerdict): SpotResult {
+  // The store calls a transaction clean once every transfer is judged; a spot check, only once every counted method ran.
+  const ranAll = !v.notRun.some((m) => m === 'A' || m === 'AC');
   return {
-    washTrade: v.washTrade,
+    washTrade: v.washTrade === false && !ranAll ? null : v.washTrade,
     methods: v.by,
     notRun: v.notRun,
     atLeast: false,
