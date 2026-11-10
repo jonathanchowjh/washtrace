@@ -11,7 +11,9 @@ import { useZone } from './zone';
  *
  * A tick that lands while a refresh is in flight is skipped, not queued; a
  * hidden tab does not poll; and the stamp is the moment the request started,
- * so "updated at" is never later than the data.
+ * so "updated at" is never later than the data. A pending navigation is not
+ * looked for: the App Router tells only a Link's own children that it is
+ * pending, and a navigation that starts drops a refresh still in flight.
  */
 export function Refresh({ everyMs = 15_000 }: { everyMs?: number }) {
   const router = useRouter();
