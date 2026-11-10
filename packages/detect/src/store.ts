@@ -443,7 +443,8 @@ export type Parsed =
 export type SearchKind = 'collections' | 'tokens' | 'wallets' | 'trades';
 
 export interface SearchHits {
-  collections: { chainId: number; address: string; name: string | null; symbol: string | null }[];
+  /** `totals`: the latest analysis's, so a hit can say how washed it looks; null before the first. */
+  collections: { chainId: number; address: string; name: string | null; symbol: string | null; totals: Record<Method, MethodTotals> | null }[];
   tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number }[];
   /** `here`, in a scoped search: whether it traded in that collection. A full address is found anywhere, so it may not have. */
   wallets: { chainId: number; address: string; transfers: number; here?: boolean }[];
@@ -3228,9 +3229,11 @@ export class Store {
     const cut = <T>(rows: T[], k: SearchKind): T[] => { more[k] = rows.length > limit; return rows.slice(0, limit); };
     const page = [limit + 1, opts.offset ?? 0];
     const collections = async (where: string, arg: string) => cut((await this.pool.query(
-      `SELECT c.chain_id, c.address, c.name, c.symbol FROM washtrace.collections c WHERE ${where} ORDER BY c.name, c.id LIMIT $2 OFFSET $3`,
+      `SELECT c.chain_id, c.address, c.name, c.symbol, a.totals FROM washtrace.collections c
+       LEFT JOIN LATERAL (SELECT totals FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true
+       WHERE ${where} ORDER BY c.name, c.id LIMIT $2 OFFSET $3`,
       [arg, ...page],
-    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, symbol: r.symbol })), 'collections');
+    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, symbol: r.symbol, totals: r.totals ?? null })), 'collections');
     // The wallet index leads with chain_id, and only a chain with a watched collection can hold a wallet.
     // `here` is SQL for whether a wallet `w` traded in the scope; left out unscoped.
     const wallets = async (where: string, arg: string, here?: string) => cut((await this.pool.query(

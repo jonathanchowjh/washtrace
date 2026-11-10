@@ -22,7 +22,9 @@ async function dom(sp: Record<string, string>): Promise<HTMLElement> {
   const { default: SearchPage } = await import('@/app/search/page');
   return render(await SearchPage({ searchParams: Promise.resolve(sp) })).container;
 }
-const coll = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA' };
+const coll = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA', totals: null };
+// Round trips flags 18 of 100 sales, Linked wallets 25.
+const t = (flaggedSales: number, available = true) => ({ transfers: 100, flagged: flaggedSales, sales: 100, flaggedSales, volumeWei: '0', flaggedVolumeWei: '0', wallets: 0, tokens: 0, available });
 
 describe('the search page', () => {
   it('titles itself with the search and lists a name\'s collection as a link that says what it is', async () => {
@@ -136,6 +138,16 @@ describe('the search page', () => {
     expect(chipIn(`/c/1/${ADDR}/w/${W}`)).toBe('Traded here');
     expect(chipIn(`/w/1/${ADDR}`)).toBe('Never traded here');
     expect(chipIn(`/c/1/${ADDR}/tx/${TX}`)).toMatch(/^Tx 0xcccc/);
+  });
+
+  it('gives an analysed collection its range of washed sales in place of its symbol', async () => {
+    state.hits = { ...none, collections: [{ ...coll, totals: { A: t(18), AU: t(40), AC: t(25) } }] };
+    const chip = (await dom({ q: 'terra' })).querySelector(`a[href="/c/1/${ADDR}"] [data-chip]`)?.textContent;
+    expect(chip).toBe('18–25% of sales look washed');
+    cleanup();
+    // Only Round trips read: one share, not a range.
+    state.hits = { ...none, collections: [{ ...coll, totals: { A: t(18), AU: t(0, false), AC: t(0, false) } }] };
+    expect((await dom({ q: 'terra' })).querySelector('[data-chip]')?.textContent).toBe('18% of sales look washed');
   });
 
   it('offers no check for a pasted hash when no chain has an RPC', async () => {

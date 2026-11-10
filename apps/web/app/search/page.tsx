@@ -5,6 +5,7 @@ import type { SearchHits, SearchKind } from '@washtrace/detect';
 import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/ui';
 import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
+import { range, rangeEnds } from '@/lib/metrics';
 import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
 import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, type Scope } from '@/lib/search';
@@ -118,12 +119,19 @@ export default async function SearchPage({ searchParams }: Props) {
 const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'token', wallets: 'wallet', trades: 'transaction' };
 
 /**
- * What a hit knows besides its line, as a chip: a collection's symbol, whether
- * a wallet traded in the collection searched, a trade's transaction. A search
- * reads no verdict, so none is drawn.
+ * What a hit knows besides its line, as a chip: a collection's range of
+ * washed sales from its latest analysis (its symbol before the first), whether
+ * a wallet traded in the collection searched, a trade's transaction. A token,
+ * a wallet or a trade carries no verdict here, so none is drawn for them.
  */
 function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
-  if (kind === 'collections') return hits.collections[i]!.symbol;
+  if (kind === 'collections') {
+    const h = hits.collections[i]!;
+    const r = h.totals === null ? null : range(h.totals, 'sales');
+    if (r === null) return h.symbol;
+    const e = rangeEnds(r);
+    return `${e.same ? e.high : `${e.low}–${e.high}`} of sales look washed`;
+  }
   if (kind === 'wallets') {
     const here = hits.wallets[i]!.here;
     return here === undefined ? null : here ? 'Traded here' : 'Never traded here';

@@ -9,7 +9,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }
 const ADDR = '0x' + 'a'.repeat(40);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const hits = (over: Record<string, unknown>) => ({ collections: [], tokens: [], wallets: [], trades: [], more, ...over });
-const terra = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA' };
+const terra = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA', totals: null };
 
 const fetchMock = vi.fn();
 beforeEach(() => {

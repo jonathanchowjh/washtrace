@@ -4180,6 +4180,14 @@ describe('Store.search', () => {
       expect(byName.more.collections).toBe(false);
       expect((await store.search({ kind: 'text', text: '100%' })).collections).toEqual([]);
       expect((await store.search({ kind: 'text', text: '%' })).collections).toEqual([]);
+      // A hit carries its latest analysis's totals, and none before the first.
+      expect(byName.collections.map((r) => r.totals)).toEqual([null, null]);
+      const save = (n: number) => store.pool.query(
+        `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches)
+         VALUES ($1, 1, 100, $2, 0, 0, 0, 0)`, [one, JSON.stringify({ A: { sales: n } })]);
+      await save(1);
+      await save(2);
+      expect((await store.search({ kind: 'address', address: c1 })).collections[0]!.totals).toEqual({ A: { sales: 2 } });
 
       // Token 7 is in both collections, token 8 in one; busiest first.
       const tokens = (await store.search({ kind: 'token', tokenId: '7', text: '7' })).tokens;
