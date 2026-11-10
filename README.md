@@ -24,8 +24,6 @@ marketplaces and three corrections are new.
   [operating it](doc/operating.md), the [API](doc/api.md), and
   [CONTRIBUTING.md](CONTRIBUTING.md) for working on the code.
 
-![The demo's collection page: 18–25% of sales look like wash trading, 10 of 56 as round trips and up to 14 counting wallets linked by money](doc/images/collection.png)
-
 ## Quick start
 
 Requires Docker with Compose 2.24 or later.
