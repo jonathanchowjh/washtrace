@@ -8,7 +8,7 @@ import { LOCAL_ONLY } from '@/lib/auth';
 import type { Method } from '@washtrace/detect';
 import { LENSES } from '@/lib/format';
 import { DataNeeds } from './data-needs';
-import { send } from './lens-actions';
+import { send } from '@/lib/send';
 import { Preview } from './preview';
 import { RuleTable } from './rule-table';
 import { lensTabHref } from '@/lib/links';

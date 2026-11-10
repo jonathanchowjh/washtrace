@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/ui';
 import { LOCAL_ONLY } from '@/lib/auth';
+import { send } from '@/lib/send';
 import { LENSES, STAGES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
@@ -59,10 +60,7 @@ type Said = { ok: boolean; text: string };
 
 /** POST /api/settings: save a value, or clear it with null. The error the API gave, or null. */
 async function save(key: string, value: string | null): Promise<string | null> {
-  const res = await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, value }) }).catch(() => null);
-  if (res?.ok) return null;
-  const said = res ? await res.json().catch(() => ({})) : {};
-  return said.error ?? 'The service did not answer.';
+  return (await send('/api/settings', 'POST', { key, value })).error;
 }
 
 /**

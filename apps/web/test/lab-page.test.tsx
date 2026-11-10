@@ -104,6 +104,28 @@ describe('a row\'s preview', () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });
+
+  it('keeps asking through a failed poll, a page that is no JSON included, and says so, till the preview answers', async () => {
+    vi.useFakeTimers();
+    let polls = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, status: 202, json: async () => ({ id: 5 }) };
+      polls++;
+      if (polls === 1) return { ok: false, status: 500, json: async () => { throw new SyntaxError('not JSON'); } };
+      return { ok: true, status: 200, json: async () => ({ status: 'done', progress: 1, error: null, result: { caught: 2, sampled: 8, judged: 8 } }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { RowPreview } = await import('@/components/row-preview');
+    render(<RowPreview chainId={1} address={A} rule={DEFAULT_RULE} writable />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(/Lost touch with the service/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Previewing…' }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByText('Caught 25.0% of 8 sales judged')).toBeTruthy();
+    expect(screen.queryByText(/Lost touch/)).toBeNull();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 });
 
 describe('the rule picture', () => {

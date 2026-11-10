@@ -6,7 +6,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { send } from './lens-actions';
+import { send } from '@/lib/send';
 import { KindIcon } from './kit';
 
 /** One watched collection in a lens's Runs on list: where its run stands, its share, what data it still needs, and its tab. */

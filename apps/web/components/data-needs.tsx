@@ -7,7 +7,8 @@ import { moneyReason, pendingUpTo, tokensReason } from '@washtrace/detect/lens-r
 import type { MoneyRead, TokenCounts } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, about, floorTime, num, plural } from '@/lib/format';
-import { BUTTON, send } from './lens-actions';
+import { BUTTON } from './lens-actions';
+import { send } from '@/lib/send';
 
 /** `asks`: the action is a button that changes this collection, not a link. */
 type Line = { key: string; text: ReactNode; action?: ReactNode; asks?: boolean; error?: string | null };
