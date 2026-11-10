@@ -104,3 +104,12 @@ export function walletHref(chainId: number, address: string, within?: string | n
 export function txHref(chainId: number, hash: string, within?: string | null): string {
   return within ? `${within}/tx/${hash}` : `/tx/${chainId}/${hash}`;
 }
+
+/**
+ * A lens's tab on the collection's Methods page (`base`, the collection's):
+ * with `lens`, its editor (`new`, `copy-<key>`, `edit-<key>`); with
+ * `evidence`, scrolled to the lens's panel.
+ */
+export function lensTabHref(base: string, method: string, o: { lens?: string; evidence?: boolean } = {}): string {
+  return `${base}/methods?method=${encodeURIComponent(method)}${o.lens === undefined ? '' : `&lens=${o.lens}`}${o.evidence ? '#evidence' : ''}`;
+}

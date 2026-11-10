@@ -289,7 +289,7 @@ describe('the token page with lenses of yours', () => {
     expect(c.textContent).not.toContain('Not yet');
     for (const li of items.slice(1)) expect(li.querySelector('button')?.textContent).toBe('Show in graph');
     const lens = [...items[1]!.querySelectorAll('a')].find((a) => a.textContent === 'Fast flips');
-    expect(lens?.getAttribute('href')).toBe(`/c/1/${ADDR}?method=L7#evidence`);
+    expect(lens?.getAttribute('href')).toBe(`/c/1/${ADDR}/methods?method=L7#evidence`);
     expect([...items[1]!.querySelectorAll('a')].find((a) => a.textContent === '1')?.getAttribute('href')).toBe('#t1');
   });
 
@@ -335,8 +335,8 @@ describe('the token page with lenses of yours', () => {
     const c = await dom();
     // The fifth column, "Lenses that flag it".
     const chips = (id: string) => [...c.querySelectorAll(`#${id} td:nth-child(5) a`)].map((a) => [a.textContent, a.getAttribute('href')]);
-    expect(chips('t1')).toEqual([['Round trips', `/c/1/${ADDR}?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}?method=L7#evidence`]]);
-    expect(chips('t2')).toEqual([['Round trips', `/c/1/${ADDR}?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}?method=L7#evidence`], ['Slow loops', `/c/1/${ADDR}?method=L8#evidence`]]);
+    expect(chips('t1')).toEqual([['Round trips', `/c/1/${ADDR}/methods?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}/methods?method=L7#evidence`]]);
+    expect(chips('t2')).toEqual([['Round trips', `/c/1/${ADDR}/methods?method=A#evidence`], ['Fast flips', `/c/1/${ADDR}/methods?method=L7#evidence`], ['Slow loops', `/c/1/${ADDR}/methods?method=L8#evidence`]]);
   });
 
   it('no lens code in text, aria-label or title', async () => {

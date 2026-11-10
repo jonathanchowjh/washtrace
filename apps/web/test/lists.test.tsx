@@ -82,7 +82,7 @@ vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found
 afterEach(() => { cleanup(); Object.assign(state, fresh()); });
 
 async function collectionPage(sp: Record<string, string> = {}): Promise<HTMLElement> {
-  const { default: Page } = await import('@/app/c/[chain]/[address]/page');
+  const { default: Page } = await import('@/app/c/[chain]/[address]/methods/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 /** The Tokens or Wallets list, as `kind` picks, with the rest of `sp` as its address bar. */
@@ -135,12 +135,12 @@ describe('the lens lists on the collection page', () => {
   it('sort links keep the lens and end in #evidence; Next appears past ten', async () => {
     state.tokens = { rows: tokens(10), total: 25 };
     const el = list(await collectionPage({ method: 'A' }), 'tokens');
-    expect(named(el, 'share')).toEqual([`${BASE}?method=A&ts=share#evidence`]);
-    expect(named(el, 'volume')).toEqual([`${BASE}?method=A&ts=volume#evidence`]);
-    expect(named(el, 'newest')).toEqual([`${BASE}?method=A&ts=newest#evidence`]);
-    expect(named(el, 'most flagged')).toEqual([`${BASE}?method=A#evidence`]);
-    expect(named(el, 'Next ›')).toEqual([`${BASE}?method=A&tp=2#evidence`]);
-    expect(named(list(el.ownerDocument.body, 'wallets'), 'first seen')).toEqual([`${BASE}?method=A&ws=first#evidence`]);
+    expect(named(el, 'share')).toEqual([`${BASE}/methods?method=A&ts=share#evidence`]);
+    expect(named(el, 'volume')).toEqual([`${BASE}/methods?method=A&ts=volume#evidence`]);
+    expect(named(el, 'newest')).toEqual([`${BASE}/methods?method=A&ts=newest#evidence`]);
+    expect(named(el, 'most flagged')).toEqual([`${BASE}/methods?method=A#evidence`]);
+    expect(named(el, 'Next ›')).toEqual([`${BASE}/methods?method=A&tp=2#evidence`]);
+    expect(named(list(el.ownerDocument.body, 'wallets'), 'first seen')).toEqual([`${BASE}/methods?method=A&ws=first#evidence`]);
   });
 
   it('the two lists page apart', async () => {
@@ -149,8 +149,8 @@ describe('the lens lists on the collection page', () => {
     const el = await collectionPage({ method: 'A', tp: '2', ws: 'share' });
     expect(state.calls.tokens[0]![2]).toMatchObject({ offset: 10 });
     expect(state.calls.wallets[0]![2]).toMatchObject({ sort: 'share', offset: 0 });
-    expect(named(list(el, 'wallets'), 'Next ›')).toEqual([`${BASE}?method=A&tp=2&ws=share&wp=2#evidence`]);
-    expect(named(list(el, 'tokens'), 'Next ›')).toEqual([`${BASE}?method=A&tp=3&ws=share#evidence`]);
+    expect(named(list(el, 'wallets'), 'Next ›')).toEqual([`${BASE}/methods?method=A&tp=2&ws=share&wp=2#evidence`]);
+    expect(named(list(el, 'tokens'), 'Next ›')).toEqual([`${BASE}/methods?method=A&tp=3&ws=share#evidence`]);
     expect(list(el, 'tokens').querySelector('input[name=tp]')).not.toBeNull();
     expect(list(el, 'wallets').querySelector('input[name=wp]')).not.toBeNull();
   });
@@ -160,11 +160,11 @@ describe('the lens lists on the collection page', () => {
     const el = list(await collectionPage({ method: 'A', tq: '14' }), 'tokens');
     expect(state.calls.tokens[0]![2]).toMatchObject({ find: '14' });
     expect(el.textContent).toContain('12 of 644 tokens match “14”');
-    expect(named(el, 'Next ›')).toEqual([`${BASE}?method=A&tq=14&tp=2#evidence`]);
-    expect(named(el, 'share')).toEqual([`${BASE}?method=A&ts=share&tq=14#evidence`]);
-    expect(named(el, 'Clear')).toEqual([`${BASE}?method=A#evidence`]);
+    expect(named(el, 'Next ›')).toEqual([`${BASE}/methods?method=A&tq=14&tp=2#evidence`]);
+    expect(named(el, 'share')).toEqual([`${BASE}/methods?method=A&ts=share&tq=14#evidence`]);
+    expect(named(el, 'Clear')).toEqual([`${BASE}/methods?method=A#evidence`]);
     const form = el.querySelector('form[role=search]')!;
-    expect(form.getAttribute('action')).toBe(`${BASE}#evidence`);
+    expect(form.getAttribute('action')).toBe(`${BASE}/methods#evidence`);
     expect((form.querySelector('input[name=tq]') as HTMLInputElement).value).toBe('14');
     expect((form.querySelector('input[name=tq]') as HTMLInputElement).placeholder).toBe('Find a token number');
     expect([...form.querySelectorAll('input[type=hidden]')].map((i) => `${(i as HTMLInputElement).name}=${(i as HTMLInputElement).value}`)).toEqual(['method=A']);
@@ -256,6 +256,12 @@ describe('the lens lists on the flagged page', () => {
     const el = await flaggedPage({ method: 'AC', kind: 'wallets' });
     expect(el.textContent).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     expect(state.calls.wallets).toHaveLength(0);
+  });
+
+  it('sends an old link into the overview\'s lens panel on to Methods, with its lens and list', async () => {
+    const { default: Overview } = await import('@/app/c/[chain]/[address]/page');
+    await expect(Overview({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'A', tp: '2', other: 'x' }) }))
+      .rejects.toThrow(`redirect:${BASE}/methods?method=A&tp=2`);
   });
 
   it('sends an old flagged link on to its list, with its lens, order, Find and page', async () => {

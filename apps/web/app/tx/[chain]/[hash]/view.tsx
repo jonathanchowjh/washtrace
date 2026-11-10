@@ -15,7 +15,7 @@ import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
 import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
-import { explorerTx, txHref } from '@/lib/links';
+import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
 import { APART_WHY, NOT_JUDGED, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
@@ -68,7 +68,7 @@ export async function TxView({ chainId, tx, within }: { chainId: number; tx: str
       <Answer
         tone={tone}
         title={title}
-        aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} href={home === null ? undefined : `${home}?method=${m}#evidence`} />)}</span> : undefined}
+        aside={by.length > 0 ? <span className="flex flex-col gap-1">{by.map((m) => <LensName key={m} m={m} href={home === null ? undefined : lensTabHref(home, m, { evidence: true })} />)}</span> : undefined}
       >
         {body}{notRunLine && !unread ? ` ${notRunLine}` : ''}{ownLine}
       </Answer>
@@ -110,10 +110,10 @@ export async function TxView({ chainId, tx, within }: { chainId: number; tx: str
                 {lensCards(t, c, graph === null || drawing === null ? null : { graph, drawing }, own, chainId, base).map((card) => (
                   <li key={card.key} data-lens={card.key} className="min-w-0 rounded-lg border bg-card p-3.5">
                     {/* A lens that did not run has no evidence to open: its line links its tab instead. */}
-                    <div data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? `${base}?method=${card.key}#evidence` : undefined} /></div>
+                    <div data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? lensTabHref(base, card.key, { evidence: true }) : undefined} /></div>
                     <p className="mt-1 text-sm">
                       {card.line}
-                      {card.tab === undefined ? null : <>{' '}<Link href={`${base}?method=${card.key}`} className="font-medium text-foreground underline">{card.tab}</Link></>}
+                      {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} className="font-medium text-foreground underline">{card.tab}</Link></>}
                     </p>
                     {card.caught && drawing !== null ? (
                       <div className="mt-3">

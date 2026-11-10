@@ -90,7 +90,7 @@ afterEach(() => {
 });
 
 async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
-  const { default: Page } = await import('@/app/c/[chain]/[address]/page');
+  const { default: Page } = await import('@/app/c/[chain]/[address]/methods/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 const strip = (c: Element) => c.querySelector('nav[aria-label="Lens"]')!;
@@ -112,7 +112,7 @@ describe('the tab strip', () => {
     const c = await draw({ method: 'L7' });
     const on = strip(c).querySelector('[aria-current="page"]')!;
     expect(on.textContent).toContain('Blur 3-hop');
-    expect(on.getAttribute('href')).toBe(`${BASE}?method=L7`);
+    expect(on.getAttribute('href')).toBe(`${BASE}/methods?method=L7`);
   });
 
   it('draws yours as a diamond in the own hue and Money loops back as a dashed grey ring', async () => {
@@ -170,7 +170,7 @@ describe("a built-in's panel", () => {
     const p = panel(await draw({ method: 'A' }));
     expect(p.textContent).toContain('built in · read-only');
     expect(p.textContent).toContain('The token keeps coming back to wallets that already held it.');
-    expect(anchor(p, 'Copy to new lens')?.getAttribute('href')).toBe(`${BASE}?method=A&lens=copy-A`);
+    expect(anchor(p, 'Copy to new lens')?.getAttribute('href')).toBe(`${BASE}/methods?method=A&lens=copy-A`);
     expect(anchor(p, 'Edit')).toBeUndefined();
     expect(button(p, 'Delete')).toBeUndefined();
     expect(button(p, 'Run here')).toBeUndefined();
@@ -195,7 +195,7 @@ describe("a built-in's panel", () => {
   });
 
   it('copies the built-in being shown', async () => {
-    expect(anchor(panel(await draw({ method: 'AU' })), 'Copy to new lens')?.getAttribute('href')).toBe(`${BASE}?method=AU&lens=copy-AU`);
+    expect(anchor(panel(await draw({ method: 'AU' })), 'Copy to new lens')?.getAttribute('href')).toBe(`${BASE}/methods?method=AU&lens=copy-AU`);
   });
 });
 
@@ -206,7 +206,7 @@ describe("your lens's panel", () => {
     const p = panel(c);
     expect(p.textContent).toContain('yours');
     expect(p.textContent).not.toContain('built in');
-    expect(anchor(p, 'Edit')?.getAttribute('href')).toBe(`${BASE}?method=L7&lens=edit-L7`);
+    expect(anchor(p, 'Edit')?.getAttribute('href')).toBe(`${BASE}/methods?method=L7&lens=edit-L7`);
     expect(button(p, 'Delete')).toBeDefined();
     expect(anchor(p, 'Copy to new lens')).toBeUndefined();
     const stats = c.querySelector('[aria-label="Blur 3-hop in numbers"]')!;
@@ -464,7 +464,7 @@ describe('without permission to write', () => {
   });
 
   it('offers + New lens as a link when writing is allowed', async () => {
-    expect(anchor(await draw(), '+ New lens')?.getAttribute('href')).toBe(`${BASE}?method=AC&lens=new`);
+    expect(anchor(await draw(), '+ New lens')?.getAttribute('href')).toBe(`${BASE}/methods?method=AC&lens=new`);
   });
 });
 

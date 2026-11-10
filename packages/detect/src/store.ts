@@ -228,6 +228,11 @@ export interface TimelinePoint {
   at: number;
   transfers: number;
   sales: number;
+  /**
+   * Sales flagged by Money loops back and by neither counted method: what the
+   * collection's strip shows apart, as looks suspicious but not counted.
+   */
+  apartSales: number;
   /** Sales each method flags. A method that did not run flags none, so read it with the analysis's `available`. */
   flaggedSales: Record<Method, number> & Partial<Record<`L${number}`, number>>;
   /** Present only when lenses of yours were asked for: the sales each has judged here (its run read through their block), the denominator of its share. */
@@ -2832,7 +2837,8 @@ export class Store {
               count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
               count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a,
               count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au,
-              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac${mine}
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac,
+              count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au AND NOT f.a AND NOT f.ac)::int AS apart${mine}
        FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index
        WHERE t.collection_id = $1 AND t.block_time IS NOT NULL
        GROUP BY 1 ORDER BY 1`,
@@ -2844,7 +2850,7 @@ export class Store {
       // The newest trade read. Past it the chain may be unread or merely quiet; the caller knows which.
       readThrough: span.rows[0]?.last ?? null,
       points: rows.map((r) => ({
-        at: r.at, transfers: r.transfers, sales: r.sales,
+        at: r.at, transfers: r.transfers, sales: r.sales, apartSales: r.apart,
         flaggedSales: { A: r.a, AU: r.au, AC: r.ac, ...Object.fromEntries(own.map((l) => [`L${l.lensId}`, r[`l${l.lensId}`] as number])) },
         ...(own.length > 0 ? { judgedSales: Object.fromEntries(own.map((l) => [`L${l.lensId}`, r[`j${l.lensId}`] as number])) } : {}),
       })),

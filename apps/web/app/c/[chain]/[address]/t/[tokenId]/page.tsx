@@ -12,7 +12,7 @@ import { EvidenceGlyph } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
-import { tokenLinks } from '@/lib/links';
+import { lensTabHref, tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
@@ -134,7 +134,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : (
           <>
             {flagged} of {transfers.length} transfers flagged, by {lensList(lenses)}.{' '}
-            They count toward <Link href={`${base}?method=${lenses[0]}`} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
+            They count toward <Link href={lensTabHref(base, lenses[0]!)} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
           </>
         )}
         {ownLine}
@@ -160,7 +160,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={`${base}?method=${m}#evidence`} />)}
+                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
               </>
             ),
           })),
@@ -174,7 +174,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
               meta: (
                 <>
                   {row === undefined ? null : <span>transfer <RowLinks rows={[row]} rowHref={rowHref} /></span>}
-                  <LensName m={key} own={ownLenses} className="text-xs" href={`${base}?method=${key}#evidence`} />
+                  <LensName m={key} own={ownLenses} className="text-xs" href={lensTabHref(base, key, { evidence: true })} />
                 </>
               ),
             };

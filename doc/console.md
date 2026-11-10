@@ -9,7 +9,8 @@ shows is also in the [API](api.md).
 | Route | Content | Refresh |
 |---|---|---|
 | `/` | Watched collections, each with the share of its sales and volume that looks washed (Round trips to Linked wallets) and how complete the reading is. A form to watch another. | 15 s |
-| `/c/{chain}/{address}` | One collection: how far it has been read, the answer as that range, a tab per lens, each lens's share over time, and the six stages of the reading. | 15 s |
+| `/c/{chain}/{address}` | One collection at a glance: the reading in four steps, the answer as that range, how sure each end is (the floor, what the ceiling adds, and Money loops back apart), every sale in order, the tokens and wallets most flagged ETH went through, what looks suspicious but is not counted, and your lenses. | 15 s |
+| `/c/{chain}/{address}/methods` | What the overview stands on: a tab per lens with its tokens and wallets, writing your own, each lens's share over time, and the six stages of the reading. Old `?method=` links to the overview come here. | 15 s |
 | `/c/{chain}/{address}/tokens`, `/wallets` | Every token or wallet one lens flags, most flagged first. `?method=AU&page=2`. The old `/flagged?kind=` links redirect here. | On open |
 | `/c/{chain}/{address}/trades` | The collection's trades, filtered by lens, market, price, date, wallet and token, with a CSV download. | On open |
 | `/c/{chain}/{address}/t/{tokenId}` | One token: its verdict, the graph as in the paper's Figure 8, and every transfer. | On open |

@@ -111,8 +111,8 @@ describe('the collections page', () => {
     const c = await draw();
     const links = [...c.querySelectorAll('li a[href*="#evidence"]')];
     expect(links.map((a) => [a.textContent, a.getAttribute('href')]).slice(0, 2)).toEqual([
-      ['18', `/c/1/0x${'1'.repeat(40)}?method=A#evidence`],
-      ['25%', `/c/1/0x${'1'.repeat(40)}?method=AC#evidence`],
+      ['18', `/c/1/0x${'1'.repeat(40)}/methods?method=A#evidence`],
+      ['25%', `/c/1/0x${'1'.repeat(40)}/methods?method=AC#evidence`],
     ]);
     expect(links[0]!.className).toContain('relative z-10');
   });

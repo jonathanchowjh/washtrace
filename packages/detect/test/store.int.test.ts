@@ -2654,7 +2654,7 @@ describe('Store', () => {
     // Four transfers a second apart: one bucket, the mint not a sale.
     expect(await store.timeline(c.id)).toEqual({
       bucket: 'hour', untimed: 0, readThrough: (1_700_000_000 + 3) * 1000,
-      points: [{ at: Math.floor(1_700_000_000 / 3600) * 3600 * 1000, transfers: 4, sales: 3, flaggedSales: { A: 3, AU: 3, AC: 3 } }],
+      points: [{ at: Math.floor(1_700_000_000 / 3600) * 3600 * 1000, transfers: 4, sales: 3, apartSales: 0, flaggedSales: { A: 3, AU: 3, AC: 3 } }],
     });
   });
 
@@ -6844,7 +6844,7 @@ describe('a saved lens in the reads', () => {
     expect(sql.text.replace(/\s+/g, ' ').trim()).toBe(
       "WITH f AS ( SELECT tx_hash, log_index, bool_or(method = 'A') AS a, bool_or(method = 'AU') AS au, bool_or(method = 'AC') AS ac FROM washtrace.flags WHERE collection_id = $1 GROUP BY tx_hash, log_index) " +
       "SELECT extract(epoch FROM date_trunc($2, t.block_time, $3))::float8 * 1000 AS at, count(*)::int AS transfers, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales, " +
-      "count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac " +
+      "count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au AND NOT f.a AND NOT f.ac)::int AS apart " +
       'FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index WHERE t.collection_id = $1 AND t.block_time IS NOT NULL GROUP BY 1 ORDER BY 1',
     );
   });
@@ -7143,5 +7143,30 @@ describe('spot checks', () => {
     await store.sweepPreviews(Date.now());
     expect(await store.spot(old.id)).toBeNull();
     expect(await store.spot(fresh.id)).not.toBeNull();
+  });
+});
+
+describe('the timeline\'s sales apart', () => {
+  const CHAIN = 911;
+  const coll = '0x' + 'e1'.padEnd(40, '0');
+  const A = '0x' + 'aa'.padEnd(40, '0'), B = '0x' + 'bb'.padEnd(40, '0');
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  afterAll(() => drop(CHAIN, coll));
+
+  it('counts a sale only Money loops back flags apart, and none a counted method also flags', async () => {
+    await store.migrate();
+    const id = (await store.addCollection(CHAIN, coll, null, 1)).id;
+    const sale = (n: number) => transfer(String(n), n % 2 ? A : B, n % 2 ? B : A, { txHash: tx(n), blockNumber: n, blockTime: 1_700_000_000 + n, marketplace: 'Seaport' });
+    await store.ingest(id, CHAIN, [1, 2, 3, 4].map(sale), 100, [A, B]);
+    const flag = (m: Method, n: number) => store.pool.query(
+      `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, $2, $3, 0, '{"kind":"pair","pair":[],"middle":null,"flowTx":"0x"}')`,
+      [id, m, tx(n)]);
+    // 1: all three; 2: Linked wallets and Money loops back; 3: Money loops back alone; 4: nothing.
+    for (const m of ['A', 'AC', 'AU'] as const) await flag(m, 1);
+    await flag('AC', 2);
+    await flag('AU', 2);
+    await flag('AU', 3);
+    const [p] = (await store.timeline(id)).points;
+    expect(p).toMatchObject({ sales: 4, apartSales: 1, flaggedSales: { A: 1, AC: 2, AU: 3 } });
   });
 });

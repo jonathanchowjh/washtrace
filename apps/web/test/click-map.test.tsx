@@ -95,6 +95,10 @@ type Draw = () => Promise<HTMLElement>;
 const PAGES: Record<string, Draw> = {
   collection: async () => {
     const { default: P } = await import('@/app/c/[chain]/[address]/page');
+    return render(await P({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).container;
+  },
+  methods: async () => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/methods/page');
     return render(await P({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'A' }) })).container;
   },
   home: async () => {
@@ -130,7 +134,7 @@ describe('lens names and chips', () => {
   it('the token page’s lens name opens that lens’s tab', async () => {
     const c = await PAGES.token!();
     const link = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Round trips' && a.closest('li, [class*="inline-flex"]'));
-    expect(link?.getAttribute('href')).toBe(`${BASE}?method=A#evidence`);
+    expect(link?.getAttribute('href')).toBe(`${BASE}/methods?method=A#evidence`);
   });
 
   it('a row’s date opens the trade page, and its explorer link is a separate ↗', async () => {
@@ -145,8 +149,8 @@ describe('lens names and chips', () => {
     const chip = (name: string) => [...c.querySelectorAll('tbody a')].find((a) => a.textContent === name)!;
     expect(chip('Money loops back').className).toContain('bg-muted-foreground');
     expect(chip('Round trips').className).toContain('bg-cycle');
-    expect(chip('Round trips').getAttribute('href')).toBe(`${BASE}?method=A#evidence`);
-    expect(chip('Money loops back').getAttribute('href')).toBe(`${BASE}?method=AU#evidence`);
+    expect(chip('Round trips').getAttribute('href')).toBe(`${BASE}/methods?method=A#evidence`);
+    expect(chip('Money loops back').getAttribute('href')).toBe(`${BASE}/methods?method=AU#evidence`);
   });
 });
 
@@ -162,21 +166,21 @@ describe('links out', () => {
 
 describe('a period opens its trades', () => {
   it('the history table’s first period links to that month’s trades, as instants', async () => {
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     const first = [...c.querySelectorAll('details table a')].find((a) => a.textContent === 'Jan 2023');
     expect(first?.getAttribute('href')).toBe(`${BASE}/trades?from=2023-01-01&to=2023-02-01`);
     expect(first?.getAttribute('href')).toBe(tradesHref(BASE, { fromMs: JAN, toMs: Date.UTC(2023, 1, 1) }));
   });
 
   it('the last period ends where one more period would start', async () => {
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     expect(hrefs(c)).toContain(`${BASE}/trades?from=2023-02-01&to=2023-03-01`);
   });
 
   it('a click near the right edge pushes the last period’s link, near the left the first', async () => {
     // jsdom has no layout: give the chart a width, so the pointer's place picks the period.
     const box = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     const overlay = c.querySelector('svg rect[fill=transparent]')!;
     fireEvent.click(overlay, { clientX: 199 });
     expect(push).toHaveBeenLastCalledWith(`${BASE}/trades?from=2023-02-01&to=2023-03-01`);
@@ -186,14 +190,14 @@ describe('a period opens its trades', () => {
   });
 
   it('a lens’s share in a period opens what that lens caught in it', async () => {
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     const row = [...c.querySelectorAll('details table tbody tr')].find((tr) => tr.textContent?.startsWith('Jan 2023'))!;
     const to = [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     for (const m of ['A', 'AU', 'AC'] as const) expect(to).toContain(tradesHref(BASE, { fromMs: JAN, toMs: Date.UTC(2023, 1, 1), caught: [m] }));
   });
 
   it('Enter on the focused chart opens the current period', async () => {
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     const chart = c.querySelector('[role=group][tabindex="0"]')!;
     fireEvent.focus(chart);
     fireEvent.keyDown(chart, { key: 'Enter' });
@@ -221,7 +225,7 @@ const ALLOWED: { why: string; test: (el: Element) => boolean }[] = [
   { why: 'a time, which is a <Time>', test: (el) => { const t = el.querySelector('time'); return t !== null && el.textContent === t.textContent; } },
   { why: 'a chart axis or tick label: a scale mark, in an aria-hidden drawing', test: (el) => el.closest('svg') !== null },
   { why: 'a row number: a place in the list, not a count of anything', test: (el) => el.hasAttribute('data-row-number') },
-  { why: 'a collection’s supply and its holders: no page lists every token or every holder', test: (el) => el.tagName === 'DD' && ['Tokens', 'Holders'].includes(el.previousElementSibling?.textContent ?? '') },
+  { why: 'a collection’s supply and its holders: no page lists every token or every holder', test: (el) => el.closest('[data-supply]') !== null },
   { why: 'the range a table page shows, as a pager says it: the list is already open', test: (el) => /^Showing /.test(el.textContent ?? '') },
   { why: 'the pipeline’s progress figures: how far a stage has read, not a list', test: (el) => el.closest('[data-progress]') !== null },
   { why: 'a Group by row no filter can hold, such as the unknown group: its trades are in the list below, but no list holds only them', test: (el) => el.closest('tr[data-unlisted]') !== null },
@@ -277,7 +281,7 @@ describe('the click map', () => {
   });
 
   it('fails on a plain figure, in a chart table as anywhere', async () => {
-    const c = await PAGES.collection!();
+    const c = await PAGES.methods!();
     const cell = c.querySelector('details table td.text-right a')!;
     cell.replaceWith(document.createTextNode('7.5%'));
     expect(loose(c).length).toBeGreaterThan(0);

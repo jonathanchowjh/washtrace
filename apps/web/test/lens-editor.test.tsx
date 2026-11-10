@@ -194,7 +194,7 @@ describe('Save and run', () => {
     type(within(c).getByLabelText('Days from the trade within which an edge counts'), '7');
     type(within(c).getByLabelText('ETH payment: smallest payment counted, in ETH'), '0.5');
     fireEvent.click(button(c, 'Save and run'));
-    await waitFor(() => expect(push).toHaveBeenCalledWith(`${BASE}?method=L9#evidence`));
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`${BASE}/methods?method=L9#evidence`));
     const { url, method, body } = sent(fetchMock);
     expect(url).toBe('/api/lenses');
     expect(method).toBe('POST');
@@ -302,7 +302,7 @@ describe('editing a lens', () => {
     const c = editor({ title: 'Blur 3-hop', name: 'Blur 3-hop', lensId: 7, selected: 'L7' });
     type(within(c).getByLabelText('Days from the trade within which an edge counts'), '14');
     fireEvent.click(button(c, 'Save and run'));
-    await waitFor(() => expect(push).toHaveBeenCalledWith(`${BASE}?method=L7#evidence`));
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`${BASE}/methods?method=L7#evidence`));
     const { url, method, body } = sent(fetchMock);
     expect(url).toBe('/api/lenses/7');
     expect(method).toBe('PATCH');
@@ -354,7 +354,7 @@ describe('Cancel', () => {
     vi.stubGlobal('fetch', fetchMock);
     const c = editor({ selected: 'AU' });
     fireEvent.click(button(c, 'Cancel'));
-    expect(push).toHaveBeenCalledWith(`${BASE}?method=AU`);
+    expect(push).toHaveBeenCalledWith(`${BASE}/methods?method=AU`);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

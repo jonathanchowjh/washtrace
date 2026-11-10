@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
-import { explorerTx, txHref, walletHref } from '@/lib/links';
+import { explorerTx, lensTabHref, txHref, walletHref } from '@/lib/links';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
@@ -142,5 +142,5 @@ function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) 
   if (info === null) return null;
   const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[info.tone]);
   return base === undefined ? <span className={cls}>{info.name}</span>
-    : <Link href={`${base}?method=${m}#evidence`} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
+    : <Link href={lensTabHref(base, m, { evidence: true })} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
 }

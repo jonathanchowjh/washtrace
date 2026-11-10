@@ -11,6 +11,7 @@ import { DataNeeds } from './data-needs';
 import { send } from './lens-actions';
 import { Preview } from './preview';
 import { RuleTable } from './rule-table';
+import { lensTabHref } from '@/lib/links';
 
 const BUTTON = 'rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -68,7 +69,7 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
     );
     setBusy(false);
     if (said.error !== null) return setError(said.error);
-    router.push(`${base}?method=${said.body.lens.key}#evidence`);
+    router.push(lensTabHref(base, said.body.lens.key, { evidence: true }));
     router.refresh();
   }
 
@@ -102,7 +103,7 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
       {writable ? null : <p className="text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
       {error ? <p ref={alert} role="alert" tabIndex={-1} className="text-sm text-fault">{error}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={BUTTON} disabled={busy} title="Leave without saving" onClick={() => router.push(`${base}?method=${selected}`)}>Cancel</button>
+        <button type="button" className={BUTTON} disabled={busy} title="Leave without saving" onClick={() => router.push(lensTabHref(base, selected))}>Cancel</button>
         <button type="submit" className={BUTTON} disabled={!writable || busy}
           title={writable ? 'Save this lens, then queue its run on this collection' : LOCAL_ONLY}>Save and run</button>
       </div>

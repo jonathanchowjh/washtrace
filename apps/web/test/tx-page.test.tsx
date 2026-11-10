@@ -260,8 +260,8 @@ describe('the trade page: one card per lens', () => {
     expect(second.get('Linked wallets')!.textContent).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     // Each card's lens name opens that lens's tab on its own collection.
     const tab = (li: HTMLElement, name: string) => [...li.querySelectorAll('a')].find((x) => x.textContent === name)?.getAttribute('href');
-    expect(tab(first.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A1}?method=A#evidence`);
-    expect(tab(second.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A2}?method=A#evidence`);
+    expect(tab(first.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A1}/methods?method=A#evidence`);
+    expect(tab(second.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A2}/methods?method=A#evidence`);
   });
 
   it('across two collections, the answer names the one whose latest analysis missed a lens, never that a lens it names as flagging flags nothing', async () => {
@@ -311,14 +311,14 @@ describe('the trade page: one card per lens', () => {
       const li = card.get(name)!;
       expect(li.textContent).toBe(`${name}${line} ${link}`);
       expect(li.textContent).not.toContain(OWN_NOT_CAUGHT);
-      expect([...li.querySelectorAll('a')].find((x) => x.textContent === link)?.getAttribute('href')).toBe(`/c/1/${A1}?method=${key}`);
+      expect([...li.querySelectorAll('a')].find((x) => x.textContent === link)?.getAttribute('href')).toBe(`/c/1/${A1}/methods?method=${key}`);
     }
     const why = (li: HTMLElement) => [...li.querySelectorAll('a')].find((x) => x.textContent === 'See why on its tab →')?.getAttribute('href');
     for (const [m, name] of [['AU', 'Money loops back'], ['AC', 'Linked wallets']] as const) {
       const li = card.get(name)!;
       expect(li.textContent).toContain(`${name} did not run in the latest analysis, so it flags nothing.`);
       expect(li.textContent).not.toContain(NOT_CAUGHT[m]);
-      expect(why(li)).toBe(`/c/1/${A1}?method=${m}`);
+      expect(why(li)).toBe(`/c/1/${A1}/methods?method=${m}`);
     }
   });
 
@@ -351,7 +351,7 @@ describe('the trade page: one card per lens', () => {
     state.own = [caughtOwn(7)];
     const c = await txPage();
     const chips = [...c.querySelectorAll('tbody tr td:nth-child(5) a')].map((a) => [a.textContent, a.getAttribute('href')]);
-    expect(chips).toEqual([['Round trips', `/c/1/${A1}?method=A#evidence`], ['Fast flips', `/c/1/${A1}?method=L7#evidence`]]);
+    expect(chips).toEqual([['Round trips', `/c/1/${A1}/methods?method=A#evidence`], ['Fast flips', `/c/1/${A1}/methods?method=L7#evidence`]]);
   });
 
   it('no lens code in text, aria-label or title', async () => {
