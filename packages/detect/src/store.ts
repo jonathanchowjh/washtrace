@@ -2388,26 +2388,7 @@ export class Store {
     try {
       await this.tx(async (c) => {
         const f: readonly Flag[] = analysis.flags;
-        // Each witness gets an id in order of first appearance, and each lens
-        // counts its own: from the map and the flags, with no pass in SQL. A
-        // lens that did not run counts none, as its totals are zeroed, though
-        // its flags carry Round trips' copy: the counts reach the API unfiltered.
-        const ids = new Map<Witness, number>();
-        const seen: Record<Method, Set<number>> = { A: new Set(), AU: new Set(), AC: new Set() };
-        const loops: Record<Method, { loops: number; pairs: number }> = {
-          A: { loops: 0, pairs: 0 }, AU: { loops: 0, pairs: 0 }, AC: { loops: 0, pairs: 0 },
-        };
-        for (const x of f) {
-          let wid = ids.get(x.witness);
-          if (wid === undefined) ids.set(x.witness, (wid = ids.size));
-          if (!analysis.totals[x.method].available || seen[x.method].has(wid)) continue;
-          seen[x.method].add(wid);
-          loops[x.method][x.witness.kind === 'pair' ? 'pairs' : 'loops']++;
-        }
-        // Rings join the witnesses a counted lens points at; Money loops back's alone make none (rings.ts).
-        const counted = new Map<number, readonly string[]>();
-        for (const x of f) if (x.method !== 'AU') counted.set(ids.get(x.witness)!, walletsOf(x.witness));
-        const ring = anchorsOf([...counted].map(([wid, wallets]) => ({ id: wid, wallets })));
+        const { ids, loops, ring } = witnessCounts(analysis, f);
         // How far the facts on disk reach, and what they were worked out with: the latest analysis's, read before this one's row is in.
         // Facts worked out otherwise, or by an analysis from before facts were keyed, are no base to add to.
         const key = factsKey(money);
@@ -4075,6 +4056,37 @@ function toRing(r: Record<string, unknown>): RingLine {
     sales: r.sales as number, floorSales: r.floor_sales as number, tokens: r.tokens as number, volumeWei: String(r.volume),
     firstAt: r.first_at as number | null, lastAt: r.last_at as number | null,
   };
+}
+
+/**
+ * What saveAnalysis works out from an analysis before it writes anything:
+ * each witness's id, each method's distinct loops and pairs, and the ring
+ * of each witness a counted lens points at, by its id. `f` is its flags.
+ */
+function witnessCounts(analysis: Analysis, f: readonly Flag[]): {
+  ids: Map<Witness, number>; loops: Record<Method, { loops: number; pairs: number }>; ring: Map<number, string>;
+} {
+  // Each witness gets an id in order of first appearance, and each lens
+  // counts its own: from the map and the flags, with no pass in SQL. A
+  // lens that did not run counts none, as its totals are zeroed, though
+  // its flags carry Round trips' copy: the counts reach the API unfiltered.
+  const ids = new Map<Witness, number>();
+  const seen: Record<Method, Set<number>> = { A: new Set(), AU: new Set(), AC: new Set() };
+  const loops: Record<Method, { loops: number; pairs: number }> = {
+    A: { loops: 0, pairs: 0 }, AU: { loops: 0, pairs: 0 }, AC: { loops: 0, pairs: 0 },
+  };
+  for (const x of f) {
+    let wid = ids.get(x.witness);
+    if (wid === undefined) ids.set(x.witness, (wid = ids.size));
+    if (!analysis.totals[x.method].available || seen[x.method].has(wid)) continue;
+    seen[x.method].add(wid);
+    loops[x.method][x.witness.kind === 'pair' ? 'pairs' : 'loops']++;
+  }
+  // Rings join the witnesses a counted lens points at; Money loops back's alone make none (rings.ts).
+  const counted = new Map<number, readonly string[]>();
+  for (const x of f) if (x.method !== 'AU') counted.set(ids.get(x.witness)!, walletsOf(x.witness));
+  const ring = anchorsOf([...counted].map(([wid, wallets]) => ({ id: wid, wallets })));
+  return { ids, loops, ring };
 }
 
 /** The wallets a witness names, as its row stores them: a pair's two and its middle, a loop's own. */
