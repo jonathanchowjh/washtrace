@@ -1,6 +1,6 @@
 import {
   AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
-  createPublicClient, http, HttpRequestError, parseAbi, RpcError, RpcRequestError, WebSocketRequestError, type Log, type PublicClient,
+  createPublicClient, http, HttpRequestError, parseAbi, RpcError, RpcRequestError, TransactionReceiptNotFoundError, WebSocketRequestError, type Log, type PublicClient,
 } from 'viem';
 import { ZERO } from './graph.js';
 import { TRANSFER, tagSales } from './marketplaces.js';
@@ -150,15 +150,65 @@ export class Chain {
     }
   }
 
-  private async tag(transfers: Transfer[], collection: string): Promise<void> {
-    const hashes = [...new Set(transfers.map((t) => t.txHash))];
+  /**
+   * Every transfer of one token of `collection` from `from` to `to`, as
+   * sales where a marketplace filled them: what a spot check reads instead
+   * of the whole collection. Filtered to the token, a query returns few
+   * logs, so it asks for the whole range first and halves only when the
+   * provider refuses, growing back after each answer. Its span is its own:
+   * `span` is learned for whole collections, and a token's narrow query
+   * would teach it a width a collection's query cannot take.
+   */
+  async tokenTransfers(collection: string, tokenId: string, from: number, to: number): Promise<Transfer[]> {
+    const topic = `0x${BigInt(tokenId).toString(16).padStart(64, '0')}`;
+    const transfers: Transfer[] = [];
+    let span = to - from + 1;
+    while (from <= to) {
+      const through = Math.min(to, from + span - 1);
+      let logs: RawLog[];
+      try {
+        logs = await this.client.request({
+          method: 'eth_getLogs',
+          params: [{ address: collection as `0x${string}`, topics: [TRANSFER, null, null, topic as `0x${string}`], fromBlock: hex(from), toBlock: hex(through) }],
+        }) as unknown as RawLog[];
+      } catch (err) {
+        if (span === 1 || isTransient(err)) throw err;
+        span = Math.max(1, Math.floor(span / 2));
+        continue;
+      }
+      transfers.push(...logs.filter((l) => l.topics.length === 4 && !l.removed).map(toTransfer));
+      from = through + 1;
+      span *= 2;
+    }
+    await this.tag(transfers, collection);
+    return transfers;
+  }
+
+  /** One transaction's block, whether it reverted, and its logs; null when the node has no such transaction. */
+  async receipt(tx: string): Promise<{ blockNumber: number; reverted: boolean; logs: readonly Log[] } | null> {
+    try {
+      const r = await this.client.getTransactionReceipt({ hash: tx as `0x${string}` });
+      return { blockNumber: Number(r.blockNumber), reverted: r.status === 'reverted', logs: r.logs };
+    } catch (err) {
+      if (err instanceof TransactionReceiptNotFoundError) return null;
+      throw err;
+    }
+  }
+
+  /** The logs of each of `txs`, by lowercase hash, RECEIPT_WIDTH asked at once. */
+  async receipts(txs: readonly string[]): Promise<Map<string, readonly Log[]>> {
+    const hashes = [...new Set(txs)];
     const logsByTx = new Map<string, readonly Log[]>();
     for (let i = 0; i < hashes.length; i += RECEIPT_WIDTH) {
       const receipts = await Promise.all(hashes.slice(i, i + RECEIPT_WIDTH).map((hash) =>
         this.client.getTransactionReceipt({ hash: hash as `0x${string}` })));
       for (const r of receipts) logsByTx.set(r.transactionHash.toLowerCase(), r.logs);
     }
-    tagSales(transfers, logsByTx, collection);
+    return logsByTx;
+  }
+
+  private async tag(transfers: Transfer[], collection: string): Promise<void> {
+    tagSales(transfers, await this.receipts(transfers.map((t) => t.txHash)), collection);
   }
 }
 
