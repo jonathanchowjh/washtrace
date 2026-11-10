@@ -13,6 +13,7 @@ import { FOLLOWED_NEAR, REACH_LIMIT, SERVED_LIVE, SERVED_NAMES, SERVED_REACH, UN
 import { COLLECTION_SELECT, FLAG_BATCH_CHARS, FLAG_BATCH_ROWS, LENS_SELECT, deadlockRetried, insertFlows, insertTransfers, pgCode, queueWallets, tally, toAnalysis, toCollection, toFlow, toLens, toLensRun, toOwnFlag } from './store-rows.js';
 import { factsKey, writeFacts } from './facts.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
+import type { SpotResult } from './spot.js';
 import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type TokenFlow, type Transfer, type Witness } from './types.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
@@ -443,6 +444,15 @@ export const PREVIEWS_CHANNEL = 'washtrace_previews';
 export const PREVIEW_SAMPLE = 2_000;
 /** A preview is kept this long from when it was asked for, then swept: the editor that asked has long stopped polling. */
 export const PREVIEW_KEEP_MS = 60 * 60_000;
+/** A done spot check of a final block is answered again for this long; after, the money may have moved on. */
+export const SPOT_FRESH_MS = 60 * 60_000;
+/** A spot check is kept this long from when it was asked for, then swept with the previews. */
+export const SPOT_KEEP_MS = 24 * 60 * 60_000;
+/** One spot check as `GET /api/spots/{id}` returns it. */
+export interface SpotRow {
+  id: number; chainId: number; tx: string; lens: string | null; status: 'queued' | 'running' | 'done' | 'failed';
+  result: SpotResult | null; error: string | null; requestedAt: number; finishedAt: number | null;
+}
 
 /**
  * What a preview found. `sampled` is the drawn sample (all the sales when
@@ -3703,7 +3713,155 @@ export class Store {
       `DELETE FROM washtrace.lens_previews WHERE requested_at < to_timestamp($1::float8 / 1000) - make_interval(secs => $2::float8 / 1000)`,
       [now, PREVIEW_KEEP_MS],
     );
+    // Spot checks are swept on the same clock: nobody polls one a day on.
+    await this.pool.query(
+      `DELETE FROM washtrace.spot_checks WHERE requested_at < to_timestamp($1::float8 / 1000) - make_interval(secs => $2::float8 / 1000)`,
+      [now, SPOT_KEEP_MS],
+    );
     return rowCount ?? 0;
+  }
+
+  // ---- spot checks ----
+
+  /**
+   * Ask for a spot check of `tx`, with the built-ins (`lens` null) or a lens
+   * of yours at its version. One in flight for the same question is shared,
+   * by the unique index, so two requests at once make one row; a done one of
+   * a final block younger than SPOT_FRESH_MS is answered again.
+   */
+  async requestSpot(chainId: number, tx: string, lens: { key: string; version: number } | null): Promise<{ id: number; reused: boolean }> {
+    const key = lens?.key ?? null;
+    const version = lens?.version ?? null;
+    const { rows: fresh } = await this.pool.query<{ id: number }>(
+      `SELECT id FROM washtrace.spot_checks
+       WHERE chain_id = $1 AND tx_hash = $2 AND lens IS NOT DISTINCT FROM $3::text AND lens_version IS NOT DISTINCT FROM $4::int
+         AND status = 'done' AND (result ->> 'finalized')::boolean AND finished_at > now() - make_interval(secs => $5::float8 / 1000)
+       ORDER BY finished_at DESC, id DESC LIMIT 1`,
+      [chainId, tx, key, version, SPOT_FRESH_MS],
+    );
+    if (fresh[0]) return { id: fresh[0].id, reused: true };
+    // DO UPDATE, not DO NOTHING, so the row in flight comes back; xmax is set only on that path.
+    const { rows } = await this.pool.query<{ id: number; reused: boolean }>(
+      `INSERT INTO washtrace.spot_checks (chain_id, tx_hash, lens, lens_version, status) VALUES ($1, $2, $3, $4, 'queued')
+       ON CONFLICT (chain_id, tx_hash, coalesce(lens, ''), coalesce(lens_version, 0)) WHERE status IN ('queued', 'running')
+       DO UPDATE SET status = washtrace.spot_checks.status
+       RETURNING id, (xmax <> 0) AS reused`,
+      [chainId, tx, key, version],
+    );
+    return rows[0]!;
+  }
+
+  /** One spot check as the console polls it, or null once swept. */
+  async spot(id: number): Promise<SpotRow | null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, chain_id, tx_hash, lens, status, result, error,
+              extract(epoch FROM requested_at)::float8 AS requested, extract(epoch FROM finished_at)::float8 AS finished
+       FROM washtrace.spot_checks WHERE id = $1`,
+      [id],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id, chainId: r.chain_id, tx: r.tx_hash, lens: r.lens, status: r.status, result: r.result, error: r.error,
+      requestedAt: r.requested * 1000, finishedAt: r.finished === null ? null : r.finished * 1000,
+    };
+  }
+
+  /**
+   * Take the oldest queued spot check and mark it running, with its lens's
+   * rule. Its only caller, the fund pass, holds the fund lock, so one still
+   * `running` was left by a worker that stopped and is failed here. A check
+   * whose lens was removed, or edited since it was asked, is failed (its
+   * answer would be of a rule nobody asked about), and the next is taken.
+   */
+  async nextSpot(): Promise<{ id: number; chainId: number; tx: string; lens: { key: string; rule: LensRule } | null } | null> {
+    await this.pool.query(
+      `UPDATE washtrace.spot_checks SET status = 'failed', error = 'The worker stopped during this check.', finished_at = now()
+       WHERE status = 'running'`,
+    );
+    for (;;) {
+      const { rows } = await this.pool.query(
+        `SELECT s.id, s.chain_id, s.tx_hash, s.lens, s.lens_version, l.rule, l.version AS current
+         FROM washtrace.spot_checks s
+         LEFT JOIN washtrace.lenses l ON s.lens IS NOT NULL AND 'L' || l.id = s.lens
+         WHERE s.status = 'queued' ORDER BY s.requested_at, s.id LIMIT 1`,
+      );
+      const r = rows[0];
+      if (!r) return null;
+      let lens: { key: string; rule: LensRule } | null = null;
+      if (r.lens !== null) {
+        const why = r.current === null ? 'That lens was removed.'
+          : r.current !== r.lens_version ? 'That lens was edited; ask again.'
+          : null;
+        const checked = why === null ? checkRule(r.rule) : null;
+        const error = why ?? (checked !== null && 'error' in checked ? `This rule can't be read: ${checked.error}` : null);
+        if (error !== null) {
+          await this.spotEnded(r.id, 'failed', null, error, 'queued');
+          continue;
+        }
+        lens = { key: r.lens, rule: (checked as { rule: LensRule }).rule };
+      }
+      await this.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [r.id]);
+      return { id: r.id, chainId: r.chain_id, tx: r.tx_hash, lens };
+    }
+  }
+
+  async saveSpot(id: number, result: SpotResult): Promise<void> {
+    await this.spotEnded(id, 'done', result, null, 'running');
+  }
+
+  /** `error` is shown to whoever asked, so it comes already scrubbed. */
+  async spotFailed(id: number, error: string): Promise<void> {
+    await this.spotEnded(id, 'failed', null, error, 'running');
+  }
+
+  /** Finish a spot check that is `from`. One swept meanwhile stays gone. */
+  private async spotEnded(id: number, status: 'done' | 'failed', result: SpotResult | null, error: string | null, from: 'queued' | 'running'): Promise<void> {
+    await this.pool.query(
+      `UPDATE washtrace.spot_checks SET status = $2, result = $3, error = $4, finished_at = now() WHERE id = $1 AND status = $5`,
+      [id, status, result === null ? null : JSON.stringify(result), error, from],
+    );
+  }
+
+  /**
+   * The wallets among `wallets` whose money read is done, each with `from`:
+   * null when its read reached `block` (it covers the trade), else the block
+   * to read on from, as rereadFrom gives (a day of blocks back, floored at
+   * 0; 0 for a read with no rows, which recorded no block).
+   */
+  async moneyCovering(chainId: number, wallets: readonly string[], block: number): Promise<Map<string, { from: number | null; truncated: boolean }>> {
+    const { rows } = await this.pool.query<{ address: string; truncated: boolean; read_block: string | null }>(
+      `SELECT address, truncated, read_block FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND address = ANY($2::text[])`,
+      [chainId, wallets],
+    );
+    const out = new Map<string, { from: number | null; truncated: boolean }>();
+    for (const r of rows) {
+      const reached = r.read_block === null ? null : Number(r.read_block);
+      const from = reached !== null && reached >= block ? null : reached === null ? 0 : Math.max(0, reached + 1 - REREAD_OVERLAP_BLOCKS);
+      out.set(r.address, { from, truncated: r.truncated });
+    }
+    return out;
+  }
+
+  /** The stored flows from or to any of `wallets`. A spot check reads a few wallets, so these are few. */
+  async flowsOf(chainId: number, wallets: readonly string[]): Promise<Flow[]> {
+    if (wallets.length === 0) return [];
+    const { rows } = await this.pool.query(
+      `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
+              extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+       WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[]))
+       ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address`,
+      [chainId, wallets],
+    );
+    return rows.map(toFlow);
+  }
+
+  /** A wallets row for each, so saveMoney has one to update; one already there is left as it is. */
+  async addWallets(chainId: number, wallets: readonly string[]): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO washtrace.wallets (chain_id, address) SELECT $1, unnest($2::text[]) ORDER BY 2 ON CONFLICT (chain_id, address) DO NOTHING`,
+      [chainId, wallets],
+    );
   }
 }
 

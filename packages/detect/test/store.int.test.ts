@@ -26,6 +26,7 @@ import { COPIES, DEFAULT_RULE, FOLLOW_FANOUT } from '../src/lens-rule.js';
 import { lensStored, previewStored } from '../src/lens-thread.js';
 import { MIGRATIONS } from '../src/migrations.js';
 import type { Payments } from '../src/payments.js';
+import type { SpotResult } from '../src/spot.js';
 
 let pg: StartedPostgreSqlContainer;
 let store: Store;
@@ -7008,5 +7009,138 @@ describe('pruning', () => {
     expect(await store.check(old)).toBeNull();
     expect(await store.check(recent)).toMatchObject({ finished: true, ok: true });
     expect(await store.check(pending)).toEqual({ finished: false, ok: null, detail: null });
+  });
+});
+
+describe('spot checks', () => {
+  beforeAll(async () => { await store.migrate(); });
+
+  const TX = `0x${'5'.repeat(64)}`;
+  const tx = (n: number) => `0x${String(n).padStart(64, '0')}`;
+  const finished = { washTrade: true, methods: ['A'], notRun: ['AU'], atLeast: false, finalized: true, source: 'spot', transfers: [] } as unknown as SpotResult;
+
+  it('requestSpot reuses a queued, running or fresh check', async () => {
+    const first = await store.requestSpot(1, tx(1), null);
+    expect(first.reused).toBe(false);
+    expect(await store.requestSpot(1, tx(1), null)).toEqual({ id: first.id, reused: true });
+    const withLens = await store.requestSpot(1, tx(1), { key: 'L7', version: 1 });
+    expect(withLens.id).not.toBe(first.id);
+    const edited = await store.requestSpot(1, tx(1), { key: 'L7', version: 2 });
+    expect(edited.id).not.toBe(withLens.id);
+    // Running is still in flight.
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [first.id]);
+    expect((await store.requestSpot(1, tx(1), null)).id).toBe(first.id);
+    // Done and fresh is reused; done two hours back is not.
+    await store.saveSpot(first.id, finished);
+    expect(await store.requestSpot(1, tx(1), null)).toEqual({ id: first.id, reused: true });
+    await store.pool.query(`UPDATE washtrace.spot_checks SET finished_at = now() - interval '2 hours' WHERE id = $1`, [first.id]);
+    const again = await store.requestSpot(1, tx(1), null);
+    expect(again.id).not.toBe(first.id);
+    // A failed check is asked again.
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [again.id]);
+    await store.spotFailed(again.id, 'No such transaction on chain 1.');
+    expect((await store.requestSpot(1, tx(1), null)).id).not.toBe(again.id);
+  });
+
+  it('does not reuse a done check of a block that was not final', async () => {
+    const one = await store.requestSpot(1, tx(2), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [one.id]);
+    await store.saveSpot(one.id, { ...finished, finalized: false });
+    expect((await store.requestSpot(1, tx(2), null)).id).not.toBe(one.id);
+  });
+
+  it('two requests at once make one row', async () => {
+    const [p, q] = await Promise.all([store.requestSpot(1, tx(3), null), store.requestSpot(1, tx(3), null)]);
+    expect(p.id).toBe(q.id);
+    const { rows } = await store.pool.query(`SELECT count(*)::int AS n FROM washtrace.spot_checks WHERE tx_hash = $1`, [tx(3)]);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it('spot reads a check back as the console polls it, and null for an unknown id', async () => {
+    const { id } = await store.requestSpot(5, TX, null);
+    expect(await store.spot(id)).toMatchObject({ id, chainId: 5, tx: TX, lens: null, status: 'queued', result: null, error: null, finishedAt: null });
+    expect(await store.spot(2_000_000_000)).toBeNull();
+  });
+
+  it('nextSpot takes the oldest queued, fails one left running, and fails one whose lens was removed or edited', async () => {
+    await store.pool.query(`DELETE FROM washtrace.spot_checks`);
+    const left = await store.requestSpot(1, tx(10), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [left.id]);
+    const removed = await store.createLens('Spot removed', DEFAULT_RULE);
+    const gone = await store.requestSpot(1, tx(11), { key: removed.key, version: removed.version });
+    await store.deleteLens(removed.id);
+    const edited = await store.createLens('Spot edited', DEFAULT_RULE);
+    const stale = await store.requestSpot(1, tx(12), { key: edited.key, version: edited.version });
+    await store.updateLens(edited.id, 'Spot edited', DEFAULT_RULE);
+    const plain = await store.requestSpot(1, tx(13), null);
+    const own = await store.createLens('Spot kept', DEFAULT_RULE);
+    const kept = await store.requestSpot(1, tx(14), { key: own.key, version: own.version });
+
+    expect(await store.nextSpot()).toEqual({ id: plain.id, chainId: 1, tx: tx(13), lens: null });
+    // The fund pass finishes one check before it takes the next.
+    await store.saveSpot(plain.id, finished);
+    expect(await store.nextSpot()).toEqual({ id: kept.id, chainId: 1, tx: tx(14), lens: { key: own.key, rule: DEFAULT_RULE } });
+    await store.saveSpot(kept.id, finished);
+    expect(await store.nextSpot()).toBeNull();
+    expect(await store.spot(left.id)).toMatchObject({ status: 'failed', error: 'The worker stopped during this check.' });
+    expect(await store.spot(gone.id)).toMatchObject({ status: 'failed', error: 'That lens was removed.' });
+    expect(await store.spot(stale.id)).toMatchObject({ status: 'failed', error: 'That lens was edited; ask again.' });
+    expect(await store.spot(plain.id)).toMatchObject({ status: 'done' });
+    expect(await store.spot(kept.id)).toMatchObject({ status: 'done' });
+    await store.deleteLens(edited.id);
+    await store.deleteLens(own.id);
+  });
+
+  it('saveSpot and spotFailed finish only a running check', async () => {
+    const { id } = await store.requestSpot(1, tx(20), null);
+    await store.saveSpot(id, finished);
+    expect(await store.spot(id)).toMatchObject({ status: 'queued' });
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [id]);
+    await store.saveSpot(id, finished);
+    const done = await store.spot(id);
+    expect(done).toMatchObject({ status: 'done', result: finished, error: null });
+    expect(done!.finishedAt).not.toBeNull();
+  });
+
+  it('moneyCovering says which reads cover the block and where the rest read on', async () => {
+    const covered = w('5c01'), older = w('5c02'), empty = w('5c03'), waiting = w('5c04');
+    await store.addWallets(77, [covered, older, empty, waiting]);
+    await store.saveMoney(77, covered, [flow(covered, x, { blockNumber: 50_000 })], false, undefined, 50_000);
+    await store.saveMoney(77, older, [flow(older, x, { blockNumber: 30_000 })], true, undefined, 30_000);
+    await store.saveMoney(77, empty, [], false, undefined, null);
+    const at = await store.moneyCovering(77, [covered, older, empty, waiting], 40_000);
+    expect(at.get(covered)).toEqual({ from: null, truncated: false });
+    // A day of blocks (7,200) before the one after its last read.
+    expect(at.get(older)).toEqual({ from: 30_000 + 1 - 7_200, truncated: true });
+    // A read that found no rows has no block: it reads again from 0.
+    expect(at.get(empty)).toEqual({ from: 0, truncated: false });
+    expect(at.has(waiting)).toBe(false);
+    expect((await store.moneyCovering(77, [covered], 90_000)).get(covered)).toEqual({ from: 50_000 + 1 - 7_200, truncated: false });
+    // Floored at 0 near the chain's start.
+    await store.saveMoney(77, waiting, [flow(waiting, x, { blockNumber: 100 })], false, undefined, 100);
+    expect((await store.moneyCovering(77, [waiting], 200)).get(waiting)).toEqual({ from: 0, truncated: false });
+  });
+
+  it('addWallets adds a row once, and flowsOf returns flows either way', async () => {
+    const me = w('5d01');
+    await store.addWallets(78, [me]);
+    await store.addWallets(78, [me]);
+    const { rows } = await store.pool.query(`SELECT count(*)::int AS n, min(status) AS s FROM washtrace.wallets WHERE chain_id = 78 AND address = $1`, [me]);
+    expect(rows[0]).toEqual({ n: 1, s: 'pending' });
+    const out = flow(me, a, { blockNumber: 10, blockTime: 1_000 });
+    const into = flow(b, me, { blockNumber: 11, blockTime: 1_001 });
+    const other = flow(a, b, { blockNumber: 12, blockTime: 1_002 });
+    await store.saveMoney(78, me, [out, into, other], false, undefined, 12);
+    expect((await store.flowsOf(78, [me])).map((f) => f.txHash).sort()).toEqual([out.txHash, into.txHash].sort());
+    expect(await store.flowsOf(78, [])).toEqual([]);
+  });
+
+  it('sweepPreviews also deletes spot checks past a day', async () => {
+    const old = await store.requestSpot(1, tx(30), null);
+    const fresh = await store.requestSpot(1, tx(31), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET requested_at = now() - interval '25 hours' WHERE id = $1`, [old.id]);
+    await store.sweepPreviews(Date.now());
+    expect(await store.spot(old.id)).toBeNull();
+    expect(await store.spot(fresh.id)).not.toBeNull();
   });
 });

@@ -613,4 +613,26 @@ ALTER TABLE washtrace.token_reads ADD COLUMN IF NOT EXISTS stale_at timestamptz;
 CREATE INDEX IF NOT EXISTS wallets_stale_idx ON washtrace.wallets (chain_id, stale_at) WHERE stale_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS token_reads_stale_idx ON washtrace.token_reads (chain_id, stale_at) WHERE stale_at IS NOT NULL;
 `,
+  `
+-- A spot check: one transaction judged without watching its collection
+-- (spot.ts). lens: null for the built-ins, else a key such as 'L7', at
+-- lens_version, so an edited lens is asked again. result: the SpotResult.
+CREATE TABLE IF NOT EXISTS washtrace.spot_checks (
+  id           serial PRIMARY KEY,
+  chain_id     int NOT NULL,
+  tx_hash      text NOT NULL,
+  lens         text,
+  lens_version int,
+  status       text NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  result       jsonb,
+  error        text,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  finished_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS spot_checks_queued_idx ON washtrace.spot_checks (requested_at) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS spot_checks_tx_idx ON washtrace.spot_checks (chain_id, tx_hash);
+-- One check in flight per question, so two requests at once share it.
+CREATE UNIQUE INDEX IF NOT EXISTS spot_checks_open_idx ON washtrace.spot_checks
+  (chain_id, tx_hash, coalesce(lens, ''), coalesce(lens_version, 0)) WHERE status IN ('queued', 'running');
+`,
 ];
