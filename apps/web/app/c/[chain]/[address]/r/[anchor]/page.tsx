@@ -5,7 +5,7 @@ import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
 import { WhereItSits } from '@/components/where-it-sits';
 import { Empty, Head, MoreLink, Section } from '@/components/ui';
-import { KindIcon, TierMark } from '@/components/kit';
+import { KindIcon, VerdictChip } from '@/components/kit';
 import { RingFigure, ringName, ringTone } from '@/components/rings';
 import { Time } from '@/components/time';
 import { collectionOf } from '@/lib/collection-reads';
@@ -76,7 +76,7 @@ export default async function RingPage(props: Props) {
       <Head
         kind="ring" title={ringName(line)}
         sub={<>{plural(line.wallets, 'wallet')} · {plural(line.tokens, 'token')} · {line.firstAt === null ? null : line.lastAt! - line.firstAt < DAY ? <><Time ms={line.firstAt} style="date" /> · </> : <><Time ms={line.firstAt} style="date" /> to <Time ms={line.lastAt!} style="date" /> · </>}named by <span className="font-mono">{short(anchor)}</span></>}
-        part={<span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium"><TierMark tone={ringTone(line)} />{line.floorSales > 0 ? 'Round trips · the floor' : 'Linked by money · the ceiling'}</span>}
+        part={<VerdictChip tone={ringTone(line)} />}
       />
 
       <section aria-label="What it adds up to" className="flex flex-wrap items-center gap-6 rounded-lg border bg-card p-4">

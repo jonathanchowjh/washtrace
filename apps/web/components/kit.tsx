@@ -35,6 +35,23 @@ export function FunnelIcon({ className }: { className?: string }) {
   );
 }
 
+// Each verdict by the tier of the lens behind it, in the lenses' own names.
+const VERDICT = { cycle: 'Round trips · the floor', money: 'Linked wallets · the ceiling', apart: 'Money loops back · not counted', clean: 'Not flagged' } as const;
+
+/**
+ * A detail page's verdict as a chip under its title: the tier's mark and the
+ * lens behind it, so the page says what it is before the reader gets to its
+ * answer. Null for one not judged yet, which is never shown as clean.
+ */
+export function VerdictChip({ tone }: { tone: keyof typeof VERDICT | null }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium text-foreground">
+      {tone === null || tone === 'clean' ? <i aria-hidden className={cn('inline-block size-2.5 shrink-0 rounded-[2px]', tone === null ? 'border border-dashed border-muted-foreground' : 'bg-muted')} /> : <TierMark tone={tone} />}
+      {tone === null ? 'Not judged yet' : VERDICT[tone]}
+    </span>
+  );
+}
+
 // Literal class names: Tailwind generates only the classes it can read in the source.
 const MARK = {
   cycle: 'rounded-[2px] bg-cycle',

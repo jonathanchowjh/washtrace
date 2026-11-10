@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Witness } from '@washtrace/detect';
-import { EvidenceGlyph, KindIcon, TierMark, evidenceLabel } from '@/components/kit';
+import { EvidenceGlyph, KindIcon, TierMark, VerdictChip, evidenceLabel } from '@/components/kit';
 
 afterEach(cleanup);
 
@@ -53,5 +53,13 @@ describe('the tier mark and the kind symbol', () => {
     const { container } = render(<><KindIcon kind="wallet" /><TierMark tone="cycle" /></>);
     expect(container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect(container.querySelector('i')?.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('the verdict chip', () => {
+  it('names the tier by the lens behind it, and says not judged yet rather than clean', () => {
+    const word = (tone: Parameters<typeof VerdictChip>[0]['tone']) => { const t = render(<VerdictChip tone={tone} />).container.textContent; cleanup(); return t; };
+    expect([word('cycle'), word('money'), word('apart'), word('clean'), word(null)])
+      .toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back · not counted', 'Not flagged', 'Not judged yet']);
   });
 });

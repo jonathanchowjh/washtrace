@@ -9,7 +9,7 @@ import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segment
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
-import { EvidenceGlyph } from '@/components/kit';
+import { EvidenceGlyph, VerdictChip } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
@@ -125,7 +125,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
-        part={<Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense>}
+        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense></>}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { lensRefusal } from '@washtrace/detect';
+import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/where-it-sits';
 import { SpotCheck } from '@/components/spot-check';
 import { mayWrite } from '@/lib/auth';
@@ -71,8 +72,8 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
-        part={within !== undefined && collection !== null && collections[collection.address] !== undefined
-          ? <Suspense fallback={null}><RingChips id={collections[collection.address]!.id} base={within} money={moneyFor(chainId)} of={{ tx }} /></Suspense> : undefined}
+        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{within !== undefined && collection !== null && collections[collection.address] !== undefined
+          ? <Suspense fallback={null}><RingChips id={collections[collection.address]!.id} base={within} money={moneyFor(chainId)} of={{ tx }} /></Suspense> : null}</>}
         crumb={within !== undefined ? [] : [{ href: '/', label: 'Collections' }, ...(home === null ? [] : [{ href: home, label: collection!.name ?? short(collection!.address) }])]}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       />

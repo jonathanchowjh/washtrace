@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
+import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
@@ -129,7 +130,7 @@ export async function WalletView({ chainId, address, sp, within }: {
         kind="wallet"
         title={<span className="font-mono">{short(address)}</span>}
         crumb={scope === undefined ? [{ href: '/', label: 'Collections' }] : []}
-        part={within === undefined ? undefined : <Suspense fallback={null}><RingChips id={within.id} base={within.base} money={moneyFor(chainId)} of={{ wallet: address }} /></Suspense>}
+        part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{within === undefined ? null : <Suspense fallback={null}><RingChips id={within.id} base={within.base} money={moneyFor(chainId)} of={{ wallet: address }} /></Suspense>}</>}
         sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext>
           {scope === undefined ? null : <> · its trades here · <Link href={walletHref(chainId, address)} className="hover:text-foreground hover:underline">in every collection</Link></>}</>}
       >
