@@ -5,7 +5,7 @@ import { MOVE_KIND, Moves } from './moves.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
 import { findOf, isOwnKey, NO_FILTER, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
-import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED_JOIN, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
+import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_JOIN, LATEST, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
 import { FOLLOW_FANOUT, checkRule, type EdgeKind, type LensRule } from './lens-rule.js';
 import type { FollowEstimate } from './lens-reads.js';
 import type { Rules } from './methods.js';
@@ -2080,7 +2080,7 @@ export class Store {
               extract(epoch FROM c.rules_at)::float8 AS rules_changed, extract(epoch FROM c.analysis_retry_at)::float8 AS retry,
               extract(epoch FROM c.analysis_started_at)::float8 AS started
        FROM washtrace.collections c
-       LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true
+       LEFT JOIN LATERAL (SELECT ran_at, took_ms FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true
        WHERE c.version > c.analyzed_version AND c.paused_at IS NULL ORDER BY c.id`,
     );
     return rows.map((r) => ({
@@ -2435,7 +2435,7 @@ export class Store {
         // Facts worked out otherwise, or by an analysis from before facts were keyed, are no base to add to.
         const key = factsKey(money);
         const last = (await c.query<{ through_block: string | null; facts_key: string | null }>(
-          'SELECT through_block, facts_key FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT 1', [id],
+          `SELECT through_block, facts_key FROM washtrace.analyses WHERE collection_id = $1 ${LATEST}`, [id],
         )).rows[0];
         const prev = last?.through_block != null && last.facts_key === key ? Number(last.through_block) : null;
         await c.query(
@@ -2544,7 +2544,7 @@ export class Store {
 
   async history(id: number, limit = HISTORY_KEEP): Promise<AnalysisRow[]> {
     const { rows } = await this.pool.query(
-      `SELECT *, extract(epoch FROM ran_at)::float8 AS ran FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC LIMIT $2`,
+      `SELECT *, extract(epoch FROM ran_at)::float8 AS ran FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC, id DESC LIMIT $2`,
       [id, limit],
     );
     return rows.map((r) => toAnalysis(r, r.id)).reverse();
@@ -2707,7 +2707,7 @@ export class Store {
       const due = (await c.query<{ id: number; collection_id: number }>(
         `SELECT a.id, a.collection_id FROM washtrace.analyses a
          WHERE a.rings IS NULL AND a.loops IS NOT NULL AND a.collection_id <> ALL($1::int[])
-           AND a.id = (SELECT b.id FROM washtrace.analyses b WHERE b.collection_id = a.collection_id ORDER BY b.ran_at DESC, b.id DESC LIMIT 1)
+           AND a.id = (SELECT b.id FROM washtrace.analyses b WHERE b.collection_id = a.collection_id ${LATEST})
          ORDER BY a.collection_id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`,
         [[...skip]],
       )).rows[0];
@@ -2716,7 +2716,7 @@ export class Store {
         // The witnesses a counted lens points at, as saveAnalysis takes them.
         const { rows } = await c.query<{ id: number; wallets: string[] }>(
           `SELECT w.id, w.wallets FROM washtrace.witnesses w
-           WHERE w.collection_id = $1 AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND f.witness_id = w.id)`,
+           WHERE w.collection_id = $1 AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND f.witness_id = w.id)`,
           [due.collection_id],
         );
         const ring = ringsOf(rows);
@@ -2748,7 +2748,7 @@ export class Store {
     const line = (await this.pool.query(`${RINGS_SQL} SELECT * FROM ranked WHERE ring = $3`, [id, [...ctx.money], anchor])).rows[0];
     if (line === undefined) return null;
     const hits = `SELECT DISTINCT f.tx_hash, f.log_index FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
-      WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring = $2`;
+      WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring = $2`;
     const [wallets, tokens] = await Promise.all([
       this.pool.query<{ address: string; traded: boolean }>(
         `WITH traded AS (SELECT DISTINCT a FROM (${hits}) h JOIN washtrace.transfers t ON t.collection_id = $1 AND t.tx_hash = h.tx_hash AND t.log_index = h.log_index
@@ -2792,11 +2792,11 @@ export class Store {
       : 'tx' in of
         ? await this.pool.query<{ ring: string }>(
           `SELECT DISTINCT w.ring FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
-           WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring IS NOT NULL AND f.tx_hash = $2 ORDER BY w.ring`, [id, of.tx])
+           WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring IS NOT NULL AND f.tx_hash = $2 ORDER BY w.ring`, [id, of.tx])
         : await this.pool.query<{ ring: string }>(
         `SELECT DISTINCT w.ring FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
          JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
-         WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring IS NOT NULL AND t.token_id = $2::numeric ORDER BY w.ring`, [id, of.tokenId]);
+         WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring IS NOT NULL AND t.token_id = $2::numeric ORDER BY w.ring`, [id, of.tokenId]);
     return rows.map((r) => r.ring);
   }
 
@@ -3633,7 +3633,7 @@ export class Store {
        FROM washtrace.lens_runs r
        JOIN washtrace.lenses l ON l.id = r.lens_id
        JOIN washtrace.collections c ON c.id = r.collection_id AND c.paused_at IS NULL
-       JOIN LATERAL (SELECT id, through_block, ran_at FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC, x.id DESC LIMIT 1) a ON true
+       JOIN LATERAL (SELECT id, through_block, ran_at FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true
        WHERE r.status IN ('queued', 'running')
           OR (r.status = 'done' AND (r.lens_version < l.version
             OR ((r.analysis_id IS DISTINCT FROM a.id OR ${tokensMoved})
@@ -3768,7 +3768,7 @@ export class Store {
     const { rows } = await this.pool.query<{ sales: boolean }>(
       `SELECT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $1 AND t.marketplace IS NOT NULL
                         AND (a.through_block IS NULL OR t.block_number <= a.through_block)) AS sales
-       FROM (SELECT through_block FROM washtrace.analyses WHERE collection_id = $1 ORDER BY ran_at DESC, id DESC LIMIT 1) a`,
+       FROM (SELECT through_block FROM washtrace.analyses WHERE collection_id = $1 ${LATEST}) a`,
       [collectionId],
     );
     if (rows.length === 0) return 'not-analysed';
@@ -3823,7 +3823,7 @@ export class Store {
         `SELECT p.id, p.collection_id, p.rule, c.chain_id, coalesce(c.name, left(c.address, 6) || '…' || right(c.address, 4)) AS name, a.through_block
          FROM washtrace.lens_previews p
          JOIN washtrace.collections c ON c.id = p.collection_id
-         LEFT JOIN LATERAL (SELECT through_block FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC, x.id DESC LIMIT 1) a ON true
+         LEFT JOIN LATERAL (SELECT through_block FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true
          WHERE p.status = 'queued' ORDER BY p.requested_at, p.id LIMIT 1`,
       );
       const r = rows[0];
@@ -3868,7 +3868,7 @@ export class Store {
   async roundTripsCaught(collectionId: number, keys: readonly string[]): Promise<number | null> {
     const cut = keys.map((k) => k.lastIndexOf(':'));
     const { rows } = await this.pool.query<{ ran: boolean | null; caught: number }>(
-      `SELECT (SELECT a.totals -> 'A' ->> 'available' = 'true' FROM washtrace.analyses a WHERE a.collection_id = $1 ORDER BY a.ran_at DESC, a.id DESC LIMIT 1) AS ran,
+      `SELECT (SELECT a.totals -> 'A' ->> 'available' = 'true' FROM washtrace.analyses a WHERE a.collection_id = $1 ${LATEST}) AS ran,
               (SELECT count(*)::int FROM washtrace.flags f JOIN unnest($2::text[], $3::int[]) AS k(tx, li) ON f.tx_hash = k.tx AND f.log_index = k.li
                WHERE f.collection_id = $1 AND f.method = 'A') AS caught`,
       [collectionId, keys.map((k, i) => k.slice(0, cut[i])), keys.map((k, i) => Number(k.slice(cut[i]! + 1)))],
@@ -4072,7 +4072,7 @@ export class Store {
 const RINGS_SQL = `WITH hits AS (
   SELECT w.ring, f.tx_hash, f.log_index, bool_or(f.method = 'A') AS floor
   FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
-  WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND w.ring IS NOT NULL
+  WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.ring IS NOT NULL
   GROUP BY w.ring, f.tx_hash, f.log_index),
 r AS (
   SELECT h.ring, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,

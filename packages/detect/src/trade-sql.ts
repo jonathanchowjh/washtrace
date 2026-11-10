@@ -115,7 +115,7 @@ export function walletWhere(chainId: number, address: string, filter: WalletFilt
   if (filter.flaggedOnly) {
     where.push(`EXISTS (SELECT 1 FROM washtrace.flags f
       WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${p(HEADLINE)}::text[])
-        AND (SELECT a.totals FROM washtrace.analyses a WHERE a.collection_id = t.collection_id ORDER BY a.ran_at DESC LIMIT 1) -> f.method ->> 'available' = 'true')`);
+        AND (SELECT a.totals FROM washtrace.analyses a WHERE a.collection_id = t.collection_id ${LATEST}) -> f.method ->> 'available' = 'true')`);
   }
   // The other side: the buyer of what it sold, the seller of what it bought.
   const other = (op: '=' | 'LIKE', v: string) => {
@@ -203,6 +203,14 @@ export function caughtOf(key: LensKey, params: unknown[]): { from: string; where
     where: `f.collection_id = $1 AND ${src.where} AND x.counted`,
   };
 }
+/** The counted lenses as a SQL list, `('A', 'AC')`: a flag of a lens out of it (Money loops back) is in no share, ring or count. From HEADLINE, so the two never part. */
+export const COUNTED = `(${HEADLINE.map((m) => `'${m}'`).join(', ')})`;
+/**
+ * The latest analysis of a collection, as the end of a subquery over
+ * washtrace.analyses: the latest run, and of two saved in the same instant the
+ * later row, so every read picks the same one.
+ */
+export const LATEST = 'ORDER BY ran_at DESC, id DESC LIMIT 1';
 /** Transfer `t`'s facts, when the analysis counted it. */
 export const COUNTED_JOIN = 'JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted';
 /** Transfer `t` once for each wallet in it, as `s.address`: a wallet that sold to itself is in it once. */
@@ -322,7 +330,7 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
   if (q.ring !== null) {
     // A trade is the ring's when a counted lens flags it through one of the ring's witnesses.
     where.push(`EXISTS (SELECT 1 FROM washtrace.flags rf JOIN washtrace.witnesses rw ON rw.collection_id = rf.collection_id AND rw.id = rf.witness_id
-      WHERE rf.collection_id = ${c} AND rf.tx_hash = t.tx_hash AND rf.log_index = t.log_index AND rf.method IN ('A', 'AC') AND rw.ring = ${p(q.ring.toLowerCase())})`);
+      WHERE rf.collection_id = ${c} AND rf.tx_hash = t.tx_hash AND rf.log_index = t.log_index AND rf.method IN ${COUNTED} AND rw.ring = ${p(q.ring.toLowerCase())})`);
   }
   if (q.group !== null) {
     const g = q.group;
