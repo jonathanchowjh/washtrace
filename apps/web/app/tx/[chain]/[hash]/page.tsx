@@ -3,6 +3,11 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
+import { headers } from 'next/headers';
+import { lensRefusal } from '@washtrace/detect';
+import { SpotCheck } from '@/components/spot-check';
+import { mayWrite } from '@/lib/auth';
+import { store } from '@/lib/store';
 import { METHODS, ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { Answer, Ext, Head, MoreLink, Section } from '@/components/ui';
@@ -75,6 +80,10 @@ export default async function TxPage({ params }: Props) {
       >
         {body}{notRunLine && !unread ? ` ${notRunLine}` : ''}{ownLine}
       </Answer>
+      {unread || washTrade === null ? (
+        <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}
+          lenses={(await store().lenses()).map((l) => ({ key: l.key, name: l.name, refusal: lensRefusal(l.rule) }))} />
+      ) : null}
       {transfers.length > 0 ? <Section title="What it moved" lead={TINT_LEAD}><Transfers chainId={chainId} transfers={transfers} collection own={ownByRow} names={ownLenses} /></Section> : null}
       {transfers.map((t, i) => {
         const c = collections[t.collection?.address ?? ''];

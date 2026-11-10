@@ -9,6 +9,8 @@ import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, searchArgs, SEARCH_LIMIT } from '@/lib/search';
 import { store } from '@/lib/store';
+import { chainName } from '@/lib/chains';
+import { configFromSources } from '@/lib/settings';
 
 type Props = { searchParams: Promise<{ q?: string; kind?: string; page?: string }> };
 
@@ -61,12 +63,20 @@ export default async function SearchPage({ searchParams }: Props) {
     const address = addressOf(q);
     const tx = txOf(q);
     const outside = address ? explorerAddress(1, address) : tx ? explorerTx(1, tx) : null;
+    // A hash no watched collection holds can still be spot checked, on any chain the worker has an RPC for.
+    const checkOn = tx ? configFromSources(...await Promise.all([store().sources(), store().settings()])).chains : [];
     return (
       <>
         {head}
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
           {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
+          {checkOn.length > 0 ? (
+            <> Check it on{' '}
+              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={`/tx/${c}/${tx}`}>{chainName(c)}</Link></span>)}
+              : washtrace reads that one transaction, without watching its collection.
+            </>
+          ) : null}
         </Empty>
       </>
     );

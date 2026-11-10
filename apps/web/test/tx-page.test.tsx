@@ -61,6 +61,7 @@ vi.mock('@/lib/store', () => ({
       return { id, chainId: 1, address, name: address === A1 ? 'First' : 'Second', latest: { id: 1, throughBlock: state.through[id], truncatedSearches: state.truncatedSearches, totals } };
     },
     transaction: async () => state.tx,
+    lenses: async () => state.lenses.map((l) => ({ id: l.id, key: `L${l.id}` as const, name: l.name, rule: l.rule, version: l.version, createdAt: 0, updatedAt: 0 })),
     token: async (id: number, tokenId: string) => state.tokens[`${id === 1 ? A1 : A2}/${tokenId}`] ?? [],
     flowsAmong: flows,
     lensRuns: async (collectionId: number) => state.lenses.map((l) => ({
@@ -77,6 +78,7 @@ vi.mock('@/lib/store', () => ({
   }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'localhost:8080' }) }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => {
@@ -586,5 +588,16 @@ describe('a transfer a lens does not judge says so, never that it was not caught
     expect(card.get('Round trips')!.querySelector('figure')).not.toBeNull();
     expect(card.get('Every owner')!.querySelector('figure')).not.toBeNull();
     expect(c.textContent).not.toContain('custody, not a trade');
+  });
+});
+
+describe('the trade page: a spot check', () => {
+  it('an unread transaction offers the check; a judged one does not', async () => {
+    const unread = await txPage();
+    expect(unread.querySelector('#spot-check')?.textContent).toBe('Check this transaction');
+    cleanup();
+    roundTrip();
+    const judged = await txPage();
+    expect(judged.querySelector('#spot-check')).toBeNull();
   });
 });
