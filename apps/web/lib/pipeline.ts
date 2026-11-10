@@ -1,7 +1,7 @@
 import { BEHIND_BLOCKS, NOT_DONE, TRAIL_NOTES, reaches, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES } from './format';
 
-export type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
+type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
 export type StageState = 'waiting' | 'running' | 'done' | 'not-needed' | 'blocked' | 'failed' | 'paused' | 'live' | 'silent';
 
 export interface Stage {
@@ -20,7 +20,7 @@ export interface Stage {
   skipped: string | null;
 }
 
-export interface PipelineInput {
+interface PipelineInput {
   c: CollectionRow;
   entry: StoredEntry | null;
   rpcChains: ReadonlySet<number>;

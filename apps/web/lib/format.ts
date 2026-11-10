@@ -318,9 +318,6 @@ export function withoutKey(trailFunded: boolean): string {
   return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
 }
 
-/** A file's size as the Hub shows it. Defined once in the detect package, so the dataset card says the same size (see bytes.ts). */
-export { formatBytes };
-
 /** One collection's stored files, sized: what the suggested list and the add form say of it. */
 export interface StoredSize { chainId: number; address: string; name: string; transfers: number; trail: number | null }
 

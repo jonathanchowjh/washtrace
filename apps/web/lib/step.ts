@@ -7,7 +7,8 @@ import { lensContext, ownLenses } from './metrics';
 import { pageOf } from './params';
 import { store } from './store';
 import { TRADES_PAGE, holdsNothing, parseView } from './trades-url';
-import { LIST_PAGE, RINGS_PAGE, listView } from './views';
+import { LIST_PAGE, RINGS_PAGE } from './views';
+import { listView } from './params';
 
 /**
  * Stepping through a list from one of its items: ‹ and › (and J and K) open
@@ -19,7 +20,7 @@ import { LIST_PAGE, RINGS_PAGE, listView } from './views';
  * its page offers the way back to the list.
  */
 
-export type ListKind = 'tokens' | 'wallets' | 'rings' | 'trades';
+type ListKind = 'tokens' | 'wallets' | 'rings' | 'trades';
 const KINDS: readonly ListKind[] = ['tokens', 'wallets', 'rings', 'trades'];
 
 /** A `from`: the list's kind and its query; null for anything else. */
@@ -43,7 +44,6 @@ type Item = { id: string; label: string; href: string };
 export type Step = { prev: Item | null; next: Item | null; at: number; total: number; back: { href: string; label: string } };
 
 const SIZE: Record<ListKind, number> = { tokens: LIST_PAGE, wallets: LIST_PAGE, rings: RINGS_PAGE, trades: TRADES_PAGE };
-const NOUN: Record<ListKind, string> = { tokens: 'tokens', wallets: 'wallets', rings: 'rings', trades: 'trades' };
 
 /** One page of the list a `from` names, as items, and the list's total. */
 async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchParams, page: number): Promise<{ items: Item[]; total: number }> {
@@ -102,6 +102,6 @@ export async function stepOf(c: CollectionRow, from: NonNullable<ReturnType<type
     next: i < here.items.length - 1 ? here.items[i + 1]! : after?.items.find((x) => x.id !== id) ?? null,
     at: (page - 1) * size + i + 1,
     total: here.total,
-    back: { href: back, label: `All ${here.total} ${NOUN[kind]}` },
+    back: { href: back, label: `All ${here.total} ${kind}` },
   };
 }

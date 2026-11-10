@@ -14,7 +14,7 @@
  */
 export const ACTOR_HEADER = 'x-washtrace-user';
 
-export type AuthResult =
+type AuthResult =
   | { ok: true; user: string | null }
   | { ok: false; status: 401 | 503; message: string };
 
@@ -80,7 +80,7 @@ export function authConfigured(env: Record<string, string | undefined>): boolean
  * `X-Forwarded-For` and `X-Forwarded-Host` can't tell: Next adds both to
  * every request itself.
  */
-export function localRequest(headers: Headers): boolean {
+function localRequest(headers: Headers): boolean {
   const host = (headers.get('host') ?? '').toLowerCase();
   // A bracketed IPv6 address keeps up to its `]`; otherwise the port, if any, follows the last colon.
   const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.includes(':') ? host.slice(0, host.lastIndexOf(':')) : host;

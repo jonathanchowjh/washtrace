@@ -1,7 +1,8 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MethodTotals, TimelinePoint, TokenLine, TradeRow } from '@washtrace/detect';
-import { HowSure, NotCounted, SalesStrip, TopList, saleStanding, standing, stepOf } from '@/components/overview';
+import { HowSure, NotCounted, TopList, worstStage } from '@/components/overview';
+import { SalesStrip, saleStanding, standing } from '@/components/sales-strip';
 import type { Stage } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 
@@ -19,12 +20,12 @@ const links = (c: Element) => [...c.querySelectorAll('a')].map((a) => [a.textCon
 describe('the reading in four steps', () => {
   it('reads each step as the worst of its stages, so a failure is never behind one that is done', () => {
     const stages = [stage('download', 'done'), stage('load', 'failed'), stage('stored-analysis', 'running')];
-    expect(stepOf(stages, ['download', 'load', 'stored-analysis'])?.state).toBe('failed');
+    expect(worstStage(stages, ['download', 'load', 'stored-analysis'])?.state).toBe('failed');
   });
 
   it('calls a step not needed only when every stage of it is', () => {
-    expect(stepOf([stage('download', 'not-needed'), stage('load', 'not-needed')], ['download', 'load'])?.state).toBe('not-needed');
-    expect(stepOf([stage('download', 'not-needed'), stage('load', 'done')], ['download', 'load'])?.state).toBe('done');
+    expect(worstStage([stage('download', 'not-needed'), stage('load', 'not-needed')], ['download', 'load'])?.state).toBe('not-needed');
+    expect(worstStage([stage('download', 'not-needed'), stage('load', 'done')], ['download', 'load'])?.state).toBe('done');
   });
 });
 

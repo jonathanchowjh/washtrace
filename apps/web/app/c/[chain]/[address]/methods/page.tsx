@@ -29,7 +29,8 @@ import { pipeline, trailComing } from '@/lib/pipeline';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
-import { clampedPage, collectionView, listView } from '@/lib/views';
+import { listView } from '@/lib/params';
+import { clampedPage, collectionView } from '@/lib/views';
 
 /** Rows of each lens list a page in the lens panel; the flagged page has all of them. */
 const TOP = 10;

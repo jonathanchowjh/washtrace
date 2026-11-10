@@ -13,9 +13,9 @@ import { KindIcon } from './kit';
 import { ringName, ringsIn } from './rings';
 
 /** One wallet on the rail, with what it did here. */
-export type RailWallet = { address: string; role: string };
+type RailWallet = { address: string; role: string };
 /** One transaction on the rail: a sale of a token, or a payment. */
-export type RailTx = { hash: string; block: number; what: string };
+type RailTx = { hash: string; block: number; what: string };
 
 // A group past this many lists the first; the page's own sections hold the rest.
 const SHOWN = 6;

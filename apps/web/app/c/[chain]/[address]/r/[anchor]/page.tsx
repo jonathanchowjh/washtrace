@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
 import { ConnectedRail } from '@/components/connected-rail';
-import { WhereItSits } from '@/components/where-it-sits';
+import { WhereItSits } from '@/components/sales-strip';
 import { Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, VerdictChip } from '@/components/kit';
 import { RingFigure, ringName, ringTone } from '@/components/rings';

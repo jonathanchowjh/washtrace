@@ -11,12 +11,10 @@ import { MAX_TEXT, addressOf, chainOf, pageOf, tokenIdOf } from './params';
  * which a client component must not.
  */
 
-export type { Parsed, SearchKind };
-
 /** Rows per kind on the results page, and per page of one kind. */
 export const SEARCH_LIMIT = 20;
 
-export const SEARCH_KINDS: readonly SearchKind[] = ['collections', 'tokens', 'wallets', 'trades'];
+const SEARCH_KINDS: readonly SearchKind[] = ['collections', 'tokens', 'wallets', 'trades'];
 
 /** A search narrowed to one collection, as `scope=<chain>:<address>` carries it. */
 export type Scope = { chainId: number; address: string };

@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { HEADLINE, lensRefusal } from '@washtrace/detect';
 import { ConnectedRail, walletRoles } from '@/components/connected-rail';
 import { VerdictChip } from '@/components/kit';
-import { WhereItSits } from '@/components/where-it-sits';
+import { WhereItSits } from '@/components/sales-strip';
 import { SpotCheck } from '@/components/spot-check';
 import { mayWrite } from '@/lib/auth';
 import { store } from '@/lib/store';

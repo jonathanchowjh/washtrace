@@ -10,7 +10,7 @@ function witnessKey(w: Witness): string {
   return w.kind === 'scc' ? `scc|${base}` : `flow|${base}|${w.via.length}`;
 }
 
-export interface Reason { witness: Witness; methods: Method[]; rows: number[] }
+interface Reason { witness: Witness; methods: Method[]; rows: number[] }
 
 /**
  * A token's flags grouped by reason, so a pattern that four transfers share
@@ -40,7 +40,7 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const FAN_MAX = 6;
 
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it. */
-export interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
+interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; middle: boolean; first: boolean }
 /**
  * `tx` and `row` are the transfer an asset arrow opens and numbers (a bundle's
  * first), and null for money. `from` and `to` are the wallets it joins. Tone

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-export type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
+type CollectionTab = 'overview' | 'rings' | 'tokens' | 'wallets' | 'trades';
 
 /**
  * The tab a path under a collection belongs to: a list lights its own tab,

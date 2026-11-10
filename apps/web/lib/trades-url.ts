@@ -13,7 +13,7 @@ import { LENSES, ethToWei, localTime, short, weiToEth } from './format';
 import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
 
-export type Params = Record<string, string | string[] | undefined>;
+type Params = Record<string, string | string[] | undefined>;
 export interface View { by: TradeGroupBy | null; page: number }
 
 /** Trades to a page, in the Trades list and its route, so a page number means the same rows in both. */

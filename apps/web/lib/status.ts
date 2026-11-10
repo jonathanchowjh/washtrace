@@ -1,6 +1,7 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, NOT_DONE, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES, eta, floorPct, formatBytes, localTime, num } from './format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES, eta, floorPct, localTime, num } from './format';
+import { formatBytes } from '@washtrace/detect/bytes';
 import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './coverage';
 import { FIELDS, type SourcesConfig } from './settings';
 
@@ -64,7 +65,7 @@ export const JOB_STEP: Readonly<Record<Job, string>> = {
 const PARTNER: Partial<Record<Job, Job>> = { analyze: 'lens', lens: 'analyze' };
 
 /** `job`'s partner on the shared lock and its row, for `jobState`. */
-export function partnerOf(passes: readonly PassRow[], job: Job): { job: Job; pass: PassRow | undefined } | undefined {
+function partnerOf(passes: readonly PassRow[], job: Job): { job: Job; pass: PassRow | undefined } | undefined {
   const partner = PARTNER[job];
   return partner === undefined ? undefined : { job: partner, pass: passes.find((r) => r.job === partner) };
 }
