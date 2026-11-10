@@ -166,8 +166,8 @@ export function RuleTable({ rule, onChange, advanced }: { rule: LensRule; onChan
         </Row>
         ) : null}
         {more ? (
-        <Row term="At least N loops among the wallets involved">
-          <Count label="Fewest loops among the wallets involved for a trade to be flagged" value={rule.minCycles} none="1" disabled={locked}
+        <Row term="Fewest times round the wallets involved">
+          <Count label="Fewest times the token goes round the wallets involved for a trade to be flagged" value={rule.minCycles} none="1" disabled={locked}
             onCommit={edit<string>((d, v) => { d.minCycles = Number(v || 1); })} />
         </Row>
         ) : null}

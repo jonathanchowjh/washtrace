@@ -137,8 +137,8 @@ export function checkRule(raw: unknown): { rule: LensRule } | { error: string } 
   }
 
   const minCycles = raw.minCycles;
-  if (!isCount(minCycles) || minCycles < 1) return { error: 'Loops: a whole number, 1 or more.' };
-  if (minCycles > 1 && !edges['nft-token'].use) return { error: `At least ${minCycles} loops needs "NFT: same token" switched on.` };
+  if (!isCount(minCycles) || minCycles < 1) return { error: 'Times round: a whole number, 1 or more.' };
+  if (minCycles > 1 && !edges['nft-token'].use) return { error: `Going round at least ${minCycles} times needs "NFT: same token" switched on.` };
 
   let window: LensRule['window'] = null;
   if (raw.window !== null) {
@@ -268,7 +268,7 @@ export const COPIES: Record<Method, { rule: LensRule; differs: string | null }> 
     rule: copy({ 'nft-token': row(true, 'along', null, null, 'each'), eth: moneyAlong, internal: moneyAlong, weth: moneyAlong }, {
       hops: { min: 0, max: 6 }, window: null, never: { marketplaces: true, over: 20, addresses: [] }, judges: 'owners', minCycles: 1,
     }),
-    differs: 'Money loops back also needs two laps when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.',
+    differs: 'Money loops back also needs the token to go round twice when no money is involved, and follows money through up to 30 wallets; this copy is as close as the editor can say.',
   },
   AC: {
     rule: copy({ eth: moneyEither, internal: moneyEither, weth: moneyEither }, {

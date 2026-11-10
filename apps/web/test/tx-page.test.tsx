@@ -132,7 +132,7 @@ describe('the trade page: one card per lens', () => {
     expect(a.querySelector('figure')).not.toBeNull();
     // Round trips' one pattern holds all three of the token's transfers.
     expect(lit(a)).toEqual(['t0', 't1', 't2']);
-    expect(a.textContent).toContain('2 wallets pass it around in 2 cycles');
+    expect(a.textContent).toContain('2 wallets pass it round twice');
     const own = card.get('Fast flips')!;
     // Its loop for this trade (o1): the trade's arrow and the way back through the middle.
     expect(lit(own)).toEqual(['o1e1', 'o1e2', 't2']);

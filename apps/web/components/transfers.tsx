@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
-import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
+import { eth, lensInfo, num, plural, short, timesRound, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
 import { FILL } from './kit';
 import { Empty, Ext } from '@/components/ui';
@@ -24,9 +24,9 @@ export function Wallet({ chainId, address, within, from }: { chainId: number; ad
 
 /** Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do. */
 export function because(w: Witness, chainId: number, within?: string): React.ReactNode {
-  if (w.kind === 'scc') return `${w.wallets.length} wallets pass it around in ${w.cycles} cycles`;
+  if (w.kind === 'scc') return `${w.wallets.length} wallets pass it round ${timesRound(w.cycles)}`;
   if (w.kind === 'scc+flow') {
-    return `${w.wallets.length} wallets in a cycle closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
+    return `${w.wallets.length} wallets in a loop closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
   }
   const [a, b] = w.pair;
   const tx = explorerTx(chainId, w.flowTx);
