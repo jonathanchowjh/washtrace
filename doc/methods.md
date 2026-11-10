@@ -82,10 +82,6 @@ flowchart LR
   S -- "token, 9 ETH sale" --> B
 ```
 
-The console draws the same thing on #114's token page: the sale as a solid arrow, the funder's payments dashed.
-
-![Demo #114's token page: flagged by Linked wallets, with the funder's two payments drawn as dashed arrows](images/token.png)
-
 **Demo #116**: after the sale, the seller and the buyer both paid the same wallet.
 
 AC does not flag #113: its way back is four wallets long, past AC's two hops. AU does not flag #114 or #116:
