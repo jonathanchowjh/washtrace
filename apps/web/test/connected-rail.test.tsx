@@ -47,12 +47,12 @@ describe('the wallets on the rail', () => {
 });
 
 describe('the Connected to rail', () => {
-  it('reads up the tree, then the wallets, then the transactions, each opening its page', async () => {
-    const c = render(await ConnectedRail({ chainId: 1, address: ADDR, of: { tokenId: '114' }, token: '114', wallets: [{ address: w('a'), role: 'seller' }], txs: [{ hash: TX, block: 9, what: 'Sale of #114' }] })!).container;
+  it('reads up the tree, then the wallets, then the transactions, each opening its page; its rings are the header\'s chips, not repeated', async () => {
+    const c = render(await ConnectedRail({ chainId: 1, address: ADDR, token: '114', wallets: [{ address: w('a'), role: 'seller' }], txs: [{ hash: TX, block: 9, what: 'Sale of #114' }] })!).container;
     expect([...c.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['Part of', 'Wallets', 'Transactions']);
     const links = [...c.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]);
     expect(links).toEqual([
-      ['Demo Apes18–25% washed', BASE], ['Ring 33 wallets', `${BASE}/r/${RING}`], ['#114', `${BASE}/t/114`],
+      ['Demo Apes18–25% washed', BASE], ['#114', `${BASE}/t/114`],
       [`${'0xaaaa…aaaa'}seller`, `${BASE}/w/${w('a')}`], ['Sale of #1140x9999…9999', `${BASE}/tx/${TX}`],
     ]);
   });

@@ -162,7 +162,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
       </Answer>
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
-      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} of={{ tokenId }} wallets={walletRoles(transfers, flows, middles)} txs={railTxs(transfers, flows)} /></Suspense>
+      <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
+      <ConnectedRail chainId={chainId} address={address} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
 
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}

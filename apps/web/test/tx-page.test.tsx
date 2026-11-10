@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopEdge, Method, OwnFlag } from '@washtrace/detect';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
@@ -103,6 +103,19 @@ function cards(c: HTMLElement, title: string): Map<string, HTMLElement> {
   return new Map([...section.querySelectorAll<HTMLElement>('li[data-lens]')].map((li) => [li.querySelector('[data-lens-name]')?.textContent ?? '', li]));
 }
 const lit = (el: Element) => [...el.querySelectorAll('[data-lit]')].map((e) => e.getAttribute('data-edge')).sort();
+/**
+ * The one graph of `title`'s token, lit for lens `name`: its switch pressed when it has one. Null when
+ * that lens lights no loop there. The cards are words only; the token's graph is drawn once a transfer.
+ */
+function graph(c: HTMLElement, title: string, name: string): HTMLElement | null {
+  const section = [...c.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === title);
+  const root = section?.querySelector<HTMLElement>('[data-lens-graph]') ?? null;
+  if (root === null) return null;
+  const press = [...root.querySelectorAll('button')].find((b) => b.textContent === name);
+  if (press !== undefined) fireEvent.click(press);
+  return root.querySelector(`svg[aria-label="The loop ${name} caught, lit in this token’s graph"]`) === null ? null : root;
+}
+const openHref = (el: HTMLElement) => [...el.querySelectorAll('a')].find((x) => x.textContent === 'Open it in the token’s graph →')?.getAttribute('href');
 
 /** Token 7 of the first collection: bought back once before this trade, and caught by Round trips, then this trade (row 3). */
 function roundTrip(flags: Method[] = ['A']) {
@@ -121,39 +134,41 @@ const caughtOwn = (id: number, collectionId = 1, logIndex = 5): OwnFlag => ({
 });
 
 describe('the trade page: one card per lens', () => {
-  it("a caught trade's card draws its loop, for a built-in and for a lens of yours", async () => {
+  it("a caught trade's loop is lit in the token's one graph, for a built-in and for a lens of yours", async () => {
     roundTrip();
     state.lenses = [lens(7, 'Fast flips', { 1: {} })];
     // The lens catches an earlier trade of the token too, so its loop for this trade is not its first.
     state.own = [{ ...caughtOwn(7), txHash: '0x01', logIndex: 0 }, caughtOwn(7)];
     const c = await txPage();
     const card = cards(c, 'How each lens reads First #7');
-    const a = card.get('Round trips')!;
-    expect(a.querySelector('figure')).not.toBeNull();
-    // Round trips' one pattern holds all three of the token's transfers.
+    const title = 'How each lens reads First #7';
+    // One graph for the token, not one a card.
+    expect([...c.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === title)!.querySelectorAll('figure')).toHaveLength(1);
+    expect(c.querySelectorAll('li[data-lens] figure')).toHaveLength(0);
+    expect(card.get('Round trips')!.textContent).toContain('2 wallets pass it round in 2 cycles');
+    expect(card.get('Fast flips')!.textContent).toContain('Back to the seller through 1 wallet, 2 by money');
+    // Round trips' one pattern holds all three of the token's transfers; it is lit first.
+    const a = graph(c, title, 'Round trips')!;
     expect(lit(a)).toEqual(['t0', 't1', 't2']);
-    expect(a.textContent).toContain('2 wallets pass it round in 2 cycles');
-    const own = card.get('Fast flips')!;
-    // Its loop for this trade (o1): the trade's arrow and the way back through the middle.
+    expect(openHref(a)).toBe(`/c/1/${A1}/t/7?loop=r0`);
+    // Fast flips' loop for this trade (o1): the trade's arrow and the way back through the middle.
+    const own = graph(c, title, 'Fast flips')!;
     expect(lit(own)).toEqual(['o1e1', 'o1e2', 't2']);
-    expect(own.textContent).toContain('Back to the seller through 1 wallet, 2 by money');
-    const open = (li: HTMLElement) => [...li.querySelectorAll('a')].find((x) => x.textContent === 'Open it in the token’s graph →')?.getAttribute('href');
-    expect(open(a)).toBe(`/c/1/${A1}/t/7?loop=r0`);
-    expect(open(own)).toBe(`/c/1/${A1}/t/7?loop=o1`);
+    expect(openHref(own)).toBe(`/c/1/${A1}/t/7?loop=o1`);
   });
 
-  it('a card’s loop key lights the same loop on the token page', async () => {
+  it('each lens’s loop key lights the same loop on the token page', async () => {
     roundTrip();
     state.lenses = [lens(7, 'Fast flips', { 1: {} }), lens(8, 'Slow loops', { 1: {} })];
     state.own = [{ ...caughtOwn(8), txHash: '0x01', logIndex: 0 }, caughtOwn(7), caughtOwn(8)];
     const c = await txPage();
     const keys: string[] = [];
-    for (const [name, li] of cards(c, 'How each lens reads First #7')) {
-      if (li.querySelector('figure') === null) continue;
-      const href = [...li.querySelectorAll('a')].find((x) => x.textContent === 'Open it in the token’s graph →')!.getAttribute('href')!;
-      const loop = new URL(href, 'http://x').searchParams.get('loop')!;
+    for (const name of cards(c, 'How each lens reads First #7').keys()) {
+      const g = graph(c, 'How each lens reads First #7', name);
+      if (g === null) continue;
+      const loop = new URL(openHref(g)!, 'http://x').searchParams.get('loop')!;
       keys.push(loop);
-      const onTrade = lit(li);
+      const onTrade = lit(g);
       expect(onTrade.length, name).toBeGreaterThan(0);
       const token = await tokenPage(A1, '7', { loop });
       expect(lit(token.querySelector('figure')!), name).toEqual(onTrade);
@@ -252,10 +267,10 @@ describe('the trade page: one card per lens', () => {
     const first = cards(c, 'How each lens reads First #7'), second = cards(c, 'How each lens reads Second #8');
     expect([...first.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
     expect([...second.keys()]).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Fast flips']);
-    expect(first.get('Fast flips')!.querySelector('figure')).not.toBeNull();
+    expect(graph(c, 'How each lens reads First #7', 'Fast flips')).not.toBeNull();
     // A flag stored on a collection the lens never ran on is not read as a catch.
     expect(second.get('Fast flips')!.textContent).toContain('Fast flips has not run on this collection, so it flags nothing yet.');
-    expect(second.get('Fast flips')!.querySelector('figure')).toBeNull();
+    expect(graph(c, 'How each lens reads Second #8', 'Fast flips')).toBeNull();
     expect(second.get('Round trips')!.textContent).toContain(NOT_CAUGHT.A);
     expect(second.get('Linked wallets')!.textContent).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     // Each card's lens name opens that lens's tab on its own collection.
@@ -375,21 +390,23 @@ describe('the trade page: one card per lens', () => {
     for (const s of said) expect(s).not.toMatch(/\b(L[789]|AU|AC)\b/);
   });
 
-  it('each figure has its own arrow markers, and says whose loop it lights', async () => {
+  it('the graph has its own arrow markers, and says whose loop it lights', async () => {
     roundTrip();
     state.lenses = [lens(7, 'Fast flips', { 1: {} })];
     state.own = [caughtOwn(7)];
     const c = await txPage();
     const ids = [...c.querySelectorAll('marker')].map((m) => m.id);
-    expect(ids.length).toBeGreaterThan(5);
+    expect(ids.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(ids.length);
     // Every arrowhead names a marker of its own figure.
-    for (const svg of c.querySelectorAll('li[data-lens] svg')) {
+    for (const svg of c.querySelectorAll('figure svg')) {
       const own = new Set([...svg.querySelectorAll('marker')].map((m) => m.id));
       for (const p of svg.querySelectorAll('path[marker-end]')) expect(own.has(p.getAttribute('marker-end')!.slice(5, -1))).toBe(true);
     }
-    const labels = [...c.querySelectorAll('li[data-lens] svg[aria-label]')].map((s) => s.getAttribute('aria-label'));
-    expect(labels).toEqual(['The loop Round trips caught, lit in this token’s graph', 'The loop Fast flips caught, lit in this token’s graph']);
+    const labels = () => [...c.querySelectorAll('[data-lens-graph] svg[aria-label]')].map((s) => s.getAttribute('aria-label'));
+    expect(labels()).toEqual(['The loop Round trips caught, lit in this token’s graph']);
+    expect(graph(c, 'How each lens reads First #7', 'Fast flips')).not.toBeNull();
+    expect(labels()).toEqual(['The loop Fast flips caught, lit in this token’s graph']);
   });
 
   it.each([
@@ -435,8 +452,8 @@ describe('a built-in’s miss line is true of the trade it misses', () => {
     // The engine's own reading: the sales and the re-mints are the round trips, the first mint and the burns no step at all.
     expect(rows.map((t) => 'A' in t.flags)).toEqual([false, true, false, true, true, false, true]);
     const c = await txPage();
-    const a = cards(c, 'How each lens reads First #7').get('Round trips')!;
-    expect(a.querySelector('figure')).not.toBeNull();
+    const a = graph(c, 'How each lens reads First #7', 'Round trips')!;
+    expect(a).not.toBeNull();
     expect(lit(a).length).toBeGreaterThan(0);
     expect(c.textContent).not.toContain('A mint: no lens caught it.');
   });
@@ -510,10 +527,11 @@ describe('a transfer a lens does not judge says so, never that it was not caught
     const { runs } = await engine(rows, 0, [[7, DEFAULT_RULE], [8, OWNERS]]);
     // The engine's own reading: the sales-only lens never looked at it, and the one judging owners caught it.
     expect(runs.map((r) => r.flags.map((f) => f.txHash))).toEqual([[], [TX, '0x03']]);
-    const card = cards(await txPage(), 'How each lens reads First #7');
+    const c = await txPage();
+    const card = cards(c, 'How each lens reads First #7');
     expect(card.get('Fast flips')!.textContent).toContain('Not judged: Fast flips judges sales only, and this transfer is not a sale.');
     expect(card.get('Fast flips')!.textContent).not.toContain(OWN_NOT_CAUGHT);
-    expect(card.get('Every owner')!.querySelector('figure')).not.toBeNull();
+    expect(graph(c, 'How each lens reads First #7', 'Every owner')).not.toBeNull();
   });
 
   it('a sale with no block time, under a rule that times its window from the trade: not judged; with no window it is judged', async () => {
@@ -592,8 +610,9 @@ describe('a transfer a lens does not judge says so, never that it was not caught
     expect(runs[0]!.flags.map((f) => f.txHash)).toContain(TX);
     const c = await txPage();
     const card = cards(c, 'How each lens reads First #7');
-    expect(card.get('Round trips')!.querySelector('figure')).not.toBeNull();
-    expect(card.get('Every owner')!.querySelector('figure')).not.toBeNull();
+    expect(card.get('Round trips')).toBeDefined();
+    expect(graph(c, 'How each lens reads First #7', 'Round trips')).not.toBeNull();
+    expect(graph(c, 'How each lens reads First #7', 'Every owner')).not.toBeNull();
     expect(c.textContent).not.toContain('custody, not a trade');
   });
 });

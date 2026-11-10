@@ -11,9 +11,9 @@ import { mayWrite } from '@/lib/auth';
 import { store } from '@/lib/store';
 import { ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
-import { Answer, Ext, Head, MoreLink, Section } from '@/components/ui';
+import { Answer, Ext, Head, Section } from '@/components/ui';
 import { LensName } from '@/components/methods';
-import { LoopFigure } from '@/components/token-graph';
+import { LensGraph } from '@/components/token-graph';
 import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
 import { BURN_LINE, BUILT_IN_BEHIND, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
@@ -96,7 +96,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
       </Answer>
 
       {within === undefined || collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ find: tx }} label="this trade's" /></Suspense>}
-      {within === undefined || collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} of={{ tx }} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
+      {within === undefined || collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
       {unread || washTrade === null ? (
         <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}
           lenses={(await store().lenses()).map((l) => ({ key: l.key, name: l.name, refusal: lensRefusal(l.rule) }))} />
@@ -123,32 +123,36 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
           : null;
         // Out of custody to another wallet is that wallet's trade with the one that put the token in, which every card's "seller" means.
         const seller = out?.parked != null && out.parked !== t.to ? out.parked : t.from;
+        const cards = alone !== null ? [] : lensCards(t, c, graph === null || drawing === null ? null : { graph, drawing }, own, chainId, base);
         const held = seller === t.from ? '' : `, through custody: ${short(t.from)} held the token for ${short(seller)}, so each lens reads this as a trade from ${short(seller)}`;
         return (
           <Section
             key={`${t.txHash}:${t.logIndex}`}
             title={alone === null ? `How each lens reads ${token}` : alone.title}
-            lead={alone !== null ? undefined : `${short(seller)} → ${short(t.to)}${held}. One card per lens: one that caught this transfer draws its loop lit in the token’s graph, and one that did not says why.`}
+            lead={alone !== null ? undefined : `${short(seller)} → ${short(t.to)}${held}. One card per lens says why it caught this transfer or why not; the token’s graph below lights the loop of each that caught it.`}
           >
             {alone !== null ? <p className="text-sm">{alone.line}</p> : (
-              <ul className="grid gap-3 lg:grid-cols-2">
-                {lensCards(t, c, graph === null || drawing === null ? null : { graph, drawing }, own, chainId, base).map((card) => (
-                  <li key={card.key} data-lens={card.key} className="min-w-0 rounded-lg border bg-card p-3.5">
-                    {/* A lens that did not run has no evidence to open: its line links its tab instead. */}
-                    <div data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? lensTabHref(base, card.key, { evidence: true }) : undefined} /></div>
-                    <p className="mt-1 text-sm">
-                      {card.line}
-                      {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} className="font-medium text-foreground underline">{card.tab}</Link></>}
-                    </p>
-                    {card.caught && drawing !== null ? (
-                      <div className="mt-3">
-                        <LoopFigure drawing={drawing} chainId={chainId} base={base} lit={card.loop ?? { edges: [], nodes: [] }} label={`The loop ${lensInfo(card.key, ownLenses)?.name ?? 'this lens'} caught, lit in this token’s graph`} />
-                        {card.loop === null ? null : <MoreLink href={`${base}/t/${t.tokenId}?loop=${card.loop.key}`} className="mt-2">Open it in the token’s graph →</MoreLink>}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="grid gap-3 lg:grid-cols-2">
+                  {cards.map((card) => (
+                    <li key={card.key} data-lens={card.key} className="min-w-0 rounded-lg border bg-card p-3.5">
+                      {/* A lens that did not run has no evidence to open: its line links its tab instead. */}
+                      <div data-lens-name><LensName m={card.key} own={ownLenses} href={card.tab === undefined ? lensTabHref(base, card.key, { evidence: true }) : undefined} /></div>
+                      <p className="mt-1 text-sm">
+                        {card.line}
+                        {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} className="font-medium text-foreground underline">{card.tab}</Link></>}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                {/* The token's graph once, not once a card: a switch lights each catching lens's loop in turn. */}
+                {drawing === null || !cards.some((card) => card.caught) ? null : (
+                  <div className="mt-3">
+                    <LensGraph drawing={drawing} chainId={chainId} base={base} tokenHref={`${base}/t/${t.tokenId}`}
+                      caught={cards.filter((card) => card.caught).map((card) => ({ key: card.key, name: lensInfo(card.key, ownLenses)?.name ?? 'this lens', loop: card.loop }))} />
+                  </div>
+                )}
+              </>
             )}
           </Section>
         );
