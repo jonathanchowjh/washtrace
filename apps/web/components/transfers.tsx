@@ -72,6 +72,12 @@ const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', a
  * `own` gives the lenses of yours that flag a row, by `txHash:logIndex`, chipped
  * after the built-ins' and named from `names`. `within` keeps wallet and
  * trade links under that collection's tabs, as Wallet's.
+ *
+ * Below `sm` the table is too wide for the screen, so each row is laid out as
+ * a card there: the same row, not a second copy as the Trades cards are,
+ * because the graph's numbers link to a row by its id, and an id names one
+ * element. A card leaves out a cell with nothing to say: it has no column to
+ * hold a dash.
  */
 export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, within, own, names = {} }: {
   chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string; within?: string;
@@ -80,8 +86,8 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
   if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full min-w-[52rem] text-left text-sm">
-        <thead className="text-xs text-muted-foreground">
+      <table className="block w-full text-left text-sm sm:table sm:min-w-[52rem]">
+        <thead className="hidden text-xs text-muted-foreground sm:table-header-group">
           <tr className="border-b">
             {numbered ? <th className="px-3 py-2 font-medium">#</th> : null}
             <th className="px-3 py-2 font-medium">When</th>
@@ -92,7 +98,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             <th className="px-3 py-2 font-medium">Why</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="block sm:table-row-group">
           {transfers.map((t, i) => {
             const tone = toneOf(t);
             const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
@@ -101,35 +107,37 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             const keys: LensKey[] = [...SHOWN.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
             const chipBase = t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base;
             return (
-              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
-                {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
-                <td className="px-3 py-2 whitespace-nowrap">
+              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined}
+                className={cn('flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b px-3 py-2 align-top last:border-b-0 target:outline-2 target:outline-focus sm:table-row sm:p-0', ROW_TONE[tone])}>
+                {/* The card's # is drawn, not written: the cell's text stays the row's number, the graph's label for it. */}
+                {numbered ? <td data-row-number className="tabular-nums text-muted-foreground before:content-['#'] sm:px-3 sm:py-2 sm:before:content-none">{n}</td> : null}
+                <td className="whitespace-nowrap sm:px-3 sm:py-2">
                   <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade">
                     {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
                   {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
                 </td>
                 {collection && t.collection ? (
-                  <td className="px-3 py-2">
+                  <td className="basis-full font-medium sm:px-3 sm:py-2 sm:font-normal">
                     <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`} prefetch={false}>
                       {t.collection.name ?? short(t.collection.address)} #{tokenLabel(t.tokenId)}
                     </Link>
                   </td>
                 ) : null}
-                <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
-                <td className="px-3 py-2 whitespace-nowrap">
+                <td className="whitespace-nowrap sm:px-3 sm:py-2"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
+                <td className="whitespace-nowrap sm:px-3 sm:py-2">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
                     <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className={cn('basis-full sm:px-3 sm:py-2', keys.length === 0 && 'max-sm:hidden')}>
                   {keys.length > 0 ? (
                     <span className="flex flex-wrap gap-1">
                       {keys.map((m) => <Chip key={m} m={m} names={names} base={chipBase} />)}
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="px-3 py-2 text-xs">{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
+                <td className={cn('basis-full text-xs sm:px-3 sm:py-2', first === undefined && 'max-sm:hidden')}>{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
               </tr>
             );
           })}
