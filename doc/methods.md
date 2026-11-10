@@ -97,6 +97,26 @@ These are the three corrections to the 2023 method. Each has a test.
 | A round trip through a loan | Custody is not a change of owner. A → escrow → A is no hop, so two Blur Blend loans are not a back-and-forth trade. | #120 |
 | A common funder that is an exchange | A wallet joined by money to more than 20 of the collection's wallets (`hubDegree`), a known contract, or a wallet with more history than Etherscan pages through is never the middle of an AC path. | #1–#40, all funded by one exchange |
 
+## Rings
+
+A **ring** is the wallets the counted evidence joins: two loops or linked pairs that share a wallet are one ring,
+and a pair's middle wallet is in it with the seller and the buyer. It answers "who did this together", not
+"how much": a ring flags nothing of its own and is not a fourth method. Its figures are the counted flagged trades
+of its witnesses, a trade two of them flag counted once.
+
+- **Only Round trips and Linked wallets make rings.** A witness only Money loops back points at is in none, for
+  the reason [the headline leaves it out](#why-the-headline-leaves-money-loops-back-out).
+- **A ring is named by its smallest wallet**, its anchor, not by its place. Rings are ranked by the ETH their
+  flagged sales moved, and a new analysis can change the ranks, but a ring with the same wallets keeps its
+  anchor, so a link to it still opens it.
+- **A ring is wallets the evidence ties together, not one person.** Two people can be in one ring because their
+  loops cross a wallet, and one person's wallets can sit in two rings that nothing on chain joins.
+- **A ring can be large.** Loops chain through shared wallets, so a busy collection can hold one ring of
+  thousands of wallets. Its page says how many, and lists the first 500, traders first.
+
+An analysis saves its rings with its flags. One saved before rings existed has its rings worked out from the
+witnesses it stored, one collection per worker turn, with nothing analysed again.
+
 ## The thresholds
 
 `RULES` in [methods.ts](../packages/detect/src/methods.ts) holds the numbers, each with the sentence that

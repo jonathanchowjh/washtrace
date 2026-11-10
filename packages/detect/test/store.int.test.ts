@@ -26,6 +26,7 @@ import { COPIES, DEFAULT_RULE, FOLLOW_FANOUT } from '../src/lens-rule.js';
 import { lensStored, previewStored } from '../src/lens-thread.js';
 import { MIGRATIONS } from '../src/migrations.js';
 import type { Payments } from '../src/payments.js';
+import type { SpotResult } from '../src/spot.js';
 
 let pg: StartedPostgreSqlContainer;
 let store: Store;
@@ -2639,6 +2640,26 @@ describe('Store', () => {
     expect(await store.history(c.id)).toHaveLength(1);
   });
 
+  it('saves the analysis\'s rings with it: its wallets, its counted sales, and the ring a wallet or token is in', async () => {
+    const c = (await store.collection(1, collection))!;
+    const anchor = [a, b].sort()[0]!;
+    const { rows, total } = await store.rings(c.id, RAN, 10, 0);
+    expect(total).toBe(1);
+    expect(rows).toEqual([expect.objectContaining({ anchor, rank: 1, wallets: 2, sales: 3, floorSales: 3, tokens: 1 })]);
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [c.id])).rows[0].rings).toBe(1);
+    const view = (await store.ring(c.id, anchor, RAN))!;
+    const token = await store.token(c.id, '1');
+    expect(view.wallets).toEqual([a, b].sort().map((address) => ({ address, traded: true })));
+    expect(view.tokens).toEqual([expect.objectContaining({ tokenId: '1', sales: 3 })]);
+    expect(await store.ring(c.id, '0xnone', RAN)).toBeNull();
+    expect(await store.ringsOf(c.id, { wallet: b })).toEqual([anchor]);
+    expect(await store.ringsOf(c.id, { tokenId: '1' })).toEqual([anchor]);
+    expect(await store.ringsOf(c.id, { tx: token[1]!.txHash })).toEqual([anchor]);
+    expect(await store.ringLines(c.id, [anchor, '0xnone'], RAN)).toEqual([rows[0]]);
+    // Past its last page a list still says how many there are.
+    expect(await store.rings(c.id, RAN, 10, 5)).toEqual({ rows: [], total: 1 });
+  });
+
   it('pages the ranked reads', async () => {
     const c = (await store.collection(1, collection))!;
     const all = (await store.lensWallets(c.id, 'A', LIST, RAN)).rows;
@@ -2653,7 +2674,7 @@ describe('Store', () => {
     // Four transfers a second apart: one bucket, the mint not a sale.
     expect(await store.timeline(c.id)).toEqual({
       bucket: 'hour', untimed: 0, readThrough: (1_700_000_000 + 3) * 1000,
-      points: [{ at: Math.floor(1_700_000_000 / 3600) * 3600 * 1000, transfers: 4, sales: 3, flaggedSales: { A: 3, AU: 3, AC: 3 } }],
+      points: [{ at: Math.floor(1_700_000_000 / 3600) * 3600 * 1000, transfers: 4, sales: 3, apartSales: 0, flaggedSales: { A: 3, AU: 3, AC: 3 } }],
     });
   });
 
@@ -4171,6 +4192,17 @@ describe('Store.search', () => {
       expect((await store.search({ kind: 'address', address: c2 })).collections.map((r) => r.address)).toEqual([c2]);
       expect((await store.search({ kind: 'address', address: carol })).wallets.map((r) => r.address)).toEqual([carol]);
 
+      // In one collection: its tokens, the wallets that traded it; a full address and a hash ignore the scope.
+      const scope = { id: one, chainId: 1 };
+      expect((await store.search({ kind: 'token', tokenId: '7', text: '7' }, { scope })).tokens.map((r) => r.address)).toEqual([c1]);
+      const inOne = (await store.search({ kind: 'prefix', prefix: '0xab' }, { scope: { id: two, chainId: 10 } })).wallets;
+      expect(inOne.map((r) => [r.chainId, r.address, r.here])).toEqual([[10, alice, true]]);
+      expect((await store.search({ kind: 'prefix', prefix: '0xcd' }, { scope })).wallets).toEqual([]);
+      // Carol is found by her full address, and marked as never having traded in the scope.
+      expect((await store.search({ kind: 'address', address: carol }, { scope })).wallets.map((r) => [r.address, r.here])).toEqual([[carol, false]]);
+      expect((await store.search({ kind: 'address', address: carol })).wallets[0]).not.toHaveProperty('here');
+      expect((await store.search({ kind: 'tx', tx }, { scope })).trades).toHaveLength(1);
+
       // A transaction.
       expect((await store.search({ kind: 'tx', tx })).trades).toEqual([{ chainId: 10, txHash: tx, address: c2, name: 'Searchable Cats', tokenId: '7' }]);
       expect(await store.search({ kind: 'empty' })).toMatchObject({ collections: [], tokens: [], wallets: [], trades: [] });
@@ -4961,6 +4993,12 @@ describe('a wallet', () => {
     expect(await store.walletCollections(CHAIN, W)).toEqual([{ address: ran, name: 'Ran', trades: 4 }, { address: notRan, name: null, trades: 2 }]);
   });
 
+  it('lists the tokens it traded in one collection, not one it never touched, cut at the limit', async () => {
+    // Token 8 moved between P and Q only. One transfer each, so the token number breaks the tie.
+    expect(await store.walletTokens(CHAIN, W, notRan, 5)).toEqual(['1', '7']);
+    expect(await store.walletTokens(CHAIN, W, ran, 2)).toEqual(['1', '2']);
+  });
+
   it('a Find reads a token number, or the other side of the trade by its address or the start of it; anything else matches nothing', async () => {
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '#1' }))).toEqual(['u1', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: P }))).toEqual(['u1', 't2', 't1']);
@@ -5069,11 +5107,11 @@ describe('lenses', () => {
     const { id } = await analysed(w('1e62'));
     const named = async (name: string) => (await store.pool.query('SELECT 1 FROM washtrace.lenses WHERE name = $1', [name])).rowCount;
     try {
-      const lens = await store.createLens('With its run', DEFAULT_RULE, id);
+      const lens = await store.createLens('With its run', DEFAULT_RULE, [id]);
       expect((await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: null });
       await store.deleteLens(lens.id);
-      // A collection gone by then fails the run's insert, and the lens goes with it.
-      await expect(store.createLens('Orphaned', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      // A collection gone by then fails its run's insert, and the lens and its other runs go with it.
+      await expect(store.createLens('Orphaned', DEFAULT_RULE, [id, 2_000_000_000])).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
       expect(await named('Orphaned')).toBe(0);
       // With no collection, the lens alone, as before.
       const alone = await store.createLens('Alone', DEFAULT_RULE);
@@ -5084,26 +5122,45 @@ describe('lenses', () => {
     }
   });
 
+  it('lists every lens with its runs on every collection at once, a lens with none included', async () => {
+    const { id } = await analysed(w('1e65'));
+    const { id: other } = await analysed(w('1e66'));
+    const ran = await store.createLens('Runs on two', DEFAULT_RULE, [id, other]);
+    const none = await store.createLens('Runs on none', DEFAULT_RULE);
+    try {
+      const all = await store.lensRunsAll();
+      const of = (lensId: number) => all.find((x) => x.lens.id === lensId)!;
+      expect([...of(ran.id).runs.keys()].sort((a, b) => a - b)).toEqual([id, other].sort((a, b) => a - b));
+      expect(of(ran.id).runs.get(id)).toMatchObject({ status: 'queued' });
+      expect(of(none.id).runs.size).toBe(0);
+    } finally {
+      await store.deleteLens(ran.id);
+      await store.deleteLens(none.id);
+      await drop(1, w('1e65'));
+      await drop(1, w('1e66'));
+    }
+  });
+
   it('queues a run on the collection an edit names, in the same statement, once whether or not one is there', async () => {
     const { id } = await analysed(w('1e63'));
     const { id: other } = await analysed(w('1e64'));
-    const lens = await store.createLens('Edited here', DEFAULT_RULE, other);
+    const lens = await store.createLens('Edited here', DEFAULT_RULE, [other]);
     const runOf = async (c: number) => (await store.lensRuns(c)).find((r) => r.lens.id === lens.id)!.run;
     const rows = async () => Number((await store.pool.query('SELECT count(*) FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rows[0].count);
     try {
       // None here yet: the edit queues one at the new version; the run elsewhere is queued again as before.
       expect(await runOf(id)).toBeNull();
-      expect(await store.updateLens(lens.id, 'Edited here', { ...DEFAULT_RULE, minCycles: 1 }, id)).toMatchObject({ version: 2 });
+      expect(await store.updateLens(lens.id, 'Edited here', { ...DEFAULT_RULE, minCycles: 1 }, [id])).toMatchObject({ version: 2 });
       expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2, totals: null });
       expect(await runOf(other)).toMatchObject({ status: 'queued' });
       expect(await rows()).toBe(2);
       // One already here: queued again by the same statement, never a second row, and its version stays the one its totals are from.
       await store.pool.query(`UPDATE washtrace.lens_runs SET status = 'done', totals = '{}'::jsonb WHERE lens_id = $1 AND collection_id = $2`, [lens.id, id]);
-      expect(await store.updateLens(lens.id, 'Edited here', DEFAULT_RULE, id)).toMatchObject({ version: 3 });
+      expect(await store.updateLens(lens.id, 'Edited here', DEFAULT_RULE, [id])).toMatchObject({ version: 3 });
       expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2 });
       expect(await rows()).toBe(2);
       // A collection gone by then fails the run's insert, and the edit goes with it.
-      await expect(store.updateLens(lens.id, 'Renamed', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      await expect(store.updateLens(lens.id, 'Renamed', DEFAULT_RULE, [2_000_000_000])).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
       expect(await store.lens(lens.id)).toMatchObject({ name: 'Edited here', version: 3 });
     } finally {
       await store.deleteLens(lens.id);
@@ -6843,7 +6900,7 @@ describe('a saved lens in the reads', () => {
     expect(sql.text.replace(/\s+/g, ' ').trim()).toBe(
       "WITH f AS ( SELECT tx_hash, log_index, bool_or(method = 'A') AS a, bool_or(method = 'AU') AS au, bool_or(method = 'AC') AS ac FROM washtrace.flags WHERE collection_id = $1 GROUP BY tx_hash, log_index) " +
       "SELECT extract(epoch FROM date_trunc($2, t.block_time, $3))::float8 * 1000 AS at, count(*)::int AS transfers, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales, " +
-      "count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac " +
+      "count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.a)::int AS a, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au)::int AS au, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.ac)::int AS ac, count(*) FILTER (WHERE t.marketplace IS NOT NULL AND f.au AND NOT f.a AND NOT f.ac)::int AS apart " +
       'FROM washtrace.transfers t LEFT JOIN f ON f.tx_hash = t.tx_hash AND f.log_index = t.log_index WHERE t.collection_id = $1 AND t.block_time IS NOT NULL GROUP BY 1 ORDER BY 1',
     );
   });
@@ -7008,5 +7065,228 @@ describe('pruning', () => {
     expect(await store.check(old)).toBeNull();
     expect(await store.check(recent)).toMatchObject({ finished: true, ok: true });
     expect(await store.check(pending)).toEqual({ finished: false, ok: null, detail: null });
+  });
+});
+
+describe('spot checks', () => {
+  beforeAll(async () => { await store.migrate(); });
+
+  const TX = `0x${'5'.repeat(64)}`;
+  const tx = (n: number) => `0x${String(n).padStart(64, '0')}`;
+  const finished = { washTrade: true, methods: ['A'], notRun: ['AU'], atLeast: false, finalized: true, source: 'spot', transfers: [] } as unknown as SpotResult;
+
+  it('requestSpot reuses a queued, running or fresh check', async () => {
+    const first = await store.requestSpot(1, tx(1), null);
+    expect(first.reused).toBe(false);
+    expect(await store.requestSpot(1, tx(1), null)).toEqual({ id: first.id, reused: true });
+    const withLens = await store.requestSpot(1, tx(1), { key: 'L7', version: 1 });
+    expect(withLens.id).not.toBe(first.id);
+    const edited = await store.requestSpot(1, tx(1), { key: 'L7', version: 2 });
+    expect(edited.id).not.toBe(withLens.id);
+    // Running is still in flight.
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [first.id]);
+    expect((await store.requestSpot(1, tx(1), null)).id).toBe(first.id);
+    // Done and fresh is reused; done two hours back is not.
+    await store.saveSpot(first.id, finished);
+    expect(await store.requestSpot(1, tx(1), null)).toEqual({ id: first.id, reused: true });
+    await store.pool.query(`UPDATE washtrace.spot_checks SET finished_at = now() - interval '2 hours' WHERE id = $1`, [first.id]);
+    const again = await store.requestSpot(1, tx(1), null);
+    expect(again.id).not.toBe(first.id);
+    // A failed check is asked again.
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [again.id]);
+    await store.spotFailed(again.id, 'No such transaction on chain 1.');
+    expect((await store.requestSpot(1, tx(1), null)).id).not.toBe(again.id);
+  });
+
+  it('does not reuse a done check of a block that was not final', async () => {
+    const one = await store.requestSpot(1, tx(2), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [one.id]);
+    await store.saveSpot(one.id, { ...finished, finalized: false });
+    expect((await store.requestSpot(1, tx(2), null)).id).not.toBe(one.id);
+  });
+
+  it('two requests at once make one row', async () => {
+    const [p, q] = await Promise.all([store.requestSpot(1, tx(3), null), store.requestSpot(1, tx(3), null)]);
+    expect(p.id).toBe(q.id);
+    const { rows } = await store.pool.query(`SELECT count(*)::int AS n FROM washtrace.spot_checks WHERE tx_hash = $1`, [tx(3)]);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it('spot reads a check back as the console polls it, and null for an unknown id', async () => {
+    const { id } = await store.requestSpot(5, TX, null);
+    expect(await store.spot(id)).toMatchObject({ id, chainId: 5, tx: TX, lens: null, status: 'queued', result: null, error: null, finishedAt: null });
+    expect(await store.spot(2_000_000_000)).toBeNull();
+  });
+
+  it('nextSpot takes the oldest queued, fails one left running, and fails one whose lens was removed or edited', async () => {
+    await store.pool.query(`DELETE FROM washtrace.spot_checks`);
+    const left = await store.requestSpot(1, tx(10), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [left.id]);
+    const removed = await store.createLens('Spot removed', DEFAULT_RULE);
+    const gone = await store.requestSpot(1, tx(11), { key: removed.key, version: removed.version });
+    await store.deleteLens(removed.id);
+    const edited = await store.createLens('Spot edited', DEFAULT_RULE);
+    const stale = await store.requestSpot(1, tx(12), { key: edited.key, version: edited.version });
+    await store.updateLens(edited.id, 'Spot edited', DEFAULT_RULE);
+    const plain = await store.requestSpot(1, tx(13), null);
+    const own = await store.createLens('Spot kept', DEFAULT_RULE);
+    const kept = await store.requestSpot(1, tx(14), { key: own.key, version: own.version });
+
+    expect(await store.nextSpot()).toEqual({ id: plain.id, chainId: 1, tx: tx(13), lens: null });
+    // The fund pass finishes one check before it takes the next.
+    await store.saveSpot(plain.id, finished);
+    expect(await store.nextSpot()).toEqual({ id: kept.id, chainId: 1, tx: tx(14), lens: { key: own.key, rule: DEFAULT_RULE } });
+    await store.saveSpot(kept.id, finished);
+    expect(await store.nextSpot()).toBeNull();
+    expect(await store.spot(left.id)).toMatchObject({ status: 'failed', error: 'The worker stopped during this check.' });
+    expect(await store.spot(gone.id)).toMatchObject({ status: 'failed', error: 'That lens was removed.' });
+    expect(await store.spot(stale.id)).toMatchObject({ status: 'failed', error: 'That lens was edited; ask again.' });
+    expect(await store.spot(plain.id)).toMatchObject({ status: 'done' });
+    expect(await store.spot(kept.id)).toMatchObject({ status: 'done' });
+    await store.deleteLens(edited.id);
+    await store.deleteLens(own.id);
+  });
+
+  it('saveSpot and spotFailed finish only a running check', async () => {
+    const { id } = await store.requestSpot(1, tx(20), null);
+    await store.saveSpot(id, finished);
+    expect(await store.spot(id)).toMatchObject({ status: 'queued' });
+    await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [id]);
+    await store.saveSpot(id, finished);
+    const done = await store.spot(id);
+    expect(done).toMatchObject({ status: 'done', result: finished, error: null });
+    expect(done!.finishedAt).not.toBeNull();
+  });
+
+  it('moneyCovering says which reads cover the block and where the rest read on', async () => {
+    const covered = w('5c01'), older = w('5c02'), empty = w('5c03'), waiting = w('5c04');
+    await store.addWallets(77, [covered, older, empty, waiting]);
+    await store.saveMoney(77, covered, [flow(covered, x, { blockNumber: 50_000 })], false, undefined, 50_000);
+    await store.saveMoney(77, older, [flow(older, x, { blockNumber: 30_000 })], true, undefined, 30_000);
+    await store.saveMoney(77, empty, [], false, undefined, null);
+    const at = await store.moneyCovering(77, [covered, older, empty, waiting], 40_000);
+    expect(at.get(covered)).toEqual({ from: null, truncated: false });
+    // A truncated read is a hub either way, and reading on could save it as untruncated over its gap: never read on.
+    expect(at.get(older)).toEqual({ from: null, truncated: true });
+    // A read that found no rows has no block: it reads again from 0.
+    expect(at.get(empty)).toEqual({ from: 0, truncated: false });
+    expect(at.has(waiting)).toBe(false);
+    // A day of blocks (7,200) before the one after its last read.
+    expect((await store.moneyCovering(77, [covered], 90_000)).get(covered)).toEqual({ from: 50_000 + 1 - 7_200, truncated: false });
+    // Floored at 0 near the chain's start.
+    await store.saveMoney(77, waiting, [flow(waiting, x, { blockNumber: 100 })], false, undefined, 100);
+    expect((await store.moneyCovering(77, [waiting], 200)).get(waiting)).toEqual({ from: 0, truncated: false });
+  });
+
+  it('addWallets adds a row once, and flowsOf returns flows either way', async () => {
+    const me = w('5d01');
+    await store.addWallets(78, [me]);
+    await store.addWallets(78, [me]);
+    const { rows } = await store.pool.query(`SELECT count(*)::int AS n, min(status) AS s FROM washtrace.wallets WHERE chain_id = 78 AND address = $1`, [me]);
+    expect(rows[0]).toEqual({ n: 1, s: 'pending' });
+    const out = flow(me, a, { blockNumber: 10, blockTime: 1_000 });
+    const into = flow(b, me, { blockNumber: 11, blockTime: 1_001 });
+    const other = flow(a, b, { blockNumber: 12, blockTime: 1_002 });
+    await store.saveMoney(78, me, [out, into, other], false, undefined, 12);
+    expect((await store.flowsOf(78, [me])).map((f) => f.txHash).sort()).toEqual([out.txHash, into.txHash].sort());
+    expect(await store.flowsOf(78, [])).toEqual([]);
+  });
+
+  it('sweepPreviews also deletes spot checks past a day', async () => {
+    const old = await store.requestSpot(1, tx(30), null);
+    const fresh = await store.requestSpot(1, tx(31), null);
+    await store.pool.query(`UPDATE washtrace.spot_checks SET requested_at = now() - interval '25 hours' WHERE id = $1`, [old.id]);
+    await store.sweepPreviews(Date.now());
+    expect(await store.spot(old.id)).toBeNull();
+    expect(await store.spot(fresh.id)).not.toBeNull();
+  });
+});
+
+describe('the timeline\'s sales apart', () => {
+  const CHAIN = 911;
+  const coll = '0x' + 'e1'.padEnd(40, '0');
+  const A = '0x' + 'aa'.padEnd(40, '0'), B = '0x' + 'bb'.padEnd(40, '0');
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  afterAll(() => drop(CHAIN, coll));
+
+  it('counts a sale only Money loops back flags apart, and none a counted method also flags', async () => {
+    await store.migrate();
+    const id = (await store.addCollection(CHAIN, coll, null, 1)).id;
+    const sale = (n: number) => transfer(String(n), n % 2 ? A : B, n % 2 ? B : A, { txHash: tx(n), blockNumber: n, blockTime: 1_700_000_000 + n, marketplace: 'Seaport' });
+    await store.ingest(id, CHAIN, [1, 2, 3, 4].map(sale), 100, [A, B]);
+    const flag = (m: Method, n: number) => store.pool.query(
+      `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, $2, $3, 0, '{"kind":"pair","pair":[],"middle":null,"flowTx":"0x"}')`,
+      [id, m, tx(n)]);
+    // 1: all three; 2: Linked wallets and Money loops back; 3: Money loops back alone; 4: nothing.
+    for (const m of ['A', 'AC', 'AU'] as const) await flag(m, 1);
+    await flag('AC', 2);
+    await flag('AU', 2);
+    await flag('AU', 3);
+    const [p] = (await store.timeline(id)).points;
+    expect(p).toMatchObject({ sales: 4, apartSales: 1, flaggedSales: { A: 1, AC: 2, AU: 3 } });
+  });
+});
+
+describe('rings worked out from an analysis saved before them', () => {
+  const CHAIN = 912;
+  const coll = '0x' + 'e2'.padEnd(40, '0');
+  const w = (s: string) => '0x' + s.padEnd(40, '0');
+  const S = w('a1'), B = w('b1'), M = w('c1'), X = w('d1'), Y = w('e1');
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  const RAN = { money: new Set(['']), ran: ['A', 'AU', 'AC'] as Method[], zone: 'UTC' };
+  let id = 0;
+  afterAll(() => drop(CHAIN, coll));
+
+  beforeAll(async () => {
+    await store.migrate();
+    id = (await store.addCollection(CHAIN, coll, null, 1)).id;
+    const sale = (n: number, from: string, to: string) => transfer(String(n), from, to, { txHash: tx(n), blockNumber: n, blockTime: 1_700_000_000 + n, marketplace: 'Seaport', priceWei: '1000000000000000000', currency: '' });
+    await store.ingest(id, CHAIN, [sale(1, S, B), sale(2, B, S), sale(3, X, Y)], 100, [S, B, X, Y]);
+    // Saved before rings: loops counted, rings not.
+    await store.pool.query(
+      `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches, loops)
+       VALUES ($1, 1, 100, $2, 0, 0, 0, 0, '{}')`,
+      [id, JSON.stringify({ A: { available: true }, AU: { available: true }, AC: { available: true } })]);
+    // 0: S and B's round trip. 1: B and a new seller linked through middle M, by Linked wallets. 2: X and Y, by Money loops back alone.
+    const witness = (wid: number, kind: string, wallets: string[], middle: string | null = null) => store.pool.query(
+      'INSERT INTO washtrace.witnesses (collection_id, id, kind, wallets, cycles, middle) VALUES ($1, $2, $3, $4, $5, $6)', [id, wid, kind, wallets, kind === 'pair' ? null : 1, middle]);
+    await witness(0, 'scc', [S, B]);
+    await witness(1, 'pair', [B, S, M], M);
+    await witness(2, 'pair', [X, Y]);
+    const flag = (m: Method, n: number, wid: number) => store.pool.query(
+      `INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness, witness_id) VALUES ($1, $2, $3, 0, '{"kind":"scc","wallets":[],"cycles":1}', $4)`, [id, m, tx(n), wid]);
+    // Sale 2 is Round trips' through the loop and Linked wallets' through the pair: two witnesses, one ring.
+    await flag('A', 1, 0);
+    await flag('AC', 1, 0);
+    await flag('A', 2, 0);
+    await flag('AC', 2, 1);
+    await flag('AU', 3, 2);
+    // Counted, as an analysis's trade facts count a sale.
+    await store.pool.query(`INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) SELECT $1, tx_hash, log_index, true FROM washtrace.transfers WHERE collection_id = $1`, [id]);
+  });
+
+  it('fills them once, from the witnesses a counted lens points at, leaves Money loops back\'s in none, and passes over one skipped', async () => {
+    // Skipped, it is passed over while every other collection fills; then it fills.
+    while (await store.fillRings([id])) { /* other collections' first */ }
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].rings).toBeNull();
+    expect(await store.fillRings()).toBe(true);
+    const rings = (await store.pool.query('SELECT id, ring FROM washtrace.witnesses WHERE collection_id = $1 ORDER BY id', [id])).rows;
+    expect(rings).toEqual([{ id: 0, ring: S }, { id: 1, ring: S }, { id: 2, ring: null }]);
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].rings).toBe(1);
+    expect(await store.fillRings()).toBe(false);
+  });
+
+  it('lists a middle as a wallet of its ring that only moved the money, and counts a trade two witnesses flag once', async () => {
+    const view = (await store.ring(id, S, RAN))!;
+    expect(view.wallets).toEqual([{ address: S, traded: true }, { address: B, traded: true }, { address: M, traded: false }]);
+    expect(view.line).toMatchObject({ wallets: 3, sales: 2, floorSales: 2, volumeWei: '2000000000000000000' });
+    expect((await store.rings(id, RAN, 10, 0)).total).toBe(1);
+    expect(await store.ringsOf(id, { wallet: X })).toEqual([]);
+  });
+
+  it('narrows the trades to a ring\'s: those a counted lens flags through its witnesses', async () => {
+    expect((await store.tradeCount(id, { ...NO_FILTER, ring: S }, RAN)).total).toBe(2);
+    // Sale 3 is flagged, but only by Money loops back, which makes no ring.
+    expect((await store.tradeCount(id, { ...NO_FILTER, ring: X }, RAN)).total).toBe(0);
   });
 });

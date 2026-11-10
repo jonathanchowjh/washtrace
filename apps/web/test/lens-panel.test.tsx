@@ -26,9 +26,9 @@ describe('the lens stat line', () => {
     expect(named(c, '4.1%')).toEqual([caught]);
     expect(named(c, '812.4 ETH')).toEqual([tradesHref(BASE, { caught: ['A'], sort: 'price', dir: 'desc' })]);
     expect(named(c, '19,032 ETH')).toEqual([tradesHref(BASE, { sort: 'price', dir: 'desc' })]);
-    expect(named(c, '644 tokens')).toEqual([`${BASE}/flagged?method=A&kind=tokens`]);
-    expect(named(c, '1,207 wallets')).toEqual([`${BASE}/flagged?method=A&kind=wallets`]);
-    expect(named(c, '388 loops')).toEqual([`${BASE}/flagged?method=A&kind=tokens`]);
+    expect(named(c, '644 tokens')).toEqual([`${BASE}/tokens?method=A`]);
+    expect(named(c, '1,207 wallets')).toEqual([`${BASE}/wallets?method=A`]);
+    expect(named(c, '388 loops')).toEqual([`${BASE}/tokens?method=A`]);
     expect(named(c, '8.0%')).toEqual([tradesHref(BASE, { caught: ['A'], kind: 'all' })]);
     expect(c.textContent).toContain('of every change of owner');
   });

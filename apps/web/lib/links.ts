@@ -78,3 +78,50 @@ export function homeHref(q: { tab?: string; find?: string; sort?: string; dir?: 
   const s = p.toString();
   return s ? `/?${s}` : '/';
 }
+
+/**
+ * A collection's Tokens or Wallets list under one lens: its order, Find and
+ * page left out at their defaults. The lens is always named, so the list a
+ * link opens never shifts with the default.
+ */
+export function listHref(base: string, kind: 'tokens' | 'wallets', o: { method: string; sort?: string; q?: string | null; page?: number }): string {
+  const p = [`method=${encodeURIComponent(o.method)}`];
+  if (o.sort !== undefined && o.sort !== 'caught') p.push(`sort=${encodeURIComponent(o.sort)}`);
+  if (o.q != null) p.push(`q=${encodeURIComponent(o.q)}`);
+  if ((o.page ?? 1) > 1) p.push(`page=${o.page}`);
+  return `${base}/${kind}?${p.join('&')}`;
+}
+
+/**
+ * A wallet's page. `within`, a collection's base, opens the one under that
+ * collection's tabs instead, so a reader who came from it stays in it.
+ */
+export function walletHref(chainId: number, address: string, within?: string | null): string {
+  return within ? `${within}/w/${address}` : `/w/${chainId}/${address}`;
+}
+
+/** A transaction's page; with `within`, the one under that collection's tabs. */
+export function txHref(chainId: number, hash: string, within?: string | null): string {
+  return within ? `${within}/tx/${hash}` : `/tx/${chainId}/${hash}`;
+}
+
+/**
+ * A lens's tab on the collection's Methods page (`base`, the collection's):
+ * with `lens`, its editor (`new`, `copy-<key>`, `edit-<key>`); with
+ * `evidence`, scrolled to the lens's panel.
+ */
+export function lensTabHref(base: string, method: string, o: { lens?: string; evidence?: boolean } = {}): string {
+  return `${base}/methods?method=${encodeURIComponent(method)}${o.lens === undefined ? '' : `&lens=${o.lens}`}${o.evidence ? '#evidence' : ''}`;
+}
+
+/** The hover card's read for one wallet, token or ring of the collection at `base` (its `/c/<chain>/<address>`). */
+export function cardSrc(base: string, of: 'wallet' | 'token' | 'ring', value: string): string {
+  return `/api/collections/${base.slice('/c/'.length)}/card?${of}=${encodeURIComponent(value)}`;
+}
+
+/** `href` with `from` (lib/step.ts: the list it was opened from) added to its query, before any #hash. */
+export function withFrom(href: string, from: string | undefined): string {
+  if (from === undefined) return href;
+  const [path, hash] = href.split('#', 2);
+  return `${path}${path!.includes('?') ? '&' : '?'}from=${encodeURIComponent(from)}${hash === undefined ? '' : `#${hash}`}`;
+}

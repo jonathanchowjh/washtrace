@@ -54,7 +54,7 @@ describe('POST /api/lenses', () => {
     const res = await create(req('POST', NEW));
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ lens });
-    expect(fake.createLens).toHaveBeenCalledWith('Blur 3-hop', DEFAULT_RULE, 3);
+    expect(fake.createLens).toHaveBeenCalledWith('Blur 3-hop', DEFAULT_RULE, [3]);
     expect(fake.requestLensRun).not.toHaveBeenCalled();
   });
 
@@ -117,7 +117,7 @@ describe('POST /api/lenses', () => {
     const res = await edit(req('PATCH', { name: 'BLUR 3-HOP', rule: DEFAULT_RULE }), idCtx('7'));
     expect(res.status).toBe(200);
     expect(fake.nameTaken).toHaveBeenCalledWith('BLUR 3-HOP', 7);
-    expect(fake.updateLens).toHaveBeenCalledWith(7, 'BLUR 3-HOP', DEFAULT_RULE, undefined);
+    expect(fake.updateLens).toHaveBeenCalledWith(7, 'BLUR 3-HOP', DEFAULT_RULE, []);
   });
 
   it('409s a name that is taken, a built-in\'s included', async () => {
@@ -166,7 +166,7 @@ describe('PATCH /api/lenses/[id]', () => {
     const res = await edit(req('PATCH', { name: 'Renamed', rule: DEFAULT_RULE }), idCtx('7'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ lens: { ...lens, version: 2 } });
-    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Renamed', DEFAULT_RULE, undefined);
+    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Renamed', DEFAULT_RULE, []);
     expect(fake.nameTaken).toHaveBeenCalledWith('Renamed', 7);
   });
 
@@ -174,7 +174,7 @@ describe('PATCH /api/lenses/[id]', () => {
     const res = await edit(req('PATCH', NEW), idCtx('7'));
     expect(res.status).toBe(200);
     expect(fake.collection).toHaveBeenCalledWith(1, ADDR);
-    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Blur 3-hop', DEFAULT_RULE, 3);
+    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Blur 3-hop', DEFAULT_RULE, [3]);
     expect(fake.requestLensRun).not.toHaveBeenCalled();
   });
 
@@ -511,5 +511,34 @@ describe('POST /api/collections/[chain]/[address]/tokens', () => {
     expect((await startReading(req('POST', {}), ctx)).status).toBe(404);
     expect((await startReading(req('POST', {}), { params: Promise.resolve({ chain: 'x', address: 'y' }) })).status).toBe(404);
     expect(fake.startTokens).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a lens saved to run on several collections', () => {
+  const B = '0x' + 'cd'.repeat(20);
+  const on = [{ chainId: 1, address: ADDR }, { chainId: 1, address: B }];
+  const ids = (_c: number, a: string) => Promise.resolve(a === ADDR ? { id: 3 } : a === B ? { id: 4 } : null);
+
+  it('creates it with a run on each, all in the save\'s own statement', async () => {
+    fake.collection.mockImplementation(ids as never);
+    const res = await create(req('POST', { name: 'Two', rule: DEFAULT_RULE, collections: on }));
+    expect(res.status).toBe(201);
+    expect(fake.createLens).toHaveBeenCalledWith('Two', DEFAULT_RULE, [3, 4]);
+    expect(fake.requestLensRun).not.toHaveBeenCalled();
+  });
+
+  it('runs an edit on each collection named, all in the edit\'s own statement', async () => {
+    fake.collection.mockImplementation(ids as never);
+    expect((await edit(req('PATCH', { name: 'Two', rule: DEFAULT_RULE, collections: on }), idCtx('7'))).status).toBe(200);
+    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Two', DEFAULT_RULE, [3, 4]);
+    expect(fake.requestLensRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty list, one collection twice, and one not watched, before saving anything', async () => {
+    fake.collection.mockImplementation(ids as never);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [] }))).status).toBe(400);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [on[0], on[0]] }))).status).toBe(400);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [on[0], { chainId: 1, address: '0x' + 'ef'.repeat(20) }] }))).status).toBe(404);
+    expect(fake.createLens).not.toHaveBeenCalled();
   });
 });

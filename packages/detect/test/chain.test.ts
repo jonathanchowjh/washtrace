@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HttpRequestError, LimitExceededRpcError, RpcRequestError, TimeoutError, UnknownRpcError, WebSocketRequestError, type PublicClient } from 'viem';
+import { HttpRequestError, LimitExceededRpcError, RpcRequestError, TimeoutError, TransactionReceiptNotFoundError, UnknownRpcError, WebSocketRequestError, type PublicClient } from 'viem';
 import { Chain, CHECK_TIMEOUT_MS, TERRAFORMS, TRANSFER } from '../src/chain.js';
 
 /** A Chain whose node answers from these functions; nothing reaches a network. */
@@ -168,5 +168,121 @@ describe('Chain.transfers when a log read fails', () => {
     expect(reads()).toBe(3);
     // Halved twice, then doubled by the empty read that followed.
     expect(span()).toBe(1_000);
+  });
+});
+
+describe('Chain.tokenTransfers and Chain.receipt', () => {
+  const url = 'https://rpc.example/key';
+  const pad = (hex: string) => `0x${hex.replace(/^0x/, '').padStart(64, '0')}`;
+  const A = `0x${'a'.repeat(40)}`, B = `0x${'b'.repeat(40)}`;
+  /** One Transfer log of token `id` in `block`, as a node returns it. */
+  const log = (id: number, block: number) => ({
+    address: TERRAFORMS, topics: [TRANSFER, pad(A), pad(B), pad(id.toString(16))], data: '0x',
+    blockNumber: `0x${block.toString(16)}`, transactionHash: pad(block.toString(16)), logIndex: '0x0',
+  });
+
+  /** A Chain whose log query answers each call from `answer(range)`, recording the ranges asked. */
+  function node(answer: (from: number, to: number) => unknown): { c: Chain; ranges: [number, number][]; params: any[] } {
+    const c = new Chain(1, url);
+    const ranges: [number, number][] = [];
+    const params: any[] = [];
+    const client = (c as unknown as { client: { request: (a: any) => unknown; getTransactionReceipt: (a: any) => unknown } }).client;
+    client.request = async ({ params: [p] }: any) => {
+      params.push(p);
+      const range: [number, number] = [Number(p.fromBlock), Number(p.toBlock)];
+      ranges.push(range);
+      const out = answer(...range);
+      if (out instanceof Error) throw out;
+      return out;
+    };
+    client.getTransactionReceipt = async ({ hash }: any) => ({ transactionHash: hash, logs: [] });
+    return { c, ranges, params };
+  }
+
+  it('asks for the whole range first, filtered to the token', async () => {
+    const { c, ranges, params } = node((from) => [log(7, from)]);
+    const got = await c.tokenTransfers(TERRAFORMS, '7', 100, 5_000);
+    expect(ranges).toEqual([[100, 5_000]]);
+    expect(params[0]).toEqual({ address: TERRAFORMS, topics: [TRANSFER, null, null, pad('7')], fromBlock: '0x64', toBlock: `0x${(5_000).toString(16)}` });
+    expect(got).toMatchObject([{ tokenId: '7', from: A, to: B, blockNumber: 100 }]);
+  });
+
+  /** A provider that refuses any range wider than `cap` blocks, as many cap eth_getLogs. */
+  const capped = (cap: number) => (from: number, to: number) => (to - from + 1 > cap ? new Error('block range is too wide') : [log(7, from)]);
+
+  it('halves on a refusal and reads every part in order, never again as wide as a refused range', async () => {
+    const { c, ranges } = node(capped(300));
+    const got = await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000);
+    // Growing back to 500 would be refused on every other query against a provider's fixed cap.
+    expect(ranges).toEqual([[1, 1_000], [1, 500], [1, 250], [251, 500], [501, 750], [751, 1_000]]);
+    expect(got.map((t) => t.blockNumber)).toEqual([1, 251, 501, 751]);
+  });
+
+  it('a later token of the same check starts at the width the first one was refused down to', async () => {
+    const { c, ranges } = node(capped(300));
+    const width = { span: Infinity };
+    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width);
+    expect(width.span).toBe(250);
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '8', 1, 1_000, Infinity, width);
+    expect(ranges).toEqual([[1, 250], [251, 500], [501, 750], [751, 1_000]]);
+    // The Chain lives as long as the worker: another check learns afresh.
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '9', 1, 1_000);
+    expect(ranges[0]).toEqual([1, 1_000]);
+  });
+
+  it('an outage teaches no width: only a query answered after a refusal does', async () => {
+    let down = true;
+    const { c, ranges } = node((from) => (down ? new Error('upstream unavailable') : [log(7, from)]));
+    const width = { span: Infinity };
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width)).rejects.toThrow('upstream unavailable');
+    expect(width.span).toBe(Infinity);
+    down = false;
+    ranges.length = 0;
+    await c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Infinity, width);
+    expect(ranges).toEqual([[1, 1_000]]);
+  });
+
+  it('stops with a sentence once the check\'s time is up', async () => {
+    const { c, ranges } = node(capped(300));
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1_000, Date.now() - 1))
+      .rejects.toThrow('Reading the history of token 7 took longer than a spot check allows: this RPC answers only narrow log queries.');
+    expect(ranges).toHaveLength(0);
+  });
+
+  it('rethrows a rate limit at once', async () => {
+    const err = new HttpRequestError({ url, status: 429 });
+    const { c, ranges } = node(() => err);
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1_000)).rejects.toBe(err);
+    expect(ranges).toHaveLength(1);
+  });
+
+  it('leaves the span learned for whole collections alone', async () => {
+    const { c } = node(() => new Error('too wide'));
+    const span = () => (c as unknown as { span: number }).span;
+    const before = span();
+    await expect(c.tokenTransfers(TERRAFORMS, '7', 1, 1)).rejects.toThrow('too wide');
+    expect(span()).toBe(before);
+  });
+
+  it('reads a receipt, and null for a transaction the node does not have', async () => {
+    const c = new Chain(1, url);
+    const client = (c as unknown as { client: { getTransactionReceipt: (a: any) => unknown } }).client;
+    client.getTransactionReceipt = async ({ hash }: any) => {
+      if (hash === pad('1')) return { blockNumber: 42n, status: 'reverted', logs: [log(7, 42)] };
+      throw new TransactionReceiptNotFoundError({ hash });
+    };
+    expect(await c.receipt(pad('1'))).toEqual({ blockNumber: 42, reverted: true, logs: [log(7, 42)] });
+    expect(await c.receipt(pad('2'))).toBeNull();
+  });
+
+  it('reads many receipts by hash', async () => {
+    const c = new Chain(1, url);
+    const client = (c as unknown as { client: { getTransactionReceipt: (a: any) => unknown } }).client;
+    client.getTransactionReceipt = async ({ hash }: any) => ({ transactionHash: hash, logs: [log(1, 1)] });
+    const got = await c.receipts([pad('1'), pad('2')]);
+    expect([...got.keys()]).toEqual([pad('1'), pad('2')]);
+    expect(got.get(pad('2'))).toEqual([log(1, 1)]);
   });
 });

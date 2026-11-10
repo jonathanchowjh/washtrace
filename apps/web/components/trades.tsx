@@ -3,13 +3,16 @@ import Link from 'next/link';
 import { METHODS, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { SortHead } from '@/components/ui';
-import { DOT, NotCounted } from '@/components/methods';
+import { NotCounted } from '@/components/methods';
+import { FunnelIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
+import { cardSrc, txHref, withFrom } from '@/lib/links';
 import { judgedBy } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
+import { HoverCard } from './hover-card';
 
 /**
  * The Trades view's three parts: the Find box, chips and filter form; the
@@ -108,6 +111,7 @@ export function FilterBar(w: Where) {
     <section aria-label="Filters" className="mt-4 space-y-3">
       <form action={`${base}/trades`} method="get" role="search" className="flex flex-wrap items-center gap-2">
         {carried(w, (k) => k !== 'q')}
+        <FunnelIcon className="text-muted-foreground" />
         <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
         <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
@@ -119,7 +123,7 @@ export function FilterBar(w: Where) {
           </Link>
         ))}
         <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium">+ Filter</summary>
+          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium"><FunnelIcon className="mr-1 inline size-3.5 align-[-2px] text-muted-foreground" />+ Filter</summary>
           <form action={`${base}/trades`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
             {carried(w, (k) => ['wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}
@@ -257,7 +261,7 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
   const dir = here ? (q.dir === 'asc' ? 'desc' : 'asc') : FIRST_ASC.includes(sort) ? 'asc' : 'desc';
   return (
     <SortHead href={tradesHref(base, { ...q, sort, dir }, { by: view.by })} dir={here ? (q.dir === 'asc' ? 'asc' : 'desc') : null}>
-      {tone ? <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[lensInfo(tone, where.own ?? {})?.tone ?? 'apart'])} /> : null}
+      {tone ? <TierMark tone={lensInfo(tone, where.own ?? {})?.tone ?? 'apart'} /> : null}
       {label}
     </SortHead>
   );
@@ -269,8 +273,10 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
  * run read (lensContext): a trade past it reads not judged yet in that lens's
  * column, as a trade no analysis covered reads across them all.
  */
-export function TradesTable({ chainId, rows, ran, through, money, ...where }: Where & {
+export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
+  /** The list as a trade's `from` (lib/step.ts), so a trade opened from it can step to its neighbours. */
+  from?: string;
 }) {
   const { base, q, view, zone, own = {} } = where;
   const lenses = withOwn(ran);
@@ -278,7 +284,7 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
     <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
   );
   const wallet = (a: string) => (
-    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
+    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
   );
   return (
     <div className="mt-4 overflow-x-auto rounded-lg border bg-card">
@@ -294,14 +300,14 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
             const venue = r.marketplace === null ? null : venueOf(r.marketplace);
             const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
             // The price opens the trade, as a price does in the transfer tables.
-            const trade = (v: string) => (v === '—' ? v : <Link href={`/tx/${chainId}/${r.txHash}`} title="Open this trade" className="hover:underline">{v}</Link>);
+            const trade = (v: string) => (v === '—' ? v : <Link href={withFrom(txHref(chainId, r.txHash, base), from)} title="Open this trade" className="hover:underline">{v}</Link>);
             return (
               <tr key={`${r.txHash}-${r.logIndex}`}>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={`/tx/${chainId}/${r.txHash}`} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
+                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : localTime(r.blockTime * 1000, 'datetime', zone, 'en-US')}</Link>
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">
-                  <Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link>
+                  <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>
                   {only({ token: r.tokenId }, 'Only trades with this token')}
                 </td>
                 <td className="px-3 py-2">{wallet(r.from)} → {wallet(r.to)}</td>
@@ -317,7 +323,7 @@ export function TradesTable({ chainId, rows, ran, through, money, ...where }: Wh
                       {!judgedBy(r, m, through)
                         ? <span title={`Newer than the block ${lensInfo(m, own)?.name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
                         : r.lenses.includes(m)
-                        ? <i role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className={cn('inline-block size-2.5 rounded-full', DOT[lensInfo(m, own)?.tone ?? 'apart'])} />
+                        ? <span role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
                         : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
                     </td>
                   ))

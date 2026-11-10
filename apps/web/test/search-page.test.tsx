@@ -5,15 +5,18 @@ const ADDR = '0x' + 'a'.repeat(40);
 const TX = '0x' + 'c'.repeat(64);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const none = { collections: [], tokens: [], wallets: [], trades: [], more };
-const state = { hits: none as Record<string, unknown>, calls: [] as unknown[] };
+const state = { hits: none as Record<string, unknown>, calls: [] as unknown[], sources: {} as Record<string, unknown> };
 
 vi.mock('@/lib/store', () => ({
-  store: () => ({ search: async (p: unknown, o: unknown) => { state.calls.push([p, o]); return state.hits; } }),
+  store: () => ({
+    search: async (p: unknown, o: unknown) => { state.calls.push([p, o]); return state.hits; },
+    sources: async () => state.sources, settings: async () => new Map<string, string>(),
+  }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [] }); });
+afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], sources: {} }); });
 
 async function dom(sp: Record<string, string>): Promise<HTMLElement> {
   const { default: SearchPage } = await import('@/app/search/page');
@@ -44,7 +47,7 @@ describe('the search page', () => {
     expect(t).toContain('Trade in Meebits, token #14022');
     expect(c.querySelector(`a[href="/c/1/${ADDR}/t/1234"]`)).not.toBeNull();
     expect(c.querySelector(`a[href="/w/1/${ADDR}"]`)).not.toBeNull();
-    expect(c.querySelector(`a[href="/tx/1/${TX}"]`)).not.toBeNull();
+    expect(c.querySelector(`a[href="/c/1/${ADDR}/tx/${TX}"]`)).not.toBeNull();
     expect([...c.querySelectorAll('h2')].map((h) => h.textContent).join('|')).toMatch(/\(1\)/);
   });
 
@@ -102,5 +105,18 @@ describe('the search page', () => {
     const t = (await dom({ q: 'terra', kind: 'collections', page: '99999' })).textContent;
     expect(t).toContain('That page is past the last result.');
     expect(t).not.toContain('Nothing watched matches');
+  });
+
+  it('a pasted hash nothing matches links a check on each chain with an RPC', async () => {
+    state.sources = { 'rpc.1': { from: 'env', value: 'https://…' }, 'rpc.8453': { from: 'env', value: 'https://…' } };
+    const c = await dom({ q: TX });
+    expect(c.textContent).toContain('Check it on');
+    expect(c.querySelector(`a[href="/tx/1/${TX}"]`)?.textContent).toBe('Ethereum');
+    expect(c.querySelector(`a[href="/tx/8453/${TX}"]`)?.textContent).toBe('Base');
+  });
+
+  it('offers no check for a pasted hash when no chain has an RPC', async () => {
+    const c = await dom({ q: TX });
+    expect(c.textContent).not.toContain('Check it on');
   });
 });

@@ -11,6 +11,7 @@ import { DataNeeds } from './data-needs';
 import { send } from './lens-actions';
 import { Preview } from './preview';
 import { RuleTable } from './rule-table';
+import { lensTabHref } from '@/lib/links';
 
 const BUTTON = 'rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -22,7 +23,7 @@ const BUTTON = 'rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted
  * checks it again. `selected` is the tab Cancel goes back to; `lensId` is set
  * when an existing lens is being edited.
  */
-export function LensEditor({ base, chainId, address, selected, title, name: startName, rule: startRule, differs, lensId, writable, notFinal, funded, needs }: {
+export function LensEditor({ base, chainId, address, selected, title, name: startName, rule: startRule, differs, lensId, writable, notFinal, funded, needs, others = [] }: {
   base: string; chainId: number; address: string; selected: string;
   /** What the readiness strip compares the rule with: what is read of this collection, and the numbers it is priced by. */
   needs: Omit<Parameters<typeof DataNeeds>[0], 'rule' | 'estimate' | 'writable' | 'chainId' | 'address'>;
@@ -34,6 +35,8 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
   /** How far a copy of a built-in is from it, or null. */
   differs: string | null;
   lensId?: number; writable: boolean;
+  /** The other watched collections, which Save can run it on too (Save and run on N). */
+  others?: readonly { chainId: number; address: string; name: string }[];
 }) {
   const router = useRouter();
   const [name, setName] = useState(startName);
@@ -42,6 +45,9 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
   const latest = useRef(rule);
   const change = (next: LensRule) => { latest.current = next; setRule(next); };
   const [busy, setBusy] = useState(false);
+  const [also, setAlso] = useState<ReadonlySet<string>>(new Set());
+  const keyOf = (c: { chainId: number; address: string }) => `${c.chainId}:${c.address}`;
+  const toggle = (k: string) => setAlso((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [error, setError] = useState<string | null>(null);
   // A refusal takes the focus, so a screen reader says it and Tab goes on from it rather than from the top of the page.
   const alert = useRef<HTMLParagraphElement>(null);
@@ -63,12 +69,13 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
     setBusy(true);
     const said = await send<{ lens: { key: string } }>(
       lensId === undefined ? '/api/lenses' : `/api/lenses/${lensId}`, lensId === undefined ? 'POST' : 'PATCH',
-      // The collection goes with an edit too, so its run is queued here, as the button says.
-      { name: trimmed, rule: checked.rule, chainId, address },
+      // The collection goes with an edit too, so its run is queued here, as the button says; those ticked go with it, all in the save's statement.
+      also.size === 0 ? { name: trimmed, rule: checked.rule, chainId, address }
+        : { name: trimmed, rule: checked.rule, collections: [{ chainId, address }, ...others.filter((c) => also.has(keyOf(c))).map((c) => ({ chainId: c.chainId, address: c.address }))] },
     );
     setBusy(false);
     if (said.error !== null) return setError(said.error);
-    router.push(`${base}?method=${said.body.lens.key}#evidence`);
+    router.push(lensTabHref(base, said.body.lens.key, { evidence: true }));
     router.refresh();
   }
 
@@ -99,12 +106,26 @@ export function LensEditor({ base, chainId, address, selected, title, name: star
       <Preview chainId={chainId} address={address} rule={rule} roundTripsName={LENSES.A.name} notFinal={notFinal} funded={funded} funding={needs.funding} money={moneyReason(rule, needs.money, needs.followHops, false)}
         tokens={{ reason: tokensReason(rule, needs.tokens.started, needs.tokens.counts, needs.tokens.counts?.read ?? null), payees: needs.tokens.counts?.payees ?? needs.tokens.payees }} writable={writable} />
 
+      {others.length === 0 ? null : (
+        <fieldset className="text-sm">
+          <legend className="font-medium">Also run it on</legend>
+          <span className="text-xs text-muted-foreground">its run here is queued either way; each ticked gets one too</span>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+            {others.map((c) => (
+              <label key={keyOf(c)} className="inline-flex items-center gap-1.5">
+                <input type="checkbox" checked={also.has(keyOf(c))} disabled={!writable} onChange={() => toggle(keyOf(c))} />{c.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
       {writable ? null : <p className="text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
       {error ? <p ref={alert} role="alert" tabIndex={-1} className="text-sm text-fault">{error}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={BUTTON} disabled={busy} title="Leave without saving" onClick={() => router.push(`${base}?method=${selected}`)}>Cancel</button>
+        <button type="button" className={BUTTON} disabled={busy} title="Leave without saving" onClick={() => router.push(lensTabHref(base, selected))}>Cancel</button>
         <button type="submit" className={BUTTON} disabled={!writable || busy}
-          title={writable ? 'Save this lens, then queue its run on this collection' : LOCAL_ONLY}>Save and run</button>
+          title={writable ? `Save this lens, then queue its run on this collection${also.size === 0 ? '' : ' and each ticked'}` : LOCAL_ONLY}>{also.size === 0 ? 'Save and run' : `Save and run on ${also.size + 1}`}</button>
       </div>
     </form>
   );

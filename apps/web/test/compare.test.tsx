@@ -108,7 +108,7 @@ vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined })
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push, refresh: vi.fn() }) }));
 
 async function draw(sp: Record<string, string>): Promise<HTMLElement> {
-  const { default: Page } = await import('@/app/c/[chain]/[address]/page');
+  const { default: Page } = await import('@/app/c/[chain]/[address]/methods/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
 const done = { lensId: 7, collectionId: 1, status: 'done', progress: null, lensVersion: 1, analysisId: 1, throughBlock: 5, totals: totals(30), error: null, retryAt: null, finishedAt: 1, tookMs: 1 };
@@ -122,7 +122,7 @@ describe('the Compare tab on the collection page', () => {
     const nav = c.querySelector('nav[aria-label="Lens"]')!;
     const on = [...nav.querySelectorAll('[aria-current="page"]')];
     expect(on.map((a) => a.textContent)).toEqual(['Compare']);
-    expect(on[0]!.getAttribute('href')).toBe(`${BASE}?method=compare`);
+    expect(on[0]!.getAttribute('href')).toBe(`${BASE}/methods?method=compare`);
     expect([...nav.children].at(-1)!.textContent).toBe('Compare');
   });
 
@@ -175,7 +175,7 @@ describe('Compare, further cases', () => {
     state.compare.mockResolvedValue({ both: {}, not: {} });
     const c = await draw({ method: 'compare', lens: 'new' });
     fireEvent.click([...c.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!);
-    expect(push).toHaveBeenCalledWith(`${BASE}?method=compare`);
+    expect(push).toHaveBeenCalledWith(`${BASE}/methods?method=compare`);
   });
 });
 

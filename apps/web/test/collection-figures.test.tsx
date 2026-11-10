@@ -56,6 +56,11 @@ async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: Page } = await import('@/app/c/[chain]/[address]/page');
   return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
+/** The Methods page, where the lens panel is. */
+async function methods(sp: Record<string, string> = {}): Promise<HTMLElement> {
+  const { default: Page } = await import('@/app/c/[chain]/[address]/methods/page');
+  return render(await Page({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
+}
 const named = (c: Element, text: string) => [...c.querySelectorAll('a')].filter((a) => a.textContent === text).map((a) => a.getAttribute('href'));
 const answer = (c: Element) => c.querySelector('[aria-label="The answer"]')!;
 
@@ -78,32 +83,32 @@ describe('the answer on the collection page', () => {
   });
 
   it('offers the whole trades list under the headline', async () => {
-    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'Dig into its trades →');
+    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'All 1,000 trades ›');
     expect(dig?.getAttribute('href')).toBe(tradesHref(BASE, {}));
   });
 });
 
 describe('the lens panel on the collection page', () => {
   it('puts the stat line at the top of the panel, outside every card', async () => {
-    const stats = (await draw({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
+    const stats = (await methods({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
     expect(stats).not.toBeNull();
     expect(stats.closest('nav')).toBeNull();
-    expect(named(stats, '120 loops and 300 linked pairs')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
-    expect(named(stats, '644 tokens')).toEqual([`${BASE}/flagged?method=AC&kind=tokens`]);
+    expect(named(stats, '120 loops and 300 linked pairs')).toEqual([`${BASE}/tokens?method=AC`]);
+    expect(named(stats, '644 tokens')).toEqual([`${BASE}/tokens?method=AC`]);
   });
 
   it('leaves the loops out of the stat line for an analysis that did not count them', async () => {
     state.loops = false;
-    const stats = (await draw({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
+    const stats = (await methods({ method: 'AC' })).querySelector('[aria-label="Linked wallets in numbers"]')!;
     expect(stats.textContent).not.toContain('loop');
     expect(stats.textContent).toContain('644 tokens');
   });
 
   it('says Money loops back is not counted in its stat line, and gives a lens that did not run none', async () => {
-    expect((await draw({ method: 'AU' })).querySelector('[aria-label="Money loops back in numbers"]')!.textContent).toContain('(not counted)');
+    expect((await methods({ method: 'AU' })).querySelector('[aria-label="Money loops back in numbers"]')!.textContent).toContain('(not counted)');
     cleanup();
     state.moneyRan = false;
-    const c = await draw({ method: 'AU' });
+    const c = await methods({ method: 'AU' });
     expect(c.querySelector('[aria-label="Money loops back in numbers"]')).toBeNull();
     expect(c.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
   });
@@ -113,15 +118,15 @@ describe('the lens panel on the collection page', () => {
     const earlier = { ...collection().latest, id: 1, ranAt: 1_690_000_000_000 };
     state.moneyRan = false;
     state.history = [{ ...collection().latest, id: 2 }, earlier];
-    const c = await draw({ method: 'AU' });
+    const c = await methods({ method: 'AU' });
     expect(c.textContent).toContain('How the answer settled as the reading filled in, at each of 2 analyses');
     expect(c.textContent).toContain('Money loops back did not run in the latest analysis, so it flags nothing. Choose another lens above.');
     expect(c.textContent).not.toContain('has not run on this collection');
   });
 });
 
-describe('About', () => {
-  it('opens each marketplace on its sales, and Traded on all sales oldest first', async () => {
+describe('its facts line', () => {
+  it('opens each marketplace on its sales, and the sales count on all of them oldest first', async () => {
     const about = (await draw()).querySelector('[aria-label="The collection"]')!;
     expect(named(about, '650')).toEqual([tradesHref(BASE, { venues: ['opensea'] })]);
     expect(named(about, '300')).toEqual([tradesHref(BASE, { venues: ['blur'] })]);
@@ -132,8 +137,10 @@ describe('About', () => {
 
 describe('links never sit inside links', () => {
   it('no link is nested in another, whichever method is chosen', async () => {
+    expect((await draw()).querySelectorAll('a a').length).toBe(0);
+    cleanup();
     for (const method of ['A', 'AU', 'AC']) {
-      const c = await draw({ method });
+      const c = await methods({ method });
       expect(c.querySelectorAll('a a').length).toBe(0);
       cleanup();
     }

@@ -1,7 +1,8 @@
 import type { Parsed, SearchHits, SearchKind } from '@washtrace/detect';
 import { chainName } from './chains';
 import { plural, short } from './format';
-import { MAX_TEXT, pageOf, tokenIdOf } from './params';
+import { txHref, walletHref } from './links';
+import { MAX_TEXT, addressOf, chainOf, pageOf, tokenIdOf } from './params';
 
 /**
  * Reading what was typed into search, and the page and kind a results URL
@@ -16,6 +17,48 @@ export type { Parsed, SearchKind };
 export const SEARCH_LIMIT = 20;
 
 export const SEARCH_KINDS: readonly SearchKind[] = ['collections', 'tokens', 'wallets', 'trades'];
+
+/** A search narrowed to one collection, as `scope=<chain>:<address>` carries it. */
+export type Scope = { chainId: number; address: string };
+
+/** The collection a `scope` parameter names, or null for anything else. */
+export function scopeOf(raw: string | null | undefined): Scope | null {
+  const [chain, address, rest] = (raw ?? '').split(':');
+  const chainId = chainOf(chain ?? '');
+  const a = addressOf(address ?? '');
+  return rest === undefined && chainId !== null && a !== null ? { chainId, address: a } : null;
+}
+
+export const scopeParam = (s: Scope) => `${s.chainId}:${s.address}`;
+
+/** The collection a console path is under, which its search box narrows to. */
+export function scopeOfPath(path: string): Scope | null {
+  const m = /^\/c\/([^/]+)\/([^/]+)/.exec(path);
+  return m === null ? null : scopeOf(`${m[1]}:${m[2]}`);
+}
+
+/**
+ * The kinds in the order a search reads best: the kind of thing typed first,
+ * so a token number leads with tokens and a hash with its trades, then the rest.
+ */
+export function kindsFor(p: Parsed): readonly SearchKind[] {
+  const first: SearchKind | null = p.kind === 'token' ? 'tokens' : p.kind === 'tx' ? 'trades' : p.kind === 'prefix' ? 'wallets' : null;
+  return first === null ? SEARCH_KINDS : [first, ...SEARCH_KINDS.filter((k) => k !== first)];
+}
+
+/** The kind of a search's best match: the first kind, in kindsFor's order, with any hit. Its first hit is the match. */
+export function bestKind(hits: SearchHits, p: Parsed): SearchKind | undefined {
+  return kindsFor(p).find((k) => hits[k].length > 0);
+}
+
+/** Rings and tokens listed under a scoped search's best match: a few, each one Enter away. */
+export const CONNECTED = 3;
+
+/** What a scoped search's best match is connected to in that collection, when it is a wallet: its rings by rank, and the tokens it traded most. */
+export type Connected = { wallet: string; rings: { anchor: string; rank: number }[]; tokens: string[] };
+
+/** What /api/search answers: the hits and, for a scoped search whose best match is a wallet, what it is connected to there. */
+export type SearchReply = SearchHits & { connected?: Connected };
 
 /**
  * Trims, lowercases hex and strips one leading '#'. One or two bare digits are
@@ -51,11 +94,22 @@ export function searchArgs(q: { kind?: string; page?: string }): { only: SearchK
 }
 
 /**
+ * Where a trade hit opens: under its collection's tabs when every transfer of
+ * its transaction found is in that collection and none were cut off, else the
+ * transaction's own page, as the page under a collection requires.
+ */
+export function tradeHref(hits: SearchHits, h: SearchHits['trades'][number]): string {
+  const one = !hits.more.trades && hits.trades.every((o) => o.txHash !== h.txHash || o.address === h.address);
+  return txHref(h.chainId, h.txHash, one ? `/c/${h.chainId}/${h.address}` : null);
+}
+
+/**
  * One hit as a link: where it opens, the line that says what it is, and its
  * address. The results page and the search box's list both draw this, so a hit
- * reads the same in both.
+ * reads the same in both. `scope` keeps a wallet hit under that collection's
+ * tabs, where the search was made.
  */
-export function hitRow(hits: SearchHits, kind: SearchKind, i: number): { href: string; line: string; address: string } {
+export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Scope | null = null): { href: string; line: string; address: string } {
   if (kind === 'collections') {
     const h = hits.collections[i]!;
     return { href: `/c/${h.chainId}/${h.address}`, line: `Collection on ${chainName(h.chainId)} · ${h.name ?? h.symbol ?? short(h.address)}`, address: h.address };
@@ -66,8 +120,10 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number): { href: s
   }
   if (kind === 'wallets') {
     const h = hits.wallets[i]!;
-    return { href: `/w/${h.chainId}/${h.address}`, line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
+    // A full address is found wherever it traded: one that never traded in the scope opens on its own page.
+    const within = scope !== null && scope.chainId === h.chainId && h.here !== false ? `/c/${scope.chainId}/${scope.address}` : null;
+    return { href: walletHref(h.chainId, h.address, within), line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
   }
   const h = hits.trades[i]!;
-  return { href: `/tx/${h.chainId}/${h.txHash}`, line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
+  return { href: tradeHref(hits, h), line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
 }

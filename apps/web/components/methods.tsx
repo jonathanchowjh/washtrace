@@ -5,9 +5,11 @@ import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals,
 import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
 import type { Qualifier } from '@/lib/lens-state';
 import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metrics';
+import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
 import { dateIn, midnight } from '@/lib/zone';
 import { cn } from '@/lib/utils';
+import { TierMark } from './kit';
 import { TimeChart, type TimePoint } from './trend';
 
 // Literal class names: Tailwind generates only the classes it can read in the source.
@@ -23,7 +25,7 @@ export function LensName({ m, className, href, own = {} }: { m: string; classNam
   const name = info.name;
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
-      <i aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT[info.tone])} />
+      <TierMark tone={info.tone} />
       {href === undefined ? <span className="font-medium text-foreground">{name}</span>
         : <Link href={href} title={`Open the evidence for ${name}`} className="font-medium text-foreground hover:underline">{name}</Link>}
     </span>
@@ -135,7 +137,7 @@ export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
   const s = part(t, 'sales'), o = part(t, 'owners');
   const caught = tradesHref(base, { caught: [m] });
   const priciest = { sort: 'price', dir: 'desc' } as const;
-  const flagged = (kind: 'tokens' | 'wallets') => `${base}/flagged?method=${m}&kind=${kind}`;
+  const flagged = (kind: 'tokens' | 'wallets') => listHref(base, kind, { method: m });
   return (
     <div aria-label={`${lensInfo(m, own)?.name} in numbers`} className="mb-4 space-y-1 text-sm text-muted-foreground tabular-nums">
       <p>
@@ -206,7 +208,7 @@ export function History({ timeline, totals, notFinal, funded, funding, now, zone
 }
 
 /** The start of the period after the one starting at `at`, on the reader's calendar (a week starts on a Monday, as the store buckets it). */
-function nextStart(at: number, bucket: Bucket, zone: string): number {
+export function nextStart(at: number, bucket: Bucket, zone: string): number {
   if (bucket === 'hour') return at + 3_600_000;
   const { y, m, d } = dateIn(at, zone);
   return bucket === 'month' ? midnight(y, m + 1, 1, zone) : midnight(y, m, d + (bucket === 'week' ? 7 : 1), zone);

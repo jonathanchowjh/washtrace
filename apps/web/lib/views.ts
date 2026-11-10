@@ -42,10 +42,16 @@ export type TokenView = {
   ownLenses: Lenses;
 } & TokenDrawing & Verdict;
 
+/** Tokens or wallets to a page in a collection's Tokens and Wallets lists, as many as a screen shows without scrolling far. */
+export const LIST_PAGE = 20;
+
+/** A collection's rings to a page, in its list and the API's, so a page number means the same rings in both. */
+export const RINGS_PAGE = 20;
+
 /** A page of each of the wallet page's lists: its trades, its money partners, and the payments between it and one of them. */
-export const TRADES = 100;
-export const COUNTERPARTIES = 50;
-export const FLOWS = 50;
+export const TRADES = 20;
+export const COUNTERPARTIES = 20;
+export const FLOWS = 20;
 
 /** Each collection's latest analysis, by address, for the collections these transfers are in (null: none yet). */
 async function latestByAddress(s: Store, chainId: number, transfers: readonly FlaggedTransfer[]): Promise<Map<string, AnalysisRow | null>> {
@@ -67,6 +73,26 @@ async function drawingInputs(s: Store, chainId: number, c: Pick<CollectionRow, '
     s.lensFlagsOfToken(c.id, tokenId, ran),
   ]);
   return { transfers, middles, flows, own };
+}
+
+/** Past this many wallets a ring's loops are a tangle: its page draws who is in it instead. */
+export const RING_DRAWN = 25;
+
+/**
+ * A ring's loops as a token's graph draws them (layout()): each of its tokens
+ * changing hands between two of its wallets, with the flags of the lenses that
+ * ran, and the money among its wallets; those that only moved the money sit
+ * inside as middles. Null past RING_DRAWN wallets, or for one with no such transfer.
+ */
+export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> | null> {
+  if (ring.wallets.length === 0 || ring.wallets.length > RING_DRAWN) return null;
+  const inRing = new Set(ring.wallets.map((w) => w.address));
+  const all = (await Promise.all(ring.tokens.map((t) => s.token(c.id, t.tokenId)))).flat();
+  const transfers = all.filter((t) => inRing.has(t.from) && inRing.has(t.to)).map((t) => ranFlags(t, c.latest))
+    .sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+  if (transfers.length === 0) return null;
+  const flows = await s.flowsAmong(chainId, [...inRing]);
+  return { transfers, middles: ring.wallets.filter((w) => !w.traded).map((w) => w.address), flows };
 }
 
 /** Your lenses that ran on a collection, by id: a lens of yours with no finished run there has flagged nothing on it yet. */
@@ -270,25 +296,30 @@ function paged(asked: number, total: number, size: number): { page: number; page
  * A wallet: its funding, a page of its money partners, a page of its trades
  * under the filter, with the one verdict of the trades shown, and with
  * `filter.with` what passed between it and that wallet. Its counts are over
- * every trade: the title's flagged count is the flagged-only list's.
+ * every trade: the title's flagged count is the flagged-only list's. With
+ * `home`, a collection's address, every trade count and list is of its trades
+ * in that collection alone, and `collections` (the picker's) is empty; its
+ * money is the wallet's, wherever it went.
  */
-export async function walletView(chainId: number, address: string, opts: WalletOpts) {
+export async function walletView(chainId: number, address: string, opts: WalletOpts, home?: string) {
   const s = store();
-  const { with: other, ...narrow } = opts.filter;
-  const narrowed = Object.keys(narrow).length > 0;
+  const inHome = home === undefined ? {} : { collection: home };
+  const { with: other, ...asked } = opts.filter;
+  const narrowed = Object.keys(asked).length > 0;
+  const narrow = { ...asked, ...inHome };
   const [funding, collections, all, flagged, matched, counterpartiesTotal, flowsTotal, betweenTotal] = await Promise.all([
-    s.wallet(chainId, address), s.walletCollections(chainId, address),
-    s.walletTradeCount(chainId, address), s.walletTradeCount(chainId, address, { flaggedOnly: true }),
+    s.wallet(chainId, address), home === undefined ? s.walletCollections(chainId, address) : [],
+    s.walletTradeCount(chainId, address, inHome), s.walletTradeCount(chainId, address, { flaggedOnly: true, ...inHome }),
     narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
     other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),
-    other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other }),
+    other === undefined ? 0 : s.walletTradeCount(chainId, address, { with: other, ...inHome }),
   ]);
   const pages = { trades: paged(opts.trades, matched ?? all, TRADES), partners: paged(opts.partners, counterpartiesTotal, COUNTERPARTIES), flows: paged(opts.flows, flowsTotal, FLOWS) };
   const offset = (p: { page: number }, size: number) => (p.page - 1) * size;
   const [shown, counterparties, betweenShown, flows] = await Promise.all([
     s.walletTransfers(chainId, address, TRADES, offset(pages.trades, TRADES), narrow),
     s.counterparties(chainId, address, COUNTERPARTIES, offset(pages.partners, COUNTERPARTIES), opts.psort),
-    other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other }),
+    other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other, ...inHome }),
     other === undefined ? [] : s.flowsBetween(chainId, address, other, opts.dir, FLOWS, offset(pages.flows, FLOWS)),
   ]);
   const latest = await latestByAddress(s, chainId, [...shown, ...betweenShown]);

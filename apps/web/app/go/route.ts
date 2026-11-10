@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { connection } from 'next/server';
 import { addressOf, chainOf, txOf } from '@/lib/params';
-import { parseSearch } from '@/lib/search';
+import { hitRow, parseSearch, scopeOf, scopeParam, tradeHref } from '@/lib/search';
 import { store } from '@/lib/store';
 
 /**
@@ -28,10 +28,13 @@ export async function GET(req: NextRequest): Promise<Response> {
     const watched = await store().collection(given, address).catch(() => null);
     return to(watched ? `/c/${given}/${address}` : `/w/${given}/${address}`);
   }
-  const results = `/search?q=${encodeURIComponent(q)}`;
+  // A search from inside a collection (the sidebar under /c/) is narrowed to it, and its results page says so.
+  const scope = scopeOf(req.nextUrl.searchParams.get('scope'));
+  const scoped = scope === null ? null : await store().collection(scope.chainId, scope.address).catch(() => null);
+  const results = `/search?q=${encodeURIComponent(q)}${scoped && scope ? `&scope=${scopeParam(scope)}` : ''}`;
   const parsed = parseSearch(q);
   if (parsed.kind === 'empty') return to(results);
-  const hits = await store().search(parsed).catch(() => null);
+  const hits = await store().search(parsed, scoped ? { scope: { id: scoped.id, chainId: scoped.chainId } } : {}).catch(() => null);
   if (address && hits !== null) {
     // A watched collection's contract can also have traded as a wallet; the collection is what was meant.
     if (hits.collections.length === 1 && !hits.more.collections) return to(`/c/${hits.collections[0]!.chainId}/${address}`);
@@ -44,8 +47,8 @@ export async function GET(req: NextRequest): Promise<Response> {
   const found = new Set([
     ...hits.collections.map((h) => `/c/${h.chainId}/${h.address}`),
     ...hits.tokens.map((h) => `/c/${h.chainId}/${h.address}/t/${h.tokenId}`),
-    ...hits.wallets.map((h) => `/w/${h.chainId}/${h.address}`),
-    ...hits.trades.map((h) => `/tx/${h.chainId}/${h.txHash}`),
+    ...hits.wallets.map((_, i) => hitRow(hits, 'wallets', i, scoped ? scope : null).href),
+    ...hits.trades.map((h) => tradeHref(hits, h)),
   ]);
   return to(found.size === 1 ? [...found][0]! : results);
 }

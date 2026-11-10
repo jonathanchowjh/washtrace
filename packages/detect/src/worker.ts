@@ -1,4 +1,5 @@
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
+import { SpotCheck } from './spot.js';
 import { Chain } from './chain.js';
 import { Checks } from './checks.js';
 import { Etherscan, WALLET_MS, isServiceFailure } from './etherscan.js';
@@ -251,6 +252,8 @@ export class Worker {
   private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
   /** What the last analyze pass here ran, for pickWork. In memory only: a restart forgets it, and the first pass picks as if nothing ran. */
   private last: Work | null = null;
+  // Collections whose rings failed to fill: passed over until the worker restarts, so one holds up none after it. Their next analysis fills them.
+  private ringsFailed = new Set<number>();
   /**
    * A preview was asked for while an analyze pass was in flight here: that
    * pass may have looked for one before it was queued, so one more runs after
@@ -470,6 +473,14 @@ export class Worker {
     const now = Date.now();
     const failed = new Map<Job, unknown>();
     const swept = await this.store.sweepPreviews(now).then(() => true, (err) => { failed.set('lens', err); return false; });
+    // Rings for an analysis saved before they were (Store.fillRings): one collection a turn, under the lock saveAnalysis is under.
+    // A failure is the analyze row's, and is logged: an analysis that runs after it would otherwise write over it with ok.
+    await this.store.fillRings([...this.ringsFailed]).catch((err) => {
+      const id = (err as { collectionId?: unknown }).collectionId;
+      if (typeof id === 'number') this.ringsFailed.add(id);
+      failed.set('analyze', err);
+      this.logFailed('analyze', this.scrubbed(err));
+    });
     const due = await this.dueAnalysis(now).catch((err) => { failed.set('analyze', err); return null; });
     const analysisFirst = this.last === 'preview' && due !== null;
     let preview: Awaited<ReturnType<Store['nextPreview']>> = null;
@@ -666,10 +677,12 @@ export class Worker {
   async fund(): Promise<string> {
     const { followHops: globalHops } = this.resolved();
     const etherscan = this.etherscanClient();
-    if (etherscan === null) return 'no funding source configured';
     const started = Date.now();
     this.outage = '';
     const deadline = started + BUDGET_MS;
+    // Spot checks first, inside the pass's budget: someone is waiting on each. Without a key they still run Round trips.
+    let spotted = await this.spots(etherscan, deadline);
+    if (etherscan === null) return 'no funding source configured';
     const collections = await this.store.collections();
     const counting = await this.store.nextCount(globalHops);
     const countUntil = deadline - (counting === null ? 0 : COUNT_MS);
@@ -697,6 +710,8 @@ export class Worker {
       };
       for (const wallet of interleave(lanes, priority)) {
         if (Date.now() > checkUntil || this.lockLost('fund')) break chains;
+        // One asked for mid-pass waits a wallet, not the rest of the pass.
+        spotted += await this.spots(etherscan, checkUntil);
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
           // A wallet due a re-read is read from a day of blocks before where the last read ended, and a first read in full.
@@ -731,7 +746,39 @@ export class Worker {
       await this.store.countNext(counting, globalHops, Math.min(COUNT_MS, deadline - Date.now()))
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
-    return `${done} wallets read, ${failed} failed`;
+    return `${done} wallets read, ${failed} failed${spotted > 0 ? `, ${spotted} transactions checked` : ''}`;
+  }
+
+  /**
+   * Run queued spot checks, one after another, until none is left or `until`
+   * passes; returns how many ran. Under the fund lock, so one at a time, and
+   * with the pass's Etherscan client, so its pacing holds across both. A
+   * check that fails is saved failed with its sentence, and the next goes on.
+   */
+  async spots(etherscan: Etherscan | null, until: number): Promise<number> {
+    let ran = 0;
+    while (Date.now() < until && !this.lockLost('fund')) {
+      const next = await this.store.nextSpot();
+      if (next === null) break;
+      ran += 1;
+      const url = this.resolved().rpc.get(next.chainId);
+      if (url === undefined) {
+        await this.store.spotFailed(next.id, `No RPC is configured for chain ${next.chainId}. Set WASHTRACE_RPC_${next.chainId}.`);
+        continue;
+      }
+      await this.beat('fund', `Checking transaction ${next.tx.slice(0, 10)}…`, null);
+      try {
+        await this.store.saveSpot(next.id, await this.spotCheck(next.chainId, url, etherscan).run(next.tx, next.lens));
+      } catch (err) {
+        await this.store.spotFailed(next.id, this.scrubbed(err));
+      }
+    }
+    return ran;
+  }
+
+  /** The check for one spot check on `chainId`. Tests override it on the instance. */
+  spotCheck(chainId: number, url: string, etherscan: Etherscan | null): SpotCheck {
+    return new SpotCheck(this.store, this.chain(chainId, url), etherscan, chainId);
   }
 
   /**

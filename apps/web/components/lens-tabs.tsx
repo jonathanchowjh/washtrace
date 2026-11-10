@@ -13,6 +13,7 @@ import { DeleteLens, RunHere } from './lens-actions';
 import { LensName, LensPicture } from './methods';
 import { RuleTable } from './rule-table';
 import { Time } from './time';
+import { lensTabHref } from '@/lib/links';
 
 type Runs = readonly { lens: Lens; run: LensRun | null }[];
 
@@ -61,7 +62,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   /** The chosen lens's stat line and lists; the panel shows them for a built-in, and for a lens of yours once it has figures. On the Compare tab, the comparison. */
   children: ReactNode;
 }) {
-  const href = (key: string) => `${base}?method=${key}`;
+  const href = (key: string) => lensTabHref(base, key);
   const own = ownLenses(runs);
   const chosen = runs.find((r) => r.lens.key === selected) ?? null;
   const tone = chosen || selected === 'compare' ? 'own' : LENSES[selected as Method].tone;
@@ -91,7 +92,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           );
         })}
         {writable
-          ? <Link href={`${base}?method=${selected}&lens=new`} scroll={false} title="Write a lens of your own" className={cn(BUTTON, 'self-center')}>+ New lens</Link>
+          ? <Link href={lensTabHref(base, selected, { lens: 'new' })} scroll={false} title="Write a lens of your own" className={cn(BUTTON, 'self-center')}>+ New lens</Link>
           : <button type="button" disabled title={LOCAL_ONLY} className={cn(BUTTON, OFF, 'self-center')}>+ New lens</button>}
         <Tab href={href('compare')} on={selected === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
       </nav>
@@ -151,7 +152,7 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
           <LensName m={m} className="text-base" />
           <Chip>built in · read-only</Chip>
         </div>
-        <Action href={`${base}?method=${m}&lens=copy-${m}`} writable={writable}>Copy to new lens</Action>
+        <Action href={lensTabHref(base, m, { lens: `copy-${m}` })} writable={writable}>Copy to new lens</Action>
       </div>
       <div className="mb-3 flex items-start gap-3">
         <LensPicture m={m} />
@@ -193,7 +194,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
           <Chip>yours</Chip>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Action href={`${base}?method=${lens.key}&lens=edit-${lens.key}`} writable={writable}>Edit</Action>
+          <Action href={lensTabHref(base, lens.key, { lens: `edit-${lens.key}` })} writable={writable}>Edit</Action>
           <DeleteLens id={lens.id} name={lens.name} writable={writable} />
         </div>
       </div>

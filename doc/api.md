@@ -1,8 +1,8 @@
 # API reference
 
 The console's HTTP API, for clients that read verdicts or manage what is watched. It is served by the
-`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 23 route files under
-`apps/web/app/api` with 28 method handlers, and `/go`.
+`api` service (apps/web) under `/api`, plus one redirect route, `/go`. There are 28 route files under
+`apps/web/app/api` with 33 method handlers, and `/go`.
 
 Paths below use `{chain}` for a chain id (digits, such as `1`), `{address}` for a 0x address (any case; stored
 lowercase), and `{tx}` for a 0x transaction hash (64 hex digits).
@@ -57,6 +57,9 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `POST /api/collections/{chain}/{address}/follow` | `{hops}`: a whole number from 1 to 10, above the global `follow.hops`. | 202 set, 200 already set (`set: false`), 400, 404 | `set` |
 | `POST /api/collections/{chain}/{address}/tokens` | `{}` | 202 started, 200 already started (`started: false`), 404 | `started` |
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | | 200, 404 (no such path, not watched, or no transfer of the token) | `collection`, `tokenId`, `transfers`, `middles`, `flows`, and the verdict keys |
+| `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
+| `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
+| `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`; for a token `transfers`, `flagged`; for a ring `ring` |
 
 Notes:
 
@@ -66,6 +69,14 @@ Notes:
 - `GET /api/collections/{chain}/{address}` lists the 50 tokens and 50 wallets with the most trades caught
   under `method`, each `{rows, total}`. A lens that did not run lists none. `lenses` holds each lens of yours
   with its `run` on this collection (`run` is null when it has none).
+- Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
+  sample, sales, floorSales, tokens, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
+  the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
+  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one that only moved the money,
+  at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
+- `.../card` is the console's hover card: a few counts, never a verdict. A wallet's `trades` and `flagged` are in
+  this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or
+  Linked wallets flags. `judged` is false before the first analysis.
 - Stored-data fields on a collection in `GET /api/collections`: `restoreNote` and `analysisError` say why its
   stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`,
   `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress`
@@ -79,12 +90,13 @@ Notes:
 `GET /api/collections/{chain}/{address}/trades` answers 200 or 404.
 
 The query is the Trades page's address bar. The filters are `caught`, `not`, `market`, `pmin`, `pmax`,
-`heldover`, `heldunder`, `ageover`, `ageunder`, `fmin`, `fmax`, `from`, `to`, `wallet`, `token`, `group`, `q`,
-`sort`, `dir` and `all`, and `page` for JSON. A filter on a lens that did not run holds no trades.
+`heldover`, `heldunder`, `ageover`, `ageunder`, `fmin`, `fmax`, `from`, `to`, `wallet`, `token`, `ring`, `group`,
+`q`, `sort`, `dir` and `all`, and `page` for JSON. A filter on a lens that did not run holds no trades. `ring` is a
+ring's anchor: the trades Round trips or Linked wallets flags through one of its witnesses.
 
 | `format` | Response |
 |---|---|
-| none | One page of 50: `total`, `unjudged` (trades newer than the latest analysis), `page`, `pages`, `ran` (the lenses that ran), `through` (for each lens of yours in `ran`, the block its run read), `rows`. Rows carry lens codes. |
+| none | One page of 20: `total`, `unjudged` (trades newer than the latest analysis), `page`, `pages`, `ran` (the lenses that ran), `through` (for each lens of yours in `ran`, the block its run read), `rows`. Rows carry lens codes. |
 | `csv` | Every trade the filters hold, streamed as `text/csv` and named `<address>-trades.csv`. Read one row at a time, so a cancelled download closes its cursor. |
 
 Limits on the CSV download:
@@ -107,12 +119,20 @@ leading `'`.
 |---|---|---|---|
 | `GET /api/wallets/{chain}/{address}` | `trades`, `partners`, `flows` (page numbers); `collection` (a collection address); `flagged=1`; `q`; `psort` (`flows`, `sent`, `received` or `watched`); `with` (another wallet) and `dir` (`sent` or `received`, both when left out) | 200, 404 | `chainId`, `address`, `funding`, `collections`, `counterparties`, `transfers`, `counts`, `pages`, `cut`, `between`, and the verdict keys |
 | `GET /api/transfers/{chain}/{tx}` | | 200, 404 | `chainId`, `tx`, `transfers`, and the verdict keys |
-| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page` | 200 | `collections`, `tokens`, `wallets`, `trades`, `more` |
+| `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page`; `scope` (`<chain>:<address>`) | 200 | `collections`, `tokens`, `wallets`, `trades`, `more`, and with a scope `connected` |
 
-- A wallet page holds 50 money partners and 100 trades, newest first. `pages` gives each list's
+- `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
+  address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
+  collection narrows nothing. In a scoped search each wallet hit carries `here`, whether it traded in that
+  collection: false only for one found by its full address.
+- `connected` comes with a scoped search of every kind (no `kind`) whose best match, the first hit of the kind
+  listed first, is a wallet on the scope's chain: `{wallet, rings, tokens}`, its first 3 rings there by rank
+  (`{anchor, rank}`) and the 3 tokens it traded there most. The search box lists them under that wallet.
+
+- A wallet page holds 20 money partners and 20 trades, newest first. `pages` gives each list's
   `{page, pages, total}` (a page past the last reads as the last); `counts` every trade it has and those counted
   flagged; `cut` which list has more than one page. With `with`, `between` holds the trades between the two
-  (`trades`, the latest 100, of `tradesTotal`) and a page of 50 payments in `dir` (`flows` of `flowsTotal`);
+  (`trades`, the latest 20, of `tradesTotal`) and a page of 20 payments in `dir` (`flows` of `flowsTotal`);
   otherwise `between` is null. A wallet with no trades answers `washTrade: null, judged: false`.
 - A transaction washtrace has not read is 404, never `washTrade: false`.
 - Search `q` is a collection name, a token number (`#1234`), a wallet address or its start (`0x` and at least 4
@@ -159,8 +179,8 @@ check is 400 with the reason.
 
 | Route | Body | Status | Top-level keys |
 |---|---|---|---|
-| `POST /api/lenses` | `{name, rule, chainId, address}` | 201, 400, 404 (collection not watched), 409 (name taken) | `lens` |
-| `PATCH /api/lenses/{id}` | `{name, rule, chainId?, address?}`; naming a collection queues a run there | 200, 400, 404, 409 | `lens` |
+| `POST /api/lenses` | `{name, rule, chainId, address}`, or `collections: [{chainId, address}]` (1 to 100) in place of `chainId` and `address` to queue a run on each | 201, 400, 404 (collection not watched), 409 (name taken) | `lens` |
+| `PATCH /api/lenses/{id}` | `{name, rule, chainId?, address?}` or `collections`; each collection named gets a run queued | 200, 400, 404, 409 | `lens` |
 | `DELETE /api/lenses/{id}` | | 200, 404 | `deleted` |
 | `POST /api/lenses/{id}/runs` | `{chainId, address}` | 202, 404 | `queued` |
 | `POST /api/lenses/previews` | `{chainId, address, rule}` | 202, 400, 404, 409 (no sales to sample, or not analyzed yet) | `id` |
@@ -171,6 +191,45 @@ check is 400 with the reason.
 - Editing a lens moves its version and queues its runs again. Creating one queues its run on the collection.
 - A preview is a sample run of an unsaved rule. Poll it until it finishes. It is 404 once it is swept (an hour
   after it was asked for) or its collection is removed.
+
+### Spot checks
+
+One transaction judged without watching its collection: the worker reads its receipt, each of its tokens'
+histories, and the money of its sellers, buyers and the wallets that could join them, at the start of a fund pass
+and between wallets in one. The console's Check this transaction button uses these two routes.
+
+| Route | Body or query | Status | Top-level keys |
+|---|---|---|---|
+| `POST /api/spots` | `{chainId, tx, lens?}`. `chainId` a number, `tx` a 0x hash, `lens` a key of yours such as `L7`. | 200, 202, 400, 404 | 200: `status: 'done'`, `result`. 202: `id`, `status`, `reused`. |
+| `GET /api/spots/{id}` | | 200, 404 | `id`, `chainId`, `tx`, `lens`, `status` (`queued`, `running`, `done`, `failed`), `result`, `error`, `requestedAt`, `finishedAt` |
+
+- **200 at once.** With no `lens`, a transaction every transfer of which a watched collection's latest analysis
+  judged is answered from the store, `result.source: 'watched'`. That answer holds only the transfers of
+  collections you watch: a token of another collection in the same transaction is not in it. With a lens it is
+  always queued: stored verdicts hold only the built-ins.
+- **Reuse.** A check of the same transaction, with the same lens at the same version, that is queued or running is
+  shared (`reused: true`), so two requests at once make one check. A done one is answered again for an hour when
+  its block was final. A failed one is asked again.
+- **400** for a bad `chainId`, `tx` or `lens`, and for a lens a spot check cannot run, with the sentence: `This lens
+  uses Other tokens, which a spot check does not read.` or `This lens follows other tokens in the collection, which
+  a spot check does not read.` **404** `No such lens.` and `No such spot check.` (swept a day after it was asked).
+- **A failed check's `error`** says why: `No such transaction on chain N.`, `This transaction reverted.`, `This
+  transaction moved only ERC-1155 tokens, which washtrace does not read.`, `This transaction moved no ERC-721
+  token.`, `This transaction holds no trade: a mint, a burn or a move into or out of custody.`, `No RPC is configured
+  for chain N. Set WASHTRACE_RPC_N.`, `Reading the history of token N took longer than a spot check allows: this RPC
+  answers only narrow log queries.`, `That lens was removed.`, `That lens was edited; ask again.`
+
+**The result** has the verdict keys' meaning, in one shape for both sources:
+
+| Key | Meaning |
+|---|---|
+| `washTrade` | `true` when a counted method flags a trade (Round trips or Linked wallets; with a lens, that lens). `false` only when each of them ran on every trade, nothing is `atLeast`, and none flagged. Otherwise `null`. |
+| `methods` | The counted methods, or the lens, that flagged. |
+| `notRun` | What could not run: `AU` always on a spot check; `AC` (or the lens) without an Etherscan key or when a seller's or buyer's money could not be read. |
+| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, more than 200 other transactions joined the wallets (a payment whose receipt is not read is left out, since it may be another sale's price), a lens needs money further out than the sellers and buyers, or a lens skipped a trade (one no marketplace filled, when it judges sales; an untimed one, under a window or loop order) or its search hit its cap. |
+| `finalized` | The transaction's block was final when read. A check of one that was not is never reused. |
+| `source` | `spot` or `watched`. |
+| `transfers` | The transaction's transfers, each with its `collection` and `flags`: a built-in's witness as in the verdict keys, or a lens's `{path, wallets}`. |
 
 ### Status
 

@@ -4,17 +4,29 @@ import { plural } from '@/lib/format';
 import type { Tone } from '@/lib/metrics';
 import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
+import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-/** A page's title, the trail back up to it, and whatever it states on the right. */
-export function Head({ title, crumb = [], sub, children }: {
+const KIND_NAME: Record<Kind, string> = { collection: 'Collection', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
+
+/**
+ * A page's title, the trail back up to it, and whatever it states on the
+ * right. A page about one thing names its `kind` first, as a symbol tile and a
+ * word, so every such page reads the same way: what it is, then which one.
+ * `part` is what it belongs to, such as its ring, as chips under the title.
+ */
+export function Head({ title, crumb = [], sub, kind, part, children }: {
   title: ReactNode;
   crumb?: { href: string; label: string }[];
   sub?: ReactNode;
+  kind?: Kind;
+  part?: ReactNode;
   children?: ReactNode;
 }) {
   return (
     <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pt-6 pb-4">
+      <div className="flex min-w-0 items-start gap-3">
+      {kind ? <span aria-hidden className="mt-0.5 grid size-11 shrink-0 place-items-center rounded-lg border bg-card text-foreground"><KindIcon kind={kind} className="size-6" /></span> : null}
       <div className="min-w-0">
         {crumb.length > 0 ? (
           <nav aria-label="Trail" className="mb-1 flex flex-wrap gap-1 text-xs text-muted-foreground">
@@ -25,11 +37,40 @@ export function Head({ title, crumb = [], sub, children }: {
             ))}
           </nav>
         ) : null}
+        {kind ? <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{KIND_NAME[kind]}</p> : null}
         <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
         {sub ? <p className="mt-1 text-sm text-muted-foreground">{sub}</p> : null}
+        {part ? <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">{part}</div> : null}
+      </div>
       </div>
       {children ? <div className="flex flex-wrap items-center gap-3">{children}</div> : null}
     </header>
+  );
+}
+
+// Pulses only for a reader who has not asked for less motion.
+const BONE = 'rounded bg-muted motion-safe:animate-pulse';
+
+/**
+ * What a page shows while its reads are still out: Head's outline, with the
+ * kind of thing it will be already named, so a slow store reads as on its way
+ * and the reader knows where they are going before it lands.
+ */
+export function Loading({ kind, list = false }: { kind: Kind; list?: boolean }) {
+  return (
+    <div role="status" aria-label={list ? `Loading these ${kind}s` : `Loading this ${kind}`}>
+      <header className="pt-6 pb-4">
+        <div className={cn('mb-2 h-3 w-32', BONE)} />
+        <div className="flex items-center gap-2">
+          <KindIcon kind={kind} className="size-5 text-muted-foreground" />
+          <div className={cn('h-7 w-64 max-w-full', BONE)} />
+        </div>
+      </header>
+      <div className={cn('h-24 rounded-lg', BONE)} />
+      <div className="mt-10 flex flex-col gap-2">
+        {[0, 1, 2, 3, 4].map((i) => <div key={i} className={cn('h-8', BONE)} />)}
+      </div>
+    </div>
   );
 }
 

@@ -111,7 +111,7 @@ The dataset is CC BY-NC 4.0 (credit `MLNTeam-Unical/NFT-70M_transactions`): keep
 
 ```
 packages/detect/          Everything that knows chains, money and graphs. No React, no HTTP.
-  src/                    30 files, by concern:
+  src/                    31 files, by concern:
     Types and the pure engine
       types.ts            Transfer, Flow, Method, Witness, Analysis
       graph.ts            The asset transfer graph of one token (AddressGraph); Tarjan; cycle counting
@@ -145,6 +145,7 @@ packages/detect/          Everything that knows chains, money and graphs. No Rea
       checks.ts           Checks: the console's Test requests
       analysis-thread.ts  analyze() in a worker thread
       lens-thread.ts      A lens run or a preview in a worker thread
+      spot.ts             SpotCheck: one transaction judged without watching its collection
     Shared
       env.ts              Every environment variable, read the same way by both services
       index.ts            The package entry
@@ -265,7 +266,13 @@ skipped.
    connection holding its lock, the thread is ended and the run is queued
    again, not counted as a failure. A thread running past an hour
    (`ANALYZE_TIMEOUT_MS`, `LENS_TIMEOUT_MS`) is ended too.
-5. **The console and the API** read the store. Neither calls a chain.
+5. **Spot checks** (`Worker.spots`, in the fund pass: first, then between wallets). `POST /api/spots` queues a
+   row (`Store.requestSpot`, shared while one is in flight by a unique index); `nextSpot` takes it, and
+   `SpotCheck.run` reads the receipt (`Chain.receipt`), each token's history (`Chain.tokenTransfers`, its own span),
+   the sellers' and buyers' money (`Store.moneyCovering` says which stored reads reach the block; the rest are read
+   and saved), and the possible middles' money in memory only. It then runs `analyze()` per collection, or
+   `runLens` on the transaction's trades, and `saveSpot` stores the `SpotResult`.
+6. **The console and the API** read the store. Neither calls a chain.
 
 ## Design record
 
@@ -358,12 +365,13 @@ methods share.
 | `packages/detect/src/graph.ts` | `AddressGraph` | One token's graph |
 | `packages/detect/src/methods.ts` | `MoneyGraph` (not exported) | The sorted arrays built from `Payments` |
 | `packages/detect/src/lens.ts` | `LensSearch` (not exported) | One lens run's indexes and the path being grown |
+| `packages/detect/src/spot.ts` | `SpotCheck` | The store, the chain, Etherscan and one check's deadline |
 | `apps/worker/src/migrating.ts` | `Migrating` | Whether the last migration attempt failed, and why |
 | `apps/worker/src/publish.ts` | `Publisher` | The store, the token, the repo and the folder it commits from |
 | `packages/detect/src/env.ts` | `ConfigError` | A setting is missing or malformed |
 | `packages/detect/src/stored.ts` | `StoredDataError` | Stored data is bad |
 | `packages/detect/src/store.ts` | `TooManyStreams` | A download was refused: `MAX_STREAMS` others are open |
 
-That is 18 classes. The last three `extends Error` and carry no state of their
+That is 19 classes. The last three `extends Error` and carry no state of their
 own: they exist so a caller can tell the failure by `instanceof`. They are the
 one exception to "never inheritance"; add no other subclass.

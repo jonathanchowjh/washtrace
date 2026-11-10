@@ -16,8 +16,8 @@ import { dateIn, midnight } from './zone';
 export type Params = Record<string, string | string[] | undefined>;
 export interface View { by: TradeGroupBy | null; page: number }
 
-/** Trades to a page, in the Trades list and its route. */
-export const TRADES_PAGE = 50;
+/** Trades to a page, in the Trades list and its route, so a page number means the same rows in both. */
+export const TRADES_PAGE = 20;
 
 const BYS: readonly TradeGroupBy[] = ['marketplace', 'month', 'held', 'floor', 'buyerAge'];
 const SORTS: readonly string[] = ['date', 'price', 'held', 'buyerAge', 'floor', 'token', 'marketplace', 'seller'];
@@ -163,6 +163,7 @@ export function parseView(p: Params, zone: string, own: ReadonlySet<string>): { 
     fromMs: day('from'), toMs: day('to'),
     wallet: addressOf(s('wallet') ?? ''),
     token: tokenIdOf(s('token') ?? ''),
+    ring: addressOf(s('ring') ?? ''),
     group: parseGroup(s('group'), known),
     find: findText(s('q')),
     sort: sort !== undefined && (SORTS.includes(sort) || (sort.startsWith('lens-') && known(sort.slice(5)))) ? (sort as TradeSort) : NO_FILTER.sort,
@@ -188,7 +189,7 @@ export function tradesHref(base: string, q: Partial<TradeQuery>, view: Partial<V
     ['ageover', f.buyerAgeOverS === null ? null : duration(f.buyerAgeOverS)], ['ageunder', f.buyerAgeUnderS === null ? null : duration(f.buyerAgeUnderS)],
     ['fmin', f.floorMin === null ? null : String(f.floorMin)], ['fmax', f.floorMax === null ? null : String(f.floorMax)],
     ['from', f.fromMs === null ? null : instant(f.fromMs)], ['to', f.toMs === null ? null : instant(f.toMs)],
-    ['wallet', f.wallet], ['token', f.token],
+    ['wallet', f.wallet], ['token', f.token], ['ring', f.ring],
     ['group', g === null ? null : `${g.method}.${'token' in g ? `t.${g.token}` : `w.${g.wallet}`}`],
     ['q', f.find], ['all', f.kind === 'all' ? '1' : null],
     ['sort', f.sort === NO_FILTER.sort ? null : f.sort], ['dir', f.dir === NO_FILTER.dir ? null : f.dir],
@@ -248,6 +249,7 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
     ['when', when, { fromMs: null, toMs: null }],
     ['wallet', q.wallet && `Wallet ${short(q.wallet)}`, { wallet: null }],
     ['token', q.token && `Token #${q.token}`, { token: null }],
+    ['ring', q.ring && `In the ring of ${short(q.ring)}`, { ring: null }],
     ['group', g && name(g.method) !== '' ? ('token' in g ? `Wallets in #${g.token}'s ${name(g.method)} loops` : `Wallets in ${name(g.method)} loops with ${short(g.wallet)}`) : null, { group: null }],
     ['q', q.find && `Matching “${q.find}”`, { find: null }],
     ['all', q.kind === 'all' ? 'Every change of owner' : null, { kind: 'sales' }],

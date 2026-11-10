@@ -94,6 +94,8 @@ export interface TradeQuery {
   /** [from, to), instants. */
   fromMs: number | null; toMs: number | null;
   wallet: string | null; group: GroupRef | null; token: string | null;
+  /** A ring's anchor (rings.ts): the trades its counted evidence flags. */
+  ring: string | null;
   /** Read as findOf reads it: a token number, a tx hash, a wallet, or the start of one. */
   find: string | null;
   sort: TradeSort; dir: 'asc' | 'desc';
@@ -102,7 +104,7 @@ export interface TradeQuery {
 export const NO_FILTER: TradeQuery = {
   kind: 'sales', caught: [], notCaught: [], venues: [], priceMinWei: null, priceMaxWei: null,
   heldOverS: null, heldUnderS: null, buyerAgeOverS: null, buyerAgeUnderS: null, floorMin: null, floorMax: null,
-  fromMs: null, toMs: null, wallet: null, group: null, token: null, find: null, sort: 'date', dir: 'desc',
+  fromMs: null, toMs: null, wallet: null, group: null, token: null, ring: null, find: null, sort: 'date', dir: 'desc',
 };
 
 /**

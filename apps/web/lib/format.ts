@@ -333,3 +333,12 @@ export function storedSizes(m: Manifest | null): StoredSize[] | null {
 export function storedLine(s: Pick<StoredSize, 'transfers' | 'trail'>): string {
   return `stored data: ${formatBytes(s.transfers)} transfers${s.trail === null ? '' : ` + ${formatBytes(s.trail)} money trail`}`;
 }
+
+// ---- spot checks ----
+
+/** A spot check that could not judge everything: never a clean answer. */
+export const SPOT_AT_LEAST = 'At least: some wallets or trades could not be judged, so this is not a clean result.';
+export const SPOT_CHECKING = 'Checking: reading the transaction, its tokens and its wallets’ money…';
+export const SPOT_NOT_FINAL = 'This block is not final yet; the answer may change.';
+export const SPOT_ONLY = 'This was a spot check of one transaction. Watch its collection to judge it on everything it has read.';
+export const SPOT_STORED = 'From the latest analysis of its collection.';

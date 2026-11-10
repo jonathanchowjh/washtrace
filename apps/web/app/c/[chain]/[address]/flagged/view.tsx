@@ -1,36 +1,32 @@
 import type { Metadata } from 'next';
-import { cache } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS, moneyFor, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
 import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
-import { Empty, Head, Segmented } from '@/components/ui';
+import { Empty, Head } from '@/components/ui';
 import { LensList } from '@/components/lens-lists';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
+import { collectionOf, runsOf } from '@/lib/collection-reads';
 import { NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
 import { behindLine, behindOf } from '@/lib/lens-state';
+import { listHref } from '@/lib/links';
 import { lensContext, ownLenses } from '@/lib/metrics';
 import { addressOf, chainOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { clampedPage, listView } from '@/lib/views';
+import { LIST_PAGE, clampedPage, listView } from '@/lib/views';
+import { fromParam } from '@/lib/step';
 
-/** Tokens or wallets to a page; the Trades list's page is TRADES_PAGE. */
-const PAGE = 50;
+/** Tokens or wallets to a page (LIST_PAGE); the Trades list's page is TRADES_PAGE. */
+const PAGE = LIST_PAGE;
 
 type Kind = 'tokens' | 'wallets' | 'trades';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
-
-/** The collection, read once per request: the tab title and the page both need it. */
-const collectionOf = cache((chainId: number, address: string) => store().collection(chainId, address));
-
-/** Your lenses on the collection with their runs, read once per request beside the collection. */
-const runsOf = cache((collectionId: number) => store().lensRuns(collectionId));
 
 /** The page's heading, which is also its tab title. */
 function headingOf(kind: Kind, name: string, lens: string): string {
@@ -51,7 +47,7 @@ export async function metadataOf(kind: Kind, { params, searchParams }: Props): P
   const chainId = chainOf(p.chain);
   const address = addressOf(p.address);
   const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
-  if (!c) return { title: kind === 'trades' ? 'Trades' : 'Flagged' };
+  if (!c) return { title: kind === 'trades' ? 'Trades' : kind === 'tokens' ? 'Tokens' : 'Wallets' };
   const { one } = askedOf(await searchParams);
   const own = ownLenses(await runsOf(c.id));
   return { title: headingOf(kind, c.name ?? short(c.address), lensInfo(lensKeyOf(one('method'), own), own)!.name) };
@@ -106,13 +102,9 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   ]);
   // The list's own count, never the analysis totals: those also count a token or wallet whose every flagged trade is uncounted.
   const of = unfound?.total ?? rows?.total ?? 0;
-  /** The flagged page. Another kind starts at its defaults; the same kind keeps its order and Find unless told. */
-  const href = (over: { method?: string; kind?: string; page?: number; sort?: string; q?: string | null }) => {
-    const k = over.kind ?? list;
-    const sort = over.sort ?? (k === list ? lv.sort : 'caught');
-    const q = over.q !== undefined ? over.q : k === list ? lv.find : null;
-    return `${base}/flagged?method=${over.method ?? method}&kind=${k}${sort === 'caught' ? '' : `&sort=${sort}`}${q === null ? '' : `&q=${encodeURIComponent(q)}`}${(over.page ?? 1) > 1 ? `&page=${over.page}` : ''}`;
-  };
+  /** This list with its lens, order, Find or page changed; another lens keeps the order and Find. */
+  const href = (over: { method?: string; page?: number; sort?: string }) =>
+    listHref(base, list, { method: over.method ?? method, sort: over.sort ?? lv.sort, q: lv.find, page: over.page });
 
   const trades = kind === 'trades' ? await tradesOf(s, c, query, view.by, view.page, ctx) : null;
   // The lenses of yours in view whose figures are behind, said above the list: every one Trades draws a column for, or the list's own.
@@ -130,13 +122,12 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
     <>
       <Head
         title={headingOf(kind, name, lens.name)}
-        crumb={[{ href: '/', label: 'Collections' }, { href: `${base}?method=${method}`, label: name }]}
         sub={kind === 'trades'
           ? `${query.kind === 'all' ? 'Every change of owner' : 'Every sale'}, filtered by what you ask: a lens, a marketplace, a price, a wallet. Open a date to see the trade itself.`
           : `${num(of)} in all. Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <nav aria-label="Lens" className="flex flex-wrap gap-1.5">
           {[...METHODS, ...Object.keys(own) as LensKey[]].map((m) => (
             <Link key={m} href={lensHref(m)} aria-current={lensOn(m) ? 'page' : undefined}
@@ -145,10 +136,6 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
             </Link>
           ))}
         </nav>
-        <Segmented label="Show tokens, wallets or trades" items={(['tokens', 'wallets', 'trades'] as const).map((k) => ({
-          key: k, href: k === 'trades' ? tradesHref(base, kind === 'trades' ? query : {}, { by: view.by }) : href({ kind: k }),
-          label: k === 'tokens' ? 'Tokens' : k === 'wallets' ? 'Wallets' : 'Trades', current: k === kind,
-        }))} />
       </div>
 
       {behind ? <p className="mt-4 max-w-3xl text-sm text-muted-foreground">{behind}</p> : null}
@@ -179,7 +166,8 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
               <GroupBy base={base} q={query} view={view} zone={zone} own={own} groups={trades.groups} ran={trades.ran} />
               {trades.total === 0 ? null : (
                 <>
-                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money} />
+                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money}
+                    from={fromParam('trades', new URL(tradesHref(base, query, { by: view.by }), 'http://x.invalid').searchParams, trades.page)} />
                   <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label="trades" />
                   <p className="mt-3 text-sm"><a href={csv} className="font-medium hover:underline">Download CSV ↓</a></p>
                 </>
@@ -196,6 +184,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
               kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of}
               sort={lv.sort} sortHref={(sort) => href({ sort })} find={lv.find} findParam="q"
               pager={{ page: rows.page, size: PAGE, href: (n) => href({ page: n }) }} empty={`${lens.name} flags no ${list === 'tokens' ? 'token' : 'wallet'}.`}
+              from={fromParam(list, new URL(href({}), 'http://x.invalid').searchParams, rows.page)}
             />
           )}
         </div>

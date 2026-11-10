@@ -110,8 +110,62 @@ curl http://localhost:8080/api/transfers/31337/0x083d0b4dc33d0b699b212e551c5195e
 }
 ```
 
-A transaction washtrace has not read is 404, never `washTrade: false`. Every
-route, with its status codes and keys, is in [doc/api.md](doc/api.md).
+A transaction washtrace has not read is 404, never `washTrade: false`.
+
+### Not watched yet?
+
+Ask for a **spot check**. It reads only that transaction, so you don't have to
+watch its whole collection: the transaction's receipt, each of its tokens'
+histories, and the money of its sellers and buyers and of any wallet that
+paid or was paid by both. In the console, the transaction's page shows a
+**Check this transaction** button wherever washtrace has not read or judged
+it, and pasting a hash nothing watched matches into search links to that
+page. Over the API:
+
+```sh
+curl -X POST http://localhost:8080/api/spots -H 'content-type: application/json' \
+  -d '{"chainId": 31337, "tx": "0xfe7b002d55748ec99d7b7429a23fb37ea94b8a0d6b536a5ad711ecf634ffacfc"}'
+# {"id":1,"status":"queued","reused":false}
+
+curl http://localhost:8080/api/spots/1
+```
+
+```jsonc
+{
+  "id": 1,
+  "status": "done",          // queued, running, done or failed (with "error")
+  "result": {
+    "washTrade": true,
+    "methods": ["AC"],
+    "notRun": ["AU"],        // a spot check never runs Money loops back
+    "atLeast": false,        // true: some wallets could not be judged, so this is not clean
+    "finalized": true,
+    "source": "spot",
+    "transfers": [{
+      "tokenId": "114",
+      "flags": { "AC": { "kind": "pair", "middle": "0x8318…67d8", "flowTx": "0x5998…445e" } }
+    }]
+  }
+}
+```
+
+That is the demo's sale of #114, answered 3 seconds after it was asked, with
+the same funder a full read names. A transaction a watched collection has
+already judged is answered at once instead, with `"source": "watched"`. Add
+`"lens": "L7"` to judge with a lens of yours instead of the built-ins.
+
+A spot check is narrower than a full read, and says so:
+
+- **Round trips** reads the token's whole history to the finalized head, so it
+  gives the answer a full read gives with the default rules.
+- **Linked wallets** finds a link a full read would. It can't count how many
+  of the collection's wallets a middle wallet is linked to, so a middle that
+  moved money with more than 20 wallets makes the answer `atLeast`, never
+  clean.
+- **Money loops back** needs money followed several wallets out, so it is not
+  run. Neither is a lens using Other tokens or the collection's other tokens.
+
+Every route, with its status codes and keys, is in [doc/api.md](doc/api.md).
 
 ## How it works
 

@@ -1,6 +1,6 @@
 import {
   AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, SliceOffsetOutOfBoundsError,
-  createPublicClient, http, HttpRequestError, parseAbi, RpcError, RpcRequestError, WebSocketRequestError, type Log, type PublicClient,
+  createPublicClient, http, HttpRequestError, parseAbi, RpcError, RpcRequestError, TransactionReceiptNotFoundError, WebSocketRequestError, type Log, type PublicClient,
 } from 'viem';
 import { ZERO } from './graph.js';
 import { TRANSFER, tagSales } from './marketplaces.js';
@@ -150,15 +150,77 @@ export class Chain {
     }
   }
 
-  private async tag(transfers: Transfer[], collection: string): Promise<void> {
-    const hashes = [...new Set(transfers.map((t) => t.txHash))];
+  /**
+   * Every transfer of one token of `collection` from `from` to `to`, as
+   * sales where a marketplace filled them: what a spot check reads instead
+   * of the whole collection. Filtered to the token, a query returns few
+   * logs, so a refusal is the provider's cap on the range: it asks for the
+   * whole range first, halves on a refusal, and never grows back. `width`
+   * is what one check learns: a query answered after a refusal sets it, so
+   * the check's later tokens start there, and an outage, refused down to
+   * one block, teaches nothing. It is the caller's, not the Chain's: the
+   * worker keeps a Chain for its life, and one bad minute would narrow every
+   * check after it. Nor is it `span`, learned for whole collections, which a
+   * token's narrow query would teach a width a collection's query cannot
+   * take. Past `until` (epoch milliseconds) it stops with a sentence.
+   */
+  async tokenTransfers(
+    collection: string, tokenId: string, from: number, to: number, until = Infinity, width = { span: Infinity },
+  ): Promise<Transfer[]> {
+    const topic = `0x${BigInt(tokenId).toString(16).padStart(64, '0')}`;
+    const transfers: Transfer[] = [];
+    let span = width.span;
+    let refused = false;
+    while (from <= to) {
+      if (Date.now() > until) {
+        throw new Error(`Reading the history of token ${tokenId} took longer than a spot check allows: this RPC answers only narrow log queries.`);
+      }
+      const through = Math.min(to, from + span - 1);
+      let logs: RawLog[];
+      try {
+        logs = await this.client.request({
+          method: 'eth_getLogs',
+          params: [{ address: collection as `0x${string}`, topics: [TRANSFER, null, null, topic as `0x${string}`], fromBlock: hex(from), toBlock: hex(through) }],
+        }) as unknown as RawLog[];
+      } catch (err) {
+        if (through === from || isTransient(err)) throw err;
+        span = Math.floor((through - from + 1) / 2);
+        refused = true;
+        continue;
+      }
+      if (refused) width.span = Math.min(width.span, span);
+      transfers.push(...logs.filter((l) => l.topics.length === 4 && !l.removed).map(toTransfer));
+      from = through + 1;
+    }
+    await this.tag(transfers, collection);
+    return transfers;
+  }
+
+  /** One transaction's block, whether it reverted, and its logs; null when the node has no such transaction. */
+  async receipt(tx: string): Promise<{ blockNumber: number; reverted: boolean; logs: readonly Log[] } | null> {
+    try {
+      const r = await this.client.getTransactionReceipt({ hash: tx as `0x${string}` });
+      return { blockNumber: Number(r.blockNumber), reverted: r.status === 'reverted', logs: r.logs };
+    } catch (err) {
+      if (err instanceof TransactionReceiptNotFoundError) return null;
+      throw err;
+    }
+  }
+
+  /** The logs of each of `txs`, by lowercase hash, RECEIPT_WIDTH asked at once. */
+  async receipts(txs: readonly string[]): Promise<Map<string, readonly Log[]>> {
+    const hashes = [...new Set(txs)];
     const logsByTx = new Map<string, readonly Log[]>();
     for (let i = 0; i < hashes.length; i += RECEIPT_WIDTH) {
       const receipts = await Promise.all(hashes.slice(i, i + RECEIPT_WIDTH).map((hash) =>
         this.client.getTransactionReceipt({ hash: hash as `0x${string}` })));
       for (const r of receipts) logsByTx.set(r.transactionHash.toLowerCase(), r.logs);
     }
-    tagSales(transfers, logsByTx, collection);
+    return logsByTx;
+  }
+
+  private async tag(transfers: Transfer[], collection: string): Promise<void> {
+    tagSales(transfers, await this.receipts(transfers.map((t) => t.txHash)), collection);
   }
 }
 

@@ -11,6 +11,7 @@ import { LENSES, plural, short } from '@/lib/format';
 import { coverage, storedOnly } from '@/lib/coverage';
 import { range, type Range } from '@/lib/metrics';
 import { tradesHref } from '@/lib/trades-url';
+import { lensTabHref } from '@/lib/links';
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
@@ -19,7 +20,7 @@ export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_
 function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: ReactNode; href: string }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
   const end = (text: string, lens: Range['low']) => (
-    <Link href={`${href}?method=${lens}#evidence`} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
+    <Link href={lensTabHref(href, lens, { evidence: true })} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
   );
   return (
     <div className="min-w-0">

@@ -4,14 +4,17 @@ import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
+import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
+import { WhereItSits } from '@/components/where-it-sits';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
+import { EvidenceGlyph, VerdictChip } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
-import { tokenLinks } from '@/lib/links';
+import { lensTabHref, tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
@@ -22,6 +25,11 @@ import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
+import { Suspense } from 'react';
+import { RingChips } from '@/components/rings';
+import { moneyFor } from '@washtrace/detect';
+import { StepLine } from '@/components/step-line';
+import { collectionOf } from '@/lib/collection-reads';
 
 /** Transfers on one page of the table; the graph still draws every one. */
 const PAGE = 100;
@@ -30,7 +38,7 @@ const SHOWS = ['all', 'flagged', 'sales'] as const;
 type Show = (typeof SHOWS)[number];
 const SHOW_NAME: Record<Show, string> = { all: 'All', flagged: 'Flagged', sales: 'Sales' };
 
-type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string }> };
+type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string; from?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { tokenId } = await params;
@@ -109,12 +117,16 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const rowOf = new Map(transfers.map((t, i) => [`${t.txHash}:${t.logIndex}`, i + 1]));
   const ownLoops = drawing.loops.slice(why.length);
 
+  // The list it was opened from, if any: its stepper reads that list in a Suspense of its own.
+  const c = sp.from === undefined ? null : await collectionOf(chainId, address);
   return (
     <>
+      {c ? <Suspense fallback={null}><StepLine c={c} from={sp.from} id={tokenId} /></Suspense> : null}
       <Head
+        kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
-        crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]}
         sub={`${chainName(chainId)} · ${transfers.length} transfers, in the order the chain recorded them`}
+        part={<><VerdictChip tone={washTrade === null ? null : tone} /><Suspense fallback={null}><RingChips id={collection.id} base={base} money={moneyFor(chainId)} of={{ tokenId }} /></Suspense></>}
       >
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
@@ -134,7 +146,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : (
           <>
             {flagged} of {transfers.length} transfers flagged, by {lensList(lenses)}.{' '}
-            They count toward <Link href={`${base}?method=${lenses[0]}`} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
+            They count toward <Link href={lensTabHref(base, lenses[0]!)} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
           </>
         )}
         {ownLine}
@@ -148,6 +160,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
         ) : null}
       </Answer>
 
+      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} label="this token's" /></Suspense>
+      <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} of={{ tokenId }} wallets={walletRoles(transfers, flows, middles)} txs={railTxs(transfers, flows)} /></Suspense>
+
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}
         graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
@@ -156,11 +171,11 @@ export default async function TokenPage({ params, searchParams }: Props) {
         items={[
           ...why.map((r, i) => ({
             key: drawing.loops[i]!.key,
-            body: because(r.witness, chainId),
+            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId, base)}</span></span>,
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={`${base}?method=${m}#evidence`} />)}
+                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
               </>
             ),
           })),
@@ -174,7 +189,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
               meta: (
                 <>
                   {row === undefined ? null : <span>transfer <RowLinks rows={[row]} rowHref={rowHref} /></span>}
-                  <LensName m={key} own={ownLenses} className="text-xs" href={`${base}?method=${key}#evidence`} />
+                  <LensName m={key} own={ownLenses} className="text-xs" href={lensTabHref(base, key, { evidence: true })} />
                 </>
               ),
             };
@@ -195,7 +210,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <Empty>None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</Empty>
         ) : (
           <>
-            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} own={ownByRow} names={ownLenses} />
+            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} within={base} own={ownByRow} names={ownLenses} />
             {pageCount > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}
@@ -215,7 +230,7 @@ async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
   const name = c.name ?? short(c.address);
   return (
     <>
-      <Head title={`${name} #${tokenLabel(tokenId)}`} crumb={[{ href: '/', label: 'Collections' }, { href: base, label: name }]} />
+      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} />
       <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
       <MoreLink href={base}>Back to {name}</MoreLink>
     </>

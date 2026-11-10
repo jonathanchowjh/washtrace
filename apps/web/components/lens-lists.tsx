@@ -10,6 +10,9 @@ import { Empty } from './ui';
 import { DOT } from './methods';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
+import { HoverCard } from './hover-card';
+import { FunnelIcon } from './kit';
+import { cardSrc, withFrom } from '@/lib/links';
 
 /**
  * The tokens or wallets one lens flagged trades of, each saying why in words,
@@ -20,7 +23,7 @@ import { Wallet } from './transfers';
  * Find box that keeps every other parameter; below it, its pages. A Find that
  * names nothing this list holds says so.
  */
-export function LensList({ kind, method, own = {}, base, chainId, rows, total, of, sort, sortHref, find, findParam, pager, empty }: {
+export function LensList({ kind, method, own = {}, base, chainId, rows, total, of, sort, sortHref, find, findParam, pager, empty, from }: {
   kind: 'tokens' | 'wallets'; method: LensKey;
   /** Your lenses by key, for the name of a list that is one of them. */
   own?: Lenses; base: string; chainId: number; rows: TokenLine[] | WalletLine[]; total: number;
@@ -28,6 +31,8 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
   of: number;
   sort: string; sortHref: (s: string) => string; find: string | null; findParam: string;
   pager: { page: number; size: number; href: (p: number) => string; param?: string }; empty: string;
+  /** The list as an item's `from` (lib/step.ts), so an item opened from it can step to its neighbours. */
+  from?: string;
 }) {
   const lens = lensInfo(method, own);
   if (lens === null) return null;
@@ -60,6 +65,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
         </nav>
         <form action={`${first.pathname}${first.hash}`} method="get" role="search" className="flex items-center gap-1.5">
           {kept.map(([k, v], i) => <input key={i} type="hidden" name={k} value={v} />)}
+          <FunnelIcon className="text-muted-foreground" />
           <input
             type="search" name={findParam} defaultValue={find ?? ''} placeholder={kind === 'tokens' ? 'Find a token number' : 'Find a wallet (0x…)'}
             aria-label={kind === 'tokens' ? `Find a token ${lens.name} flagged, by its number` : `Find a wallet ${lens.name} flagged, by its address or the start of it`}
@@ -81,8 +87,8 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ? (rows as TokenLine[]).map((l, i) => (
               <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
                 // A lens of yours opens the token page with its loops lit, down at the why section.
-                name={<Link href={yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link>}
-                loops={`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`}
+                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link></HoverCard>}
+                loops={withFrom(`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`, from)}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
                 caught={tradesHref(base, { kind: 'all', caught: [method], token: l.tokenId })}
@@ -91,7 +97,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ))
             : (rows as WalletLine[]).map((l, i) => (
               <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
-                name={<Wallet chainId={chainId} address={l.address} />}
+                name={<Wallet chainId={chainId} address={l.address} within={base} from={from} />}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}
                 trades={tradesHref(base, { kind: 'all', wallet: l.address })}

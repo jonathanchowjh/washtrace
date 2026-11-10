@@ -46,7 +46,7 @@ SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM 
        extract(epoch FROM c.stored_through_time)::float8 AS stored_through, extract(epoch FROM c.restore_retry_at)::float8 AS restore_retry,
        extract(epoch FROM c.analysis_retry_at)::float8 AS analysis_retry, extract(epoch FROM c.download_retry_at)::float8 AS download_retry,
        (SELECT count(*)::int FROM washtrace.transfers t WHERE t.collection_id = c.id) AS transfer_count,
-       a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches, a.loops,
+       a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches, a.loops, a.rings,
        extract(epoch FROM a.ran_at)::float8 AS ran
 FROM washtrace.collections c
 LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true`;
@@ -63,7 +63,7 @@ export function toAnalysis(r: any, id: unknown): AnalysisRow {
   return {
     id: Number(id), ranAt: r.ran * 1000, tookMs: r.took_ms, throughBlock: r.through_block === null ? null : Number(r.through_block),
     totals: r.totals, missingData: r.missing_data, fundedWallets: r.funded_wallets, wallets: r.wallets, truncatedSearches: r.truncated_searches,
-    loops: r.loops ?? null,
+    loops: r.loops ?? null, rings: r.rings ?? null,
   };
 }
 

@@ -7,10 +7,13 @@ import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
 import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
-import { hitRow, parseSearch, searchArgs, SEARCH_LIMIT } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, type Scope } from '@/lib/search';
+import { KindIcon, type Kind } from '@/components/kit';
 import { store } from '@/lib/store';
+import { chainName } from '@/lib/chains';
+import { configFromSources } from '@/lib/settings';
 
-type Props = { searchParams: Promise<{ q?: string; kind?: string; page?: string }> };
+type Props = { searchParams: Promise<{ q?: string; kind?: string; page?: string; scope?: string }> };
 
 const titleOf = (q: string) => (q === '' ? 'Search' : `Search: “${q}”`);
 
@@ -39,19 +42,29 @@ export default async function SearchPage({ searchParams }: Props) {
   const q = (sp.q ?? '').trim();
   const parsed = parseSearch(q);
   const { only, page } = searchArgs(sp);
-  const head = <Head title={titleOf(q)} crumb={[{ href: '/', label: 'Collections' }]} />;
+  // A scope names a watched collection, or narrows nothing.
+  const asked = scopeOf(sp.scope);
+  let c: Awaited<ReturnType<ReturnType<typeof store>['collection']>> = null;
+  try {
+    c = asked === null ? null : await store().collection(asked.chainId, asked.address);
+  } catch { /* the search below says the store is down */ }
+  const scope: Scope | null = c === null ? null : { chainId: c.chainId, address: c.address };
+  const here = (over: { kind?: SearchKind; page?: number; unscoped?: boolean }) =>
+    `/search?q=${encodeURIComponent(q)}${scope && !over.unscoped ? `&scope=${scopeParam(scope)}` : ''}${over.kind ? `&kind=${over.kind}` : ''}${(over.page ?? 1) > 1 ? `&page=${over.page}` : ''}`;
+  const head = (
+    <Head title={titleOf(q)} crumb={[{ href: '/', label: 'Collections' }]}
+      part={c === null ? undefined : <Link href={here({ unscoped: true })} title="Search every collection" className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium hover:bg-muted"><KindIcon kind="collection" className="size-3.5" />In {c.name ?? short(c.address)} <span aria-hidden>✕</span></Link>} />
+  );
   if (parsed.kind === 'empty') return <>{head}<Empty>{HINT}</Empty></>;
 
   const offset = only ? (page - 1) * SEARCH_LIMIT : 0;
   let hits: SearchHits;
   try {
-    hits = await store().search(parsed, { offset, only });
+    hits = await store().search(parsed, { offset, only, scope: c === null ? undefined : { id: c.id, chainId: c.chainId } });
   } catch {
     return <>{head}<Problem title={STORE_DOWN}>It could not look up “{q}”.</Problem></>;
   }
-  const here = (over: { kind?: SearchKind; page?: number }) =>
-    `/search?q=${encodeURIComponent(q)}${over.kind ? `&kind=${over.kind}` : ''}${(over.page ?? 1) > 1 ? `&page=${over.page}` : ''}`;
-  const kinds = (['collections', 'tokens', 'wallets', 'trades'] as const).filter((k) => hits[k].length > 0);
+  const kinds = kindsFor(parsed).filter((k) => hits[k].length > 0);
 
   if (kinds.length === 0) {
     if (only && page > 1) {
@@ -61,12 +74,20 @@ export default async function SearchPage({ searchParams }: Props) {
     const address = addressOf(q);
     const tx = txOf(q);
     const outside = address ? explorerAddress(1, address) : tx ? explorerTx(1, tx) : null;
+    // A hash no watched collection holds can still be spot checked, on any chain the worker has an RPC for.
+    const checkOn = tx ? configFromSources(...await Promise.all([store().sources(), store().settings()])).chains : [];
     return (
       <>
         {head}
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
           {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
+          {checkOn.length > 0 ? (
+            <> Check it on{' '}
+              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={`/tx/${c}/${tx}`}>{chainName(c)}</Link></span>)}
+              : washtrace reads that one transaction, without watching its collection.
+            </>
+          ) : null}
         </Empty>
       </>
     );
@@ -78,7 +99,7 @@ export default async function SearchPage({ searchParams }: Props) {
       {kinds.map((k) => (
         <Section key={k} title={`${SECTIONS[k].title} (${hits.more[k] ? `${SEARCH_LIMIT}+` : hits[k].length})`}>
           <ul className="max-w-3xl divide-y rounded-lg border bg-card">
-            {hits[k].map((_, i) => <Row key={i} hits={hits} kind={k} i={i} />)}
+            {hits[k].map((_, i) => <Row key={i} hits={hits} kind={k} i={i} scope={scope} />)}
           </ul>
           {/* The store cannot count the rest, so with more behind this page the total is only a lower bound. */}
           {only ? <Pager total={offset + hits[k].length} open={hits.more[k]} page={page} size={SEARCH_LIMIT} href={(n) => here({ kind: only, page: n })} label={SECTIONS[k].all} /> : null}
@@ -93,13 +114,16 @@ export default async function SearchPage({ searchParams }: Props) {
   );
 }
 
+/** Each kind of hit drawn as the thing it opens: a trade opens its transaction. */
+const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'token', wallets: 'wallet', trades: 'transaction' };
+
 /** One hit: a link whose line says what it is, with its address beside it. */
-function Row({ hits, kind, i }: { hits: SearchHits; kind: SearchKind; i: number }) {
-  const { href, line, address } = hitRow(hits, kind, i);
+function Row({ hits, kind, i, scope }: { hits: SearchHits; kind: SearchKind; i: number; scope: Scope | null }) {
+  const { href, line, address } = hitRow(hits, kind, i, scope);
   return (
     <li>
-      <Link href={href} className="flex flex-wrap items-baseline justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
-        <span className="font-medium text-foreground">{line}</span>
+      <Link href={href} className="flex flex-wrap items-center justify-between gap-x-4 px-3 py-2 text-sm hover:bg-muted">
+        <span className="flex items-center gap-2 font-medium text-foreground"><KindIcon kind={KIND[kind]} className="text-muted-foreground" />{line}</span>
         <span className="font-mono text-xs text-muted-foreground">{short(address)}</span>
       </Link>
     </li>

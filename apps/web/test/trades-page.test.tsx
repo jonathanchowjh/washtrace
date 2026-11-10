@@ -48,15 +48,24 @@ async function dom(sp: Record<string, string | string[]> = {}): Promise<HTMLElem
   const { default: Trades } = await import('@/app/c/[chain]/[address]/trades/page');
   return render(await Trades({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
 }
-async function flaggedDom(sp: Record<string, string | string[]>): Promise<HTMLElement> {
-  const { default: Flagged } = await import('@/app/c/[chain]/[address]/flagged/page');
-  return render(await Flagged({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).container;
+/** The Tokens or Wallets list for `kind`; any other kind is the old flagged page, which only redirects. */
+async function flaggedDom({ kind, ...rest }: Record<string, string | string[]>): Promise<HTMLElement> {
+  const params = Promise.resolve({ chain: '1', address: ADDR });
+  if (kind !== 'tokens' && kind !== 'wallets') {
+    const { default: Old } = await import('@/app/c/[chain]/[address]/flagged/page');
+    await Old({ params, searchParams: Promise.resolve({ ...rest, ...(kind === undefined ? {} : { kind }) }) });
+    throw new Error('the old flagged page rendered instead of redirecting');
+  }
+  const { default: List } = kind === 'tokens' ? await import('@/app/c/[chain]/[address]/tokens/page') : await import('@/app/c/[chain]/[address]/wallets/page');
+  return render(await List({ params, searchParams: Promise.resolve(rest) })).container;
 }
 async function page(sp: Record<string, string | string[]> = {}): Promise<string> { return (await dom(sp)).textContent ?? ''; }
 // The DOM's selector engine reads `?` and `&` in an attribute value badly, so links are found by comparing the attribute.
 /** Every text, aria-label and title in `c`: a lens key may show in none of them. */
 const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-label],[title]')].flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')])].join('\n');
 const linkTo = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
+/** A trade's link, whatever list it says it came from (`?from=`, for stepping). */
+const tradeLink = (c: HTMLElement, href: string) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href')?.split('?')[0] === href);
 const hrefs = (c: HTMLElement, sel: string) => [...c.querySelectorAll(sel)].map((a) => a.getAttribute('href'));
 
 describe('the trades page', () => {
@@ -88,7 +97,7 @@ describe('the trades page', () => {
     expect(el.textContent).toContain('2 trades match');
     expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops back (not counted)', 'Linked wallets']));
     expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe(' (not counted)');
-    expect(el.querySelector('a[href="/tx/1/0xs2"]')).not.toBeNull();
+    expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
   });
 
@@ -100,7 +109,7 @@ describe('the trades page', () => {
     expect((q as { kind: string }).kind).toBe('sales');
     expect(ctx).toMatchObject({ ran: ['A'], zone: 'UTC' });
     expect((ctx as { money: Set<string> }).money.has('')).toBe(true);
-    expect([limit, offset]).toEqual([50, 0]);
+    expect([limit, offset]).toEqual([20, 0]);
     expect(state.calls.count[0]![2]).toBe(ctx);
     expect(state.calls.groups[0]![2]).toBe('marketplace');
     expect(state.calls.groups[0]![3]).toMatchObject({ ran: ['A'] });
@@ -210,7 +219,7 @@ describe('the trades page', () => {
   it('a row with no block time still opens its trade, and the count line comes before the groups', async () => {
     state.rows = [row('0xs1', { blockTime: null })];
     const el = await dom({ by: 'marketplace' });
-    expect(linkTo(el, '/tx/1/0xs1')?.textContent).toBe('Unknown time');
+    expect(tradeLink(el, `${BASE}/tx/0xs1`)?.textContent).toBe('Unknown time');
     const text = el.textContent!;
     expect(text.indexOf('trades match')).toBeLessThan(text.indexOf('Not a marketplace sale'));
   });
@@ -243,7 +252,7 @@ describe('the trades page', () => {
     const el = await dom({ page: '99999' });
     expect(el.textContent).toContain('Page');
     expect(el.textContent).toContain('101–120 of 120 trades');
-    expect(state.calls.trades[0]!.slice(3)).toEqual([50, 100]);
+    expect(state.calls.trades[0]!.slice(3)).toEqual([20, 100]);
   });
 
   it('junk in the URL is dropped and shows the unfiltered list', async () => {
@@ -265,11 +274,8 @@ describe('the trades page', () => {
     expect(a?.getAttribute('href')).toBe(`/api/collections/1/${ADDR}/trades?format=csv&caught=A`);
   });
 
-  it('the Tokens and Wallets tabs carry the first caught lens; a lens link replaces the caught filter', async () => {
+  it('a lens link replaces the caught filter', async () => {
     const el = await dom({ caught: 'AC,A' });
-    const tab = (name: string) => [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === name)?.getAttribute('href');
-    expect(tab('Tokens')).toBe(`${BASE}/flagged?method=A&kind=tokens`);
-    expect(tab('Wallets')).toBe(`${BASE}/flagged?method=A&kind=wallets`);
     const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets');
     expect(lens?.getAttribute('href')).toBe(`${BASE}/trades?caught=AC`);
   });
@@ -332,7 +338,7 @@ describe('the trades page', () => {
     const cells = [...el.querySelectorAll('tbody td[data-measure]')];
     expect(cells.map((td) => td.textContent)).toEqual(['2 h', '3 d', '1.25×']);
     expect(cells.every((td) => td.querySelector('a') === null)).toBe(true);
-    expect([...el.querySelectorAll('tbody a')].find((a) => a.textContent === '1.5 ETH')?.getAttribute('href')).toBe('/tx/1/0xs1');
+    expect([...el.querySelectorAll('tbody a')].find((a) => a.textContent === '1.5 ETH')?.getAttribute('href')?.split('?')[0]).toBe(`${BASE}/tx/0xs1`);
   });
 
   it('a midnight bound goes back as a day field, not a hidden one', async () => {
@@ -389,7 +395,7 @@ describe('the trades page', () => {
       const boxes = [...el.querySelectorAll('fieldset')].find((f) => f.querySelector('legend')?.textContent === 'Flagged by')!;
       expect([...boxes.querySelectorAll('label')].map((l) => l.textContent)).toEqual(['Round trips', 'Money loops back', 'Linked wallets', 'Blur 3-hop']);
       expect([...el.querySelectorAll('thead th')].map((t) => t.textContent).filter((t) => t === 'Blur 3-hop')).toHaveLength(2);
-      expect(el.querySelector('i[aria-label="Flagged by Blur 3-hop"]')?.className).toContain('bg-flow');
+      expect(el.querySelector('[aria-label="Flagged by Blur 3-hop"] i')?.className).toContain('bg-flow');
       expect(el.textContent).toContain('Flagged by Blur 3-hop');
       expect(reads(el)).not.toMatch(/\bL7\b/);
       expect(state.calls.trades[0]![2]).toMatchObject({ ran: ['A', 'AU', 'AC', 'L7'] });
@@ -417,11 +423,11 @@ describe('the trades page', () => {
       state.rows = [row('0xs1', { blockNumber: 8, lenses: ['A', 'L7'] }), row('0xs2', { blockNumber: 9, lenses: ['A'] })];
       const el = await dom();
       const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.lastElementChild!);
-      expect(cells[0]!.querySelector('i[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
+      expect(cells[0]!.querySelector('[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
       expect(cells[1]!.textContent).toBe('Not judged yet');
       expect(cells[1]!.querySelector('[aria-label="Not flagged"]')).toBeNull();
       // The built-ins judged it: their cells read as before.
-      expect(el.querySelectorAll('tbody tr')[1]!.querySelector('i[aria-label="Flagged by Round trips"]')).not.toBeNull();
+      expect(el.querySelectorAll('tbody tr')[1]!.querySelector('[aria-label="Flagged by Round trips"]')).not.toBeNull();
     });
 
     it('takes a group\'s share of your lens over the trades it judged there, not every trade in the group', async () => {
@@ -461,19 +467,12 @@ describe('the trades page', () => {
       expect(state.calls.trades[0]![1]).toMatchObject({ sort: 'date', dir: 'desc' });
     });
 
-    it('the Tokens tab for a filter on your lens carries its key in the link', async () => {
-      mine();
-      const el = await dom({ caught: 'L7' });
-      const tab = [...el.querySelectorAll('nav[aria-label="Show tokens, wallets or trades"] a')].find((a) => a.textContent === 'Tokens');
-      expect(tab?.getAttribute('href')).toBe(`${BASE}/flagged?method=L7&kind=tokens`);
-    });
-
     it('the tokens list of your lens names it in the heading and the tab title', async () => {
       mine();
       const el = await flaggedDom({ kind: 'tokens', method: 'L7' });
       expect(el.textContent).toContain('Tokens flagged by Blur 3-hop');
-      const { generateMetadata } = await import('@/app/c/[chain]/[address]/flagged/page');
-      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ kind: 'tokens', method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });
+      const { generateMetadata } = await import('@/app/c/[chain]/[address]/tokens/page');
+      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });
     });
   });
 });

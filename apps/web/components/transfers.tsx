@@ -2,20 +2,27 @@ import Link from 'next/link';
 import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import type { LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
-import { explorerTx } from '@/lib/links';
+import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/time';
+import { HoverCard } from '@/components/hover-card';
 
-/** A wallet, linked to its page; the zero address is a mint or a burn, not a wallet. */
-export function Wallet({ chainId, address }: { chainId: number; address: string }) {
+/**
+ * A wallet, linked to its page: under `within`'s tabs when it is given (a
+ * collection's base), so a link from inside a collection stays inside it. The
+ * zero address is a mint or a burn, not a wallet.
+ */
+export function Wallet({ chainId, address, within, from }: { chainId: number; address: string; within?: string; from?: string }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  return <Link href={`/w/${chainId}/${address}`} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  // Inside a collection there is a card to show: its trades there and its ring.
+  return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }
 
-/** Why one method flagged one transfer, in a sentence. */
-export function because(w: Witness, chainId: number): React.ReactNode {
+/** Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do. */
+export function because(w: Witness, chainId: number, within?: string): React.ReactNode {
   if (w.kind === 'scc') return `${w.wallets.length} wallets pass it around in ${w.cycles} cycles`;
   if (w.kind === 'scc+flow') {
     return `${w.wallets.length} wallets in a cycle closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
@@ -24,8 +31,8 @@ export function because(w: Witness, chainId: number): React.ReactNode {
   const tx = explorerTx(chainId, w.flowTx);
   return (
     <>
-      <Wallet chainId={chainId} address={a} /> and <Wallet chainId={chainId} address={b} />{' '}
-      {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} /></>}
+      <Wallet chainId={chainId} address={a} within={within} /> and <Wallet chainId={chainId} address={b} within={within} />{' '}
+      {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} within={within} /></>}
       {tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}
     </>
   );
@@ -63,10 +70,11 @@ const CHIP = { cycle: 'bg-cycle', money: 'bg-money', apart: 'bg-muted-foreground
  * row its place in the whole chain order. A lens chip opens that lens's tab of
  * the row's collection, or of `base` when the rows carry none (one token's page).
  * `own` gives the lenses of yours that flag a row, by `txHash:logIndex`, chipped
- * after the built-ins' and named from `names`.
+ * after the built-ins' and named from `names`. `within` keeps wallet and
+ * trade links under that collection's tabs, as Wallet's.
  */
-export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, own, names = {} }: {
-  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string;
+export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, within, own, names = {} }: {
+  chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string; within?: string;
   own?: ReadonlyMap<string, readonly LensKey[]>; names?: Lenses;
 }) {
   if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
@@ -96,7 +104,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
               <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
                 {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
                 <td className="px-3 py-2 whitespace-nowrap">
-                  <Link className="text-xs tabular-nums hover:underline" href={`/tx/${chainId}/${t.txHash}`} title="Open this trade">
+                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} title="Open this trade">
                     {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
                   {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
@@ -108,10 +116,10 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                     </Link>
                   </td>
                 ) : null}
-                <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} /> → <Wallet chainId={chainId} address={t.to} /></td>
+                <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={`/tx/${chainId}/${t.txHash}`} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
+                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -121,7 +129,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="px-3 py-2 text-xs">{first ? because(first, chainId) : <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-3 py-2 text-xs">{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
               </tr>
             );
           })}
@@ -137,5 +145,5 @@ function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) 
   if (info === null) return null;
   const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', CHIP[info.tone]);
   return base === undefined ? <span className={cls}>{info.name}</span>
-    : <Link href={`${base}?method=${m}#evidence`} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
+    : <Link href={lensTabHref(base, m, { evidence: true })} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
 }

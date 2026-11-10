@@ -61,6 +61,7 @@ vi.mock('@/lib/store', () => ({
       return { id, chainId: 1, address, name: address === A1 ? 'First' : 'Second', latest: { id: 1, throughBlock: state.through[id], truncatedSearches: state.truncatedSearches, totals } };
     },
     transaction: async () => state.tx,
+    lenses: async () => state.lenses.map((l) => ({ id: l.id, key: `L${l.id}` as const, name: l.name, rule: l.rule, version: l.version, createdAt: 0, updatedAt: 0 })),
     token: async (id: number, tokenId: string) => state.tokens[`${id === 1 ? A1 : A2}/${tokenId}`] ?? [],
     flowsAmong: flows,
     lensRuns: async (collectionId: number) => state.lenses.map((l) => ({
@@ -77,7 +78,8 @@ vi.mock('@/lib/store', () => ({
   }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
-vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'localhost:8080' }) }));
+vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => {
   cleanup();
@@ -258,8 +260,8 @@ describe('the trade page: one card per lens', () => {
     expect(second.get('Linked wallets')!.textContent).toContain('Linked wallets did not run in the latest analysis, so it flags nothing.');
     // Each card's lens name opens that lens's tab on its own collection.
     const tab = (li: HTMLElement, name: string) => [...li.querySelectorAll('a')].find((x) => x.textContent === name)?.getAttribute('href');
-    expect(tab(first.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A1}?method=A#evidence`);
-    expect(tab(second.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A2}?method=A#evidence`);
+    expect(tab(first.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A1}/methods?method=A#evidence`);
+    expect(tab(second.get('Round trips')!, 'Round trips')).toBe(`/c/1/${A2}/methods?method=A#evidence`);
   });
 
   it('across two collections, the answer names the one whose latest analysis missed a lens, never that a lens it names as flagging flags nothing', async () => {
@@ -309,14 +311,14 @@ describe('the trade page: one card per lens', () => {
       const li = card.get(name)!;
       expect(li.textContent).toBe(`${name}${line} ${link}`);
       expect(li.textContent).not.toContain(OWN_NOT_CAUGHT);
-      expect([...li.querySelectorAll('a')].find((x) => x.textContent === link)?.getAttribute('href')).toBe(`/c/1/${A1}?method=${key}`);
+      expect([...li.querySelectorAll('a')].find((x) => x.textContent === link)?.getAttribute('href')).toBe(`/c/1/${A1}/methods?method=${key}`);
     }
     const why = (li: HTMLElement) => [...li.querySelectorAll('a')].find((x) => x.textContent === 'See why on its tab →')?.getAttribute('href');
     for (const [m, name] of [['AU', 'Money loops back'], ['AC', 'Linked wallets']] as const) {
       const li = card.get(name)!;
       expect(li.textContent).toContain(`${name} did not run in the latest analysis, so it flags nothing.`);
       expect(li.textContent).not.toContain(NOT_CAUGHT[m]);
-      expect(why(li)).toBe(`/c/1/${A1}?method=${m}`);
+      expect(why(li)).toBe(`/c/1/${A1}/methods?method=${m}`);
     }
   });
 
@@ -349,7 +351,7 @@ describe('the trade page: one card per lens', () => {
     state.own = [caughtOwn(7)];
     const c = await txPage();
     const chips = [...c.querySelectorAll('tbody tr td:nth-child(5) a')].map((a) => [a.textContent, a.getAttribute('href')]);
-    expect(chips).toEqual([['Round trips', `/c/1/${A1}?method=A#evidence`], ['Fast flips', `/c/1/${A1}?method=L7#evidence`]]);
+    expect(chips).toEqual([['Round trips', `/c/1/${A1}/methods?method=A#evidence`], ['Fast flips', `/c/1/${A1}/methods?method=L7#evidence`]]);
   });
 
   it('no lens code in text, aria-label or title', async () => {
@@ -586,5 +588,39 @@ describe('a transfer a lens does not judge says so, never that it was not caught
     expect(card.get('Round trips')!.querySelector('figure')).not.toBeNull();
     expect(card.get('Every owner')!.querySelector('figure')).not.toBeNull();
     expect(c.textContent).not.toContain('custody, not a trade');
+  });
+});
+
+describe('the trade page: a spot check', () => {
+  it('an unread transaction offers the check; a judged one does not', async () => {
+    const unread = await txPage();
+    expect(unread.querySelector('#spot-check')?.textContent).toBe('Check this transaction');
+    cleanup();
+    roundTrip();
+    const judged = await txPage();
+    expect(judged.querySelector('#spot-check')).toBeNull();
+  });
+});
+
+describe('a transaction under a collection\'s tabs', () => {
+  const under = async (address: string) => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    return render(await P({ params: Promise.resolve({ chain: '1', address, hash: TX }) })).container;
+  };
+
+  it('sits there when every transfer it moved is in that collection, its links kept inside', async () => {
+    state.tx = [transfer(A1, '5', TX, 0, 5)];
+    const hrefs = [...(await under(A1)).querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain(`/c/1/${A1}/w/${S}`);
+    expect(hrefs).toContain(`/c/1/${A1}/tx/${TX}`);
+  });
+
+  it('is sent to its own page when it is another collection\'s, or more than one\'s, or unread', async () => {
+    state.tx = [transfer(A2, '5', TX, 0, 5)];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
+    state.tx = [transfer(A1, '5', TX, 0, 5), transfer(A2, '6', TX, 1, 5)];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
+    state.tx = [];
+    await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
   });
 });

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
 import type { Drawing, DrawnEdge } from '@/lib/layout';
 import { LENSES, andList, short } from '@/lib/format';
+import { txHref, walletHref } from '@/lib/links';
 import { cn } from '@/lib/utils';
 
 // Literal class names: Tailwind generates only the classes it can read in the source. A lens of yours is drawn in the flow hue, as its tab is.
@@ -70,7 +71,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
               />
               {/* A 2px line is a poor target, so a wider invisible copy of it takes the click. Out of the tab order, as the clickable path before it was: the table's rows are the keyboard's way to a trade. A bundle opens its first. */}
               {e.tx === null ? null : (
-                <a href={`/tx/${chainId}/${e.tx}`} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${e.title}`}>
+                <a href={txHref(chainId, e.tx, base)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${e.title}`}>
                   <path d={e.d} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" className="cursor-pointer" />
                 </a>
               )}
@@ -95,7 +96,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
           );
           return pick
             ? <g key={n.id} role="button" tabIndex={0} aria-label={`Wallet ${n.id}`} data-wallet={n.id} className={cls}>{body}</g>
-            : <a key={n.id} href={`/w/${chainId}/${n.id}`} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
+            : <a key={n.id} href={walletHref(chainId, n.id, base)} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
         })}
       </svg>
       <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -164,7 +165,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
   };
   /** The first press lights a wallet's arrows; pressing the lit wallet again opens its page. */
   const pick = (id: string) => {
-    if (wallet === id) { router.push(`/w/${chainId}/${id}`); return; }
+    if (wallet === id) { router.push(walletHref(chainId, id, base)); return; }
     setLit([]);
     setWallet(id);
   };
@@ -173,7 +174,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
     const target = ev.target as Element;
     const w = target.closest('[data-wallet]'), tx = target.closest('[data-tx]');
     if (w !== null) { ev.preventDefault(); pick(w.getAttribute('data-wallet')!); }
-    else if (tx !== null) { ev.preventDefault(); router.push(`/tx/${chainId}/${tx.getAttribute('data-tx')}`); }
+    else if (tx !== null) { ev.preventDefault(); router.push(txHref(chainId, tx.getAttribute('data-tx')!, base)); }
   };
   const onKeyDown = (ev: KeyboardEvent) => {
     const w = (ev.target as Element).closest('[data-wallet]');

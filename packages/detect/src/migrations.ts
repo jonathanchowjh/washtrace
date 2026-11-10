@@ -613,4 +613,36 @@ ALTER TABLE washtrace.token_reads ADD COLUMN IF NOT EXISTS stale_at timestamptz;
 CREATE INDEX IF NOT EXISTS wallets_stale_idx ON washtrace.wallets (chain_id, stale_at) WHERE stale_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS token_reads_stale_idx ON washtrace.token_reads (chain_id, stale_at) WHERE stale_at IS NOT NULL;
 `,
+  `
+-- A spot check: one transaction judged without watching its collection
+-- (spot.ts). lens: null for the built-ins, else a key such as 'L7', at
+-- lens_version, so an edited lens is asked again. result: the SpotResult.
+CREATE TABLE IF NOT EXISTS washtrace.spot_checks (
+  id           serial PRIMARY KEY,
+  chain_id     int NOT NULL,
+  tx_hash      text NOT NULL,
+  lens         text,
+  lens_version int,
+  status       text NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  result       jsonb,
+  error        text,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  finished_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS spot_checks_queued_idx ON washtrace.spot_checks (requested_at) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS spot_checks_tx_idx ON washtrace.spot_checks (chain_id, tx_hash);
+-- One check in flight per question, so two requests at once share it.
+CREATE UNIQUE INDEX IF NOT EXISTS spot_checks_open_idx ON washtrace.spot_checks
+  (chain_id, tx_hash, coalesce(lens, ''), coalesce(lens_version, 0)) WHERE status IN ('queued', 'running');
+`,
+  `
+-- Rings (rings.ts): the wallets the counted evidence joins. Each witness a
+-- counted lens points at gets its ring's anchor, the smallest wallet in it;
+-- one only Money loops back points at gets none. analyses.rings counts them:
+-- NULL on an analysis saved before this, which the worker fills from its
+-- witnesses (Store.fillRings), so no collection is analysed again for it.
+ALTER TABLE washtrace.witnesses ADD COLUMN IF NOT EXISTS ring text;
+ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS rings int;
+CREATE INDEX IF NOT EXISTS witnesses_ring_idx ON washtrace.witnesses (collection_id, ring) WHERE ring IS NOT NULL;
+`,
 ];
