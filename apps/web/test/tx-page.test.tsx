@@ -351,11 +351,19 @@ describe('the trade page: one card per lens', () => {
     expect(answer).not.toContain('Slow loops');
   });
 
-  it('lists the counted lenses that flag it first, and sets Money loops back apart under them as not counted', async () => {
+  it('lists the counted lenses that flag it first, each with its tier, and sets Money loops back apart under them as not counted', async () => {
     roundTrip(['A', 'AU', 'AC']);
     const c = await txPage();
     const aside = c.querySelector('p.text-lg')!.closest('div')!.parentElement!.lastElementChild!;
-    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips', 'Linked wallets', 'Money loops back · not counted']);
+    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back · not counted']);
+  });
+
+  it('gives every built-in\'s card its tier, and a lens of yours none', async () => {
+    roundTrip();
+    state.lenses = [lens(7, 'Fast flips', { 1: {} })];
+    const c = await txPage();
+    const tiers = [...cards(c, 'How each lens reads First #7')].map(([name, li]) => [name, li.querySelector('[data-tier]')?.textContent ?? null]);
+    expect(tiers).toEqual([['Round trips', '· the floor'], ['Linked wallets', '· the ceiling'], ['Money loops back', '· not counted'], ['Fast flips', null]]);
   });
 
   it('a sale a built-in and your lens both caught says your lens also catches it', async () => {
