@@ -42,6 +42,35 @@ export async function collectionIdOf(
   return c ? c.id : notWatched();
 }
 
+/** The most collections one save may run a lens on: the Lab lists every watched one, and a body past this is not one it sends. */
+export const MAX_RUN_ON = 100;
+
+/**
+ * The watched collections a body runs a lens on: `collections`, a list of
+ * `{chainId, address}`, or else the one `chainId` and `address` name. The
+ * first 404 for a collection not watched, or 400 for a list that is empty,
+ * too long, or holds one twice.
+ */
+export async function collectionIdsOf(
+  s: { collection(chainId: number, address: string): Promise<{ id: number } | null> },
+  body: Record<string, unknown>,
+): Promise<number[] | Response> {
+  if (!('collections' in body)) {
+    const one = await collectionIdOf(s, body);
+    return one instanceof Response ? one : [one];
+  }
+  const list = body.collections;
+  if (!Array.isArray(list) || list.length === 0 || list.length > MAX_RUN_ON) return bad(`collections must be a list of 1 to ${MAX_RUN_ON} {chainId, address}.`);
+  const ids: number[] = [];
+  for (const c of list) {
+    const id = await collectionIdOf(s, typeof c === 'object' && c !== null ? c as Record<string, unknown> : {});
+    if (id instanceof Response) return id;
+    if (ids.includes(id)) return bad('collections names one collection twice.');
+    ids.push(id);
+  }
+  return ids;
+}
+
 /** The unique index on lower(name) refusing an insert or update that raced the name check. */
 export const nameRaced = (err: unknown): boolean => (err as { code?: string } | null)?.code === '23505';
 

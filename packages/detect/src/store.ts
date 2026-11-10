@@ -3517,6 +3517,25 @@ export class Store {
   }
 
   /** Every lens, with its run on this collection, or null when it has none here. */
+  /** Every lens of yours with its run on each collection it has one on, by collection id: the Lab lists them all at once. */
+  async lensRunsAll(): Promise<{ lens: Lens; runs: Map<number, LensRun> }[]> {
+    const { rows } = await this.pool.query(
+      `SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
+              r.lens_id AS run_lens, r.collection_id, r.status, r.progress, r.lens_version, r.analysis_id, r.through_block, r.totals, r.error,
+              extract(epoch FROM r.retry_at)::float8 AS retry, extract(epoch FROM r.finished_at)::float8 AS finished, r.took_ms, r.tokens_read
+       FROM washtrace.lenses l
+       LEFT JOIN washtrace.lens_runs r ON r.lens_id = l.id
+       ORDER BY l.id, r.collection_id`,
+    );
+    const out = new Map<number, { lens: Lens; runs: Map<number, LensRun> }>();
+    for (const r of rows.filter(readable)) {
+      let at = out.get(r.id);
+      if (at === undefined) out.set(r.id, (at = { lens: toLens(r), runs: new Map() }));
+      if (r.run_lens !== null) at.runs.set(r.collection_id, toLensRun(r));
+    }
+    return [...out.values()];
+  }
+
   async lensRuns(collectionId: number): Promise<{ lens: Lens; run: LensRun | null }[]> {
     const { rows } = await this.pool.query(
       `SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,

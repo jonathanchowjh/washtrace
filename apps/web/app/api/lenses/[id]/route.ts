@@ -1,5 +1,5 @@
 import { handle, json, writeBody } from '@/lib/api';
-import { collectionIdOf, collectionRaced, lensFields, lensIdFromPath, nameRaced, noLens, notWatched, taken } from '@/lib/lens-api';
+import { collectionIdsOf, collectionRaced, lensFields, lensIdFromPath, nameRaced, noLens, notWatched, taken } from '@/lib/lens-api';
 import { store } from '@/lib/store';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -10,7 +10,8 @@ type Ctx = { params: Promise<{ id: string }> };
  * edit made while a run is in flight needs nothing more here: that run's save
  * finds its version behind. The collection, when named (the editor names the
  * one it was opened from), gets a run queued in that statement too, so Save
- * and run runs there even where the lens never ran.
+ * and run runs there even where the lens never ran. `collections` names
+ * several, and each gets a run queued, the first in that statement.
  */
 export async function PATCH(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
@@ -23,13 +24,14 @@ export async function PATCH(req: Request, { params }: Ctx): Promise<Response> {
     const s = store();
     // A lens whose stored rule no longer reads throws here; it may still be edited, which is how it is repaired.
     if ((await s.lens(id).catch(() => ({}))) === null) return noLens();
-    const named = 'chainId' in written.body || 'address' in written.body;
-    const runOn = named ? await collectionIdOf(s, written.body) : undefined;
+    const named = 'chainId' in written.body || 'address' in written.body || 'collections' in written.body;
+    const runOn = named ? await collectionIdsOf(s, written.body) : [];
     if (runOn instanceof Response) return runOn;
     if (await s.nameTaken(fields.name, id)) return taken(fields.name);
     try {
-      const lens = await s.updateLens(id, fields.name, fields.rule, runOn);
+      const lens = await s.updateLens(id, fields.name, fields.rule, runOn[0]);
       if (!lens) return noLens();
+      for (const c of runOn.slice(1)) await s.requestLensRun(id, c);
       console.info('[washtrace] %s edited lens %d', written.actor, id);
       return json({ lens });
     } catch (err) {

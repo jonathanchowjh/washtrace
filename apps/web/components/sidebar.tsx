@@ -42,6 +42,7 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
         </nav>
         <nav aria-label="Service" className="flex items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
           <span className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase max-md:hidden">Behind the numbers</span>
+          <Link href="/lab" aria-current={current('/lab')} className={ITEM}>Lab<span className="text-xs text-muted-foreground max-md:hidden">your lenses</span></Link>
           <Link href="/worker" aria-current={current('/worker')} className={ITEM}>Worker</Link>
           <Link href="/settings" aria-current={current('/settings')} className={ITEM}>Settings</Link>
           <ThemeToggle />

@@ -175,8 +175,8 @@ check is 400 with the reason.
 
 | Route | Body | Status | Top-level keys |
 |---|---|---|---|
-| `POST /api/lenses` | `{name, rule, chainId, address}` | 201, 400, 404 (collection not watched), 409 (name taken) | `lens` |
-| `PATCH /api/lenses/{id}` | `{name, rule, chainId?, address?}`; naming a collection queues a run there | 200, 400, 404, 409 | `lens` |
+| `POST /api/lenses` | `{name, rule, chainId, address}`, or `collections: [{chainId, address}]` (1 to 100) in place of `chainId` and `address` to queue a run on each | 201, 400, 404 (collection not watched), 409 (name taken) | `lens` |
+| `PATCH /api/lenses/{id}` | `{name, rule, chainId?, address?}` or `collections`; each collection named gets a run queued | 200, 400, 404, 409 | `lens` |
 | `DELETE /api/lenses/{id}` | | 200, 404 | `deleted` |
 | `POST /api/lenses/{id}/runs` | `{chainId, address}` | 202, 404 | `queued` |
 | `POST /api/lenses/previews` | `{chainId, address, rule}` | 202, 400, 404, 409 (no sales to sample, or not analyzed yet) | `id` |

@@ -513,3 +513,32 @@ describe('POST /api/collections/[chain]/[address]/tokens', () => {
     expect(fake.startTokens).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a lens saved to run on several collections', () => {
+  const B = '0x' + 'cd'.repeat(20);
+  const on = [{ chainId: 1, address: ADDR }, { chainId: 1, address: B }];
+  const ids = (_c: number, a: string) => Promise.resolve(a === ADDR ? { id: 3 } : a === B ? { id: 4 } : null);
+
+  it('creates it with its first run, then queues one on each of the others', async () => {
+    fake.collection.mockImplementation(ids as never);
+    const res = await create(req('POST', { name: 'Two', rule: DEFAULT_RULE, collections: on }));
+    expect(res.status).toBe(201);
+    expect(fake.createLens).toHaveBeenCalledWith('Two', DEFAULT_RULE, 3);
+    expect(fake.requestLensRun.mock.calls).toEqual([[7, 4]]);
+  });
+
+  it('runs an edit on each collection named, the first in the edit\'s own statement', async () => {
+    fake.collection.mockImplementation(ids as never);
+    expect((await edit(req('PATCH', { name: 'Two', rule: DEFAULT_RULE, collections: on }), idCtx('7'))).status).toBe(200);
+    expect(fake.updateLens).toHaveBeenCalledWith(7, 'Two', DEFAULT_RULE, 3);
+    expect(fake.requestLensRun.mock.calls).toEqual([[7, 4]]);
+  });
+
+  it('refuses an empty list, one collection twice, and one not watched, before saving anything', async () => {
+    fake.collection.mockImplementation(ids as never);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [] }))).status).toBe(400);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [on[0], on[0]] }))).status).toBe(400);
+    expect((await create(req('POST', { name: 'X', rule: DEFAULT_RULE, collections: [on[0], { chainId: 1, address: '0x' + 'ef'.repeat(20) }] }))).status).toBe(404);
+    expect(fake.createLens).not.toHaveBeenCalled();
+  });
+});

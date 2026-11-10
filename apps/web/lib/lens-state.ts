@@ -184,3 +184,17 @@ export function runStateWords(run: LensRun | null, behind: 'edit' | 'analysis' |
  * trade at all is not known, and nothing is said of "its rule".
  */
 export const OWN_BEFORE_EDIT = `Shows ${FIGURES_FROM.edit}: the run they came from did not catch this transfer, and the new rule’s run has not saved yet.`;
+
+/** What a lens still needs read on one collection, in a few words; null for nothing. */
+export function needsWords(money: MoneyReason | null, tokens: TokensReason | null): string | null {
+  const said = [
+    money === 'limit' ? 'money read further out than this collection follows'
+      : money === 'seeding' || money === 'pending' ? 'money still being read'
+      : money === 'behind' ? 'a new run, for money read since' : null,
+    tokens === 'off' ? 'other tokens, not read here'
+      : tokens === 'seeding' || tokens === 'pending' ? 'other tokens still being read'
+      : tokens === 'behind' ? 'a new run, for tokens read since'
+      : tokens === 'unreached' ? 'other tokens past the wallets read' : null,
+  ].filter((x) => x !== null);
+  return said.length === 0 ? null : said.join('; ');
+}

@@ -5114,6 +5114,26 @@ describe('lenses', () => {
     }
   });
 
+  it('lists every lens with its runs on every collection at once, a lens with none included', async () => {
+    const { id } = await analysed(w('1e65'));
+    const { id: other } = await analysed(w('1e66'));
+    const ran = await store.createLens('Runs on two', DEFAULT_RULE, id);
+    await store.requestLensRun(ran.id, other);
+    const none = await store.createLens('Runs on none', DEFAULT_RULE);
+    try {
+      const all = await store.lensRunsAll();
+      const of = (lensId: number) => all.find((x) => x.lens.id === lensId)!;
+      expect([...of(ran.id).runs.keys()].sort((a, b) => a - b)).toEqual([id, other].sort((a, b) => a - b));
+      expect(of(ran.id).runs.get(id)).toMatchObject({ status: 'queued' });
+      expect(of(none.id).runs.size).toBe(0);
+    } finally {
+      await store.deleteLens(ran.id);
+      await store.deleteLens(none.id);
+      await drop(1, w('1e65'));
+      await drop(1, w('1e66'));
+    }
+  });
+
   it('queues a run on the collection an edit names, in the same statement, once whether or not one is there', async () => {
     const { id } = await analysed(w('1e63'));
     const { id: other } = await analysed(w('1e64'));
