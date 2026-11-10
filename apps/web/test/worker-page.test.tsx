@@ -42,6 +42,23 @@ describe('the worker page', () => {
     expect(c.textContent).toContain('No Etherscan key.');
   });
 
+  // What the Notices tests held, now that the status is drawn here alone.
+  it('links a Do this that has a place to go, says one that has none as text, and counts two as two', async () => {
+    state.notices = [
+      { severity: 'needs-you', text: 'Etherscan rejected the key.', doThis: 'Open Settings', href: '/settings' },
+      { severity: 'needs-you', text: 'fund has never run.', doThis: 'Check the worker is running' },
+      { severity: 'working', text: 'Checking wallets for Terraforms: 1,612 of 11,259' },
+      { severity: 'info', text: 'No Etherscan key.', action: { label: 'How to turn it on', href: '/worker#sources' } },
+    ];
+    const c = await draw();
+    expect(c.textContent).toContain('2 things need you');
+    const alerts = [...c.querySelectorAll('[role=alert]')];
+    expect(alerts.map((a) => a.querySelector('a')?.getAttribute('href') ?? null)).toEqual(['/settings', null]);
+    // A working or info notice has no Do this line, and an info one keeps its action link.
+    expect(c.textContent?.match(/Do this:/g)).toHaveLength(2);
+    expect([...c.querySelectorAll('a')].find((a) => a.textContent === 'How to turn it on')?.getAttribute('href')).toBe('/worker#sources');
+  });
+
   it('spans each job card over shared rows, so its figures line up with its neighbours', async () => {
     const cards = [...(await draw()).querySelectorAll('ol > li')];
     expect(cards).toHaveLength(4);

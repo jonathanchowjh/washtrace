@@ -1,8 +1,6 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import Link from 'next/link';
-import { plural } from '@/lib/format';
 import type { Tone } from '@/lib/metrics';
-import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
@@ -94,45 +92,6 @@ export function Problem({ title, children, doThis = 'check that the store is run
       <p className="flex items-center gap-2 font-medium text-fault"><Warn />{title}</p>
       <div className="mt-1 text-body">{children}</div>
       <p className="mt-2 text-sm text-body"><b className="text-fault">Do this:</b> {doThis}</p>
-    </div>
-  );
-}
-
-/**
- * What the worker has to say, by how serious it is. Only "needs you" is loud:
- * a neutral card with a warning icon and a "Do this" line. "Working" shows
- * progress; "info" is muted. The heading counts needs-you items only, so
- * "Nothing has failed." is the normal state even while hours of work remain.
- * It does not say the worker is reading: a missing key is an info notice, a
- * limit to lift, so the notices below the heading matter too.
- */
-export function Notices({ notices }: { notices: Notice[] }) {
-  const needs = notices.filter((n): n is Extract<Notice, { severity: 'needs-you' }> => n.severity === 'needs-you');
-  const rest = notices.filter((n): n is Exclude<Notice, { severity: 'needs-you' }> => n.severity !== 'needs-you');
-  return (
-    <div className="space-y-2">
-      <h2 className="text-lg font-semibold text-foreground">{needs.length === 0 ? 'Nothing has failed.' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}</h2>
-      {needs.map((n, i) => (
-        <div key={i} role="alert" className="flex gap-3 rounded-lg border border-fault/40 bg-card p-3 text-sm">
-          <Warn className="mt-0.5 size-5 text-fault" />
-          <div>
-            <p className="font-semibold text-foreground">{n.text}</p>
-            <p className="mt-0.5"><b className="text-fault">Do this:</b> {n.href ? <Link className="underline" href={n.href}>{n.doThis}</Link> : n.doThis}</p>
-          </div>
-        </div>
-      ))}
-      {rest.length > 0 ? (
-        <ul className="space-y-1 text-sm">
-          {rest.map((n, i) => (
-            <li key={i} className={cn('flex items-start gap-2', n.severity === 'info' && 'text-muted-foreground')}>
-              {n.severity === 'working'
-                ? <span aria-hidden className="mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-focus" />
-                : <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full border border-muted-foreground" />}
-              <span>{n.text}{n.action ? <> <Link className="underline" href={n.action.href}>{n.action.label}</Link></> : null}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </div>
   );
 }
