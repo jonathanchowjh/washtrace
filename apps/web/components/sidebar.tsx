@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { short } from '@/lib/format';
 import { SearchBox } from './search-box';
@@ -13,42 +14,65 @@ const ITEM = 'flex items-center gap-2 rounded-md px-2 py-1 whitespace-nowrap hov
 /**
  * Collections, each watched collection by name, the worker and its settings, and a search box
  * that takes a collection name, a token number, a wallet or a transaction. Under 768 px the
- * search box is a row of its own above one row that scrolls sideways, above the page.
+ * search box is a row of its own above one row that scrolls sideways, above the page; that
+ * row's right edge fades while more of it is off-screen, so nothing is cut off without a hint.
  */
 export function Sidebar({ watched }: { watched: { chainId: number; address: string; name: string | null }[] }) {
   const path = usePathname();
   const current = (href: string, exact = false) => (exact ? path === href : path === href || path.startsWith(`${href}/`)) ? 'page' : undefined;
+  const row = useRef<HTMLElement>(null);
+  const more = useMoreRight(row, watched.length);
   return (
     // The wrapper stretches to the grid row, so the sidebar's ground and edge run the page's full height; the aside inside stays put while the page scrolls.
     <div className="bg-sidebar md:border-r">
       {/* Under 768 px the search box has a row of its own, so a type-ahead list under it is not clipped by the row below, which scrolls sideways. */}
       <SearchBox id="q-top" className="border-b p-2 md:hidden" watched={watched} wide={false} />
-      <aside className="flex items-center gap-1 overflow-x-auto border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
-        <Link href="/" className="px-2 md:pb-1">
-          <span className="block font-mono font-semibold text-foreground">washtrace</span>
-          <span className="block text-xs text-muted-foreground max-md:hidden">NFT wash trading detector</span>
-        </Link>
-        <SearchBox id="q" className="max-md:hidden" watched={watched} wide />
-        <nav aria-label="Collections" className="flex gap-px md:flex-col">
-          <Link href="/" aria-current={current('/', true)} className={ITEM}>All collections</Link>
-          {watched.map((c) => {
-            const href = `/c/${c.chainId}/${c.address}`;
-            return (
-              <Link key={href} href={href} aria-current={current(href)} className={`${ITEM} md:pl-5`}>
-                <span className="truncate">{c.name ?? short(c.address)}</span>
-              </Link>
-            );
-          })}
-        </nav>
-        <nav aria-label="Service" className="flex items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
-          <span className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase max-md:hidden">Behind the numbers</span>
-          <Link href="/lab" aria-current={current('/lab')} className={ITEM}>Lab<span className="text-xs text-muted-foreground max-md:hidden">your lenses</span></Link>
-          <Link href="/worker" aria-current={current('/worker')} className={ITEM}>Worker</Link>
-          <Link href="/settings" aria-current={current('/settings')} className={ITEM}>Settings</Link>
-          <ThemeToggle />
-        </nav>
-        <div className="max-md:hidden"><ZonePicker /></div>
-      </aside>
+      {/* The fade sits over the phone's row; on a wide screen this wrapper steps aside, so the sidebar still sticks. */}
+      <div className="relative md:contents">
+        <aside ref={row} className="flex items-center gap-1 overflow-x-auto border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
+          <Link href="/" className="px-2 md:pb-1">
+            <span className="block font-mono font-semibold text-foreground">washtrace</span>
+            <span className="block text-xs text-muted-foreground max-md:hidden">NFT wash trading detector</span>
+          </Link>
+          <SearchBox id="q" className="max-md:hidden" watched={watched} wide />
+          <nav aria-label="Collections" className="flex gap-px md:flex-col">
+            <Link href="/" aria-current={current('/', true)} className={ITEM}>All collections</Link>
+            {watched.map((c) => {
+              const href = `/c/${c.chainId}/${c.address}`;
+              return (
+                <Link key={href} href={href} aria-current={current(href)} className={`${ITEM} md:pl-5`}>
+                  <span className="truncate">{c.name ?? short(c.address)}</span>
+                </Link>
+              );
+            })}
+          </nav>
+          <nav aria-label="Service" className="flex items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
+            <span className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase max-md:hidden">Behind the numbers</span>
+            <Link href="/lab" aria-current={current('/lab')} className={ITEM}>Lab<span className="text-xs text-muted-foreground max-md:hidden">your lenses</span></Link>
+            <Link href="/worker" aria-current={current('/worker')} className={ITEM}>Worker</Link>
+            <Link href="/settings" aria-current={current('/settings')} className={ITEM}>Settings</Link>
+            <ThemeToggle />
+          </nav>
+          <div className="max-md:hidden"><ZonePicker /></div>
+        </aside>
+        <div aria-hidden data-more hidden={!more} className="pointer-events-none absolute top-0 right-0 bottom-px w-12 bg-linear-to-l from-sidebar to-transparent md:hidden" />
+      </div>
     </div>
   );
+}
+
+/** Whether the row has more past its right edge: checked on scroll, on resize, and when the collections listed change. */
+function useMoreRight(row: React.RefObject<HTMLElement | null>, items: number): boolean {
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = row.current;
+    if (el === null) return;
+    // A pixel of slack: a zoomed page can leave a fraction unscrolled at the end.
+    const check = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    window.addEventListener('resize', check);
+    return () => { el.removeEventListener('scroll', check); window.removeEventListener('resize', check); };
+  }, [row, items]);
+  return more;
 }

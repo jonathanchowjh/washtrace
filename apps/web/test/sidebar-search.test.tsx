@@ -147,7 +147,7 @@ describe('the search box under a collection', () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     under();
     fireEvent.click(screen.getAllByRole('button', { name: /In Terraforms/ })[0]!);
-    expect(box().getAttribute('placeholder')).toBe('Search name, #token, address or tx  /');
+    expect(box().getAttribute('placeholder')).toBe('Name, #token or 0x…  /');
     await type('#7');
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
   });
@@ -190,6 +190,27 @@ describe('the search box on a collection nobody watches', () => {
     expect(document.querySelector('input[name=scope]')).toBeNull();
     await type('#7');
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
+  });
+});
+
+describe('the sidebar on a phone', () => {
+  it('fades the nav row\'s right edge while more of it is off-screen, and not once scrolled to the end', () => {
+    render(<Sidebar watched={[terra]} />);
+    const row = document.querySelector('aside')!;
+    const fade = document.querySelector('[data-more]') as HTMLElement;
+    expect(fade.hidden).toBe(true);
+    Object.defineProperty(row, 'scrollWidth', { configurable: true, value: 600 });
+    Object.defineProperty(row, 'clientWidth', { configurable: true, value: 400 });
+    act(() => { fireEvent.scroll(row); });
+    expect(fade.hidden).toBe(false);
+    row.scrollLeft = 200;
+    act(() => { fireEvent.scroll(row); });
+    expect(fade.hidden).toBe(true);
+  });
+
+  it('keeps the placeholder outside a collection short enough for the desktop box', () => {
+    render(<Sidebar watched={[]} />);
+    expect(box().getAttribute('placeholder')!.length).toBeLessThanOrEqual(24);
   });
 });
 

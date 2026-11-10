@@ -10,6 +10,8 @@ import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, type Scope, typ
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
 const SHOWN = 5;
 const WAIT_MS = 200;
+/** Short enough to show whole in the sidebar's box; the label says it in full. */
+const PLACEHOLDER = 'Name, #token or 0x…  /';
 
 const HEADING: Record<SearchKind, string> = { collections: 'Collections', tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' };
 
@@ -135,7 +137,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
       {scope === null ? null : <input type="hidden" name="scope" value={scopeParam(scope)} />}
       <input
         ref={input}
-        id={id} name="q" placeholder={scopeName === null ? 'Search name, #token, address or tx  /' : `Search ${scopeName}…  /`} autoComplete="off"
+        id={id} name="q" placeholder={scopeName === null ? PLACEHOLDER : `Search ${scopeName}…  /`} autoComplete="off"
         role="combobox" aria-expanded={shown} aria-controls={`${id}-list`} aria-autocomplete="list"
         aria-activedescendant={shown && active >= 0 ? optionId(active) : undefined}
         // The hits on show are for the old text until the new reply: a highlight kept among them would open one on Enter.
