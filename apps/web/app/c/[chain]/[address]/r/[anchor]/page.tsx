@@ -14,7 +14,7 @@ import { HoverCard } from '@/components/hover-card';
 import { addressOf, chainOf } from '@/lib/params';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
-import { Suspense } from 'react';
+import { cache, Suspense } from 'react';
 import { StepLine } from '@/components/step-line';
 
 type Props = { params: Promise<{ chain: string; address: string; anchor: string }>; searchParams?: Promise<{ from?: string }> };
@@ -22,17 +22,21 @@ type Props = { params: Promise<{ chain: string; address: string; anchor: string 
 /** Under a day apart, its first and last trades read as one date. */
 const DAY = 86_400_000;
 
-/** The ring of a collection named by `anchor`, read once a request: its tab title and its page both need it. */
-async function ringOf({ params }: Props) {
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const anchor = addressOf(p.anchor);
+/** The ring of a collection named by `anchor`, read once a request: its tab title and its page both need it. Cached on the path's words, which both are given. */
+const ringAt = cache(async (chain: string, collection: string, at: string) => {
+  const chainId = chainOf(chain);
+  const address = addressOf(collection);
+  const anchor = addressOf(at);
   if (chainId === null || address === null || anchor === null) return null;
   const c = await collectionOf(chainId, address);
   if (!c) return null;
   const ring = await store().ring(c.id, anchor, { money: moneyFor(chainId) });
   return { chainId, address, anchor, c, ring };
+});
+
+async function ringOf({ params }: Props) {
+  const p = await params;
+  return ringAt(p.chain, p.address, p.anchor);
 }
 
 export async function generateMetadata(props: Props): Promise<Metadata> {

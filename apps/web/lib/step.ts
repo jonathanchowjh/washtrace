@@ -96,9 +96,10 @@ export async function stepOf(c: CollectionRow, from: NonNullable<ReturnType<type
   ]);
   const base = `/c/${c.chainId}/${c.address}`;
   const back = `${base}/${fromParam(kind, params, page)}`;
+  // A transaction whose transfers straddle the edge is on both pages: its other half is not a neighbour.
   return {
-    prev: i > 0 ? here.items[i - 1]! : before?.items.at(-1) ?? null,
-    next: i < here.items.length - 1 ? here.items[i + 1]! : after?.items[0] ?? null,
+    prev: i > 0 ? here.items[i - 1]! : before?.items.findLast((x) => x.id !== id) ?? null,
+    next: i < here.items.length - 1 ? here.items[i + 1]! : after?.items.find((x) => x.id !== id) ?? null,
     at: (page - 1) * size + i + 1,
     total: here.total,
     back: { href: back, label: `All ${here.total} ${NOUN[kind]}` },

@@ -5,7 +5,7 @@ import { store } from '@/lib/store';
 /**
  * POST `{ name, rule, chainId, address }`: save a lens of yours and queue its
  * run on that collection; or `{ name, rule, collections: [{chainId, address}] }`
- * to queue it on each (the Lab's Save and run on N). The rule is checked again
+ * to queue it on each. The rule is checked again
  * here, and the name must be new (a built-in's included). 201 `{ lens }`.
  */
 export async function POST(req: Request): Promise<Response> {
@@ -19,9 +19,8 @@ export async function POST(req: Request): Promise<Response> {
     if (ids instanceof Response) return ids;
     if (await s.nameTaken(fields.name)) return taken(fields.name);
     try {
-      // The lens and its first run in one statement: a failure leaves neither, so a retry never hits 409. The others are queued after it.
-      const lens = await s.createLens(fields.name, fields.rule, ids[0]);
-      for (const id of ids.slice(1)) await s.requestLensRun(lens.id, id);
+      // The lens and its runs in one statement: a failure leaves none, so a retry never hits 409.
+      const lens = await s.createLens(fields.name, fields.rule, ids);
       console.info('[washtrace] %s created lens %d', written.actor, lens.id);
       return json({ lens }, 201);
     } catch (err) {

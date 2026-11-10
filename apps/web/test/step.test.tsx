@@ -73,6 +73,13 @@ describe('stepping through a list', () => {
     const s = (await step('trades', '0x2'))!;
     expect([s.prev?.label, s.next?.label]).toEqual(['#1', '#4']);
   });
+
+  it('steps past a transaction\'s other half on the next page, never to itself', async () => {
+    // Twenty to a page: 0xt's transfers are the last of page 1 and the first of page 2.
+    state.trades = [...Array.from({ length: 19 }, (_, i) => ({ txHash: `0x${i}`, tokenId: String(i) })), { txHash: '0xt', tokenId: '19' }, { txHash: '0xt', tokenId: '20' }, { txHash: '0xn', tokenId: '21' }];
+    expect((await step('trades', '0xt'))!.next?.label).toBe('#21');
+    expect((await step('trades?page=2', '0xt'))!.prev?.label).toBe('#18');
+  });
 });
 
 describe('the stepper', () => {

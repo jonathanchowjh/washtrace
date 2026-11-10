@@ -11,7 +11,7 @@ type Ctx = { params: Promise<{ id: string }> };
  * finds its version behind. The collection, when named (the editor names the
  * one it was opened from), gets a run queued in that statement too, so Save
  * and run runs there even where the lens never ran. `collections` names
- * several, and each gets a run queued, the first in that statement.
+ * several, each queued in that statement.
  */
 export async function PATCH(req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
@@ -29,9 +29,8 @@ export async function PATCH(req: Request, { params }: Ctx): Promise<Response> {
     if (runOn instanceof Response) return runOn;
     if (await s.nameTaken(fields.name, id)) return taken(fields.name);
     try {
-      const lens = await s.updateLens(id, fields.name, fields.rule, runOn[0]);
+      const lens = await s.updateLens(id, fields.name, fields.rule, runOn);
       if (!lens) return noLens();
-      for (const c of runOn.slice(1)) await s.requestLensRun(id, c);
       console.info('[washtrace] %s edited lens %d', written.actor, id);
       return json({ lens });
     } catch (err) {

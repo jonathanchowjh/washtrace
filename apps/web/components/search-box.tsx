@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import type { SearchKind } from '@washtrace/detect';
 import { short, tokenLabel } from '@/lib/format';
+import { typing } from '@/lib/utils';
 import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, type Scope, type SearchReply } from '@/lib/search';
 
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
@@ -46,11 +47,6 @@ function connectedRows(hits: SearchReply, kind: SearchKind, scope: Scope | null)
     ...c.rings.map((r) => ({ type: 'option' as const, key: `ring-${r.anchor}`, href: `${base}/r/${r.anchor}`, line: `Part of Ring ${r.rank}`, address: '', sub: true })),
     ...c.tokens.map((t) => ({ type: 'option' as const, key: `token-${t}`, href: `${base}/t/${t}`, line: `Traded token #${tokenLabel(t)}`, address: '', sub: true })),
   ];
-}
-
-/** True when a key press is someone typing, which the '/' shortcut must leave alone. */
-function typing(t: EventTarget | null): boolean {
-  return t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
 }
 
 /**

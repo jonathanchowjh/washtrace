@@ -94,11 +94,6 @@ export function searchArgs(q: { kind?: string; page?: string }): { only: SearchK
 }
 
 /**
- * One hit as a link: where it opens, the line that says what it is, and its
- * address. The results page and the search box's list both draw this, so a hit
- * reads the same in both.
- */
-/**
  * Where a trade hit opens: under its collection's tabs when every transfer of
  * its transaction found is in that collection and none were cut off, else the
  * transaction's own page, as the page under a collection requires.
@@ -108,7 +103,12 @@ export function tradeHref(hits: SearchHits, h: SearchHits['trades'][number]): st
   return txHref(h.chainId, h.txHash, one ? `/c/${h.chainId}/${h.address}` : null);
 }
 
-/** `scope` keeps a wallet hit under that collection's tabs, where the search was made. */
+/**
+ * One hit as a link: where it opens, the line that says what it is, and its
+ * address. The results page and the search box's list both draw this, so a hit
+ * reads the same in both. `scope` keeps a wallet hit under that collection's
+ * tabs, where the search was made.
+ */
 export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Scope | null = null): { href: string; line: string; address: string } {
   if (kind === 'collections') {
     const h = hits.collections[i]!;
@@ -120,7 +120,8 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Sco
   }
   if (kind === 'wallets') {
     const h = hits.wallets[i]!;
-    const within = scope !== null && scope.chainId === h.chainId ? `/c/${scope.chainId}/${scope.address}` : null;
+    // A full address is found wherever it traded: one that never traded in the scope opens on its own page.
+    const within = scope !== null && scope.chainId === h.chainId && h.here !== false ? `/c/${scope.chainId}/${scope.address}` : null;
     return { href: walletHref(h.chainId, h.address, within), line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
   }
   const h = hits.trades[i]!;

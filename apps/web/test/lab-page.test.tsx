@@ -70,6 +70,21 @@ describe('Runs on', () => {
     expect(refresh).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
+
+  it('stops at a run it cannot queue, says which, and keeps it and those after it ticked', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 404, json: async () => ({ error: 'Not a watched collection.' }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { RunsOn } = await import('@/components/runs-on');
+    const row = (address: string, name: string) => ({ chainId: 1, address, name, tab: '/t', edit: '/e', state: 'not run here', share: null, needs: null, busy: false });
+    render(<RunsOn lensId={7} rows={[row(A, 'Demo Apes'), row(B, 'Cats')]} writable />);
+    fireEvent.click(screen.getByLabelText('Run on Demo Apes'));
+    fireEvent.click(screen.getByLabelText('Run on Cats'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Run on 2 collections' })); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Demo Apes: Not a watched collection\. Those still ticked are not queued\./)).toBeTruthy();
+    expect([A, B].map((a) => (screen.getByLabelText(a === A ? 'Run on Demo Apes' : 'Run on Cats') as HTMLInputElement).checked)).toEqual([true, true]);
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('the rule picture', () => {

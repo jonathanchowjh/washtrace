@@ -4196,9 +4196,11 @@ describe('Store.search', () => {
       const scope = { id: one, chainId: 1 };
       expect((await store.search({ kind: 'token', tokenId: '7', text: '7' }, { scope })).tokens.map((r) => r.address)).toEqual([c1]);
       const inOne = (await store.search({ kind: 'prefix', prefix: '0xab' }, { scope: { id: two, chainId: 10 } })).wallets;
-      expect(inOne.map((r) => [r.chainId, r.address])).toEqual([[10, alice]]);
+      expect(inOne.map((r) => [r.chainId, r.address, r.here])).toEqual([[10, alice, true]]);
       expect((await store.search({ kind: 'prefix', prefix: '0xcd' }, { scope })).wallets).toEqual([]);
-      expect((await store.search({ kind: 'address', address: carol }, { scope })).wallets.map((r) => r.address)).toEqual([carol]);
+      // Carol is found by her full address, and marked as never having traded in the scope.
+      expect((await store.search({ kind: 'address', address: carol }, { scope })).wallets.map((r) => [r.address, r.here])).toEqual([[carol, false]]);
+      expect((await store.search({ kind: 'address', address: carol })).wallets[0]).not.toHaveProperty('here');
       expect((await store.search({ kind: 'tx', tx }, { scope })).trades).toHaveLength(1);
 
       // A transaction.
@@ -5105,11 +5107,11 @@ describe('lenses', () => {
     const { id } = await analysed(w('1e62'));
     const named = async (name: string) => (await store.pool.query('SELECT 1 FROM washtrace.lenses WHERE name = $1', [name])).rowCount;
     try {
-      const lens = await store.createLens('With its run', DEFAULT_RULE, id);
+      const lens = await store.createLens('With its run', DEFAULT_RULE, [id]);
       expect((await store.lensRuns(id)).find((r) => r.lens.id === lens.id)!.run).toMatchObject({ status: 'queued', lensVersion: 1, totals: null });
       await store.deleteLens(lens.id);
-      // A collection gone by then fails the run's insert, and the lens goes with it.
-      await expect(store.createLens('Orphaned', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      // A collection gone by then fails its run's insert, and the lens and its other runs go with it.
+      await expect(store.createLens('Orphaned', DEFAULT_RULE, [id, 2_000_000_000])).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
       expect(await named('Orphaned')).toBe(0);
       // With no collection, the lens alone, as before.
       const alone = await store.createLens('Alone', DEFAULT_RULE);
@@ -5123,8 +5125,7 @@ describe('lenses', () => {
   it('lists every lens with its runs on every collection at once, a lens with none included', async () => {
     const { id } = await analysed(w('1e65'));
     const { id: other } = await analysed(w('1e66'));
-    const ran = await store.createLens('Runs on two', DEFAULT_RULE, id);
-    await store.requestLensRun(ran.id, other);
+    const ran = await store.createLens('Runs on two', DEFAULT_RULE, [id, other]);
     const none = await store.createLens('Runs on none', DEFAULT_RULE);
     try {
       const all = await store.lensRunsAll();
@@ -5143,23 +5144,23 @@ describe('lenses', () => {
   it('queues a run on the collection an edit names, in the same statement, once whether or not one is there', async () => {
     const { id } = await analysed(w('1e63'));
     const { id: other } = await analysed(w('1e64'));
-    const lens = await store.createLens('Edited here', DEFAULT_RULE, other);
+    const lens = await store.createLens('Edited here', DEFAULT_RULE, [other]);
     const runOf = async (c: number) => (await store.lensRuns(c)).find((r) => r.lens.id === lens.id)!.run;
     const rows = async () => Number((await store.pool.query('SELECT count(*) FROM washtrace.lens_runs WHERE lens_id = $1', [lens.id])).rows[0].count);
     try {
       // None here yet: the edit queues one at the new version; the run elsewhere is queued again as before.
       expect(await runOf(id)).toBeNull();
-      expect(await store.updateLens(lens.id, 'Edited here', { ...DEFAULT_RULE, minCycles: 1 }, id)).toMatchObject({ version: 2 });
+      expect(await store.updateLens(lens.id, 'Edited here', { ...DEFAULT_RULE, minCycles: 1 }, [id])).toMatchObject({ version: 2 });
       expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2, totals: null });
       expect(await runOf(other)).toMatchObject({ status: 'queued' });
       expect(await rows()).toBe(2);
       // One already here: queued again by the same statement, never a second row, and its version stays the one its totals are from.
       await store.pool.query(`UPDATE washtrace.lens_runs SET status = 'done', totals = '{}'::jsonb WHERE lens_id = $1 AND collection_id = $2`, [lens.id, id]);
-      expect(await store.updateLens(lens.id, 'Edited here', DEFAULT_RULE, id)).toMatchObject({ version: 3 });
+      expect(await store.updateLens(lens.id, 'Edited here', DEFAULT_RULE, [id])).toMatchObject({ version: 3 });
       expect(await runOf(id)).toMatchObject({ status: 'queued', lensVersion: 2 });
       expect(await rows()).toBe(2);
       // A collection gone by then fails the run's insert, and the edit goes with it.
-      await expect(store.updateLens(lens.id, 'Renamed', DEFAULT_RULE, 2_000_000_000)).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
+      await expect(store.updateLens(lens.id, 'Renamed', DEFAULT_RULE, [2_000_000_000])).rejects.toMatchObject({ code: '23503', constraint: 'lens_runs_collection_id_fkey' });
       expect(await store.lens(lens.id)).toMatchObject({ name: 'Edited here', version: 3 });
     } finally {
       await store.deleteLens(lens.id);
@@ -7264,8 +7265,11 @@ describe('rings worked out from an analysis saved before them', () => {
     await store.pool.query(`INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) SELECT $1, tx_hash, log_index, true FROM washtrace.transfers WHERE collection_id = $1`, [id]);
   });
 
-  it('fills them once, from the witnesses a counted lens points at, and leaves Money loops back\'s in none', async () => {
-    while (await store.fillRings()) { /* other collections' first */ }
+  it('fills them once, from the witnesses a counted lens points at, leaves Money loops back\'s in none, and passes over one skipped', async () => {
+    // Skipped, it is passed over while every other collection fills; then it fills.
+    while (await store.fillRings([id])) { /* other collections' first */ }
+    expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].rings).toBeNull();
+    expect(await store.fillRings()).toBe(true);
     const rings = (await store.pool.query('SELECT id, ring FROM washtrace.witnesses WHERE collection_id = $1 ORDER BY id', [id])).rows;
     expect(rings).toEqual([{ id: 0, ring: S }, { id: 1, ring: S }, { id: 2, ring: null }]);
     expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [id])).rows[0].rings).toBe(1);

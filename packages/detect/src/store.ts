@@ -224,7 +224,6 @@ type CompareCounts = Partial<Record<LensKey, Partial<Record<LensKey, number>>>>;
 
 export type Bucket = 'hour' | 'day' | 'week' | 'month';
 
-/** One bucket of a collection's history. `at` is the bucket's start, in ms. */
 /**
  * One ring (rings.ts), as its list and its page read it: its anchor (the
  * smallest wallet in it, its name in a link), its rank among the collection's
@@ -250,6 +249,7 @@ export interface RingView {
 /** The most wallets a ring's page lists; a ring of a whole collection can hold tens of thousands. */
 export const RING_WALLETS = 500;
 
+/** One bucket of a collection's history. `at` is the bucket's start, in ms. */
 export interface TimelinePoint {
   at: number;
   transfers: number;
@@ -439,7 +439,8 @@ export type SearchKind = 'collections' | 'tokens' | 'wallets' | 'trades';
 export interface SearchHits {
   collections: { chainId: number; address: string; name: string | null; symbol: string | null }[];
   tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number }[];
-  wallets: { chainId: number; address: string; transfers: number }[];
+  /** `here`, in a scoped search: whether it traded in that collection. A full address is found anywhere, so it may not have. */
+  wallets: { chainId: number; address: string; transfers: number; here?: boolean }[];
   trades: { chainId: number; txHash: string; address: string; name: string | null; tokenId: string }[];
   /** That kind had a row past `limit`: it is cut, and says so. */
   more: Record<SearchKind, boolean>;
@@ -2698,29 +2699,36 @@ export class Store {
    * before rings were (its `rings` NULL), from the witnesses it stored: the
    * worker calls this once a turn, so an upgrade fills them in one collection
    * at a time and no collection is analysed again for them. True when it filled one.
+   * `skip` are collections whose fill failed before: passed over, so one that
+   * keeps failing holds up no other. A failure carries its `collectionId`.
    */
-  async fillRings(): Promise<boolean> {
+  async fillRings(skip: readonly number[] = []): Promise<boolean> {
     return this.tx(async (c) => {
       const due = (await c.query<{ id: number; collection_id: number }>(
         `SELECT a.id, a.collection_id FROM washtrace.analyses a
-         WHERE a.rings IS NULL AND a.loops IS NOT NULL
+         WHERE a.rings IS NULL AND a.loops IS NOT NULL AND a.collection_id <> ALL($1::int[])
            AND a.id = (SELECT b.id FROM washtrace.analyses b WHERE b.collection_id = a.collection_id ORDER BY b.ran_at DESC, b.id DESC LIMIT 1)
          ORDER BY a.collection_id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`,
+        [[...skip]],
       )).rows[0];
       if (due === undefined) return false;
-      // The witnesses a counted lens points at, as saveAnalysis takes them.
-      const { rows } = await c.query<{ id: number; wallets: string[] }>(
-        `SELECT w.id, w.wallets FROM washtrace.witnesses w
-         WHERE w.collection_id = $1 AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND f.witness_id = w.id)`,
-        [due.collection_id],
-      );
-      const ring = ringsOf(rows);
-      await c.query(
-        `UPDATE washtrace.witnesses w SET ring = u.r FROM unnest($2::int[], $3::text[]) AS u(i, r) WHERE w.collection_id = $1 AND w.id = u.i`,
-        [due.collection_id, [...ring.keys()], [...ring.values()]],
-      );
-      await c.query('UPDATE washtrace.analyses SET rings = $2 WHERE id = $1', [due.id, new Set(ring.values()).size]);
-      return true;
+      try {
+        // The witnesses a counted lens points at, as saveAnalysis takes them.
+        const { rows } = await c.query<{ id: number; wallets: string[] }>(
+          `SELECT w.id, w.wallets FROM washtrace.witnesses w
+           WHERE w.collection_id = $1 AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = $1 AND f.method IN ('A', 'AC') AND f.witness_id = w.id)`,
+          [due.collection_id],
+        );
+        const ring = ringsOf(rows);
+        await c.query(
+          `UPDATE washtrace.witnesses w SET ring = u.r FROM unnest($2::int[], $3::text[]) AS u(i, r) WHERE w.collection_id = $1 AND w.id = u.i`,
+          [due.collection_id, [...ring.keys()], [...ring.values()]],
+        );
+        await c.query('UPDATE washtrace.analyses SET rings = $2 WHERE id = $1', [due.id, new Set(ring.values()).size]);
+        return true;
+      } catch (err) {
+        throw Object.assign(new Error(`rings of collection ${due.collection_id}: ${err instanceof Error ? err.message : String(err)}`, { cause: err }), { collectionId: due.collection_id });
+      }
     });
   }
 
@@ -3220,9 +3228,7 @@ export class Store {
   /**
    * What a search finds, by what was typed: each kind fetches `limit + 1` so
    * `more` can say it was cut. `only` reads one kind, for its own paged view.
-   */
-  /**
-   * What a search finds. `scope` narrows it to one collection: its tokens, and
+   * `scope` narrows it to one collection: its tokens, and
    * the wallets that traded in it. A full address or a transaction hash names
    * one thing wherever it is, so the scope leaves those alone, as it does
    * collections, which a reader may be looking for from inside another.
@@ -3239,12 +3245,13 @@ export class Store {
       [arg, ...page],
     )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, symbol: r.symbol })), 'collections');
     // The wallet index leads with chain_id, and only a chain with a watched collection can hold a wallet.
-    const wallets = async (where: string, arg: string) => cut((await this.pool.query(
-      `SELECT chain_id, address, transfers FROM washtrace.wallets
+    // `here` is SQL for whether a wallet `w` traded in the scope; left out unscoped.
+    const wallets = async (where: string, arg: string, here?: string) => cut((await this.pool.query(
+      `SELECT chain_id, address, transfers${here === undefined ? '' : `, ${here} AS here`} FROM washtrace.wallets w
        WHERE chain_id IN (SELECT DISTINCT chain_id FROM washtrace.collections) AND ${where}
        ORDER BY transfers DESC, chain_id, address LIMIT $2 OFFSET $3`,
       [arg, ...page],
-    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, transfers: r.transfers })), 'wallets');
+    )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, transfers: r.transfers, ...(here === undefined ? {} : { here: r.here }) })), 'wallets');
 
     // The kinds' queries are independent, and the sidebar asks as a person types: they run at once, not one after another.
     const asks: Promise<void>[] = [];
@@ -3264,7 +3271,12 @@ export class Store {
     }
     if (p.kind === 'address') {
       if (want('collections')) asks.push(collections('c.address = $1', p.address).then((h) => { hits.collections = h; }));
-      if (want('wallets')) asks.push(wallets('address = $1', p.address).then((h) => { hits.wallets = h; }));
+      if (want('wallets')) {
+        const s = opts.scope;
+        const here = s === undefined ? undefined
+          : `EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = ${Number(s.id)} AND (t.from_address = w.address OR t.to_address = w.address))`;
+        asks.push(wallets('address = $1', p.address, here).then((h) => { hits.wallets = h; }));
+      }
     }
     if (p.kind === 'prefix') {
       // Hex has no `%` or `_`, so the prefix needs no escaping.
@@ -3276,7 +3288,7 @@ export class Store {
           : `chain_id = ${Number(s.chainId)} AND address IN (
               SELECT from_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND from_address LIKE $1 || '%'
               UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND to_address LIKE $1 || '%')`;
-        asks.push(wallets(where, p.prefix).then((h) => { hits.wallets = h; }));
+        asks.push(wallets(where, p.prefix, s === undefined ? undefined : 'true').then((h) => { hits.wallets = h; }));
       }
     }
     if (p.kind === 'tx' && want('trades')) {
@@ -3445,21 +3457,21 @@ export class Store {
   }
 
   /**
-   * Save a lens, and queue its first run on collection `runOn` when given, in
-   * one statement: a failure leaves neither, so a retry never finds the name
+   * Save a lens, and queue its run on each collection of `runOn`, in one
+   * statement: a failure leaves none of them, so a retry never finds the name
    * taken by a lens nobody saw saved. The caller has checked the rule and the
    * name; a name taken after all (a race) throws the unique index's error, and
    * a collection removed meanwhile the foreign key's.
    */
-  async createLens(name: string, rule: LensRule, runOn?: number): Promise<Lens> {
+  async createLens(name: string, rule: LensRule, runOn: readonly number[] = []): Promise<Lens> {
     const { rows } = await this.pool.query(
       `WITH l AS (
          INSERT INTO washtrace.lenses (name, rule) VALUES ($1, $2) RETURNING id, name, rule, version, created_at, updated_at
        ), r AS (
-         INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version) SELECT id, $3, 'queued', version FROM l WHERE $3::int IS NOT NULL
+         INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version) SELECT l.id, u.c, 'queued', l.version FROM l, unnest($3::int[]) AS u(c)
        )
        SELECT id, name, rule, version, extract(epoch FROM created_at)::float8 AS created, extract(epoch FROM updated_at)::float8 AS updated FROM l`,
-      [name, JSON.stringify(rule), runOn ?? null],
+      [name, JSON.stringify(rule), [...runOn]],
     );
     return toLens(rows[0]);
   }
@@ -3469,13 +3481,13 @@ export class Store {
    * same statement. A run of the old version still in flight then finds its
    * version behind (saveLensRun), and the totals it had stay on show until the
    * new run saves; its `lens_version` stays the one they came from,
-   * so a reader can tell they are the old rule's. `runOn` is a collection the
-   * lens has no run on yet, queued in the same statement (as createLens does),
-   * so an edit made from that collection's page runs there too: the editor's
-   * button says it will. A failure, such as no such collection (23503), leaves
+   * so a reader can tell they are the old rule's. `runOn` are collections the
+   * lens has no run on yet, each queued in the same statement (as createLens
+   * does), so an edit made from a collection's page runs there too: the
+   * editor's button says it will. A failure, such as no such collection (23503), leaves
    * the lens as it was. Null when there is no such lens.
    */
-  async updateLens(id: number, name: string, rule: LensRule, runOn?: number): Promise<Lens | null> {
+  async updateLens(id: number, name: string, rule: LensRule, runOn: readonly number[] = []): Promise<Lens | null> {
     const { rows } = await this.pool.query(
       `WITH l AS (
          UPDATE washtrace.lenses SET name = $2, rule = $3, version = version + 1, updated_at = now() WHERE id = $1
@@ -3486,12 +3498,12 @@ export class Store {
        ), n AS (
          -- A run already here is queued by r; the NOT EXISTS reads the rows as they were before this statement, so the two never touch one row.
          INSERT INTO washtrace.lens_runs (lens_id, collection_id, status, lens_version)
-         SELECT id, $4, 'queued', version FROM l
-         WHERE $4::int IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.lens_runs x WHERE x.lens_id = l.id AND x.collection_id = $4)
+         SELECT l.id, u.c, 'queued', l.version FROM l, unnest($4::int[]) AS u(c)
+         WHERE NOT EXISTS (SELECT 1 FROM washtrace.lens_runs x WHERE x.lens_id = l.id AND x.collection_id = u.c)
          ON CONFLICT (lens_id, collection_id) DO NOTHING
        )
        SELECT id, name, rule, version, extract(epoch FROM created_at)::float8 AS created, extract(epoch FROM updated_at)::float8 AS updated FROM l`,
-      [id, name, JSON.stringify(rule), runOn ?? null],
+      [id, name, JSON.stringify(rule), [...runOn]],
     );
     return rows[0] ? toLens(rows[0]) : null;
   }
@@ -3527,7 +3539,6 @@ export class Store {
     );
   }
 
-  /** Every lens, with its run on this collection, or null when it has none here. */
   /** Every lens of yours with its run on each collection it has one on, by collection id: the Lab lists them all at once. */
   async lensRunsAll(): Promise<{ lens: Lens; runs: Map<number, LensRun> }[]> {
     const { rows } = await this.pool.query(
@@ -3547,6 +3558,7 @@ export class Store {
     return [...out.values()];
   }
 
+  /** Every lens, with its run on this collection, or null when it has none here. */
   async lensRuns(collectionId: number): Promise<{ lens: Lens; run: LensRun | null }[]> {
     const { rows } = await this.pool.query(
       `SELECT l.id, l.name, l.rule, l.version, extract(epoch FROM l.created_at)::float8 AS created, extract(epoch FROM l.updated_at)::float8 AS updated,
@@ -4051,10 +4063,6 @@ export class Store {
 }
 
 /**
- * ` AND` the bound that keeps a lens list's counted trades to those `method`
- * judged, for its rows' denominators, or '' when it judged them all.
- */
-/**
  * Every ring of collection `$1` with what its counted flagged trades add up
  * to, priced in money `$2`, ranked: a CTE chain that ends in `ranked`, for a
  * SELECT after it. A trade two witnesses of one ring flag counts once; a ring
@@ -4097,6 +4105,10 @@ function walletsOf(w: Witness): readonly string[] {
   return w.kind === 'pair' ? (w.middle === null ? [...w.pair] : [...w.pair, w.middle]) : w.wallets;
 }
 
+/**
+ * ` AND` the bound that keeps a lens list's counted trades to those `method`
+ * judged, for its rows' denominators, or '' when it judged them all.
+ */
 function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): string {
   const judged = judgedThrough(method, ctx, params);
   return judged === null ? '' : ` AND ${judged}`;

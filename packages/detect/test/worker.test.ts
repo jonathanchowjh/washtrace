@@ -3415,6 +3415,15 @@ describe('Worker.lensRun', () => {
     expect(logged.mock.calls.map((c) => [c[1], c[2]])).toContainEqual(['analyze', 'witnesses gone']);
   });
 
+  it('passes over a collection whose rings failed to fill, so it holds up none after it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fill = vi.fn(async (_skip?: readonly number[]): Promise<boolean> => { throw Object.assign(new Error('bad witness'), { collectionId: 3 }); });
+    const t = setup({ ...analysisDue, fillRings: fill });
+    await t.pass();
+    await t.pass();
+    expect(fill.mock.calls.map((c) => c[0])).toEqual([[], [3]]);
+  });
+
   it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long', async () => {
     const now = 2_000_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);

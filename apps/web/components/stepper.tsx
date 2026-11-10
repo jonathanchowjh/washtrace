@@ -5,11 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { Step } from '@/lib/step';
 import { num } from '@/lib/format';
-
-/** True when a key press is someone typing: J and K are letters then. */
-function typing(t: EventTarget | null): boolean {
-  return t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
-}
+import { typing } from '@/lib/utils';
 
 /**
  * The line above an item opened from a list: back to the list, where it sits

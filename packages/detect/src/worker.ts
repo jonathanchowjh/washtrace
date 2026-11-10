@@ -252,6 +252,8 @@ export class Worker {
   private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
   /** What the last analyze pass here ran, for pickWork. In memory only: a restart forgets it, and the first pass picks as if nothing ran. */
   private last: Work | null = null;
+  // Collections whose rings failed to fill: passed over until the worker restarts, so one holds up none after it. Their next analysis fills them.
+  private ringsFailed = new Set<number>();
   /**
    * A preview was asked for while an analyze pass was in flight here: that
    * pass may have looked for one before it was queued, so one more runs after
@@ -473,7 +475,12 @@ export class Worker {
     const swept = await this.store.sweepPreviews(now).then(() => true, (err) => { failed.set('lens', err); return false; });
     // Rings for an analysis saved before they were (Store.fillRings): one collection a turn, under the lock saveAnalysis is under.
     // A failure is the analyze row's, and is logged: an analysis that runs after it would otherwise write over it with ok.
-    await this.store.fillRings().catch((err) => { failed.set('analyze', err); this.logFailed('analyze', this.scrubbed(err)); });
+    await this.store.fillRings([...this.ringsFailed]).catch((err) => {
+      const id = (err as { collectionId?: unknown }).collectionId;
+      if (typeof id === 'number') this.ringsFailed.add(id);
+      failed.set('analyze', err);
+      this.logFailed('analyze', this.scrubbed(err));
+    });
     const due = await this.dueAnalysis(now).catch((err) => { failed.set('analyze', err); return null; });
     const analysisFirst = this.last === 'preview' && due !== null;
     let preview: Awaited<ReturnType<Store['nextPreview']>> = null;

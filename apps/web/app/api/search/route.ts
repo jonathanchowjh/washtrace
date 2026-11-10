@@ -19,8 +19,8 @@ export async function GET(req: Request): Promise<Response> {
     const parsed = parseSearch(params.get('q') ?? '');
     const hits: SearchReply = await s.search(parsed, { only, offset: (page - 1) * SEARCH_LIMIT, scope: c === null ? undefined : { id: c.id, chainId: c.chainId } });
     const best = hits.wallets[0];
-    // Only the box's read, of every kind, adds it: a page of one kind lists no best match.
-    if (c === null || only !== undefined || bestKind(hits, parsed) !== 'wallets' || best === undefined || best.chainId !== c.chainId) return json(hits);
+    // Only the box's read, of every kind, adds it: a page of one kind lists no best match. A wallet that never traded here has nothing here.
+    if (c === null || only !== undefined || bestKind(hits, parsed) !== 'wallets' || best === undefined || best.chainId !== c.chainId || best.here === false) return json(hits);
     const [anchors, tokens] = await Promise.all([s.ringsOf(c.id, { wallet: best.address }), s.walletTokens(c.chainId, best.address, c.address, CONNECTED)]);
     const rings = (await s.ringLines(c.id, anchors, { money: moneyFor(c.chainId) })).slice(0, CONNECTED);
     hits.connected = { wallet: best.address, rings: rings.map((r) => ({ anchor: r.anchor, rank: r.rank })), tokens };

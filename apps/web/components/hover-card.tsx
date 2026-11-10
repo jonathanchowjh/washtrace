@@ -14,15 +14,18 @@ export type Card =
 /** Long enough that a pointer passing over a table opens nothing; short enough to feel like a reply. */
 export const OPEN_MS = 300;
 
-// One read per thing a page shows, however often it is hovered; a failed read is remembered as nothing to show.
-const cache = new Map<string, Promise<Card | null>>();
+/** How long a card is kept: hovering a table reads each thing once, and a new analysis shows within a minute. */
+export const KEEP_MS = 60_000;
+
+// One read per thing a page shows while it is fresh. A failed read is forgotten, so the next hover asks again.
+const cache = new Map<string, { at: number; card: Promise<Card | null> }>();
 function cardOf(src: string): Promise<Card | null> {
-  let p = cache.get(src);
-  if (p === undefined) {
-    p = fetch(src).then((r) => (r.ok ? (r.json() as Promise<Card>) : null)).catch(() => null);
-    cache.set(src, p);
-  }
-  return p;
+  const kept = cache.get(src);
+  if (kept !== undefined && Date.now() - kept.at < KEEP_MS) return kept.card;
+  const card = fetch(src).then((r) => (r.ok ? (r.json() as Promise<Card>) : null)).catch(() => null);
+  cache.set(src, { at: Date.now(), card });
+  void card.then((c) => { if (c === null && cache.get(src)?.card === card) cache.delete(src); });
+  return card;
 }
 
 /** Forget every card read, so a test starts from none. */

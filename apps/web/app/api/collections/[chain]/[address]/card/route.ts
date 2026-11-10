@@ -7,7 +7,7 @@ type Ctx = { params: Promise<{ chain: string; address: string }> };
 /**
  * GET: what a hover card says of one wallet, token or ring in the collection:
  * a few counts, never a verdict read. `?wallet=` gives its trades here, those
- * counted flagged, and its first ring; `?token=` its transfers and those a
+ * counted flagged, and its highest-ranked ring; `?token=` its transfers and those a
  * counted lens flags; `?ring=` the ring's line. Exactly one of the three.
  * `judged` is false before the collection's first analysis.
  */
@@ -29,8 +29,9 @@ export async function GET(req: Request, { params }: Ctx): Promise<Response> {
       const [trades, flagged, rings] = await Promise.all([
         s.walletTradeCount(chainId, wallet, here), s.walletTradeCount(chainId, wallet, { ...here, flaggedOnly: true }), s.ringsOf(collection.id, { wallet }),
       ]);
-      const first = rings.length === 0 ? [] : await s.ringLines(collection.id, rings.slice(0, 1), money);
-      return json({ kind: 'wallet', judged, address: wallet, trades, flagged, rings: rings.length, ring: first[0] ?? null });
+      // ringsOf is in anchor order; ringLines ranks them, so the card names the wallet's highest ring.
+      const [top] = rings.length === 0 ? [] : await s.ringLines(collection.id, rings, money);
+      return json({ kind: 'wallet', judged, address: wallet, trades, flagged, rings: rings.length, ring: top ?? null });
     }
     if (token !== null) {
       const transfers = await s.token(collection.id, token);

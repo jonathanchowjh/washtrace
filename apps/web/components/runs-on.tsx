@@ -37,12 +37,15 @@ export function RunsOn({ lensId, rows, writable }: { lensId: number; rows: reado
   async function run() {
     setBusy(true);
     setError(null);
-    for (const r of rows.filter((x) => picked.has(key(x)))) {
+    const queue = rows.filter((x) => picked.has(key(x)));
+    // Those after a failure were never sent: they stay ticked, so Run on N again sends just them.
+    let left: string[] = [];
+    for (const [n, r] of queue.entries()) {
       const { error: failed } = await send(`/api/lenses/${lensId}/runs`, 'POST', { chainId: r.chainId, address: r.address });
-      if (failed !== null) { setError(`${r.name}: ${failed}`); break; }
+      if (failed !== null) { setError(`${r.name}: ${failed} Those still ticked are not queued.`); left = queue.slice(n).map(key); break; }
     }
     setBusy(false);
-    setPicked(new Set());
+    setPicked(new Set(left));
     router.refresh();
   }
 

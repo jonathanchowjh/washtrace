@@ -18,9 +18,17 @@ const card = (q: string) => GET(new Request(`http://x/api/collections/1/${ADDR}/
 beforeEach(() => vi.clearAllMocks());
 
 describe('GET a hover card', () => {
-  it('says a wallet\'s trades here, those counted flagged, and its first ring', async () => {
+  it('says a wallet\'s trades here, those counted flagged, and its highest-ranked ring', async () => {
     expect(await (await card(`wallet=${W}`)).json()).toMatchObject({ kind: 'wallet', judged: true, trades: 5, flagged: 1, rings: 1, ring: { rank: 2 } });
     expect(fake.walletTradeCount.mock.calls[0]![2]).toEqual({ collection: ADDR });
+  });
+
+  it('names the ring of highest rank, not the one of smallest anchor', async () => {
+    const low = '0x' + '01'.repeat(20), high = '0x' + 'f1'.repeat(20);
+    fake.ringsOf.mockResolvedValueOnce([low, high]);
+    fake.ringLines.mockResolvedValueOnce([{ anchor: high, rank: 1 }, { anchor: low, rank: 57 }]);
+    expect((await (await card(`wallet=${W}`)).json()).ring).toEqual({ anchor: high, rank: 1 });
+    expect(fake.ringLines.mock.calls[0]![1]).toEqual([low, high]);
   });
 
   it('counts a token\'s transfers and those a counted lens flags, Money loops back left out', async () => {

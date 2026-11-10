@@ -123,7 +123,8 @@ leading `'`.
 
 - `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
   address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
-  collection narrows nothing.
+  collection narrows nothing. In a scoped search each wallet hit carries `here`, whether it traded in that
+  collection: false only for one found by its full address.
 - `connected` comes with a scoped search of every kind (no `kind`) whose best match, the first hit of the kind
   listed first, is a wallet on the scope's chain: `{wallet, rings, tokens}`, its first 3 rings there by rank
   (`{anchor, rank}`) and the 3 tokens it traded there most. The search box lists them under that wallet.

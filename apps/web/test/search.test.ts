@@ -76,6 +76,11 @@ describe('a search\'s scope', () => {
     const scope = { chainId: 1, address: '0x' + 'c'.repeat(40) };
     expect([hitRow(hits, 'wallets', 0, scope).href, hitRow(hits, 'wallets', 1, scope).href]).toEqual([`/c/1/${scope.address}/w/${A}`, `/w/10/${A}`]);
   });
+
+  it('opens a wallet found by its full address on its own page when it never traded in the scope', () => {
+    const hits = { collections: [], tokens: [], trades: [], wallets: [{ chainId: 1, address: A, transfers: 1, here: false }], more: { collections: false, tokens: false, wallets: false, trades: false } };
+    expect(hitRow(hits, 'wallets', 0, { chainId: 1, address: '0x' + 'c'.repeat(40) }).href).toBe(`/w/1/${A}`);
+  });
 });
 
 describe('the order of a search\'s kinds', () => {

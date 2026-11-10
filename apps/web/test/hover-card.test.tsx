@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HoverCard, OPEN_MS, cardLines, forgetCards, type Card } from '@/components/hover-card';
+import { HoverCard, KEEP_MS, OPEN_MS, cardLines, forgetCards, type Card } from '@/components/hover-card';
 
 const W = '0x' + 'a'.repeat(40);
 const wallet: Card = { kind: 'wallet', judged: true, address: W, trades: 4, flagged: 2, rings: 2, ring: { anchor: W, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null } };
@@ -45,12 +45,27 @@ describe('a hover card', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('shows nothing when the read fails', async () => {
-    fetchMock.mockResolvedValue(reply({}, false));
+  it('shows nothing when the read fails, and asks again on the next hover', async () => {
+    fetchMock.mockResolvedValueOnce(reply({}, false)).mockResolvedValue(reply(wallet));
     draw();
-    fireEvent.mouseEnter(screen.getByText('wallet').parentElement!);
+    const at = screen.getByText('wallet').parentElement!;
+    fireEvent.mouseEnter(at);
     await wait(OPEN_MS);
     expect(screen.queryByRole('tooltip')).toBeNull();
+    fireEvent.mouseLeave(at);
+    fireEvent.mouseEnter(at);
+    await wait(OPEN_MS);
+    expect(screen.getByRole('tooltip')).toBeTruthy();
+  });
+
+  it('reads a thing again once its card is a minute old, so a new analysis shows', async () => {
+    fetchMock.mockResolvedValue(reply(wallet));
+    draw();
+    const at = screen.getByText('wallet').parentElement!;
+    fireEvent.mouseEnter(at); await wait(OPEN_MS); fireEvent.mouseLeave(at);
+    await wait(KEEP_MS);
+    fireEvent.mouseEnter(at); await wait(OPEN_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('says not judged yet before any analysis, never 0 flagged', () => {
