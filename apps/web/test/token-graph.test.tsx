@@ -192,3 +192,18 @@ describe('the arrows’ links', () => {
     for (const a of tradeLinks()) expect(a.getAttribute('tabindex')).toBe('-1');
   });
 });
+
+describe('the graph on a phone', () => {
+  it('is drawn no narrower than 0.8 of its size below sm, scrolling in its own box, so its 10 px labels stay 8 px or more', () => {
+    const c = render(<LoopFigure drawing={d} chainId={1} lit={{ edges: [], nodes: [] }} base="" />).container;
+    const svg = c.querySelector<SVGSVGElement>('figure svg')!;
+    expect(svg.parentElement!.className).toBe('overflow-x-auto');
+    expect(svg.getAttribute('class')).toContain('max-sm:min-w-(--figure-min)');
+    expect(svg.style.getPropertyValue('--figure-min')).toBe(`${Math.round(d.view.w * 0.8)}px`);
+    // From sm it fits its column as before: full width, never wider than drawn.
+    expect(svg.getAttribute('class')).toContain('w-full');
+    expect(svg.style.maxWidth).toBe(`${Math.round(d.view.w)}px`);
+    // The legend stays put, outside the scrolling box.
+    expect(c.querySelector('figure > figcaption')).not.toBeNull();
+  });
+});

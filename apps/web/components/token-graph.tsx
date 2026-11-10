@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useId, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
@@ -12,6 +12,9 @@ import { cn } from '@/lib/utils';
 // Literal class names: Tailwind generates only the classes it can read in the source. A lens of yours is drawn in the flow hue, as its tab is.
 const STROKE = { cycle: 'stroke-cycle', money: 'stroke-money', apart: 'stroke-muted-foreground', clean: 'stroke-clean', own: 'stroke-flow' } as const;
 const FILL = { cycle: 'fill-cycle', money: 'fill-money', apart: 'fill-muted-foreground', clean: 'fill-clean', flow: 'fill-flow' } as const;
+
+/** The least a phone draws the graph at, of its own size: its 10 px labels stay 8 px or more. */
+const MIN_SCALE = 0.8;
 
 /**
  * The token's graph as one picture (paper Figure 8, drawn from data), with
@@ -50,57 +53,61 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   return (
     <figure className="rounded-lg border bg-card p-3">
       {/* The box round what is drawn, never wider on screen than it is drawn: a two-wallet loop is a short strip, not a square of empty card. */}
-      <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px` }} className="mx-auto block h-auto w-full" role="group" aria-label={label}>
-        <defs>
-          {(['cycle', 'money', 'apart', 'clean', 'flow'] as const).map((k) => (
-            <marker key={k} id={`${marker}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" className={FILL[k]} />
-            </marker>
-          ))}
-        </defs>
-        {edges.map((e) => {
-          const on = litEdges.has(e.key);
-          const href = labelHref(e);
-          return (
-            <g key={e.key} data-edge={e.key} data-lit={on ? '' : undefined} className={cn(any && !on && 'opacity-25')}>
-              <title>{e.title}</title>
-              <path
-                d={e.d} fill="none"
-                strokeWidth={e.kind === 'money' ? 1.4 : e.tone === 'clean' ? 1.2 : 2}
-                strokeDasharray={e.kind === 'money' ? '5 4' : undefined}
-                className={e.kind === 'money' ? 'stroke-flow' : STROKE[e.tone]}
-                markerEnd={`url(#${marker}-${e.kind === 'money' || e.tone === 'own' ? 'flow' : e.tone})`}
-              />
-              {/* A 2px line is a poor target, so a wider invisible copy of it takes the click. Out of the tab order, as the clickable path before it was: the table's rows are the keyboard's way to a trade. A bundle opens its first. */}
-              {e.tx === null ? null : (
-                <a href={txHref(chainId, e.tx, base)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${e.title}`}>
-                  <path d={e.d} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" className="cursor-pointer" />
-                </a>
-              )}
-              {labels && e.label ? (
-                <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn('font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : 'fill-muted-foreground')}>
-                  {href === undefined ? e.label : <a href={href}>{e.label}</a>}
-                </text>
-              ) : null}
-            </g>
-          );
-        })}
-        {nodes.map((n) => {
-          const cls = cn('cursor-pointer outline-focus focus-visible:outline-2', any && !litNodes.has(n.id) && 'opacity-25');
-          const body = (
-            <>
-              <title>{n.id}</title>
-              <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
-              {labels ? (
-                <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
-              ) : null}
-            </>
-          );
-          return pick
-            ? <g key={n.id} role="button" tabIndex={0} aria-label={`Wallet ${n.id}`} data-wallet={n.id} className={cls}>{body}</g>
-            : <a key={n.id} href={walletHref(chainId, n.id, base)} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
-        })}
-      </svg>
+      {/* On a phone it is never drawn below MIN_SCALE, so its labels stay readable, and scrolls sideways in its own box instead; from sm it fits the column as before. */}
+      <div className="overflow-x-auto">
+        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px`, '--figure-min': `${Math.round(view.w * MIN_SCALE)}px` } as CSSProperties}
+          className="mx-auto block h-auto w-full max-sm:min-w-(--figure-min)" role="group" aria-label={label}>
+          <defs>
+            {(['cycle', 'money', 'apart', 'clean', 'flow'] as const).map((k) => (
+              <marker key={k} id={`${marker}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" className={FILL[k]} />
+              </marker>
+            ))}
+          </defs>
+          {edges.map((e) => {
+            const on = litEdges.has(e.key);
+            const href = labelHref(e);
+            return (
+              <g key={e.key} data-edge={e.key} data-lit={on ? '' : undefined} className={cn(any && !on && 'opacity-25')}>
+                <title>{e.title}</title>
+                <path
+                  d={e.d} fill="none"
+                  strokeWidth={e.kind === 'money' ? 1.4 : e.tone === 'clean' ? 1.2 : 2}
+                  strokeDasharray={e.kind === 'money' ? '5 4' : undefined}
+                  className={e.kind === 'money' ? 'stroke-flow' : STROKE[e.tone]}
+                  markerEnd={`url(#${marker}-${e.kind === 'money' || e.tone === 'own' ? 'flow' : e.tone})`}
+                />
+                {/* A 2px line is a poor target, so a wider invisible copy of it takes the click. Out of the tab order, as the clickable path before it was: the table's rows are the keyboard's way to a trade. A bundle opens its first. */}
+                {e.tx === null ? null : (
+                  <a href={txHref(chainId, e.tx, base)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${e.title}`}>
+                    <path d={e.d} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" className="cursor-pointer" />
+                  </a>
+                )}
+                {labels && e.label ? (
+                  <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn('font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : 'fill-muted-foreground')}>
+                    {href === undefined ? e.label : <a href={href}>{e.label}</a>}
+                  </text>
+                ) : null}
+              </g>
+            );
+          })}
+          {nodes.map((n) => {
+            const cls = cn('cursor-pointer outline-focus focus-visible:outline-2', any && !litNodes.has(n.id) && 'opacity-25');
+            const body = (
+              <>
+                <title>{n.id}</title>
+                <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
+                {labels ? (
+                  <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className="fill-body font-mono text-[10px]">{short(n.id)}</text>
+                ) : null}
+              </>
+            );
+            return pick
+              ? <g key={n.id} role="button" tabIndex={0} aria-label={`Wallet ${n.id}`} data-wallet={n.id} className={cls}>{body}</g>
+              : <a key={n.id} href={walletHref(chainId, n.id, base)} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
+          })}
+        </svg>
+      </div>
       <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {drawn.has('cycle') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />{LENSES.A.name}</span> : null}
         {drawn.has('money') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />{LENSES.AC.name}</span> : null}
