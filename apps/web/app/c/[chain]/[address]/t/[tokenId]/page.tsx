@@ -10,7 +10,7 @@ import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segment
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
-import { EvidenceGlyph, VerdictChip } from '@/components/kit';
+import { EvidenceGlyph, KindIcon, VerdictChip } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
@@ -227,11 +227,21 @@ async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
   const config = configFromSources(sources, settings);
   const cov = coverage(c, new Set(config.chains), Date.now(), zone, config.funding, workerSilent(passes, Date.now()) !== null);
   const name = c.name ?? short(c.address);
+  const reading = unread(cov);
+  // Shaped as every token page is, chip and answer, so a token with nothing read never reads as missing or as clean.
   return (
     <>
-      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} />
-      <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
-      <MoreLink href={base}>Back to {name}</MoreLink>
+      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} sub={chainName(c.chainId)} part={<VerdictChip tone={null} />} />
+      <Answer tone="clean" title="No transfer of this token is read">
+        {reading ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}
+        <p className="mt-2 text-muted-foreground">
+          <b className="font-medium text-foreground">What this means:</b>{' '}
+          {reading
+            ? 'Its transfers may be in the part of the history still to read, or it may not be minted. Nothing about it is judged, which is not the same as clean.'
+            : 'It may not be minted, or the number is not one of this collection’s. Nothing about it is judged, which is not the same as clean.'}
+        </p>
+      </Answer>
+      <Link href={base} className="btn mt-4 inline-flex items-center gap-1.5 text-sm"><KindIcon kind="collection" />Back to {name}</Link>
     </>
   );
 }

@@ -367,6 +367,17 @@ describe('the token page for a watched collection with no transfer of the token'
     expect(text).not.toContain('read yet');
   });
 
+  it('heads as any token page: a Not judged yet chip, an answer with what it means, and a button back', async () => {
+    Object.assign(state, { empty: true });
+    const el = await dom();
+    expect(el.querySelector('header .chip')?.textContent).toBe('Not judged yet');
+    expect(el.querySelector('p.text-lg')?.textContent).toBe('No transfer of this token is read');
+    expect(el.textContent).toContain('What this means: It may not be minted');
+    const back = [...el.querySelectorAll('a')].find((a) => a.textContent === 'Back to Coll')!;
+    expect(back.className).toMatch(/\bbtn\b/);
+    expect(back.className).toMatch(/\bmt-4\b/);
+  });
+
   it('still answers not found for a collection that is not watched', async () => {
     Object.assign(state, { missing: true });
     await expect(dom()).rejects.toThrow('not found');
