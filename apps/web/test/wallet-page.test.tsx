@@ -266,6 +266,23 @@ describe('the wallet page', () => {
     expect(cells).toContain(`${here}?trades=2&with=${partner(0)}&dir=received#between`);
   });
 
+  it('a flagged wallet says what it means, as the token page does; a clean one does not', async () => {
+    trades = 5; flaggedTrades = 2;
+    expect(await page()).toContain('What this means: Tokens it traded came back to a wallet that sold them.');
+    cleanup();
+    flaggedTrades = 0;
+    expect(await page()).not.toContain('What this means');
+  });
+
+  it('its payment counts look like the links they are, and the kinds of payment sit in the lead, not floated beside it', async () => {
+    trades = 5; counterparties = 1;
+    const el = await render_();
+    const count = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(short(partner(0))))!.querySelector('td.text-right a')!;
+    expect(count.className).toMatch(/\bunderline\b/);
+    const section = [...el.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === 'Who did it move money with?')!;
+    expect(section.querySelector('h2')!.nextElementSibling!.textContent).toContain('Payments are native, internal and wrapped-native, both directions.');
+  });
+
   it('with=…&dir=sent lists the payments it sent and the trades between the two', async () => {
     trades = 5; counterparties = 3; sentFlows = 3; receivedFlows = 1; betweenTrades = 2;
     const el = await render_({ with: partner(0), dir: 'sent' });

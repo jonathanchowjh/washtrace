@@ -151,6 +151,15 @@ export async function WalletView({ chainId, address, sp, within }: {
         {hits.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by.filter((m) => HEADLINE.includes(m)))}.</p> : null}
         {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
         <p className="text-muted-foreground">{money}</p>
+        {/* As the token page says it: what the flag means for this wallet, in a line of its own. */}
+        {hits.length > 0 ? (
+          <p className="mt-2 text-muted-foreground">
+            <b className="font-medium text-foreground">What this means:</b>{' '}
+            {by.includes('A')
+              ? 'Tokens it traded came back to a wallet that sold them. Open a token below to see the loop.'
+              : `${lensList(by.filter((m) => HEADLINE.includes(m)))} found this: it and a wallet it traded with are linked by money. The payments are under Who did it move money with, below.`}
+          </p>
+        ) : null}
       </Answer>
 
       {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
@@ -195,8 +204,7 @@ export async function WalletView({ chainId, address, sp, within }: {
 
       <Section
         title="Who did it move money with?"
-        lead={<>{pages.partners.pages > 1 ? `${num(partnerFirst)}–${num(partnerFirst + counterparties.length - 1)} of ${num(pages.partners.total)} counterparties. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two.</>}
-        aside="native, internal and wrapped-native flows, both directions"
+        lead={<>{pages.partners.pages > 1 ? `${num(partnerFirst)}–${num(partnerFirst + counterparties.length - 1)} of ${num(pages.partners.total)} counterparties. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two. Payments are native, internal and wrapped-native, both directions.</>}
       >
         {counterparties.length === 0 ? <Empty>No money flows read for this wallet.</Empty> : (
           <div className="overflow-x-auto rounded-lg border bg-card">
@@ -212,7 +220,7 @@ export async function WalletView({ chainId, address, sp, within }: {
               <tbody>
                 {counterparties.map((c) => {
                   const opens = (n: number, dir: FlowDir) => n === 0 ? <span className="text-muted-foreground">0</span>
-                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} prefetch={false} className="font-medium hover:underline">{num(n)}</Link>;
+                    : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} prefetch={false} className="font-medium text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{num(n)}</Link>;
                   return (
                     <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
                       <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
