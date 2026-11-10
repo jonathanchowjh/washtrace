@@ -11,7 +11,10 @@ import { RingFigure, ringName, ringTone } from '@/components/rings';
 import { Time } from '@/components/time';
 import { collectionOf } from '@/lib/collection-reads';
 import { eth, num, plural, short, tokenLabel } from '@/lib/format';
-import { cardSrc, walletHref } from '@/lib/links';
+import { cardSrc, txHref, walletHref } from '@/lib/links';
+import { layout } from '@/lib/layout';
+import { ringDrawing } from '@/lib/views';
+import { LoopFigure } from '@/components/token-graph';
 import { HoverCard } from '@/components/hover-card';
 import { addressOf, chainOf } from '@/lib/params';
 import { store } from '@/lib/store';
@@ -71,6 +74,9 @@ export default async function RingPage(props: Props) {
   const traders = wallets.filter((w) => w.traded);
   const movers = wallets.filter((w) => !w.traded);
   const sales = tradesHref(base, { ring: anchor });
+  // Its loops drawn as a token's are, for a ring small enough to read; the list below holds every wallet either way.
+  const drawn = walletsCut ? null : await ringDrawing(store(), chainId, r.c, ring);
+  const drawing = drawn === null ? null : layout(drawn.transfers, drawn.flows, drawn.middles);
   return (
     <>
       {from === undefined ? null : <Suspense fallback={null}><StepLine c={r.c} from={from} id={anchor} /></Suspense>}
@@ -92,6 +98,13 @@ export default async function RingPage(props: Props) {
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ ring: anchor }} label="this ring's" /></Suspense>
       <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} salesOf={{ ring: anchor }} /></Suspense>
+
+      {drawing === null || drawn === null ? null : (
+        <Section title="What it looks like" lead="Each circle is a wallet of the ring. Solid arrows are its tokens changing hands between them, numbered by block, each opening its trade; dashed arrows are money between them.">
+          <LoopFigure drawing={drawing} chainId={chainId} lit={{ edges: [], nodes: [] }} base={base} label={`Transfers and money among the wallets of ${ringName(line)}`}
+            rowHrefs={Object.fromEntries(drawn.transfers.map((t, i) => [i + 1, txHref(chainId, t.txHash, base)]))} />
+        </Section>
+      )}
 
       <Section title="Who is in it" lead={`Those that traded, then those that only moved the money: a funder, a middle, a payee. A ring is wallets the evidence joins, not one person.${walletsCut ? ` The first ${num(wallets.length)} of ${num(line.wallets)} are listed.` : ''}`}>
         <div className="grid gap-4 md:grid-cols-2">

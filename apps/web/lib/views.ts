@@ -75,6 +75,26 @@ async function drawingInputs(s: Store, chainId: number, c: Pick<CollectionRow, '
   return { transfers, middles, flows, own };
 }
 
+/** Past this many wallets a ring's loops are a tangle: its page draws who is in it instead. */
+export const RING_DRAWN = 25;
+
+/**
+ * A ring's loops as a token's graph draws them (layout()): each of its tokens
+ * changing hands between two of its wallets, with the flags of the lenses that
+ * ran, and the money among its wallets; those that only moved the money sit
+ * inside as middles. Null past RING_DRAWN wallets, or for one with no such transfer.
+ */
+export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> | null> {
+  if (ring.wallets.length === 0 || ring.wallets.length > RING_DRAWN) return null;
+  const inRing = new Set(ring.wallets.map((w) => w.address));
+  const all = (await Promise.all(ring.tokens.map((t) => s.token(c.id, t.tokenId)))).flat();
+  const transfers = all.filter((t) => inRing.has(t.from) && inRing.has(t.to)).map((t) => ranFlags(t, c.latest))
+    .sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
+  if (transfers.length === 0) return null;
+  const flows = await s.flowsAmong(chainId, [...inRing]);
+  return { transfers, middles: ring.wallets.filter((w) => !w.traded).map((w) => w.address), flows };
+}
+
 /** Your lenses that ran on a collection, by id: a lens of yours with no finished run there has flagged nothing on it yet. */
 function ownRanIds(latest: AnalysisRow | null, runs: readonly { lens: Lens; run: LensRun | null }[]): number[] {
   return lensContext(latest, runs).ran.flatMap((k) => lensIdOf(k) ?? []);

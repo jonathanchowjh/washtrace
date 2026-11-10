@@ -7,6 +7,8 @@ const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
 const A = '0x' + 'a1'.repeat(20), B = '0x' + 'b1'.repeat(20), M = '0x' + 'c1'.repeat(20);
 const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wallets: 3, sample: [A, B, M], sales: 3, floorSales, tokens: 1, volumeWei: '9000000000000000000', firstAt: null, lastAt: null });
+const X = '0x' + 'd1'.repeat(20);
+const moved = (from: string, to: string, n: number) => ({ txHash: '0x' + String(n).repeat(64), logIndex: 0, blockNumber: n, blockTime: n, tokenId: '114', from, to, marketplace: 'opensea', priceWei: '1', currency: '', flags: {} });
 const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)] };
 vi.mock('@/lib/store', () => ({
   store: () => ({
@@ -15,6 +17,9 @@ vi.mock('@/lib/store', () => ({
     ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1), wallets: [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }], walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
     ringsOf: async (_id: number, of: { wallet?: string }) => (of.wallet === M ? [A] : []),
     ringLines: async (_id: number, anchors: string[]) => anchors.map((a) => line(3, a)),
+    // A and B pass #114 back and forth; it then leaves the ring for X.
+    token: async () => [moved(A, B, 1), moved(B, A, 2), moved(A, X, 3)],
+    flowsAmong: async () => [{ txHash: '0x' + 'f'.repeat(64), kind: 'native', from: M, to: A, valueWei: '1000000000000000000', token: '', blockNumber: 1, blockTime: 1 }],
   }),
 }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
@@ -75,6 +80,16 @@ describe('a ring', () => {
     expect(links(c)).toContainEqual(['All its 3 sales →', tradesHref(BASE, { ring: A })]);
     expect(links(c)).toContainEqual(['#114', `${BASE}/t/114`]);
     expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
+  });
+
+  it('draws its loops as a token\'s graph: its own wallets\' transfers, each opening its trade, and the money among them', async () => {
+    const c = await one(A);
+    const fig = c.querySelector('svg[aria-label="Transfers and money among the wallets of Ring 1"]')!;
+    expect(fig).toBeTruthy();
+    // The two transfers between its wallets, not the one out to X; numbered by block, each opening its trade.
+    const hrefs = [...fig.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(expect.arrayContaining([`${BASE}/tx/0x${'1'.repeat(64)}`, `${BASE}/tx/0x${'2'.repeat(64)}`]));
+    expect(hrefs.some((h) => h?.includes('3'.repeat(64)))).toBe(false);
   });
 
   it('says when no ring of the latest analysis has the anchor, and links the list', async () => {
