@@ -459,8 +459,20 @@ describe('the wallet under a collection\'s tabs', () => {
   it('with no trade in the collection says so, and not that it is in none', async () => {
     trades = 3; unjudgedTrades = 3;
     const text = (await scoped()).textContent ?? '';
-    expect(text).toContain(`No trade in ${short(COLL)}`);
+    expect(text).toContain(`No transfer of it in ${short(COLL)}`);
     expect(text).not.toContain('Not in any watched collection');
+  });
+
+  it('a wallet that never traded here claims no part of it, and its lines agree', async () => {
+    const { default: Page } = await import('@/app/c/[chain]/[address]/w/[wallet]/page');
+    const t = await Page({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve({}) });
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    const text = render(t).container.textContent ?? '';
+    expect(text).toContain('Its money is not read: no transfer of it is read in a watched collection.');
+    expect(text).toContain(`No transfer of it is read in ${short(COLL)}.`);
+    expect(text).not.toContain('No transfers read yet');
+    expect(text).not.toContain('never traded');
   });
 
   it('names the wallet\'s own page as the canonical one', async () => {

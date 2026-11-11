@@ -94,7 +94,7 @@ export async function WalletView({ chainId, address, sp, within }: {
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
   const flaggedTitle = <>In <Link href={`${base}?flagged=1`} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'transfer' : 'transfers'} out of <Link href={base} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
-  const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No trade in ${within.name}`, tone: 'clean' as const }
+  const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No transfer of it in ${within.name}`, tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
     : transfers.length === 0 ? { title: 'No transfer of it matches these filters', tone: 'clean' as const }
     : answer(view, flaggedTitle);
@@ -105,7 +105,8 @@ export async function WalletView({ chainId, address, sp, within }: {
   const apartNote = apart === 0 || tone === 'apart' ? null
     : `${apart}${hits.length > 0 ? ' more' : ''} ${apart === 1 ? 'is' : 'are'} ${FLAGGED_ONLY_AU}`;
 
-  const money = funding === null ? 'Its money is not read: it never traded a watched collection.'
+  // A wallet with no row is one no read transfer named; said in the same words as its empty list below, so the two agree.
+  const money = funding === null ? `Its money is not read${counts.trades === 0 ? ': no transfer of it is read in a watched collection' : ' yet'}.`
     : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
     : funding.status === 'failed' ? `Reading its money failed: ${funding.error ?? 'unknown error'}. Retried hourly; until then ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
     : <>Its money was read {funding.fetchedAt === null ? 'from stored data' : <Time ms={funding.fetchedAt} />}{funding.truncated ? '. It has more history than Etherscan pages through, so it is never treated as the shared funder between two others' : ''}.</>;
@@ -164,7 +165,8 @@ export async function WalletView({ chainId, address, sp, within }: {
 
       {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
       {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}
-      {home === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
+      {/* A wallet with no transfer here is part of nothing here: the rail would name the collection and its share as if it were. */}
+      {home === undefined || counts.trades === 0 ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
 
       <Section title="Which of its transfers?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (
@@ -198,7 +200,8 @@ export async function WalletView({ chainId, address, sp, within }: {
             {unreadable ? <> · “{narrow.find}” is not a token number, or a wallet address or the start of one, so it matches nothing.</> : null}
           </MatchLine>
         ) : null}
-        {narrowed && transfers.length === 0 ? <Empty>No transfer of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
+        {counts.trades === 0 ? <Empty>No transfer of it is read in {within?.name ?? 'a watched collection'}.</Empty>
+          : narrowed && transfers.length === 0 ? <Empty>No transfer of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
         {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="transfers" pageParam="trades" /> : null}
       </Section>
 
