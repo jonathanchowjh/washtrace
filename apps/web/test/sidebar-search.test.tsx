@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '@/components/sidebar';
 
 const push = vi.fn();
-const nav = { path: '/' };
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => nav.path }));
+const nav = { path: '/', search: '' };
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => nav.path, useSearchParams: () => new URLSearchParams(nav.search) }));
 
 const ADDR = '0x' + 'a'.repeat(40);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
@@ -20,7 +20,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   push.mockReset();
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); nav.path = '/'; });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); nav.path = '/'; nav.search = ''; });
 
 const reply = (body: unknown) => ({ ok: true, json: async () => body });
 const box = () => screen.getAllByRole('combobox')[0]!;
@@ -138,6 +138,30 @@ describe('the search box type-ahead', () => {
     await type('10');
     expect(screen.getByText('Too short for a token number: type 3 digits, or #10.')).toBeTruthy();
     expect(screen.queryByText(/No match/)).toBeNull();
+  });
+});
+
+describe('the search box on the results page', () => {
+  it('holds the search the page is for, follows it to the next, and asks nothing until it is used', async () => {
+    fetchMock.mockResolvedValue(reply(hits({ collections: [terra] })));
+    nav.path = '/search';
+    nav.search = 'q=terra&kind=collections';
+    const { rerender } = render(<Sidebar watched={[]} />);
+    expect(screen.getAllByRole('combobox').map((b) => (b as HTMLInputElement).value)).toEqual(['terra', 'terra']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    nav.search = 'q=0x1ee2';
+    rerender(<Sidebar watched={[]} />);
+    expect((box() as HTMLInputElement).value).toBe('0x1ee2');
+    fireEvent.focus(box());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=0x1ee2');
+  });
+
+  it('keeps what was typed on any other page', async () => {
+    nav.search = 'q=terra';
+    render(<Sidebar watched={[]} />);
+    expect((box() as HTMLInputElement).value).toBe('');
   });
 });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { SearchKind } from '@washtrace/detect';
 import { short, tokenLabel } from '@/lib/format';
 import { typing } from '@/lib/utils';
@@ -76,15 +76,25 @@ export function SearchBox({ id, className, watched = [], wide }: {
   const [dropped, setDropped] = useState<string | null>(null);
   const scope = here !== null && dropped !== path ? here : null;
   const scopeName = scope === null ? null : watchedHere?.name ?? short(scope.address);
-  const [text, setText] = useState('');
+  // On the results page the box holds the search they are for, so it can be changed rather than typed again.
+  const params = useSearchParams();
+  const asked = path === '/search' ? params.get('q') ?? '' : null;
+  const [text, setText] = useState(asked ?? '');
+  const [askedSeen, setAskedSeen] = useState(asked);
+  if (asked !== askedSeen) {
+    setAskedSeen(asked);
+    if (asked !== null) setText(asked);
+  }
   const [hits, setHits] = useState<SearchReply | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
 
   // The cleanup drops a reply whose text has since changed, so a slow answer to "te" never replaces the answer to "ter".
+  // Only an open list asks: a box filled by the results page has nothing to suggest until it is used.
   useEffect(() => {
     const q = text.trim();
     if (parseSearch(q).kind === 'empty') { setHits(null); return; }
+    if (!open) return;
     let current = true;
     const ctl = new AbortController();
     const timer = setTimeout(async () => {
@@ -97,7 +107,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
       }
     }, WAIT_MS);
     return () => { current = false; clearTimeout(timer); ctl.abort(); };
-  }, [text, scope?.chainId, scope?.address]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [text, open, scope?.chainId, scope?.address]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // '/' focuses the box on show: the sidebar's layout switches at 768 px, as its classes do.
   useEffect(() => {
