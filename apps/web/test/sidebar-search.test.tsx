@@ -194,18 +194,17 @@ describe('the search box on a collection nobody watches', () => {
 });
 
 describe('the sidebar on a phone', () => {
-  it('fades the nav row\'s right edge while more of it is off-screen, and not once scrolled to the end', () => {
+  it('reads in order: the name first, then the search box, then the links, wrapping so none is past the edge', () => {
     render(<Sidebar watched={[terra]} />);
+    const top = document.querySelector('a[href="/"]')!;
+    expect(top.textContent).toBe('washtrace');
+    expect(top.compareDocumentPosition(document.getElementById('q-top')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The phone's row of links wraps rather than scrolling, so Settings and the theme are never hidden off-screen.
     const row = document.querySelector('aside')!;
-    const fade = document.querySelector('[data-more]') as HTMLElement;
-    expect(fade.hidden).toBe(true);
-    Object.defineProperty(row, 'scrollWidth', { configurable: true, value: 600 });
-    Object.defineProperty(row, 'clientWidth', { configurable: true, value: 400 });
-    act(() => { fireEvent.scroll(row); });
-    expect(fade.hidden).toBe(false);
-    row.scrollLeft = 200;
-    act(() => { fireEvent.scroll(row); });
-    expect(fade.hidden).toBe(true);
+    expect(row.className).toContain('flex-wrap');
+    expect(row.className.split(' ').filter((c) => c.includes('overflow-x'))).toEqual([]);
+    for (const nav of row.querySelectorAll('nav')) expect(nav.className).toContain('flex-wrap');
+    expect(document.querySelector('[data-more]')).toBeNull();
   });
 
   it('keeps the placeholder outside a collection short enough for the desktop box', () => {
