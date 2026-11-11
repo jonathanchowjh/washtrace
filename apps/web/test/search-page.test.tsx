@@ -162,6 +162,14 @@ describe('the search page', () => {
     expect(chipIn(`/c/1/${ADDR}/tx/${TX}`)).toBeUndefined();
   });
 
+  it('says a token has flagged trades, and says nothing of one without: it may not be judged yet', async () => {
+    const token = { chainId: 1, address: ADDR, name: 'Meebits', tokenId: '1234', transfers: 14 };
+    state.hits = { ...none, tokens: [{ ...token, flagged: true }, { ...token, address: '0x' + 'b'.repeat(40), flagged: false }] };
+    const c = await dom({ q: '#1234' });
+    expect(c.querySelector(`a[href="/c/1/${ADDR}/t/1234"] [data-chip]`)?.textContent).toBe('Has flagged trades');
+    expect(c.querySelector(`a[href="/c/1/0x${'b'.repeat(40)}/t/1234"] [data-chip]`)).toBeNull();
+  });
+
   it('gives an analysed collection its range of washed sales in place of its symbol', async () => {
     state.hits = { ...none, collections: [{ ...coll, totals: { A: t(18), AU: t(40), AC: t(25) } }] };
     const chip = (await dom({ q: 'terra' })).querySelector(`a[href="/c/1/${ADDR}"] [data-chip]`)?.textContent;

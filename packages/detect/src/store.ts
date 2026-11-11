@@ -445,7 +445,8 @@ export type SearchKind = 'collections' | 'tokens' | 'wallets' | 'trades';
 export interface SearchHits {
   /** `totals`: the latest analysis's, so a hit can say how washed it looks; null before the first. */
   collections: { chainId: number; address: string; name: string | null; symbol: string | null; totals: Record<Method, MethodTotals> | null }[];
-  tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number }[];
+  /** `flagged`: a counted lens flagged one of its trades in the latest analysis. */
+  tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number; flagged: boolean }[];
   /** `here`, in a scoped search: whether it traded in that collection. A full address is found anywhere, so it may not have. */
   wallets: { chainId: number; address: string; transfers: number; here?: boolean }[];
   trades: { chainId: number; txHash: string; address: string; name: string | null; tokenId: string }[];
@@ -3260,13 +3261,18 @@ export class Store {
       asks.push(collections('(c.name ILIKE $1 OR c.contract_name ILIKE $1 OR c.symbol ILIKE $1)', like).then((h) => { hits.collections = h; }));
     }
     if (p.kind === 'token' && want('tokens')) {
-      // One index probe per collection: Postgres 17 has no skip scan over transfers_token_idx.
+      // One index probe per collection: Postgres 17 has no skip scan over transfers_token_idx. Whether one of
+      // the token's trades is flagged reads the same transfers again, then each one's facts and flags by key.
       asks.push(this.pool.query(
-        `SELECT c.chain_id, c.address, c.name, x.n FROM washtrace.collections c CROSS JOIN LATERAL (
+        `SELECT c.chain_id, c.address, c.name, x.n, EXISTS (
+           SELECT 1 FROM washtrace.transfers t ${COUNTED_JOIN}
+           JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.method IN ${COUNTED} AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index
+           WHERE t.collection_id = c.id AND t.token_id = $1::numeric) AS flagged
+         FROM washtrace.collections c CROSS JOIN LATERAL (
            SELECT count(*)::int AS n FROM washtrace.transfers t WHERE t.collection_id = c.id AND t.token_id = $1::numeric) x
          WHERE x.n > 0 AND ($4::int IS NULL OR c.id = $4) ORDER BY x.n DESC, c.id LIMIT $2 OFFSET $3`,
         [p.tokenId, ...page, opts.scope?.id ?? null],
-      ).then(({ rows }) => { hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n })), 'tokens'); }));
+      ).then(({ rows }) => { hits.tokens = cut(rows.map((r) => ({ chainId: r.chain_id, address: r.address, name: r.name, tokenId: p.tokenId, transfers: r.n, flagged: r.flagged })), 'tokens'); }));
     }
     if (p.kind === 'address') {
       if (want('collections')) asks.push(collections('c.address = $1', p.address).then((h) => { hits.collections = h; }));

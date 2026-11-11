@@ -126,8 +126,9 @@ const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'tok
 /**
  * What a hit knows besides its title and detail, as a chip: a collection's
  * range of washed sales from its latest analysis (its symbol before the
- * first), whether a wallet traded in the collection searched. A token, a
- * wallet or a trade carries no verdict here, so none is drawn for them.
+ * first), a token's flagged trade, whether a wallet traded in the collection
+ * searched. A token with none flagged says nothing: it may not be judged yet,
+ * which is never shown as clean. A wallet or a trade carries no verdict here.
  */
 function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
   if (kind === 'collections') {
@@ -137,6 +138,7 @@ function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
     const e = rangeEnds(r);
     return `${e.same ? e.high : `${e.low}–${e.high}`} of sales look washed`;
   }
+  if (kind === 'tokens') return hits.tokens[i]!.flagged ? 'Has flagged trades' : null;
   if (kind === 'wallets') {
     const here = hits.wallets[i]!.here;
     return here === undefined ? null : here ? 'Traded here' : 'Never traded here';

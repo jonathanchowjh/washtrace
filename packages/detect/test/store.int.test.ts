@@ -4297,6 +4297,56 @@ describe('Store.search', () => {
     }
   });
 
+  it('says whether a token has a flagged trade in the latest analysis, read by key from the token\'s own transfers', async () => {
+    await store.migrate();
+    const one = (await store.addCollection(1, c1, 'Searchable Apes', 1)).id;
+    const two = (await store.addCollection(10, c2, 'Searchable Cats', 1)).id;
+    const h = (n: number) => '0x' + String(n).repeat(64);
+    await store.ingest(one, 1, [
+      transfer('7', alice, bob, { txHash: h(1) }), transfer('7', bob, alice, { txHash: h(2) }), transfer('8', alice, bob, { txHash: h(3) }),
+    ], 100, [alice, bob]);
+    await store.ingest(two, 10, [transfer('7', alice, carol, { txHash: h(4) })], 100, [alice, carol]);
+    const q = (sql: string, args: unknown[]) => store.pool.query(sql, args);
+    // Token 7's first trade is flagged by Round trips; token 8's only by Money loops back, which no count holds.
+    await q(`INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) VALUES ($1, $2, 0, true), ($1, $3, 0, true)`, [one, h(1), h(3)]);
+    await q(`INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, 'A', $2, 0, '{}'), ($1, 'AU', $3, 0, '{}')`, [one, h(1), h(3)]);
+    try {
+      const tokens = async (tokenId: string) => (await store.search({ kind: 'token', tokenId, text: tokenId })).tokens.map((r) => [r.address, r.flagged]);
+      expect(await tokens('7')).toEqual([[c1, true], [c2, false]]);
+      expect(await tokens('8')).toEqual([[c1, false]]);
+
+      const pg = await store.pool.connect();
+      try {
+        await pg.query('BEGIN');
+        // A collection's worth of flagged, counted transfers, so the plan is costed as on a real install; rolled back.
+        await pg.query(
+          `WITH t AS (INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, token_id, from_address, to_address)
+             SELECT $1, '0xfill' || g, 0, g, g % 5000, $2, $3 FROM generate_series(1, 20000) g RETURNING tx_hash),
+           x AS (INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) SELECT $1, tx_hash, 0, true FROM t)
+           INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) SELECT $1, 'A', tx_hash, 0, '{}' FROM t`,
+          [one, alice, bob],
+        );
+        await pg.query('ANALYZE washtrace.transfers, washtrace.trade_facts, washtrace.flags');
+        // Store.search's own read of whether one collection's token has a flagged trade.
+        const plan = (await pg.query(
+          `EXPLAIN SELECT 1 FROM washtrace.transfers t JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted
+           JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.method IN ('A', 'AC') AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index
+           WHERE t.collection_id = $1 AND t.token_id = $2::numeric`,
+          [one, '7'],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/transfers_token_idx/);
+        expect(plan).not.toMatch(/Seq Scan/);
+      } finally {
+        await pg.query('ROLLBACK');
+        pg.release();
+      }
+    } finally {
+      await drop(1, c1);
+      await drop(10, c2);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[alice, bob, carol]]);
+    }
+  });
+
   it('pages a kind: one more than the limit says there is more, an offset moves on, and `only` leaves the other kinds alone', async () => {
     await store.migrate();
     const addrs: string[] = [];
