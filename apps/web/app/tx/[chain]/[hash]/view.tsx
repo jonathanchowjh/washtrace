@@ -165,7 +165,7 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
                 {/* The token's graph once, not once a card: a switch lights each catching lens's loop in turn. */}
                 {!drawn ? null : (
                   <div className="mt-3">
-                    <LensGraph drawing={drawing} chainId={chainId} base={base} tokenHref={`${base}/t/${t.tokenId}`}
+                    <LensGraph drawing={drawing} chainId={chainId} base={base} tokenHref={`${base}/t/${t.tokenId}`} transfer={t}
                       caught={cards.filter((card) => card.caught).map((card) => ({ key: card.key, name: lensInfo(card.key, ownLenses)?.name ?? 'this lens', loop: card.loop }))} />
                   </div>
                 )}

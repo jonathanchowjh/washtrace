@@ -126,7 +126,7 @@ export default async function RingPage(props: Props) {
       <Suspense fallback={null}><ConnectedRail chainId={chainId} address={address} wallets={railWallets} salesOf={{ ring: anchor }} /></Suspense>
 
       {drawing === null || drawn === null ? null : (
-        <Section title="What it looks like" lead="Each circle is a wallet of the ring. Solid arrows are its tokens changing hands between them, numbered by block, each opening its trade; dashed arrows are money between them.">
+        <Section title="What it looks like" lead="Each circle is a wallet of the ring. Solid arrows are its tokens changing hands between them, numbered by their place in their token’s history as on its page, each opening its trade; dashed arrows are money between them.">
           <LoopFigure drawing={drawing} chainId={chainId} lit={{ edges: [], nodes: [] }} base={base} label={`Transfers and money among the wallets of ${ringName(line)}`}
             rowHrefs={Object.fromEntries(drawn.transfers.map((t, i) => [i + 1, txHref(chainId, t.txHash, base)]))} />
         </Section>
