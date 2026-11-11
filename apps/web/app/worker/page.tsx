@@ -58,9 +58,10 @@ export default async function WorkerPage() {
 
       <Status notices={v.notices} now={now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')} />
 
-      <Section title="What it does" lead="Four jobs, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analyzed.">
+      <Section title="What it does" lead="Four jobs, each run over every collection on its own timer, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analyzed. They are not the reading stages below, which say how far one collection has got.">
         {/* Each card spans four rows of the list's grid, so its title, what it does, its figures and the backlog line up across cards. */}
-        <ol className="grid gap-3 lg:grid-cols-4">
+        {/* The jobs are not numbered: the reading stages below are, 1 to 6, and a job's number read as a stage's. The arrows give their order. */}
+        <ol aria-label="Jobs" className="grid gap-3 lg:grid-cols-4">
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
             const state = STATE[j.state];
@@ -70,7 +71,7 @@ export default async function WorkerPage() {
               <li key={j.job} className="relative flex flex-col gap-2 rounded-lg border bg-card p-4 lg:row-span-4 lg:grid lg:grid-rows-subgrid">
                 {i > 0 ? <span aria-hidden className="absolute top-1/2 -left-3 hidden -translate-y-1/2 text-muted-foreground lg:block">→</span> : null}
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium text-foreground"><span className="mr-1.5 text-muted-foreground tabular-nums">{i + 1}</span>{step.title}</p>
+                  <p className="font-medium text-foreground">{step.title}</p>
                   <Pill tone={state.tone}>{state.label}</Pill>
                 </div>
                 <p className="text-sm text-muted-foreground">{step.does}</p>
@@ -119,7 +120,7 @@ export default async function WorkerPage() {
         </ul>
       </Section>
 
-      <Section title="How far along is each collection?" lead="Each collection, and how far each stage of its reading has got. Open one for what each stage means and what feeds what.">
+      <Section title="How far along is each collection?" lead="Each collection's reading in six stages, and how far each has got: the jobs above do the work, a stage says where one collection stands. Open one for what each stage means and what feeds what.">
         <PipelineTable rows={v.collections} />
         <PipelineErrors rows={v.collections.map((c) => ({ ...c, paused: c.turn === 'paused', rpc: v.rpcChains.includes(c.chainId) }))} />
       </Section>

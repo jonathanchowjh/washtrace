@@ -69,6 +69,13 @@ describe('the worker page', () => {
     expect(link(c).textContent).toBe('where each comes from, in Settings');
   });
 
+  it('numbers no job, so a job is never read as the reading stage of the same number', async () => {
+    const c = await draw();
+    const titles = [...c.querySelectorAll('ol[aria-label="Jobs"] > li p.font-medium')].map((p) => p.textContent);
+    expect(titles).toEqual(['Read transfers', 'Check wallets for money', 'Run the built-in lenses', 'Run your lenses']);
+    expect(c.textContent).toContain('They are not the reading stages below');
+  });
+
   it('spans each job card over shared rows, so its figures line up with its neighbours', async () => {
     const cards = [...(await draw()).querySelectorAll('ol > li')];
     expect(cards).toHaveLength(4);

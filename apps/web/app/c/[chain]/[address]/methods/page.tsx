@@ -203,7 +203,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
         </Section>
       ) : null}
 
-      <Section id="reading" title="How far has it read?" lead="The six stages under every number on this page. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
+      <Section id="reading" title="How far has it read?" lead="The six reading stages under every number on this page; the worker's jobs do the work, these say how far this collection has got. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
         <Pipeline c={c} stages={stages} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} transfersBytes={entry?.transfers.bytes ?? null} trailComing={coming} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
