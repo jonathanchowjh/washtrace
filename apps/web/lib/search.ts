@@ -1,6 +1,6 @@
 import type { Parsed, SearchHits, SearchKind } from '@washtrace/detect';
 import { chainName } from './chains';
-import { plural, short } from './format';
+import { plural, short, tokenLabel } from './format';
 import { txHref, walletHref } from './links';
 import { MAX_TEXT, addressOf, chainOf, pageOf, tokenIdOf } from './params';
 
@@ -119,27 +119,32 @@ export function tradeHref(hits: SearchHits, h: SearchHits['trades'][number]): st
   return txHref(h.chainId, h.txHash, one ? `/c/${h.chainId}/${h.address}` : null);
 }
 
+/** One hit as a link: where it opens, what names it, whether that name is hex (an address or hash), and what kind of thing it is, on which chain. */
+export type HitRow = { href: string; title: string; hex: boolean; detail: string };
+
 /**
- * One hit as a link: where it opens, the line that says what it is, and its
- * address. The results page and the search box's list both draw this, so a hit
- * reads the same in both. `scope` keeps a wallet hit under that collection's
- * tabs, where the search was made.
+ * One hit as a link, led by what was searched for: a collection's name, a
+ * token's number, a wallet's address, a transaction's hash. The kind and the
+ * chain follow, smaller. The results page and the search box's list both draw
+ * this, so a hit reads the same in both. `scope` keeps a wallet hit under that
+ * collection's tabs, where the search was made.
  */
-export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Scope | null = null): { href: string; line: string; address: string } {
+export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Scope | null = null): HitRow {
   if (kind === 'collections') {
     const h = hits.collections[i]!;
-    return { href: `/c/${h.chainId}/${h.address}`, line: `Collection on ${chainName(h.chainId)} · ${h.name ?? h.symbol ?? short(h.address)}`, address: h.address };
+    const name = h.name ?? h.symbol;
+    return { href: `/c/${h.chainId}/${h.address}`, title: name ?? short(h.address), hex: name === null, detail: `Collection on ${chainName(h.chainId)} · ${short(h.address)}` };
   }
   if (kind === 'tokens') {
     const h = hits.tokens[i]!;
-    return { href: `/c/${h.chainId}/${h.address}/t/${h.tokenId}`, line: `Token #${h.tokenId} in ${h.name ?? short(h.address)} · ${plural(h.transfers, 'transfer')}`, address: h.address };
+    return { href: `/c/${h.chainId}/${h.address}/t/${h.tokenId}`, title: `${h.name ?? short(h.address)} #${tokenLabel(h.tokenId)}`, hex: false, detail: `Token on ${chainName(h.chainId)} · ${plural(h.transfers, 'transfer')}` };
   }
   if (kind === 'wallets') {
     const h = hits.wallets[i]!;
     // A full address is found wherever it traded: one that never traded in the scope opens on its own page.
     const within = scope !== null && scope.chainId === h.chainId && h.here !== false ? `/c/${scope.chainId}/${scope.address}` : null;
-    return { href: walletHref(h.chainId, h.address, within), line: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`, address: h.address };
+    return { href: walletHref(h.chainId, h.address, within), title: short(h.address), hex: true, detail: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections` };
   }
   const h = hits.trades[i]!;
-  return { href: tradeHref(hits, h), line: `Trade in ${h.name ?? short(h.address)}, token #${h.tokenId}`, address: h.address };
+  return { href: tradeHref(hits, h), title: short(h.txHash), hex: true, detail: `Trade on ${chainName(h.chainId)} · ${h.name ?? short(h.address)} #${tokenLabel(h.tokenId)}` };
 }

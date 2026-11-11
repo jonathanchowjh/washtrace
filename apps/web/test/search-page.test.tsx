@@ -32,7 +32,15 @@ describe('the search page', () => {
     const c = await dom({ q: 'terra' });
     expect(c.querySelector('h1')?.textContent).toBe('Search: “terra”');
     const a = [...c.querySelectorAll('a')].find((x) => x.getAttribute('href') === `/c/1/${ADDR}`)!;
-    expect(a.textContent).toContain('Collection on Ethereum · Terraforms');
+    expect(a.textContent).toContain('TerraformsCollection on Ethereum · 0xaaaa…aaaa');
+  });
+
+  it('leads each hit with what was searched for, the kind and chain under it, and a hash in mono', async () => {
+    state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 41 }], trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'Meebits', tokenId: '14022' }] };
+    const c = await dom({ q: '0xaaaa' });
+    const parts = (href: string) => [...c.querySelector(`a[href="${href}"]`)!.querySelectorAll('span.block')].map((s) => [s.textContent, s.className.includes('font-mono')]);
+    expect(parts(`/w/1/${ADDR}`)).toEqual([['0xaaaa…aaaa', true], ['Wallet on Ethereum · in 41 transfers of watched collections', false]]);
+    expect(parts(`/c/1/${ADDR}/tx/${TX}`)).toEqual([['0xcccc…cccc', true], ['Trade on Ethereum · Meebits #14022', false]]);
   });
 
   it('says a token, a wallet and a trade each in a line, with its count in its heading', async () => {
@@ -44,9 +52,9 @@ describe('the search page', () => {
     };
     const c = await dom({ q: '#1234' });
     const t = c.textContent!;
-    expect(t).toContain('Token #1234 in Meebits · 14 transfers');
-    expect(t).toContain('Wallet on Ethereum · in 41 transfers of watched collections');
-    expect(t).toContain('Trade in Meebits, token #14022');
+    expect(t).toContain('Meebits #1234Token on Ethereum · 14 transfers');
+    expect(t).toContain('0xaaaa…aaaaWallet on Ethereum · in 41 transfers of watched collections');
+    expect(t).toContain('0xcccc…ccccTrade on Ethereum · Meebits #14022');
     expect(c.querySelector(`a[href="/c/1/${ADDR}/t/1234"]`)).not.toBeNull();
     expect(c.querySelector(`a[href="/w/1/${ADDR}"]`)).not.toBeNull();
     expect(c.querySelector(`a[href="/c/1/${ADDR}/tx/${TX}"]`)).not.toBeNull();
@@ -138,7 +146,7 @@ describe('the search page', () => {
     expect(c.querySelector('ul')?.className).not.toMatch(/max-w-/);
   });
 
-  it('gives each row what it knows besides its line: a symbol, whether a wallet traded here, the transaction', async () => {
+  it('gives each row what it knows besides its title: a symbol, whether a wallet traded here; a trade, its hash already its title, none', async () => {
     const W = '0x' + 'b'.repeat(40);
     state.collection = { id: 3, chainId: 1, address: ADDR, name: 'Terraforms' };
     state.hits = {
@@ -151,7 +159,7 @@ describe('the search page', () => {
     expect(chipIn(`/c/1/${ADDR}`)).toBe('TERRA');
     expect(chipIn(`/c/1/${ADDR}/w/${W}`)).toBe('Traded here');
     expect(chipIn(`/w/1/${ADDR}`)).toBe('Never traded here');
-    expect(chipIn(`/c/1/${ADDR}/tx/${TX}`)).toMatch(/^Tx 0xcccc/);
+    expect(chipIn(`/c/1/${ADDR}/tx/${TX}`)).toBeUndefined();
   });
 
   it('gives an analysed collection its range of washed sales in place of its symbol', async () => {

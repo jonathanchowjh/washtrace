@@ -74,8 +74,8 @@ export default async function SearchPage({ searchParams }: Props) {
       return <>{head}<Empty>That page is past the last result. <Link className="underline" href={here({ kind: only })}>Back to the first page</Link></Empty></>;
     }
     // Only names were searched: what was meant may be a token or a wallet, typed too short to be read as one.
-    const short = tooShort(q);
-    if (short !== null) return <>{head}<Empty>Nothing watched is named “{q}”. {short}</Empty></>;
+    const reason = tooShort(q);
+    if (reason !== null) return <>{head}<Empty>Nothing watched is named “{q}”. {reason}</Empty></>;
     // Chain 1 is the only chain a pasted hash can be looked up on without knowing its chain.
     const address = addressOf(q);
     const tx = txOf(q);
@@ -124,10 +124,10 @@ export default async function SearchPage({ searchParams }: Props) {
 const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'token', wallets: 'wallet', trades: 'transaction' };
 
 /**
- * What a hit knows besides its line, as a chip: a collection's range of
- * washed sales from its latest analysis (its symbol before the first), whether
- * a wallet traded in the collection searched, a trade's transaction. A token,
- * a wallet or a trade carries no verdict here, so none is drawn for them.
+ * What a hit knows besides its title and detail, as a chip: a collection's
+ * range of washed sales from its latest analysis (its symbol before the
+ * first), whether a wallet traded in the collection searched. A token, a
+ * wallet or a trade carries no verdict here, so none is drawn for them.
  */
 function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
   if (kind === 'collections') {
@@ -141,21 +141,20 @@ function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
     const here = hits.wallets[i]!.here;
     return here === undefined ? null : here ? 'Traded here' : 'Never traded here';
   }
-  if (kind === 'trades') return `Tx ${short(hits.trades[i]!.txHash)}`;
   return null;
 }
 
-/** One hit: a link whose line says what it is, its address under it, and what else it knows on the right. */
+/** One hit: a link led by what names it, what kind of thing it is under that, and what else it knows on the right. */
 function Row({ hits, kind, i, scope }: { hits: SearchHits; kind: SearchKind; i: number; scope: Scope | null }) {
-  const { href, line, address } = hitRow(hits, kind, i, scope);
+  const { href, title, hex, detail } = hitRow(hits, kind, i, scope);
   const chip = chipOf(hits, kind, i);
   return (
     <li>
       <Link href={href} prefetch={false} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 text-sm hover:bg-muted">
         <span aria-hidden className="grid size-8 place-items-center rounded-md border bg-card text-muted-foreground"><KindIcon kind={KIND[kind]} /></span>
         <span className="min-w-0">
-          <span className="block font-medium text-foreground">{line}</span>
-          <span className="block font-mono text-xs text-muted-foreground">{short(address)}</span>
+          <span className={`block font-medium text-foreground ${hex ? 'font-mono' : ''}`}>{title}</span>
+          <span className="block text-xs text-muted-foreground">{detail}</span>
         </span>
         {chip === null ? <span /> : <span data-chip className="chip text-muted-foreground">{chip}</span>}
       </Link>

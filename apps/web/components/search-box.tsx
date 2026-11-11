@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { SearchKind } from '@washtrace/detect';
 import { short, tokenLabel } from '@/lib/format';
 import { typing } from '@/lib/utils';
-import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, tooShort, type Scope, type SearchReply } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, tooShort, type HitRow, type Scope, type SearchReply } from '@/lib/search';
 
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
 const SHOWN = 5;
@@ -15,8 +15,8 @@ const PLACEHOLDER = 'Name, #token or 0x…  /';
 
 const HEADING: Record<SearchKind, string> = { collections: 'Collections', tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' };
 
-/** `sub`: a ring or token the best match is connected to, listed under it; it has no address line. */
-type Option = { type: 'option'; key: string; href: string; line: string; address: string; sub?: boolean };
+/** A hit, or with `sub` a ring or token the best match is connected to, listed under it in a line of its own. */
+type Option = { type: 'option'; key: string } & (HitRow | { href: string; title: string; sub: true });
 type Row = Option | { type: 'heading'; key: string; text: string } | { type: 'more'; key: string; text: string };
 
 /**
@@ -46,8 +46,8 @@ function connectedRows(hits: SearchReply, kind: SearchKind, scope: Scope | null)
   if (c === undefined || scope === null || kind !== 'wallets' || hits.wallets[0]?.address !== c.wallet) return [];
   const base = `/c/${scope.chainId}/${scope.address}`;
   return [
-    ...c.rings.map((r) => ({ type: 'option' as const, key: `ring-${r.anchor}`, href: `${base}/r/${r.anchor}`, line: `Part of Ring ${r.rank}`, address: '', sub: true })),
-    ...c.tokens.map((t) => ({ type: 'option' as const, key: `token-${t}`, href: `${base}/t/${t}`, line: `Traded token #${tokenLabel(t)}`, address: '', sub: true })),
+    ...c.rings.map((r) => ({ type: 'option' as const, key: `ring-${r.anchor}`, href: `${base}/r/${r.anchor}`, title: `Part of Ring ${r.rank}`, sub: true as const })),
+    ...c.tokens.map((t) => ({ type: 'option' as const, key: `token-${t}`, href: `${base}/t/${t}`, title: `Traded token #${tokenLabel(t)}`, sub: true as const })),
   ];
 }
 
@@ -179,10 +179,14 @@ export function SearchBox({ id, className, watched = [], wide }: {
             <li
               key={r.key} id={optionId(i)} role="option" aria-selected={i === active}
               onClick={() => go(r.href)} onMouseEnter={() => setActive(i)}
-              className={`flex cursor-pointer flex-col gap-0.5 py-1 pr-2 text-foreground aria-selected:bg-muted ${r.sub ? 'pl-5' : 'pl-2'}`}
+              className={`flex cursor-pointer flex-col gap-0.5 py-1 pr-2 text-foreground aria-selected:bg-muted ${'sub' in r ? 'pl-5' : 'pl-2'}`}
             >
-              <span className={r.sub ? 'text-muted-foreground' : 'font-medium'}>{r.sub ? <span aria-hidden>↳ </span> : null}{r.line}</span>
-              {r.sub ? null : <span className="font-mono text-[11px] text-muted-foreground">{short(r.address)}</span>}
+              {'sub' in r ? <span className="text-muted-foreground"><span aria-hidden>↳ </span>{r.title}</span> : (
+                <>
+                  <span className={`font-medium ${r.hex ? 'font-mono' : ''}`}>{r.title}</span>
+                  <span className="text-[11px] text-muted-foreground">{r.detail}</span>
+                </>
+              )}
             </li>
           );
         }) : null}

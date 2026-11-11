@@ -45,8 +45,17 @@ describe('the search box type-ahead', () => {
     await type('ter');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=ter');
-    expect(screen.getAllByRole('option')[0]!.textContent).toContain('Collection on Ethereum · Terraforms');
+    expect(screen.getAllByRole('option')[0]!.textContent).toBe('TerraformsCollection on Ethereum · 0xaaaa…aaaa');
     expect(box().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('leads a hit with what was searched for, in mono for an address, its kind and chain under it', async () => {
+    fetchMock.mockResolvedValue(reply(hits({ wallets: [{ chainId: 1, address: ADDR, transfers: 3 }] })));
+    render(<Sidebar watched={[]} />);
+    await type('0xaaaa');
+    const [lead, detail] = [...screen.getAllByRole('option')[0]!.children];
+    expect([lead!.textContent, lead!.className.includes('font-mono')]).toEqual(['0xaaaa…aaaa', true]);
+    expect(detail!.textContent).toBe('Wallet on Ethereum · in 3 transfers of watched collections');
   });
 
   it('does not fetch for what parseSearch calls empty', async () => {
@@ -199,8 +208,8 @@ describe('the search box under a collection', () => {
     under();
     await type('#777');
     const options = screen.getAllByRole('option');
-    expect(options[0]!.textContent).toContain('Token #777');
-    fireEvent.click(options.find((o) => o.textContent?.startsWith('Wallet'))!);
+    expect(options[0]!.textContent).toContain('Terraforms #777');
+    fireEvent.click(options.find((o) => o.textContent?.includes('Wallet on'))!);
     expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/w/${W}`);
   });
 
