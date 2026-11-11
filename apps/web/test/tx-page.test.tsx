@@ -250,6 +250,23 @@ describe('the trade page: one card per lens', () => {
     expect(card.get('Linked wallets')!.textContent).not.toContain(CAPPED.trim());
   });
 
+  it('an unread transaction, or one not judged, says "Not judged yet" once: the answer\'s title, no chip over it', async () => {
+    const text = (await txPage()).textContent ?? '';
+    expect(text.split('Not judged yet').length - 1).toBe(1);
+    roundTrip([]);
+    state.through = { 1: 4, 2: 4 };
+    const c = await txPage();
+    expect(c.querySelector('header .chip')).toBeNull();
+    expect(c.querySelector('p.text-lg')!.textContent).toBe('Not judged yet');
+  });
+
+  it('a trade flagged only by the lens not counted names it, and no place on the screen', async () => {
+    roundTrip(['AU']);
+    const body = (await txPage()).querySelector('p.text-lg')!.nextElementSibling!.textContent!;
+    expect(body).toContain('Only Money loops back flags it:');
+    expect(body).not.toContain('on the right');
+  });
+
   it('a trade past the latest analysis is not judged yet by the built-ins, not clean', async () => {
     const { NOT_CAUGHT, BUILT_IN_BEHIND } = await import('@/lib/format');
     roundTrip([]);
@@ -294,7 +311,9 @@ describe('the trade page: one card per lens', () => {
     state.ran = { 1: ['A', 'AU', 'AC'], 2: ['A'] };
     const c = await txPage();
     const body = c.querySelector('p.text-lg')!.nextElementSibling!.textContent!;
-    expect(body).toContain('The lenses on the right flag it.');
+    // The flagging lenses by name, not by where they sit: beside the answer on a wide screen, under it on a phone.
+    expect(body).toContain('Round trips flags it.');
+    expect(body).not.toMatch(/on the right|below it|beside it/);
     // Floor, ceiling, then the one not counted, as every page lists lenses; the API keeps A, AU, AC.
     expect(body).toContain('Linked wallets and Money loops back did not run in the latest analysis of Second, so they flag nothing there.');
     expect(body).not.toMatch(/did not run in the latest analysis, so (it|they) flag/);

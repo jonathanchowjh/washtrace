@@ -16,7 +16,7 @@ import { LensName } from '@/components/methods';
 import { LensGraph } from '@/components/token-graph';
 import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
-import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
+import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, lensList, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
@@ -43,11 +43,13 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
   const ownNames = [...new Set(own.map((f): LensKey => `L${f.lensId}`))].flatMap((k) => lensInfo(k, ownLenses)?.name ?? []);
   const ownLine = ownNames.length === 0 ? ''
     : ` Your lenses ${washTrade === true || apartOnly ? 'also ' : ''}catch ${transfers.length === 1 ? 'it' : `${ownByRow.size} of its ${transfers.length} transfers`}: ${andList(ownNames)}.`;
+  const flaggers = inShownOrder(by).filter((m) => HEADLINE.includes(m));
   const { title, tone } = unread ? { title: NOT_JUDGED_YET, tone: 'clean' as const } : answer(v, 'Flagged as a wash trade', ownNames.length > 0);
   const body = unread ? 'No watched collection has a transfer in this transaction, so washtrace has not read it. That is not the same as clean.'
     : washTrade === null ? NOT_JUDGED
-    : washTrade ? 'The lenses on the right flag it. The reason is beside each transfer below; open its token to see the whole pattern.'
-    : apartOnly ? `The lens on the right flags it: ${APART_WHY}. The reason is beside each transfer below.`
+    // Named, not pointed at: the lenses sit beside the answer on a wide screen and under it on a phone.
+    : washTrade ? `${lensList(flaggers)} ${flaggers.length === 1 ? 'flags' : 'flag'} it. The reason is beside each transfer below; open its token to see the whole pattern.`
+    : apartOnly ? `Only ${LENSES.AU.name} flags it: ${APART_WHY}. The reason is beside each transfer below.`
     : `Its ${transfers.length === 1 ? 'transfer is' : `${transfers.length} transfers are`} read, and no ${ownNames.length > 0 ? 'built-in ' : ''}lens that ran flags ${transfers.length === 1 ? 'it' : 'them'}.`;
   // The lens names open that lens's tab when the transaction belongs to one collection; across several there is no one tab.
   const homes = new Set(transfers.flatMap((t) => (t.collection ? [`/c/${t.collection.chainId}/${t.collection.address}`] : [])));
@@ -79,7 +81,8 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
-        part={<><VerdictChip tone={unread || v.washTrade === null ? null : tone} />{collection !== null
+        // Not judged, the answer's title says so: a chip saying it again over it would be the page's second "Not judged yet".
+        part={<>{unread || v.washTrade === null ? null : <VerdictChip tone={tone} />}{collection !== null
           ? <Suspense fallback={null}><RingChips chainId={chainId} address={collection.address} of={{ tx }} /></Suspense> : null}</>}
         sub={<>Transaction on {chainName(chainId)} · <Ext href={explorerTx(chainId, tx)} className="font-mono">{tx}</Ext></>}
       >
