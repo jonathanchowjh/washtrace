@@ -73,7 +73,8 @@ export const HATCH = 'bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,va
 const MARK = {
   cycle: 'rounded-[2px] bg-cycle',
   money: `rounded-[2px] ${HATCH}`,
-  apart: 'rounded-full border border-dashed border-muted-foreground',
+  // Grey and dashed, as never counted; a 1.5 px ring round a tinted disc, so it has the weight of the marks beside it and never reads as the "–" of a sale no lens flagged.
+  apart: 'rounded-full border-[1.5px] border-dashed border-muted-foreground bg-muted-foreground/30',
   own: 'rotate-45 rounded-[1px] bg-flow',
   clean: 'rounded-[2px] bg-muted',
 } as const;
