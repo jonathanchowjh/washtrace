@@ -183,8 +183,8 @@ describe('the lens lists on the collection page', () => {
   it('beneath each list, all of them on the flagged page, keeping sort and Find', async () => {
     state.wallets = { rows: [wallet(WAL)], total: 37 };
     const el = await collectionPage({ method: 'A', ts: 'share', tq: '14' });
-    expect(named(el, 'All 644 tokens →')).toEqual([`${BASE}/tokens?method=A&sort=share&q=14`]);
-    expect(named(el, 'All 37 wallets →')).toEqual([`${BASE}/wallets?method=A`]);
+    expect(named(el, 'All 644 tokens ›')).toEqual([`${BASE}/tokens?method=A&sort=share&q=14`]);
+    expect(named(el, 'All 37 wallets ›')).toEqual([`${BASE}/wallets?method=A`]);
     // Only the list with a Find is counted again without it.
     expect(state.calls.counts).toEqual([['tokens', 1, 'A', { sort: 'caught', find: null, limit: 0, offset: 0 }, expect.objectContaining({ ran: ['A', 'AU', 'AC'] })]]);
   });
@@ -194,8 +194,8 @@ describe('the lens lists on the collection page', () => {
     state.wallets = { rows: [wallet(WAL)], total: 33 };
     const el = await collectionPage({ method: 'A' });
     expect(list(el, 'tokens').textContent).toContain('1–10 of 600 tokens');
-    expect(named(el, 'All 600 tokens →')).toHaveLength(1);
-    expect(named(el, 'All 33 wallets →')).toHaveLength(1);
+    expect(named(el, 'All 600 tokens ›')).toHaveLength(1);
+    expect(named(el, 'All 33 wallets ›')).toHaveLength(1);
     expect(list(el, 'tokens').textContent).not.toContain('700');
     // With no Find there is nothing more to count.
     expect(state.calls.counts).toHaveLength(0);

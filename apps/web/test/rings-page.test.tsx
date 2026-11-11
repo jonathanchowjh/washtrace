@@ -113,14 +113,14 @@ describe('a ring', () => {
     // A member opened from here steps through the ring's tokens or wallets, and leads back to it.
     expect(links(c)).toContainEqual(['#114', `${BASE}/t/114?from=${encodeURIComponent(`ring?anchor=${A}&of=tokens`)}`]);
     expect(links(c)).toContainEqual([`${A.slice(0, 6)}…${A.slice(-4)}`, `${BASE}/w/${A}?from=${encodeURIComponent(`ring?anchor=${A}&of=wallets`)}`]);
-    expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
+    expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 in between');
   });
 
   it('draws its loops as a token\'s graph: its own wallets\' transfers, each opening its trade, and the money among them', async () => {
     const c = await one(A);
     const fig = c.querySelector('svg[aria-label="Transfers and money among the wallets of Ring 1"]')!;
     expect(fig).toBeTruthy();
-    // The two transfers between its wallets, not the one out to X; numbered by block, each opening its trade.
+    // The two transfers between its wallets, not the one out to X; numbered by their place in their token's history, each opening its trade.
     const hrefs = [...fig.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(expect.arrayContaining([`${BASE}/tx/0x${'1'.repeat(64)}`, `${BASE}/tx/0x${'2'.repeat(64)}`]));
     expect(hrefs.some((h) => h?.includes('3'.repeat(64)))).toBe(false);
@@ -161,7 +161,7 @@ describe('a ring', () => {
     expect(c.textContent).not.toContain('None.');
     // The answer and the picture's legend say no zero count either.
     expect(c.textContent).toContain('Every one traded the tokens.');
-    expect(c.textContent).not.toContain('0 only moved the money');
+    expect(c.textContent).not.toContain('0 in between');
   });
 
   it('a ring of linked pairs alone says no loop and headlines no zero', async () => {
@@ -196,11 +196,11 @@ describe('the ring’s picture', () => {
   it('draws traders and money-only wallets in their two styles, the count in the middle, with a legend', async () => {
     const { RingFigure } = await import('@/components/rings');
     const c = render(<RingFigure wallets={ws(2, 1)} total={3} />).container;
-    expect(c.querySelector('svg[role=img]')!.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
+    expect(c.querySelector('svg[role=img]')!.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 in between');
     expect(c.querySelectorAll('svg[role=img] g[data-traded]')).toHaveLength(2);
     expect(c.querySelectorAll('svg[role=img] g:not([data-traded]) circle[stroke-dasharray]')).toHaveLength(1);
     expect([...c.querySelectorAll('svg[role=img] text')].map((t) => t.textContent)).toEqual(['3', 'wallets']);
-    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 only moved the money']);
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 in between']);
   });
 
   it('gives a kind with no wallet no legend line, and the kind that is every wallet no second count', async () => {
@@ -210,7 +210,7 @@ describe('the ring’s picture', () => {
     expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['traded']);
     cleanup();
     const m = render(<RingFigure wallets={ws(0, 2)} total={2} />).container;
-    expect([...m.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['only moved the money']);
+    expect([...m.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['in between']);
   });
 
   it('past a dozen, keeps each kind’s share of the dots, never dropping one, and says how many are drawn', async () => {

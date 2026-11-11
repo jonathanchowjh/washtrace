@@ -83,8 +83,8 @@ describe('the answer on the collection page', () => {
     expect(hrefs).toContain(tradesHref(BASE, { caught: ['AC'], sort: 'price', dir: 'desc' }));
   });
 
-  it('offers the whole trades list under the headline', async () => {
-    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'All 1,000 trades ›');
+  it('offers the whole sales list under the headline', async () => {
+    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'All 1,000 sales ›');
     expect(dig?.getAttribute('href')).toBe(tradesHref(BASE, {}));
   });
 });

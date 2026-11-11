@@ -173,7 +173,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
                     sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
                     pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
                   />
-                  <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} →</MoreLink>
+                  <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} ›</MoreLink>
                 </div>
                 <div>
                   <LensList
@@ -181,7 +181,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
                     sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
                     pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
                   />
-                  <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} →</MoreLink>
+                  <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} ›</MoreLink>
                 </div>
               </div>
             ) : null}
@@ -213,7 +213,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
         ) : null}
       </Section>
 
-      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the others\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
+      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the other collections\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
         {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
         <CollectionControls writable={writable} chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>

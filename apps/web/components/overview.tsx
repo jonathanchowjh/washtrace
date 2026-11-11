@@ -48,7 +48,7 @@ const STEP_MARK: Record<StageState, { mark: string; word: string; tone: string }
   'not-needed': { mark: '–', word: 'not needed', tone: 'text-muted-foreground' },
 };
 
-/** The reading in four steps, each a mark and a word; a running one says how far, small. The six stages are on the Methods page. */
+/** The reading in four steps, each a mark and a word; a running one says how far, small. Every reading stage is on the Methods page. */
 export function ReadingStrip({ stages, base }: { stages: readonly Stage[]; base: string }) {
   return (
     <section aria-label="How far it has read" className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border bg-card px-4 py-2.5 text-sm">
@@ -67,7 +67,7 @@ export function ReadingStrip({ stages, base }: { stages: readonly Stage[]; base:
           </span>
         );
       })}
-      <Link href={`${base}/methods#reading`} className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline">All six stages ›</Link>
+      <Link href={`${base}/methods#reading`} className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline">Reading stages, on Methods ›</Link>
     </section>
   );
 }

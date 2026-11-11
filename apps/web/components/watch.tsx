@@ -197,7 +197,7 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
         <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/pause`)} className="btn"
           title={no ? LOCAL_ONLY : 'Stop reading new blocks for this collection; keeps its data'}>Pause</button>
         {compact ? null : <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className="btn"
-          title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
+          title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the other collections'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
         {fail}
       </span>
     );

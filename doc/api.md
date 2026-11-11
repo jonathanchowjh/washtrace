@@ -73,7 +73,7 @@ Notes:
 - Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
   sample, sales, floorSales, tokens, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
   the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
-  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one that only moved the money,
+  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one in between (joined by money only),
   at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
 - `.../card` is the console's hover card: a few counts, never a verdict. A wallet's `trades` and `flagged` are in
   this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or

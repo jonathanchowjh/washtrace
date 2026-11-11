@@ -92,7 +92,7 @@ export function RingsTable({ rows, base, chainId, total, from }: { rows: readonl
 // Past a dozen wallets a ring of dots says no more; the count beside it keeps the number.
 const DRAWN = 12;
 
-/** One wallet as the ring's picture and its legend draw it: the wallet symbol, solid for a trader, dashed in the money hue for one that only moved the money. */
+/** One wallet as the ring's picture and its legend draw it: the wallet symbol, solid for a trader, dashed in the money hue for one in between, joined by money only. */
 function walletMark(x: number, y: number, r: number, traded: boolean) {
   return (
     <>
@@ -104,7 +104,7 @@ function walletMark(x: number, y: number, r: number, traded: boolean) {
 
 /**
  * A ring's wallets on a circle, each in the wallet symbol the list below uses:
- * those that traded in the text colour, those that only moved the money in
+ * those that traded in the text colour, those in between (money only) in
  * the money hue and dashed, each kind together on its own arc, the count in
  * the middle and a legend under it. It draws who is in it, not who paid
  * whom: the ring records membership, and the token pages draw the moves.
@@ -124,7 +124,7 @@ export function RingFigure({ wallets, total }: { wallets: readonly { address: st
   };
   return (
     <figure className="flex shrink-0 flex-col items-center gap-1">
-      <svg viewBox="0 0 120 104" role="img" aria-label={`${plural(total, 'wallet')}: ${traders.length} traded, ${movers.length} only moved the money`} className="h-28 w-32">
+      <svg viewBox="0 0 120 104" role="img" aria-label={`${plural(total, 'wallet')}: ${traders.length} traded, ${movers.length} in between`} className="h-28 w-32">
         <ellipse cx="60" cy="52" rx="44" ry="38" fill="none" strokeWidth={1.2} className="stroke-muted-foreground/40" />
         {shown.map((w, i) => {
           const [x, y] = at(i);
@@ -135,10 +135,10 @@ export function RingFigure({ wallets, total }: { wallets: readonly { address: st
       </svg>
       {/* The picture's label says these counts already; the legend is for the eye. */}
       <figcaption aria-hidden className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-        {/* A kind with none drawn has no line: "0 only moved the money" says nothing the picture does not. A kind that is every wallet
+        {/* A kind with none drawn has no line: "0 in between" says nothing the picture does not. A kind that is every wallet
             keys its mark with no count: "2 traded" under "2 wallets" would say the number twice. */}
         {traders.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, true)}</svg>{movers.length === 0 ? 'traded' : `${num(traders.length)} traded`}</span>}
-        {movers.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, false)}</svg>{traders.length === 0 ? 'only moved the money' : `${num(movers.length)} only moved the money`}</span>}
+        {movers.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, false)}</svg>{traders.length === 0 ? 'in between' : `${num(movers.length)} in between`}</span>}
         {total > shown.length ? <span>{num(shown.length)} of {num(total)} drawn</span> : null}
       </figcaption>
     </figure>

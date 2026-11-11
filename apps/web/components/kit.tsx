@@ -1,5 +1,5 @@
 import type { Witness } from '@washtrace/detect';
-import { LENSES, plural } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, plural } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
@@ -58,7 +58,7 @@ export function VerdictChip({ tone }: { tone: keyof typeof VERDICT | null }) {
   return (
     <span className="chip font-medium">
       {tone === null ? <i aria-hidden className="inline-block size-2.5 shrink-0 rounded-[2px] border border-dashed border-muted-foreground" /> : <TierMark tone={tone} />}
-      {tone === null ? 'Not judged yet' : VERDICT[tone]}
+      {tone === null ? NOT_JUDGED_YET : VERDICT[tone]}
     </span>
   );
 }

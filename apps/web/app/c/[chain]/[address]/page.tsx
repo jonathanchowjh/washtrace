@@ -134,7 +134,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
                   </p>
                 </>
               )}
-              <Link href={tradesHref(base, {})} className="mt-3 block text-sm font-medium text-foreground hover:underline">All {plural(a.totals.A.sales, 'trade')} ›</Link>
+              <Link href={tradesHref(base, {})} className="mt-3 block text-sm font-medium text-foreground hover:underline">All {plural(a.totals.A.sales, 'sale')} ›</Link>
             </section>
             <HowSure totals={a.totals} base={base} apart={timeline === null ? undefined : apart} />
           </div>
