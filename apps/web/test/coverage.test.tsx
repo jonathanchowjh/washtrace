@@ -160,7 +160,7 @@ describe('a collection whose latest analysis failed', () => {
   const NOW = Date.UTC(2026, 9, 23, 14, 15);
   const at = NOW + 20 * 60_000;
   const analysed = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
-  const stage6 = (c: CollectionRow) => view(c, { covNow: NOW, now: NOW }).querySelectorAll('li')[5]!;
+  const stage6 = (c: CollectionRow) => view(c, { covNow: NOW, now: NOW }).querySelector('[data-stage="6"]')!;
   it('stage 6 says the analysis runs again once the trail is in, not that nothing is new', () => {
     const loading = stage6(row({ latest: analysed, trailProgress: 0.3 })).textContent!;
     expect(loading).toContain('· money trail loading; analyzed again once it has');
@@ -529,7 +529,7 @@ describe('downloading stored data', () => {
       totals: { A: { available: true }, AU: { available: false }, AC: { available: false } } } as unknown as CollectionRow['latest'];
     const step2 = (more: Partial<CollectionRow>, trailComing: boolean) => {
       const c = row({ latest, ...more });
-      return [...view(c, { entry: withTrail(), funding: false, covFunding: false, trailComing }).querySelectorAll('li')][4]!.textContent!;
+      return view(c, { entry: withTrail(), funding: false, covFunding: false, trailComing }).querySelector('[data-stage="5"]')!.textContent!;
     };
     // A trail queued but not yet downloading waits for it too.
     for (const c of [{ trailProgress: 0.41 }, { downloadFile: 'trail' as const, downloadProgress: 0.2 }, {}]) {
@@ -569,7 +569,7 @@ describe('downloading stored data', () => {
     const el = panel(failed, entry());
     expect(el.textContent).toContain(note);
     // The stage's chip says Failed in the fault colour; the note itself is information, as before.
-    expect(el.querySelectorAll('li')[0]!.textContent).toContain('Failed');
+    expect(el.querySelector('[data-stage="1"]')!.textContent).toContain('Failed');
     expect([...el.querySelectorAll('p')].find((p) => p.textContent === note)!.className).not.toContain('text-fault');
   });
 });
@@ -578,11 +578,13 @@ describe('the six stages', () => {
   const NONE = new Set<number>();
 
   it('shows the six stages in order, each with its state and what it feeds', () => {
-    const c = row();
-    const lis = [...panel(c).querySelectorAll('li')];
-    const stages = pipeline({ c, entry: null, rpcChains: ON, funding: true, analyzing: false, silent: false });
+    // Stored data still to download: every stage is needed, so each has its card.
+    const c = row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers' });
+    const lis = [...panel(c, entry()).querySelectorAll('li')];
+    const stages = pipeline({ c, entry: entry(), rpcChains: ON, funding: true, analyzing: false, silent: false });
     expect(lis).toHaveLength(6);
     lis.forEach((li, i) => {
+      expect(li.getAttribute('data-stage')).toBe(String(i + 1));
       expect(li.textContent).toContain(STAGES[i]!.title);
       expect(li.textContent).toContain('Feeds');
       expect(li.textContent).not.toContain('Affects');
@@ -590,6 +592,19 @@ describe('the six stages', () => {
     });
     // Each title sits in its own place: the second stage's is not in the first.
     expect(lis[0]!.textContent).not.toContain(STAGES[1].title);
+  });
+
+  it('says the stages not needed in one line over the cards, not a card each', () => {
+    const el = panel(row());
+    expect([...el.querySelectorAll('li')].map((li) => li.getAttribute('data-stage'))).toEqual(['4', '5', '6']);
+    expect(el.querySelector('[data-not-needed]')!.textContent).toBe('Not neededStages 1–3 (Download, Load, Analyze stored) · No stored data for this collection.');
+    cleanup();
+    // With every stage needed there is no such line.
+    expect(panel(row({ cursorBlock: null, startBlock: null, downloadFile: 'transfers' }), entry()).querySelector('[data-not-needed]')).toBeNull();
+  });
+
+  it('ends each row of three cards with no right edge of its own, so the list\'s edge is not doubled', () => {
+    expect(panel(row()).querySelector('ol')!.className).toContain('md:[&>li:nth-child(3n)]:border-r-0');
   });
 
   it('a stage card can shrink to its column, its chip wrapping under the title rather than past the edge', () => {
@@ -607,7 +622,7 @@ describe('the six stages', () => {
     expect(links.find((a) => a.textContent === ETHERSCAN_CTA)?.getAttribute('href')).toBe(ETHERSCAN_HREF);
     // Each blocked stage's chip names what it lacks: an RPC for the chain, a key for the money.
     expect(el.textContent!.split('Needs a key')).toHaveLength(2);
-    expect(el.querySelectorAll('li')[3]!.textContent).toContain('No RPC');
+    expect(el.querySelector('[data-stage="4"]')!.textContent).toContain('No RPC');
     expect(el.textContent).not.toMatch(/\bOff\b/);
   });
 
@@ -619,21 +634,20 @@ describe('the six stages', () => {
   });
 
   it('stages 1–3 say there is no stored data when there is none', () => {
-    const lis = [...panel(row()).querySelectorAll('li')];
-    for (const li of lis.slice(0, 3)) expect(li.textContent).toContain('No stored data for this collection.');
-    expect(lis[3]!.textContent).not.toContain('No stored data for this collection.');
+    const el = panel(row());
+    expect(el.querySelector('[data-not-needed]')!.textContent).toContain('No stored data for this collection.');
+    expect(el.querySelector('[data-stage="4"]')!.textContent).not.toContain('No stored data for this collection.');
   });
 
   it('stages 1–3 say the chain was read past stored data it never needed', () => {
-    const lis = [...panel(row({ cursorBlock: 900 }), entry({ throughBlock: 500 })).querySelectorAll('li')];
-    for (const li of lis.slice(0, 3)) expect(li.textContent).toContain('Read past its stored data from the chain, so it was not needed.');
+    const line = (el: Element) => el.querySelector('[data-not-needed]')!.textContent;
+    expect(line(panel(row({ cursorBlock: 900 }), entry({ throughBlock: 500 })))).toContain('Read past its stored data from the chain, so it was not needed.');
     cleanup();
-    const early = [...panel(row({ cursorBlock: 5 }), entry({ startBlock: 100 })).querySelectorAll('li')];
-    for (const li of early.slice(0, 3)) expect(li.textContent).toContain('Its reading started before its stored data, so it was not needed.');
+    expect(line(panel(row({ cursorBlock: 5 }), entry({ startBlock: 100 })))).toContain('Its reading started before its stored data, so it was not needed.');
   });
 
   it('a live collection follows new blocks, never "done" on stage 4', () => {
-    const stage4 = panel(row()).querySelectorAll('li')[3]!;
+    const stage4 = panel(row()).querySelector('[data-stage="4"]')!;
     expect(stage4.textContent).toContain('Following');
     expect(stage4.textContent).toContain('Up to date · following new blocks');
     expect(stage4.textContent).not.toContain('Done');
@@ -644,14 +658,13 @@ describe('the six stages', () => {
     expect(waiting[1]!.textContent).toContain('Waiting for the stored data to download');
     expect(waiting[3]!.textContent).toContain('Waiting for the stored data to load');
     cleanup();
-    const running = [...panel(row({ cursorBlock: 251, headBlock: 1001 })).querySelectorAll('li')];
-    expect(running[3]!.textContent).toContain('blocks to go');
+    expect(panel(row({ cursorBlock: 251, headBlock: 1001 })).querySelector('[data-stage="4"]')!.textContent).toContain('blocks to go');
   });
 
   it('stage 3 says when the stored data was analysed, through which block, and how long it took', () => {
     const latest = { ranAt: Date.UTC(2026, 9, 14, 8), tookMs: 25_000, throughBlock: 500, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ storedThroughTime: 1, storedThroughBlock: 500, cursorBlock: 500, latest });
-    const li = panel(c, entry()).querySelectorAll('li')[2]!;
+    const li = panel(c, entry()).querySelector('[data-stage="3"]')!;
     expect(li.textContent).toContain('Analyzed');
     expect(li.textContent).toContain('through block 500');
     expect(li.textContent).toContain('took 25 s');
@@ -659,14 +672,14 @@ describe('the six stages', () => {
 
   it('the bar is green only for done and live', () => {
     const bar = (li: Element) => li.querySelector('[data-bar="stage"] i');
-    const lis = [...panel(row({ fundedWallets: 0, wallets: 4, latest: { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 4, truncatedSearches: 0 } as unknown as CollectionRow['latest'] })).querySelectorAll('li')];
+    const el = panel(row({ fundedWallets: 0, wallets: 4, latest: { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 0, wallets: 4, truncatedSearches: 0 } as unknown as CollectionRow['latest'] }));
     // Stage 4 is live (full, green); stage 5 is running at 0 (not green).
-    expect(bar(lis[3]!)!.className).toContain('bg-ok');
-    expect(bar(lis[4]!)!.className).not.toContain('bg-ok');
+    expect(bar(el.querySelector('[data-stage="4"]')!)!.className).toContain('bg-ok');
+    expect(bar(el.querySelector('[data-stage="5"]')!)!.className).not.toContain('bg-ok');
     cleanup();
     // Blocked is never green, even at a full share.
-    const stored = [...view(row({ storedThroughTime: 1, storedThroughBlock: 10, headBlock: null }), { rpc: NONE }).querySelectorAll('li')];
-    expect(bar(stored[3]!)?.className ?? '').not.toContain('bg-ok');
+    const stored = view(row({ storedThroughTime: 1, storedThroughBlock: 10, headBlock: null }), { rpc: NONE });
+    expect(bar(stored.querySelector('[data-stage="4"]')!)?.className ?? '').not.toContain('bg-ok');
   });
 
   it('a running download and a running load each show their bar', () => {
@@ -679,7 +692,7 @@ describe('the six stages', () => {
 
   it('a missing RPC with no stored data is a limit to lift, never a fault', () => {
     const c = row({ cursorBlock: null, startBlock: null, headBlock: null, transfers: 0, error: 'No RPC is configured for chain 1. Set it in Settings, or WASHTRACE_RPC_1 for the worker.' });
-    const li = view(c, { rpc: NONE }).querySelectorAll('li')[3]!;
+    const li = view(c, { rpc: NONE }).querySelector('[data-stage="4"]')!;
     expect(li.textContent).not.toContain('Needs a key');
     expect(li.textContent).toContain('No RPC is set for Ethereum');
     expect(li.textContent).not.toContain('Last read failed');
@@ -689,17 +702,17 @@ describe('the six stages', () => {
 
   it('stage 4 waits on stored data only while it is to load: after a failed load its own line returns', () => {
     const failedLoad = row({ cursorBlock: null, startBlock: null, headBlock: null, restoreNote: 'Stored data could not be loaded.' });
-    const withRpc = view(failedLoad, { entry: entry() }).querySelectorAll('li')[3]!.textContent!;
+    const withRpc = view(failedLoad, { entry: entry() }).querySelector('[data-stage="4"]')!.textContent!;
     expect(withRpc).not.toContain('Waiting for the stored data to load');
     expect(withRpc).toContain('Finding the deployment block');
     cleanup();
-    const noRpc = view(failedLoad, { entry: entry(), rpc: NONE }).querySelectorAll('li')[3]!.textContent!;
+    const noRpc = view(failedLoad, { entry: entry(), rpc: NONE }).querySelector('[data-stage="4"]')!.textContent!;
     expect(noRpc).not.toContain('Waiting for the stored data to load');
     expect(noRpc).toContain('No RPC is set for Ethereum');
   });
 
   it('a blocked stage 5 shows a dash unless a trail funds it or is on its way', () => {
-    const fig = (c: CollectionRow) => view(c, { funding: false, covFunding: false }).querySelectorAll('li')[4]!.querySelector('p.text-xl')!.textContent;
+    const fig = (c: CollectionRow) => view(c, { funding: false, covFunding: false }).querySelector('[data-stage="5"]')!.querySelector('p.text-xl')!.textContent;
     expect(fig(row({ latest: null }))).toBe('—');
     cleanup();
     expect(fig(row({ wallets: 9, fundedWallets: 3, latest: { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: {}, AU: {}, AC: {} }, missingData: 0, fundedWallets: 3, wallets: 9, truncatedSearches: 0 } as unknown as CollectionRow['latest'] }))).toBe('—');
@@ -769,7 +782,7 @@ describe('the reading, said once and truthfully', () => {
 
   it('stage 6 over a failed analysis says it is trying again now, and otherwise when it is due', () => {
     const c = row({ latest: analysed, analysisError: 'Ran out of memory.', analysisRetryAt: 5 });
-    const six = (o: View) => view(c, o).querySelectorAll('li')[5]!.textContent!;
+    const six = (o: View) => view(c, o).querySelector('[data-stage="6"]')!.textContent!;
     expect(six({ analyzing: true, now: 10 })).toContain('trying again now.');
     expect(six({ analyzing: true, now: 10 })).not.toContain('due to be tried again');
     cleanup();
@@ -778,7 +791,7 @@ describe('the reading, said once and truthfully', () => {
 
   it('transfers in with the money trail still to come: stage 1 says the trail is next', () => {
     const loaded = row({ storedThroughTime: 1, storedThroughBlock: 500 });
-    const text = (c: CollectionRow) => view(c, { entry: entry({ trail: TRAIL }) }).querySelectorAll('li')[0]!.textContent!;
+    const text = (c: CollectionRow) => view(c, { entry: entry({ trail: TRAIL }) }).querySelector('[data-stage="1"]')!.textContent!;
     expect(text(loaded)).toContain('Transfers downloaded; the money trail is next.');
     cleanup();
     expect(text(row({ cursorBlock: null, startBlock: null, restoreProgress: 0.4 }))).toContain('Transfers downloaded; the money trail is next.');
@@ -790,7 +803,7 @@ describe('the reading, said once and truthfully', () => {
 
   it('a paused collection with no RPC says that, in stage 4 and under the table, not "last error"', () => {
     const c = row({ pausedAt: 5, error: 'No RPC is configured for chain 1.', cursorBlock: 5, startBlock: 1 });
-    const four = view(c, { rpc: NONE }).querySelectorAll('li')[3]!.textContent!;
+    const four = view(c, { rpc: NONE }).querySelector('[data-stage="4"]')!.textContent!;
     expect(four).toContain('Paused · no RPC is set for Ethereum.');
     expect(four).not.toContain('last error');
     cleanup();
@@ -973,7 +986,7 @@ describe('a silent worker', () => {
 
   it('a caught-up stage 4 says what was read, not that it is the finalized head; stage 6 does not say nothing is new', () => {
     const el = view(row({ latest, wallets: 4, fundedWallets: 4 }), { silent: true, analyzing: true });
-    const items = [...el.querySelectorAll('li')].map((x) => x.textContent!);
+    const items = [1, 2, 3, 4, 5, 6].map((n) => el.querySelector(`[data-stage="${n}"]`)?.textContent ?? '');
     expect(items[3]).toContain('5 transfers read, to block 10, before the worker went silent');
     expect(items[3]).not.toContain('finalized head');
     expect(items[5]).toContain('the worker is silent, so nothing new is read');

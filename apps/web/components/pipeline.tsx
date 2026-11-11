@@ -142,9 +142,11 @@ export function PipelineErrors({ rows }: { rows: { chainId: number; address: str
 }
 
 function Step({ stage, figure, value, bar, children }: { stage: Stage; figure: ReactNode; value: ReactNode; bar?: number; children?: ReactNode }) {
+  // A stage not needed has no card: NotNeeded says it in one line above the grid.
+  if (stage.state === 'not-needed') return null;
   // A narrow column may shrink the card, and its chip then wraps under the title rather than past the card's edge.
   return (
-    <li className="relative flex min-w-0 flex-col gap-1 px-4 py-3.5">
+    <li data-stage={stage.n} className="relative flex min-w-0 flex-col gap-1 px-4 py-3.5">
       <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-muted-foreground">
         <span data-row-number className="flex size-4.5 shrink-0 items-center justify-center rounded-full border text-[10px] tabular-nums">{stage.n}</span>{stage.title}
         <span className="ml-auto"><StageChip n={stage.n} state={stage.state} /></span>
@@ -182,6 +184,25 @@ function step1(c: CollectionRow, cov: Coverage): ReactNode {
 }
 
 const DASH = '—';
+
+/**
+ * The stages not needed, in one line: with no stored data, stages 1 to 3
+ * were three cards saying "Not needed", a whole row. They are not needed for
+ * one reason (pipeline() gives each the same sentence), said once.
+ */
+function NotNeeded({ stages }: { stages: readonly Stage[] }) {
+  const skipped = stages.filter((x) => x.state === 'not-needed');
+  if (skipped.length === 0) return null;
+  const ns = skipped.map((x) => x.n);
+  const run = ns.every((n, i) => i === 0 || n === ns[i - 1]! + 1);
+  const which = ns.length === 1 ? `Stage ${ns[0]}` : run ? `Stages ${ns[0]}–${ns[ns.length - 1]}` : `Stages ${ns.join(', ')}`;
+  return (
+    <p data-not-needed className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+      <StageChip n={skipped[0]!.n} state="not-needed" />
+      <span><span className="font-medium text-foreground">{which}</span> ({skipped.map((x) => STAGES[x.n - 1]!.label).join(', ')}) · {skipped[0]!.skipped}</span>
+    </p>
+  );
+}
 
 /**
  * The reading under the numbers as six stages, each in one state (pipeline())
@@ -263,59 +284,63 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : <>took {took(a.tookMs)}{c.analysisError ? <span className="text-muted-foreground"> · still shown: the latest analysis failed</span> : c.stale ? <span className="text-muted-foreground"> · new data waiting for the next run</span> : c.pausedAt === null && c.trailProgress !== null ? ' · money trail loading; analyzed again once it has' : ' · nothing new since'}</>;
 
   return (
-    // Three across from md: a rule over stages 4–6 keeps each card its own, where the divide lines alone ran 1 into 4.
-    <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0 md:[&>li:nth-child(n+4)]:border-t">
-      <Step stage={s1} figure={s1.state === 'running' ? floorPct(s1.share!, 1) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
-        <DownloadNote c={c} />
-      </Step>
-      <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? floorPct(s2.share!, 1) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
-        {trailed ? (
-          <p className="text-xs text-muted-foreground">
-            Money trail loaded from stored data{trail ? ` · ${num(trail.checked)} of ${num(trail.of)} traders in the trail checked` : ''}
-          </p>
-        ) : null}
-        <RestoreNote c={c} rpcChains={rpcChains} now={now} />
-        {/* Why a trail on disk did not load: information, since the lenses run as they would without it. A failed import is retried, which a paused collection is not: the notes about the file stay. */}
-        {c.trailNote && !(c.pausedAt !== null && c.trailNote === TRAIL_NOTES.failed) ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
-      </Step>
-      <Step stage={s3} figure={s3.state === 'done' ? '100%' : DASH} value={v3}>
-        {a && s3.state === 'failed' ? <AnalysisFailed c={c} now={now} /> : null}
-      </Step>
-      <Step
-        stage={s4}
-        figure={s4.state === 'blocked' ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span> : cov.reading === 'head-unknown' ? <span className="text-base">Head unknown</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
-        bar={s4.share ?? (s4.state === 'paused' ? cov.blocks ?? 0 : undefined)}
-        value={v4}
-      >
-        {/* A "No RPC" left from before the stored data loaded is no fault, paused or not: the worker clears it on its next pass. */}
-        {/* Nor one on a paused collection: the worker does not touch it, so it cannot clear it, and nothing is failing now. */}
-        {/* Nor one under a No RPC chip: a missing RPC is a limit to lift, and the sentence below says it. */}
-        {c.error && s4.state !== 'blocked' && !storedOnly(c, rpcChains) ? c.pausedAt !== null
-          ? <p className="text-xs text-muted-foreground">{pausedError(c.error, rpcChains.has(c.chainId), c.chainId)}</p>
-          : <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" /><span>{lastReadFailed(c.error)}</span></p> : null}
-        {s4.state === 'blocked' ? <p className="text-xs text-muted-foreground">{cov.unsynced !== null ? `${cov.unsynced}: no` : 'No'} RPC is set for {chainName(c.chainId)}, so no newer block is read.</p> : null}
-        {s4.state === 'live' ? <p className="text-xs text-muted-foreground">Up to date · following new blocks</p> : null}
-      </Step>
-      <Step
-        stage={s5}
-        figure={awaited ? <span className="text-base">Waiting</span> : s5.state === 'blocked' && !(fed && a !== null) ? DASH : !money ? DASH : a === null ? '…' : progress(checked)}
-        bar={money && a !== null ? checked : undefined}
-        value={awaited ? 'Funded by the stored money trail once it has loaded. No funding source is set (WASHTRACE_ETHERSCAN_KEY) for wallets it did not check.'
-          : !money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
-          : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
-          : `${num(cov.wallets.checked)} of ${num(cov.wallets.of)} wallets that traded it, busiest first`}
-      >
-        {trailed && !funding && fed ? (
-          <p className="text-xs text-muted-foreground">
-            Using the stored money trail, so newer wallets go unchecked. <a href={ETHERSCAN_HREF} className="underline hover:text-foreground">{ETHERSCAN_CTA}</a>
-          </p>
-        ) : null}
-        {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search', 'money searches')} stopped at the visit cap before following every wallet out.</p> : null}
-      </Step>
-      <Step stage={s6} figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>} value={v6}>
-        {a ? <AnalysisFailed c={c} now={now} retrying={s6.state === 'running'} /> : null}
-        {a ? <p className="text-xs text-muted-foreground">Gaps in history: {pct(a.missingData, 1)} of changes of owner (skipped, never guessed).</p> : null}
-      </Step>
-    </ol>
+    <div>
+      <NotNeeded stages={stages} />
+      {/* Three across from md: a rule over the second row keeps each card its own, where the divide lines alone ran 1 into 4. */}
+      {/* Each row's last card has no right edge: the divide gives every card but the last one, which doubled the list's own at the end of the first row. */}
+      <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0 md:[&>li:nth-child(3n)]:border-r-0 md:[&>li:nth-child(n+4)]:border-t">
+        <Step stage={s1} figure={s1.state === 'running' ? floorPct(s1.share!, 1) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
+          <DownloadNote c={c} />
+        </Step>
+        <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? floorPct(s2.share!, 1) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
+          {trailed ? (
+            <p className="text-xs text-muted-foreground">
+              Money trail loaded from stored data{trail ? ` · ${num(trail.checked)} of ${num(trail.of)} traders in the trail checked` : ''}
+            </p>
+          ) : null}
+          <RestoreNote c={c} rpcChains={rpcChains} now={now} />
+          {/* Why a trail on disk did not load: information, since the lenses run as they would without it. A failed import is retried, which a paused collection is not: the notes about the file stay. */}
+          {c.trailNote && !(c.pausedAt !== null && c.trailNote === TRAIL_NOTES.failed) ? <p className="text-xs text-muted-foreground">{c.trailNote}</p> : null}
+        </Step>
+        <Step stage={s3} figure={s3.state === 'done' ? '100%' : DASH} value={v3}>
+          {a && s3.state === 'failed' ? <AnalysisFailed c={c} now={now} /> : null}
+        </Step>
+        <Step
+          stage={s4}
+          figure={s4.state === 'blocked' ? <span className="text-base">{cov.stops !== null ? 'Stored data' : 'No RPC'}</span> : cov.reading === 'head-unknown' ? <span className="text-base">Head unknown</span> : cov.blocks === null ? '…' : progress(cov.blocks)}
+          bar={s4.share ?? (s4.state === 'paused' ? cov.blocks ?? 0 : undefined)}
+          value={v4}
+        >
+          {/* A "No RPC" left from before the stored data loaded is no fault, paused or not: the worker clears it on its next pass. */}
+          {/* Nor one on a paused collection: the worker does not touch it, so it cannot clear it, and nothing is failing now. */}
+          {/* Nor one under a No RPC chip: a missing RPC is a limit to lift, and the sentence below says it. */}
+          {c.error && s4.state !== 'blocked' && !storedOnly(c, rpcChains) ? c.pausedAt !== null
+            ? <p className="text-xs text-muted-foreground">{pausedError(c.error, rpcChains.has(c.chainId), c.chainId)}</p>
+            : <p className="flex items-start gap-1 text-xs text-fault"><Warn className="size-3.5" /><span>{lastReadFailed(c.error)}</span></p> : null}
+          {s4.state === 'blocked' ? <p className="text-xs text-muted-foreground">{cov.unsynced !== null ? `${cov.unsynced}: no` : 'No'} RPC is set for {chainName(c.chainId)}, so no newer block is read.</p> : null}
+          {s4.state === 'live' ? <p className="text-xs text-muted-foreground">Up to date · following new blocks</p> : null}
+        </Step>
+        <Step
+          stage={s5}
+          figure={awaited ? <span className="text-base">Waiting</span> : s5.state === 'blocked' && !(fed && a !== null) ? DASH : !money ? DASH : a === null ? '…' : progress(checked)}
+          bar={money && a !== null ? checked : undefined}
+          value={awaited ? 'Funded by the stored money trail once it has loaded. No funding source is set (WASHTRACE_ETHERSCAN_KEY) for wallets it did not check.'
+            : !money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
+            : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
+            : `${num(cov.wallets.checked)} of ${num(cov.wallets.of)} wallets that traded it, busiest first`}
+        >
+          {trailed && !funding && fed ? (
+            <p className="text-xs text-muted-foreground">
+              Using the stored money trail, so newer wallets go unchecked. <a href={ETHERSCAN_HREF} className="underline hover:text-foreground">{ETHERSCAN_CTA}</a>
+            </p>
+          ) : null}
+          {a && a.truncatedSearches > 0 ? <p className="text-xs text-muted-foreground">{plural(a.truncatedSearches, 'money search', 'money searches')} stopped at the visit cap before following every wallet out.</p> : null}
+        </Step>
+        <Step stage={s6} figure={a === null ? 'Not yet' : <span className="text-base"><Time ms={a.ranAt} /></span>} value={v6}>
+          {a ? <AnalysisFailed c={c} now={now} retrying={s6.state === 'running'} /> : null}
+          {a ? <p className="text-xs text-muted-foreground">Gaps in history: {pct(a.missingData, 1)} of changes of owner (skipped, never guessed).</p> : null}
+        </Step>
+      </ol>
+    </div>
   );
 }
