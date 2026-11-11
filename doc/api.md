@@ -127,6 +127,10 @@ leading `'`.
   collection: false only for one found by its full address.
 - Each collection hit carries `totals`, its latest analysis's totals per lens (as in `GET /api/collections`), or
   `null` before the first analysis. The search page draws the range of washed sales from them.
+- The start of a hex string (4 characters or more after `0x`) finds wallets and also trades whose transaction hash
+  starts that way, in every collection: a trade's link needs every transfer of its transaction, so a scope never
+  narrows trades. Each token hit carries `flagged`, true when Round trips or Linked wallets flagged one of its
+  counted trades in the latest analysis; false says only that none is, not that it was judged clean.
 - `connected` comes with a scoped search of every kind (no `kind`) whose best match, the first hit of the kind
   listed first, is a wallet on the scope's chain: `{wallet, rings, tokens}`, its first 3 rings there by rank
   (`{anchor, rank}`) and the 3 tokens it traded there most. The search box lists them under that wallet.
