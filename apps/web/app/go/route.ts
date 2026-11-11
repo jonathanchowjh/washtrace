@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { connection } from 'next/server';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, scopeOf, scopeParam, tradeHref } from '@/lib/search';
@@ -20,7 +20,9 @@ export async function GET(req: NextRequest): Promise<Response> {
   await connection();
   const q = (req.nextUrl.searchParams.get('q') ?? '').trim();
   const given = chainOf(req.nextUrl.searchParams.get('chain') ?? '');
-  const to = (path: string) => NextResponse.redirect(new URL(path, req.url), 303);
+  // A relative Location, which the browser resolves against the address it asked on. req.url is the server's
+  // own: in the container it is the 0.0.0.0 it binds, so an absolute one sent the reader off to another host.
+  const to = (path: string) => new Response(null, { status: 303, headers: { Location: path } });
   const tx = txOf(q);
   if (tx && given !== null) return to(`/tx/${given}/${tx}`);
   const address = addressOf(q);
