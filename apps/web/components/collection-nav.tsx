@@ -59,16 +59,17 @@ export function Badge({ n }: { n: number }) {
 }
 
 type Counted = 'tokens' | 'wallets' | 'trades';
-// One answer a page for all three badges, asked again only when a new analysis lands (`src` names it).
+// One answer a page for all three badges, asked again only for another lens, or when a new analysis or run lands (`src` names them).
 const asked = new Map<string, Promise<Partial<Record<Counted, number | null>>>>();
 
 /**
  * A tab's count, read from the browser once the page is up: in the layout it
- * was read again for every prefetch of a tab and every 15 s refresh. A count
- * that cannot be read shows nothing, as before.
+ * was read again for every prefetch of a tab and every 15 s refresh. A lens
+ * that has not run here (null) says so in the pill, as its list does, so the
+ * tab keeps its shape; a count that cannot be read shows nothing.
  */
 export function TabCount({ src, kind }: { src: string; kind: Counted }) {
-  const [n, setN] = useState<number | null>(null);
+  const [n, setN] = useState<number | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     let counts = asked.get(src);
@@ -76,10 +77,13 @@ export function TabCount({ src, kind }: { src: string; kind: Counted }) {
       counts = fetch(src).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
       asked.set(src, counts);
     }
-    void counts.then((c) => { if (live) setN(typeof c[kind] === 'number' ? c[kind] : null); });
+    void counts.then((c) => { if (live) setN(typeof c[kind] === 'number' || c[kind] === null ? c[kind] : undefined); });
     return () => { live = false; };
   }, [src, kind]);
-  return n === null ? null : <Badge n={n} />;
+  if (n === undefined) return null;
+  return n === null
+    ? <span title="This lens has not run here, so its list is empty for now" className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">not run</span>
+    : <Badge n={n} />;
 }
 
 const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
@@ -92,21 +96,25 @@ const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
 ];
 
 /**
- * The collection's parent line and its tabs, on every page under it. The
- * counts are Linked wallets' lists, the default lens, so they are hidden while
- * the address bar picks another: a count beside a list of a different size
- * would contradict it. Trades counts every sale, the collection's own figure:
- * a filter's matches are said by the list's own line. A chosen lens is carried
- * to the Tokens and Wallets tabs.
+ * The collection's parent line and its tabs, on every page under it. Tokens
+ * and Wallets count the lists they open, so the lens the address bar picks
+ * (lensOf) picks their counts too, and the bar keeps its shape as the lens
+ * changes. Trades counts every sale, the collection's own figure: a filter's
+ * matches are said by the list's own line. A chosen lens is carried to the
+ * Tokens and Wallets tabs.
  */
-export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
+export function CollectionNav({ base, name, analysedAt, lenses, opensOn, counts, rings }: {
   base: string;
   name: string;
   analysedAt: number | null;
   /** Every lens key that exists here, the built-ins first in METHODS' order. */
   lenses: readonly string[];
-  /** Each tab's count badge, streamed in: nothing shows until it is read, or when there is none to show. */
-  counts: Partial<Record<Exclude<CollectionTab, 'overview'>, ReactNode>>;
+  /** The lens a list opens on with no lens named: the one whose counts show then. */
+  opensOn: string;
+  /** By lens key, where its tab counts are read from (the counts route); each is read once a page, from the browser. */
+  counts: Readonly<Record<string, string>>;
+  /** How many rings the latest analysis found, or null before rings are worked out. */
+  rings: number | null;
 }) {
   const path = usePathname();
   const current = tabOf(base, path);
@@ -125,7 +133,11 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
     return () => watch.disconnect();
   }, [current]);
   const method = lensOf(useSearchParams(), current, lenses);
-  const defaultLens = method === null || method === 'AC';
+  const src = counts[method ?? opensOn];
+  const countOf = (tab: CollectionTab): ReactNode =>
+    tab === 'rings' ? (rings === null ? null : <Badge n={rings} />)
+      // Overview and Methods count nothing.
+      : (tab === 'tokens' || tab === 'wallets' || tab === 'trades') && src !== undefined ? <TabCount src={src} kind={tab} /> : null;
   const hrefOf = (tab: CollectionTab) =>
     tab === 'overview' ? base
       : tab === 'trades' || tab === 'rings' ? `${base}/${tab}`
@@ -141,18 +153,14 @@ export function CollectionNav({ base, name, analysedAt, lenses, counts }: {
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
       <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
-        {TABS.map(({ tab, label, kind }) => {
-          // Rings and Trades are no lens's lists: their counts always stand. Overview and Methods count nothing.
-          const count = tab === 'overview' || tab === 'methods' || ((tab === 'tokens' || tab === 'wallets') && !defaultLens) ? null : counts[tab];
-          return (
-            <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
-              className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
-                tab === current ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-              <KindIcon kind={kind} />{label}
-              {count}
-            </Link>
-          );
-        })}
+        {TABS.map(({ tab, label, kind }) => (
+          <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
+            className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
+              tab === current ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+            <KindIcon kind={kind} />{label}
+            {countOf(tab)}
+          </Link>
+        ))}
       </nav>
     </div>
   );
