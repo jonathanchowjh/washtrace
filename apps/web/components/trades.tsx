@@ -215,7 +215,8 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 font-medium">{BY_NAME[by]}</th>
-                <th className="px-3 py-2 text-right font-medium">Trades</th>
+                {/* What the count is of, as the match line above says it. */}
+                <th className="px-3 py-2 text-right font-medium">{q.kind === 'all' ? 'Changes of owner' : 'Sales'}</th>
                 {cols.map((m) => <th key={m} className="px-3 py-2 text-right font-medium">{lensTitle(m, own)}</th>)}
               </tr>
             </thead>
@@ -226,7 +227,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
                 return (
                   // A row no filter can hold (the unknown group, a marketplace with no name here) is not a list to open.
                   <tr key={g.key} data-unlisted={f === null ? '' : undefined}>
-                    <td className="px-3 py-2">{groupLabel(by, g.key)}</td>
+                    <td className="px-3 py-2"><Cell href={to()}>{groupLabel(by, g.key)}</Cell></td>
                     <td className="px-3 py-2 text-right tabular-nums"><Cell href={to()}>{num(g.trades)}</Cell></td>
                     {cols.map((m) => (
                       <td key={m} className="px-3 py-2 text-right tabular-nums">

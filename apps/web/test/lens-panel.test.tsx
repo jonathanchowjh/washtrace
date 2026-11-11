@@ -31,6 +31,9 @@ describe('the lens stat line', () => {
     expect(named(c, '388 loops')).toEqual([`${BASE}/tokens?method=A`]);
     expect(named(c, '8.0%')).toEqual([tradesHref(BASE, { caught: ['A'], kind: 'all' })]);
     expect(c.textContent).toContain('of every change of owner');
+    // A count of sales says sales, as the share before it does.
+    expect(c.textContent).toContain('41 sales of 1,000');
+    expect(c.textContent).not.toContain('trades of');
   });
 
   it('says linked pairs beside loops for a lens that counts them, and leaves loops out when none were counted', () => {

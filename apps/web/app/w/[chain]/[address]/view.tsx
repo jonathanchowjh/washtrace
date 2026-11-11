@@ -90,13 +90,13 @@ export async function WalletView({ chainId, address, sp, within }: {
   const apart = transfers.filter((t) => toneOf(t) === 'apart').length;
   const tokens = new Set(hits.map((t) => `${t.collection?.address}:${t.tokenId}`)).size;
   const linked = counterparties.filter((c) => c.watched).length;
-  // The title counts every trade it has: the flagged count opens the flagged-only list, the total all of them.
+  // The title counts every transfer it sent or received, a mint among them, so it says transfers: the flagged count opens the flagged-only list, the total all of them.
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
-  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'trade' : 'trades'} out of <Link href={base} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
+  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'transfer' : 'transfers'} out of <Link href={base} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
   const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No trade in ${within.name}`, tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
-    : transfers.length === 0 ? { title: 'No trade of it matches these filters', tone: 'clean' as const }
+    : transfers.length === 0 ? { title: 'No transfer of it matches these filters', tone: 'clean' as const }
     : answer(view, flaggedTitle);
   // Where the title's flagged trades are not: a filter whose list is one page holds none, else they are on other pages.
   const elsewhere = counts.flagged === 0 || hits.length > 0 ? null
@@ -115,8 +115,8 @@ export async function WalletView({ chainId, address, sp, within }: {
   const covers = (them: string) => (elsewhere === null ? `; the verdict above covers ${them}.` : '.');
   const shown = narrowed || pages.trades.pages > 1
     ? transfers.length === 1
-      ? `Trade ${num(first)} of ${num(pages.trades.total)} is shown${covers('it')}`
-      : `Trades ${num(first)}–${num(first + transfers.length - 1)} of ${num(pages.trades.total)} are shown${covers('these')}`
+      ? `Transfer ${num(first)} of ${num(pages.trades.total)} is shown${covers('it')}`
+      : `Transfers ${num(first)}–${num(first + transfers.length - 1)} of ${num(pages.trades.total)} are shown${covers('these')}`
     : `Every transfer it sent or received in ${scope === undefined ? 'a watched collection' : 'this collection'}.`;
   const named = narrow.find === undefined ? null : findOf(narrow.find);
   const unreadable = named !== null && named.kind !== 'token' && named.kind !== 'address' && named.kind !== 'prefix';
@@ -166,7 +166,7 @@ export async function WalletView({ chainId, address, sp, within }: {
       {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}
       {home === undefined ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
 
-      <Section title="Which of its trades?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
+      <Section title="Which of its transfers?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (
           <form action={base} method="get" role="search" aria-label="Narrow its trades" className="mb-2 flex flex-wrap items-center gap-2 text-sm">
             {/* The other lists stay where they are; the trades start again at their first page. */}
@@ -194,12 +194,12 @@ export async function WalletView({ chainId, address, sp, within }: {
           </form>
         )}
         {narrowed ? (
-          <MatchLine n={pages.trades.total} of={plural(counts.trades, 'trade')} query={narrow.find ?? null} clear={href({ filter: other === undefined ? {} : { with: other }, trades: 1 })}>
+          <MatchLine n={pages.trades.total} of={plural(counts.trades, 'transfer')} query={narrow.find ?? null} clear={href({ filter: other === undefined ? {} : { with: other }, trades: 1 })}>
             {unreadable ? <> · “{narrow.find}” is not a token number, or a wallet address or the start of one, so it matches nothing.</> : null}
           </MatchLine>
         ) : null}
-        {narrowed && transfers.length === 0 ? <Empty>No trade of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
-        {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="trades" pageParam="trades" /> : null}
+        {narrowed && transfers.length === 0 ? <Empty>No transfer of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
+        {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="transfers" pageParam="trades" /> : null}
       </Section>
 
       <Section

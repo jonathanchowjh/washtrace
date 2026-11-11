@@ -125,6 +125,8 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   const csv = `/api/collections/${chainId}/${address}/trades?format=csv${tradesHref(base, query).slice(`${base}/trades`.length).replace('?', '&')}`;
   const lensHref = (m: LensKey) => kind === 'trades' ? tradesHref(base, { ...query, caught: [m] }, { by: view.by }) : href({ method: m });
   const lensOn = (m: LensKey) => kind === 'trades' ? query.caught.length === 1 && query.caught[0] === m : m === method;
+  // What Trades counts, in the glossary's words: sales, or every change of owner, as the sub above says.
+  const unit = query.kind === 'all' ? { one: 'change of owner', many: 'changes of owner' } : { one: 'sale', many: 'sales' };
 
   return (
     <>
@@ -163,12 +165,12 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
             <>
               {trades.total === 0 ? (
                 <div className="mt-4 max-w-3xl space-y-2">
-                  <Empty>No trade matches these filters.</Empty>
+                  <Empty>No {unit.one} matches these filters.</Empty>
                   {skipped ? <p className="text-sm text-muted-foreground">{skipped.trim()}</p> : null}
                 </div>
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">
-                  {plural(trades.total, 'trade')} match{trades.total === 1 ? 'es' : ''} · everything is in the address bar, so this view can be shared.
+                  {plural(trades.total, unit.one, unit.many)} match{trades.total === 1 ? 'es' : ''} · everything is in the address bar, so this view can be shared.
                   {trades.unjudged > 0 ? ` ${unjudged(c.latest, trades.unjudged)}` : ''}
                   {skipped}
                 </p>
@@ -178,7 +180,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
                 <>
                   <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money}
                     from={fromParam('trades', new URL(tradesHref(base, query, { by: view.by }), 'http://x.invalid').searchParams, trades.page)} />
-                  <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label="trades" />
+                  <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label={unit.many} />
                   <p className="mt-3 text-sm"><a href={csv} className="font-medium hover:underline">Download CSV ↓</a></p>
                 </>
               )}

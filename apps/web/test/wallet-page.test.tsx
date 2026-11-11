@@ -93,7 +93,7 @@ describe('the wallet page', () => {
   it('opens the flagged trades on the flagged count, and the whole list on the total, over all its trades', async () => {
     trades = 500; flaggedTrades = 3;
     const el = await render_();
-    expect(el.textContent).toContain('In 3 flagged trades out of 500');
+    expect(el.textContent).toContain('In 3 flagged transfers out of 500');
     expect(el.textContent).not.toContain('its latest');
     expect(linkTo(el, '3')).toBe(`${here}?flagged=1`);
     expect(linkTo(el, '500')).toBe(here);
@@ -103,16 +103,16 @@ describe('the wallet page', () => {
     // Round trips flags 4; Money loops back 2, not counted; and 3 of the 10 in a collection no analysis covered.
     trades = 500; flaggedTrades = 4; moneyOnlyTrades = 2; unjudgedTrades = 10;
     const el = await render_();
-    const title = Number(/In (\d+) flagged trades out of/.exec(el.textContent ?? '')![1]);
+    const title = Number(/In (\d+) flagged transfers out of/.exec(el.textContent ?? '')![1]);
     expect(linkTo(el, String(title))).toBe(`${here}?flagged=1`);
-    expect(await page({ flagged: '1' })).toContain(`${title} of 500 trades match`);
+    expect(await page({ flagged: '1' })).toContain(`${title} of 500 transfers match`);
   });
 
   it('a wallet whose flagged trades are all past the first page titles as flagged, and says none is on this page', async () => {
     trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
     const text = el.textContent ?? '';
-    expect(text).toContain('In 2 flagged trades out of 150');
+    expect(text).toContain('In 2 flagged transfers out of 150');
     expect(text).not.toContain('Not flagged by any lens');
     expect(text).toContain('None of them is on this page.');
     expect(linkTo(el, 'Show the flagged ones')).toBe(`${here}?flagged=1`);
@@ -123,14 +123,14 @@ describe('the wallet page', () => {
   it('a flagged wallet never sits in a clean card, and the lead claims no cover for trades it does not hold', async () => {
     trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
-    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card.className).toContain('bg-money-surface');
-    expect(el.textContent).toContain('Trades 1–20 of 150 are shown.');
+    expect(el.textContent).toContain('Transfers 1–20 of 150 are shown.');
     expect(el.textContent).not.toContain('covers these');
     cleanup();
     // The page that holds them keeps its own verdict's tone, and says the verdict covers them.
     const two = await render_({ trades: '2' });
-    const card2 = [...two.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card2 = [...two.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card2.className).toContain('bg-cycle-surface');
     expect(two.textContent).toContain('the verdict above covers these');
   });
@@ -138,7 +138,7 @@ describe('the wallet page', () => {
   it('a flagged wallet whose filter matches nothing still sits in a flagged card', async () => {
     trades = 50; flaggedTrades = 2;
     const el = await render_({ q: '999' });
-    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card.className).toContain('bg-money-surface');
   });
 
@@ -146,16 +146,16 @@ describe('the wallet page', () => {
     trades = 50; flaggedTrades = 2;
     const el = await render_({ q: '30' });
     const text = el.textContent ?? '';
-    expect(text).toContain('In 2 flagged trades out of 50');
+    expect(text).toContain('In 2 flagged transfers out of 50');
     expect(text).toContain('None of them matches these filters.');
     expect(linkTo(el, 'Show the flagged ones')).toBe(`${here}?flagged=1`);
-    expect(text).toContain('1 of 50 trades matches “30” · Clear');
+    expect(text).toContain('1 of 50 transfers matches “30” · Clear');
   });
 
   it('a filter that matches nothing still titles a flagged wallet from its counts', async () => {
     trades = 50; flaggedTrades = 2;
     const text = await page({ q: '999' });
-    expect(text).toContain('In 2 flagged trades out of 50');
+    expect(text).toContain('In 2 flagged transfers out of 50');
     expect(text).toContain('None of them matches these filters.');
   });
 
@@ -176,25 +176,25 @@ describe('the wallet page', () => {
     trades = 21;
     const text = await page();
     expect(text).toContain('Not flagged by any lens');
-    expect(text).toContain('Trades 1–20 of 21 are shown; the verdict above covers these.');
+    expect(text).toContain('Transfers 1–20 of 21 are shown; the verdict above covers these.');
   });
 
   it('one flagged trade is singular', async () => {
     trades = 101;
     flaggedTrades = 1;
-    expect(await page()).toContain('In 1 flagged trade out of 101');
+    expect(await page()).toContain('In 1 flagged transfer out of 101');
   });
 
   it('?trades=2 shows rows 21–40, with a working Previous', async () => {
     trades = 500;
     const el = await render_({ trades: '2' });
-    expect(el.textContent).toContain('Trades 21–40 of 500 are shown; the verdict above covers these.');
+    expect(el.textContent).toContain('Transfers 21–40 of 500 are shown; the verdict above covers these.');
     expect(tokenShown(el, 20)).toBe(true);
     expect(tokenShown(el, 39)).toBe(true);
     expect(tokenShown(el, 19)).toBe(false);
     expect(tokenShown(el, 40)).toBe(false);
-    const trades_ = pager(el, 'trades');
-    expect(trades_.text).toContain('21–40 of 500 trades');
+    const trades_ = pager(el, 'transfers');
+    expect(trades_.text).toContain('21–40 of 500 transfers');
     expect(trades_.link('‹ Previous')).toBe(here);
     expect(trades_.link('Next ›')).toBe(`${here}?trades=3`);
   });
@@ -203,53 +203,53 @@ describe('the wallet page', () => {
     trades = 500; counterparties = 50;
     const el = await render_({ trades: '2', partners: '3' });
     expect(el.textContent).toContain('41–50 of 50 counterparties');
-    expect(pager(el, 'trades').text).toContain('21–40 of 500 trades');
+    expect(pager(el, 'transfers').text).toContain('21–40 of 500 transfers');
     expect(pager(el, 'counterparties').link('‹ Previous')).toBe(`${here}?trades=2&partners=2`);
-    expect(pager(el, 'trades').link('Next ›')).toBe(`${here}?trades=3&partners=3`);
+    expect(pager(el, 'transfers').link('Next ›')).toBe(`${here}?trades=3&partners=3`);
   });
 
   it('a page past the end is clamped to the last', async () => {
     trades = 500;
     const el = await render_({ trades: '99999' });
-    expect(el.textContent).toContain('Trades 481–500 of 500 are shown');
+    expect(el.textContent).toContain('Transfers 481–500 of 500 are shown');
     expect(tokenShown(el, 499)).toBe(true);
   });
 
   it('collection= and flagged=1 narrow the trades and say how many match', async () => {
     trades = 500; flaggedTrades = 3; unjudgedTrades = 10;
     const flagged = await render_({ flagged: '1' });
-    expect(flagged.textContent).toContain('3 of 500 trades match');
+    expect(flagged.textContent).toContain('3 of 500 transfers match');
     expect([0, 1, 2].every((n) => tokenShown(flagged, n))).toBe(true);
     expect(tokenShown(flagged, 3)).toBe(false);
     cleanup();
     const one = await page({ collection: OTHER });
-    expect(one).toContain('10 of 500 trades match');
-    expect(one).toContain('Trades 1–10 of 10 are shown');
+    expect(one).toContain('10 of 500 transfers match');
+    expect(one).toContain('Transfers 1–10 of 10 are shown');
   });
 
   it('a Find that names no token or wallet says it matches nothing', async () => {
     trades = 5;
     const text = await page({ q: 'hello' });
-    expect(text).toContain('0 of 5 trades match');
+    expect(text).toContain('0 of 5 transfers match');
     expect(text).toContain('“hello” is not a token number, or a wallet address or the start of one, so it matches nothing.');
   });
 
   it('the match line and the shown line agree in number', async () => {
     trades = 5; flaggedTrades = 2;
-    expect(await page({ q: '3' })).toContain('1 of 5 trades matches');
+    expect(await page({ q: '3' })).toContain('1 of 5 transfers matches');
     cleanup();
     const two = await page({ flagged: '1' });
-    expect(two).toContain('2 of 5 trades match ·');
-    expect(two).toContain('Trades 1–2 of 2 are shown; the verdict above covers these.');
+    expect(two).toContain('2 of 5 transfers match ·');
+    expect(two).toContain('Transfers 1–2 of 2 are shown; the verdict above covers these.');
     cleanup();
     trades = 1; flaggedTrades = 1;
     const one = await page({ flagged: '1' });
-    expect(one).toContain('1 of 1 trade matches');
-    expect(one).toContain('Trade 1 of 1 is shown; the verdict above covers it.');
+    expect(one).toContain('1 of 1 transfer matches');
+    expect(one).toContain('Transfer 1 of 1 is shown; the verdict above covers it.');
     cleanup();
     // A last page holding one trade reads the same way.
     trades = 21; flaggedTrades = 0;
-    expect(await page({ trades: '2' })).toContain('Trade 21 of 21 is shown; the verdict above covers it.');
+    expect(await page({ trades: '2' })).toContain('Transfer 21 of 21 is shown; the verdict above covers it.');
   });
 
   it('sorts its partners by their headers, and each count opens what passed between the two', async () => {
@@ -435,7 +435,7 @@ describe('the wallet under a collection\'s tabs', () => {
     // Ten trades: the last four in another collection, two flagged here.
     trades = 10; unjudgedTrades = 4; flaggedTrades = 2;
     const el = await scoped({ collection: OTHER });
-    expect(el.textContent).toContain('In 2 flagged trades out of 6');
+    expect(el.textContent).toContain('In 2 flagged transfers out of 6');
     expect(el.querySelector('select[name="collection"]')).toBeNull();
     // The plain page under the tabs is no filter of the reader's.
     expect(el.textContent).toContain('Every transfer it sent or received in this collection.');

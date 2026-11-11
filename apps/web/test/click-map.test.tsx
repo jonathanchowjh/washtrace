@@ -231,7 +231,7 @@ const ALLOWED: { why: string; test: (el: Element) => boolean }[] = [
   { why: 'the pipeline’s progress figures: how far a stage has read, not a list', test: (el) => el.closest('[data-progress]') !== null },
   { why: 'a Group by row no filter can hold, such as the unknown group: its trades are in the list below, but no list holds only them', test: (el) => el.closest('tr[data-unlisted]') !== null },
   { why: "a trade's own measure, in its row or its card: it counts no list, and the trade's date opens the trade", test: (el) => el.closest('[data-measure]') !== null },
-  { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
+  { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|sales|changes of owner|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
 ];
 
 /** Every figure outside a link, a time or an allowed place: the text itself, not its wrapper, so one loose digit among links still counts. */

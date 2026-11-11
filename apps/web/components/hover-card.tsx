@@ -36,7 +36,8 @@ export function cardLines(c: Card): { title: string; kind: 'wallet' | 'token' | 
   const judged = (s: string) => (c.judged ? s : 'not judged yet');
   if (c.kind === 'wallet') {
     return { kind: 'wallet', title: short(c.address), lines: [
-      `${plural(c.trades, 'trade')} here · ${judged(`${num(c.flagged)} flagged`)}`,
+      // The route's `trades` is every transfer it sent or received here, a mint among them (walletTradeCount), as its page counts: so, transfers.
+      `${plural(c.trades, 'transfer')} here · ${judged(`${num(c.flagged)} flagged`)}`,
       c.ring === null ? 'In no ring' : `In Ring ${c.ring.rank}${c.rings > 1 ? ` and ${plural(c.rings - 1, 'more ring')}` : ''}`,
     ] };
   }

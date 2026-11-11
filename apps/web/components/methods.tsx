@@ -147,7 +147,7 @@ export function LensStats({ m, t, loops, base, qualifier, own = {} }: {
       <p>
         {qualifier === 'at least' ? 'at least ' : null}<Link href={caught} prefetch={false} className={cn('text-lg', FIGURE)}>{pctTenth(s.part, s.whole)}</Link> of sales
         {(APART as readonly string[]).includes(m) ? <NotCountedTag /> : null}{qualifier === 'so far' ? ' so far' : ''}
-        {' · '}<Link href={caught} prefetch={false} className={FIGURE}>{num(t.flaggedSales)}</Link> trades of <Link href={tradesHref(base, {})} prefetch={false} className={FIGURE}>{num(t.sales)}</Link>
+        {' · '}<Link href={caught} prefetch={false} className={FIGURE}>{num(t.flaggedSales)}</Link> sales of <Link href={tradesHref(base, {})} prefetch={false} className={FIGURE}>{num(t.sales)}</Link>
         {' · '}<Link href={tradesHref(base, { caught: [m], ...priciest })} prefetch={false} className={FIGURE}>{eth(t.flaggedVolumeWei)}</Link> of <Link href={tradesHref(base, priciest)} prefetch={false} className={FIGURE}>{eth(t.volumeWei)}</Link>
       </p>
       <p>
