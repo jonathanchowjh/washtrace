@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
@@ -31,6 +31,9 @@ const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:rou
  * for TokenLoops: its wallets are then buttons, lit on a first press and
  * opened on a second, which it handles on the element around this one.
  * `label` names the picture, as a page with several says which loop each lights.
+ *
+ * Wider than its box, as a big graph is on a phone, it opens scrolled to the
+ * part that matters: what is lit, else its middle.
  */
 export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = false, label = 'Transfer graph of this token' }: {
   drawing: Drawing; chainId: number; lit: { edges: string[]; nodes: string[] }; base: string;
@@ -51,12 +54,20 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   const yours = [...new Set(edges.flatMap((e) => e.yours ?? []))];
   const others = edges.some((e) => e.kind === 'asset' && e.tone === 'own' && e.yours === undefined);
   const money = edges.some((e) => e.kind === 'money');
+  const box = useRef<HTMLDivElement>(null);
+  const focus = Math.round(focusOf(drawing, litNodes));
+  useEffect(() => {
+    const el = box.current, svg = el?.querySelector('svg');
+    if (!el || !svg || el.scrollWidth <= el.clientWidth) return;
+    const scale = svg.getBoundingClientRect().width / view.w;
+    el.scrollLeft = Math.max(0, (focus - view.x) * scale - el.clientWidth / 2);
+  }, [focus, view.x, view.w]);
   const labelHref = (e: DrawnEdge) => (e.row !== null ? rowHrefs[e.row] : e.token === undefined || base === '' ? undefined : `${base}/t/${e.token}`);
   return (
     <figure className="rounded-lg border bg-card p-3">
       {/* The box round what is drawn, never wider on screen than it is drawn: a two-wallet loop is a short strip, not a square of empty card. */}
       {/* On a phone it is never drawn below MIN_SCALE, so its labels stay readable, and scrolls sideways in its own box instead; from sm it fits the column as before. */}
-      <div className="overflow-x-auto">
+      <div ref={box} className="overflow-x-auto">
         <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px`, '--figure-min': `${Math.round(view.w * MIN_SCALE)}px` } as CSSProperties}
           className="mx-auto block h-auto w-full max-sm:min-w-(--figure-min)" role="group" aria-label={label}>
           <defs>
@@ -123,6 +134,12 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
       </figcaption>
     </figure>
   );
+}
+
+/** Where across the drawing (in its own x) the part that matters is: the lit wallets, else the middle. */
+function focusOf({ view, nodes }: Drawing, lit: ReadonlySet<string>): number {
+  const xs = nodes.filter((n) => lit.has(n.id)).map((n) => n.x);
+  return xs.length === 0 ? view.x + view.w / 2 : (Math.min(...xs) + Math.max(...xs)) / 2;
 }
 
 /**

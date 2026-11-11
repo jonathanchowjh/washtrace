@@ -207,3 +207,40 @@ describe('the graph on a phone', () => {
     expect(c.querySelector('figure > figcaption')).not.toBeNull();
   });
 });
+
+describe('a graph wider than its box', () => {
+  // jsdom lays nothing out: give the box a phone's width, the drawing twice that, and the svg its drawn width.
+  const wide = (svgWidth: number) => {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 300; } });
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get() { return svgWidth; } });
+    const rect = SVGElement.prototype.getBoundingClientRect;
+    SVGElement.prototype.getBoundingClientRect = () => ({ width: svgWidth } as DOMRect);
+    return () => {
+      // Own properties over Element's: deleting them leaves jsdom's.
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+      SVGElement.prototype.getBoundingClientRect = rect;
+    };
+  };
+
+  it('opens scrolled to the lit loop, not its left edge', () => {
+    const restore = wide(d.view.w);
+    try {
+      // The A and B reason, right of the drawing's middle: its wallets' middle is put in the box's.
+      const loop = d.loops[0]!;
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: loop.edges, nodes: loop.nodes }} />).container;
+      const xs = d.nodes.filter((n) => loop.nodes.includes(n.id)).map((n) => n.x);
+      const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.round(mid) - d.view.x - 150);
+      expect(mid).toBeGreaterThan(d.view.x + d.view.w / 2 + 10);
+    } finally { restore(); }
+  });
+
+  it('opens at its middle with nothing lit', () => {
+    const restore = wide(d.view.w);
+    try {
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.max(0, Math.round(d.view.x + d.view.w / 2) - d.view.x - 150));
+    } finally { restore(); }
+  });
+});

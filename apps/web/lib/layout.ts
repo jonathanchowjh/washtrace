@@ -39,6 +39,12 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 /** Past this many transfers between one pair, the fan's arcs leave the drawing and stop being countable. */
 const FAN_MAX = 6;
 
+/** Between two neighbouring wallets on the ring, in px: room for a fan of FAN_MAX arcs and their numbers. */
+const SPACING = 160;
+
+/** How far a middle sits off the line between a pair: past the furthest of a full fan's arcs, which bows about 60 px out. */
+const FAN_CLEAR = 76;
+
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it; `anchor`, which end of the label sits there. */
 interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; anchor: 'start' | 'middle' | 'end'; middle: boolean; first: boolean }
 /**
@@ -129,19 +135,25 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   // between them, under the very arrow it explains.
   const ring = (list: readonly string[], r: number, middle: boolean): DrawnNode[] =>
     list.map((id, i) => {
-      const start = !middle && list.length === 2 ? Math.PI : -Math.PI / 2;
+      const pair = !middle && list.length === 2;
+      const start = pair ? Math.PI : -Math.PI / 2;
       const angle = start + (2 * Math.PI * i) / Math.max(1, list.length);
       const lone = list.length === 1 && !middle;
       const x = lone ? c : c + r * Math.cos(angle);
       const y = lone ? c : c + r * Math.sin(angle);
+      // A pair's labels hang under their wallets, reaching outward from just inside them: set beside, each would add its
+      // whole width to the strip's, and a phone would have to shrink the strip's text below reading to show it.
+      if (pair) return { id, x, y, lx: x + (i === 0 ? 10 : -10), ly: y + 24, anchor: i === 0 ? 'end' : 'start', middle, first: i === 0 };
       const out = lone ? 0 : middle ? -Math.PI / 2 : angle;
       const gap = lone ? 0 : 26;
       const lx = x + gap * Math.cos(out);
       return { id, x, y, lx, ly: (lone ? y + 24 : y + gap * Math.sin(out)), anchor: lx < x - 4 ? 'end' : lx > x + 4 ? 'start' : 'middle', middle, first: !middle && i === 0 };
     });
-  // Room past the ring for a label set outward: an address is about 70 px of mono text.
-  const r = c - 100;
-  const nodes = [...ring(holders, r, false), ...ring(inner, r * 0.42, true)];
+  // Neighbours on the ring sit SPACING apart, so a loop of a few wallets is drawn small, not on the big ring a crowd needs;
+  // past six the ring stops growing, leaving room in the square for a label set outward (an address is about 70 px of mono text).
+  const r = holders.length < 2 ? 0 : Math.min(c - 100, SPACING / (2 * Math.sin(Math.PI / holders.length)));
+  // A pair's middles sit above and below the line between them, past the highest of its fan of arrows; any other ring's, inside it.
+  const nodes = [...ring(holders, r, false), ...ring(inner, holders.length === 2 ? FAN_CLEAR : r * 0.42, true)];
   const at = new Map(nodes.map((n) => [n.id, n]));
 
   // Edges grouped by unordered pair, so A→B and B→A share one fan.
@@ -164,6 +176,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   }
   const bundles = new Map<string, { first: number; rows: number[]; tone: Tone }>();
   const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
+
 
   const edges: DrawnEdge[] = [];
   /** Which arrow draws each transfer (by index), so a reason can name its arrows. */
