@@ -4,7 +4,7 @@ import { addressOf } from '@/lib/params';
 
 type Ctx = { params: Promise<{ chain: string; address: string; anchor: string }> };
 
-/** GET: one ring by its anchor: its line, its wallets (`traded` false for one that only moved the money), and its tokens. */
+/** GET: one ring by its anchor: its line, its wallets (`traded` false for one in between, on none of its flagged trades), and its tokens. */
 export async function GET(_req: Request, { params }: Ctx): Promise<Response> {
   return handle(async () => {
     const found = await collectionFrom(params);

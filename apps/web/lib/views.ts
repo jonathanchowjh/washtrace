@@ -81,8 +81,8 @@ const RING_DRAWN = 25;
 /**
  * A ring's loops as a token's graph draws them (layout()): each of its tokens
  * changing hands between two of its wallets, with the flags of the lenses that
- * ran, and the money among its wallets; those that only moved the money sit
- * inside as middles. Null past RING_DRAWN wallets, or for one with no such transfer.
+ * ran, and the money among its wallets; those on none of its flagged trades
+ * sit inside as middles, in between. Null past RING_DRAWN wallets, or for one with no such transfer.
  */
 export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> | null> {
   if (ring.wallets.length === 0 || ring.wallets.length > RING_DRAWN) return null;

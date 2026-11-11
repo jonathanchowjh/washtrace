@@ -11,12 +11,12 @@ const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wall
 const X = '0x' + 'd1'.repeat(20);
 const moved = (from: string, to: string, n: number) => ({ txHash: '0x' + String(n).repeat(64), logIndex: 0, blockNumber: n, blockTime: n, tokenId: '114', from, to, marketplace: 'opensea', priceWei: '1', currency: '', flags: {} });
 const MEMBERS = [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }];
-const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS };
+const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 };
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => ({ id: 1, name: 'Demo Apes', address: ADDR, latest: state.latest ? { rings: state.rings } : null }),
     rings: async (_id: number, _ctx: unknown, limit: number, offset: number) => ({ rows: state.list.slice(offset, offset + limit), total: state.list.length }),
-    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1), wallets: state.members, walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
+    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1, A, state.floorSales), wallets: state.members, walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
     ringsOf: async (_id: number, of: { wallet?: string }) => (of.wallet === M ? [A] : []),
     ringLines: async (_id: number, anchors: string[]) => anchors.map((a) => line(3, a)),
     // A and B pass #114 back and forth; it then leaves the ring for X.
@@ -27,7 +27,7 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS }); });
+afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 }); });
 
 const params = Promise.resolve({ chain: '1', address: ADDR });
 async function list(page?: string) {
@@ -97,12 +97,12 @@ describe('the rings list', () => {
 });
 
 describe('a ring', () => {
-  it('heads as a ring, splits who traded from who only moved the money, and opens its sales and tokens', async () => {
+  it('heads as a ring, splits who traded from who is in between, and opens its sales and tokens', async () => {
     const c = await one(A);
     expect(c.querySelector('h1')?.textContent).toBe('Ring 1');
     expect(c.querySelector('header')?.textContent).toContain('Ring');
     const groups = [...c.querySelectorAll('h3')].map((h) => h.textContent);
-    expect(groups).toEqual(['Traded (2)', 'Only moved the money (1)']);
+    expect(groups).toEqual(['Traded (2)', 'In between (1)']);
     expect(links(c)).toContainEqual(['All its 3 sales →', tradesHref(BASE, { ring: A })]);
     // A member opened from here steps through the ring's tokens or wallets, and leads back to it.
     expect(links(c)).toContainEqual(['#114', `${BASE}/t/114?from=${encodeURIComponent(`ring?anchor=${A}&of=tokens`)}`]);
@@ -125,13 +125,13 @@ describe('a ring', () => {
     const answer = c.querySelector('p.text-lg')!;
     expect(answer.textContent).toBe('3 wallets joined by 3 flagged sales');
     const body = answer.nextElementSibling!.textContent;
-    expect(body).toContain('2 traded the tokens and 1 only moved the money.');
+    expect(body).toContain('2 traded the tokens and 1 is in between, joining them by money.');
     expect(body).toContain('Its 3 flagged sales, 2 of them round trips, moved 9 ETH across 1 token.');
     expect(body).toContain('What this means: Tokens went round among these wallets');
     expect(links(answer.nextElementSibling!)).toContainEqual(['Demo Apes’s share', BASE]);
   });
 
-  it('gives Connected to its wallets: each trader by its side of the sales, the rest as moving money', async () => {
+  it('gives Connected to its wallets: each trader by its side of the sales, the rest in between', async () => {
     const { default: P } = await import('@/app/c/[chain]/[address]/r/[anchor]/page');
     const { ConnectedRail } = await import('@/components/connected-rail');
     const rails: { props: Record<string, unknown> }[] = [];
@@ -143,7 +143,7 @@ describe('a ring', () => {
     };
     walk(await P({ params: Promise.resolve({ chain: '1', address: ADDR, anchor: A }) }));
     expect(rails.map((r) => r.props.wallets)).toEqual([[
-      { address: A, role: 'seller · buyer' }, { address: B, role: 'buyer · seller' }, { address: M, role: 'moved money' },
+      { address: A, role: 'seller · buyer' }, { address: B, role: 'buyer · seller' }, { address: M, role: 'in between' },
     ]]);
   });
 
@@ -151,11 +151,27 @@ describe('a ring', () => {
     state.members = MEMBERS.filter((w) => w.traded);
     const c = await one(A);
     expect([...c.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['Traded (2)']);
-    expect(c.textContent).toContain('Every wallet listed traded; none only moved the money.');
+    expect(c.textContent).toContain('Every wallet listed traded; none is in between.');
     expect(c.textContent).not.toContain('None.');
     // The answer and the picture's legend say no zero count either.
     expect(c.textContent).toContain('Every one traded the tokens.');
     expect(c.textContent).not.toContain('0 only moved the money');
+  });
+
+  it('a ring of linked pairs alone says no loop and headlines no zero', async () => {
+    state.floorSales = 0;
+    const c = await one(A);
+    const text = c.textContent ?? '';
+    expect(text).toContain('Its 3 flagged sales moved 9 ETH across 1 token.');
+    expect(text).not.toContain('round trips');
+    expect([...c.querySelectorAll('dt')].map((d) => d.textContent)).toEqual(['Flagged sales', 'ETH they moved']);
+    expect(text).toContain('What this means: Buyers and sellers among these wallets are linked by money.');
+    expect(text).not.toMatch(/see the loop/);
+  });
+
+  it('says a ring is not one person once', async () => {
+    const text = (await one(A)).textContent ?? '';
+    expect(text.split('not one person').length - 1).toBe(1);
   });
 
   it('says when no ring of the latest analysis has the anchor, and links the list', async () => {
