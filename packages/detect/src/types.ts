@@ -77,11 +77,26 @@ export const METHODS: readonly Method[] = ['A', 'AU', 'AC'];
  */
 export const HEADLINE: readonly Method[] = ['A', 'AC'];
 
-/** Why one transfer was flagged by one method: enough to draw it. */
+/**
+ * Which way the money went between a linked pair's seller and buyer. Through
+ * a middle: `funder` it paid both, `payee` both paid it, `back` the buyer paid
+ * it and it paid the seller, `forward` the seller paid it and it paid the
+ * buyer. Direct: `direct-back` the buyer paid the seller, `direct-forward` the
+ * seller paid the buyer, `both` each paid the other. Of several that hold
+ * through a middle, the first of back, forward, funder, payee; one always
+ * does, since the middle paid or was paid by each.
+ */
+export type PairShape = 'funder' | 'payee' | 'back' | 'forward' | 'direct-back' | 'direct-forward' | 'both';
+export const PAIR_SHAPES: readonly PairShape[] = ['funder', 'payee', 'back', 'forward', 'direct-back', 'direct-forward', 'both'];
+
+/**
+ * Why one transfer was flagged by one method: enough to draw it. A pair's
+ * `shape` is absent on one an analysis stored before shapes were recorded.
+ */
 export type Witness =
   | { kind: 'scc'; wallets: string[]; cycles: number }
   | { kind: 'scc+flow'; wallets: string[]; cycles: number; via: [string, string][] }
-  | { kind: 'pair'; pair: [string, string]; middle: string | null; flowTx: string };
+  | { kind: 'pair'; pair: [string, string]; middle: string | null; flowTx: string; shape?: PairShape };
 
 export interface Flag {
   txHash: string;

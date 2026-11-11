@@ -663,4 +663,11 @@ END $$`,
       'CREATE INDEX CONCURRENTLY IF NOT EXISTS trade_facts_counted_idx ON washtrace.trade_facts (collection_id, tx_hash, log_index) WHERE counted',
     ],
   },
+  `
+-- A linked pair's shape (PairShape in types.ts): which way the money went
+-- between its seller, its buyer and their middle. NULL on a witness saved
+-- before this, and on every loop; a collection's next analysis writes it.
+-- Nullable with no default, so adding it rewrites no row.
+ALTER TABLE washtrace.witnesses ADD COLUMN IF NOT EXISTS shape text;
+`,
 ];

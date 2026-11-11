@@ -4,8 +4,8 @@
  * nothing the chain does not already say.
  */
 
-import { VENUES, venueOf } from '@washtrace/detect/trades';
-import { CHAINS } from './chains';
+import { venueName, venueOf } from '@washtrace/detect/trades';
+import { CHAINS, explorerOf } from './chains';
 
 export type Link = { label: string; href: string };
 
@@ -24,13 +24,13 @@ export function collectionLinks(chainId: number, address: string): Link[] {
 
 /** The transaction on its chain's explorer, or null for a chain with none: a link there is left out, never sent to another chain's explorer. */
 export function explorerTx(chainId: number, hash: string): string | null {
-  const e = CHAINS[chainId]?.explorer;
+  const e = explorerOf(chainId);
   return e ? `${e.host}/tx/${hash}` : null;
 }
 
 /** The address (a wallet or a contract) on its chain's explorer, or null for a chain with none. */
 export function explorerAddress(chainId: number, address: string): string | null {
-  const e = CHAINS[chainId]?.explorer;
+  const e = explorerOf(chainId);
   return e ? `${e.host}/address/${address}` : null;
 }
 
@@ -53,12 +53,6 @@ export function walletLinks(chainId: number, address: string): Link[] {
     ...(os ? [{ label: 'OpenSea', href: `https://opensea.io/${address}` }] : []),
     ...(chainId === 1 ? [{ label: 'Blur', href: `https://blur.io/eth/portfolio/${address}` }] : []),
   ];
-}
-
-/** Marketplace contracts by the name a reader knows them by: every Seaport, and Wyvern before it, is OpenSea's. */
-export function venueName(venue: string): string {
-  const key = venueOf(venue);
-  return Object.hasOwn(VENUES, key) ? VENUES[key]!.name : venue;
 }
 
 /** Sales per marketplace under its reader's name, busiest first. `key` is the name Trades filters it by (a VENUES key, or the raw string no venue lists). */
@@ -119,9 +113,21 @@ export function cardSrc(base: string, of: 'wallet' | 'token' | 'ring', value: st
   return `/api/collections/${base.slice('/c/'.length)}/card?${of}=${encodeURIComponent(value)}`;
 }
 
-/** `href` with `from` (lib/step.ts: the list it was opened from) added to its query, before any #hash. */
-export function withFrom(href: string, from: string | undefined): string {
-  if (from === undefined) return href;
-  const [path, hash] = href.split('#', 2);
-  return `${path}${path!.includes('?') ? '&' : '?'}from=${encodeURIComponent(from)}${hash === undefined ? '' : `#${hash}`}`;
+/** What a link out of a page keeps of how the reader got there: the lens, and the list (lib/step.ts) it was opened from. */
+export type Context = { method?: string; from?: string };
+
+/**
+ * `href` with `ctx` added to its query, before any #hash: `method` unless the
+ * link names one, then `from`. A Trades link is left alone: Trades reads
+ * `from` as its date filter, so a list's `from` there would silently drop it.
+ */
+export function carry(href: string, ctx: Context): string {
+  const [path = '', hash] = href.split('#', 2);
+  const [where = '', query = ''] = path.split('?', 2);
+  if (/\/trades$/.test(where)) return href;
+  const add: string[] = [];
+  if (ctx.method !== undefined && !new URLSearchParams(query).has('method')) add.push(`method=${encodeURIComponent(ctx.method)}`);
+  if (ctx.from !== undefined) add.push(`from=${encodeURIComponent(ctx.from)}`);
+  if (add.length === 0) return href;
+  return `${path}${path.includes('?') ? '&' : '?'}${add.join('&')}${hash === undefined ? '' : `#${hash}`}`;
 }

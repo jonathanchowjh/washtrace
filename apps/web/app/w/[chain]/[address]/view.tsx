@@ -1,23 +1,25 @@
 import Link from 'next/link';
 import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
-import { ConnectedRail, OpenUnder, ParentLine, partnersOf, type Home } from '@/components/connected-rail';
+import { ConnectedRail, OpenUnder, ParentLine, type Home } from '@/components/connected-rail';
+import { middleWords, partnersOf } from '@/lib/why';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
-import { Transfers, Wallet } from '@/components/transfers';
+import { TokenLink, Transfers, Wallet } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
-import { LENSES, eth, lensList, plural, short, num } from '@/lib/format';
-import { explorerAddress, explorerTx, walletHref, walletLinks } from '@/lib/links';
+import { MONEY_LENSES, eth, lensList, plural, short, num } from '@/lib/format';
+import { carry, explorerTx, walletHref, walletLinks } from '@/lib/links';
 import { HEADLINE } from '@washtrace/detect';
 import { FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { hrefOf, walletOpts, type WalletOpts } from '@/lib/params';
+import { contextOf } from '@/lib/step';
 import { COUNTERPARTIES, FLOWS, TRADES, walletView } from '@/lib/views';
 import { Time } from '@/components/zone';
-import { Suspense } from 'react';
+import { Fragment, Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { StepLine } from '@/components/step-line';
 
@@ -32,9 +34,9 @@ const PARTNER_COLUMNS: readonly { sort: PartnerSort; label: string; right: boole
 /** How each payment between two wallets moved, in words. */
 const FLOW_KIND: Readonly<Record<Flow['kind'], string>> = { native: 'direct', internal: 'inside a contract call', token: 'wrapped ETH' };
 
-/** A flagged wallet's card: the page verdict's tone when it is a flagged one, else money's. */
+/** A flagged wallet's card: the page verdict's tone when it is a flagged one, else the ceiling's. */
 function flaggedTone(page: Tone | null): Tone {
-  return page === 'cycle' || page === 'money' ? page : 'money';
+  return page === 'cycle' || page === 'ceiling' ? page : 'ceiling';
 }
 
 /**
@@ -53,12 +55,15 @@ export async function WalletView({ chainId, address, sp, within }: {
   if (within !== undefined) delete filter.collection;
   const asked: WalletOpts = { ...parsed, filter };
   const view = await walletView(chainId, address, asked, within?.collection);
-  const { funding, collections, counterparties, transfers, counts, pages, between, by, washTrade } = view;
+  const { funding, collections, counterparties, middles, partnerMiddles, middleIn, transfers, counts, pages, between, by, washTrade } = view;
   // The page as shown: every page clamped to the last there is.
   const o: WalletOpts = { ...asked, trades: pages.trades.page, partners: pages.partners.page, flows: pages.flows.page };
   const scope = within?.base;
   const base = walletHref(chainId, address, scope);
-  const href = (over: Partial<WalletOpts>) => hrefOf(base, { ...o, ...over });
+  // Under a collection's tabs a link keeps the lens and the list the page was opened with; one to another kind of item keeps the lens only.
+  const ctx = scope === undefined ? {} : contextOf(sp);
+  const away = { method: ctx.method };
+  const href = (over: Partial<WalletOpts>) => hrefOf(base, { ...o, ...over }, ctx);
   const { with: other, ...narrow } = o.filter;
   const narrowed = Object.keys(narrow).length > 0;
 
@@ -70,8 +75,15 @@ export async function WalletView({ chainId, address, sp, within }: {
   // The title counts every transfer it sent or received, a mint among them, so it says transfers: the flagged count opens the flagged-only list, the total all of them.
   // A flagged wallet titles from its counts, though the page shown holds none of them, and is never in a clean or grey card:
   // the page's verdict gives its tone when that is a flagged one, else it is money's. The notes stay the page's own.
-  const flaggedTitle = <>In <Link href={`${base}?flagged=1`} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'transfer' : 'transfers'} out of <Link href={base} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
-  const { title, tone } = counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No transfer of it in ${within.name}`, tone: 'clean' as const }
+  const flaggedTitle = <>In <Link href={carry(`${base}?flagged=1`, ctx)} prefetch={false} className="hover:underline">{num(counts.flagged)}</Link> flagged {counts.flagged === 1 ? 'transfer' : 'transfers'} out of <Link href={carry(base, ctx)} prefetch={false} className="hover:underline">{num(counts.trades)}</Link></>;
+  // It sold nothing there, but a middle of linked pairs leads with that role: Linked wallets' evidence, so the ceiling's tone, not a clean one.
+  // Across every collection it names each it is a middle in, opening its page there, where the pairs are read.
+  const moreTokens = middles.tokens - 1;
+  const { title, tone } = counts.trades === 0 && scope !== undefined && middles.rows.length > 0
+    ? { title: <>{middleWords(middles.rows)} <TokenLink base={scope} tokenId={middles.rows[0]!.tokenId} method={ctx.method} />{moreTokens > 0 ? ` and ${moreTokens} more` : ''}</>, tone: 'ceiling' as const }
+    : counts.trades === 0 && middleIn.length > 0
+    ? { title: <>Is in between sellers and buyers in {middleIn.map((c, i) => <Fragment key={c.address}>{i === 0 ? '' : i === middleIn.length - 1 ? ' and ' : ', '}<Link href={walletHref(chainId, address, `/c/${chainId}/${c.address}`)} prefetch={false} className="hover:underline">{c.name ?? short(c.address)}</Link></Fragment>)}</>, tone: 'ceiling' as const }
+    : counts.trades === 0 ? { title: within === undefined ? 'Not in any watched collection' : `No transfer of it in ${within.name}`, tone: 'clean' as const }
     : counts.flagged > 0 ? { title: flaggedTitle, tone: flaggedTone(transfers.length === 0 ? null : answer(view, null).tone) }
     : transfers.length === 0 ? { title: 'No transfer of it matches these filters', tone: 'clean' as const }
     : answer(view, flaggedTitle);
@@ -83,9 +95,10 @@ export async function WalletView({ chainId, address, sp, within }: {
     : `${apart}${hits.length > 0 ? ' more' : ''} ${apart === 1 ? 'is' : 'are'} ${FLAGGED_ONLY_AU}`;
 
   // A wallet with no row is one no read transfer named; said in the same words as its empty list below, so the two agree.
-  const money = funding === null ? `Its money is not read${counts.trades === 0 ? ': no transfer of it is read in a watched collection' : ' yet'}.`
-    : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
-    : funding.status === 'failed' ? `Reading its money failed: ${funding.error ?? 'unknown error'}. Retried hourly; until then ${LENSES.AU.name} and ${LENSES.AC.name} cannot see its links.`
+  const money = funding === null && counts.trades === 0 && counterparties.length > 0 ? 'The payments below were read from the wallets it paid or was paid by; its own history is not read.'
+    : funding === null ? `Its money is not read${counts.trades === 0 ? ': no transfer of it is read in a watched collection' : ' yet'}.`
+    : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${MONEY_LENSES} cannot see its links.`
+    : funding.status === 'failed' ? `Reading its money failed: ${funding.error ?? 'unknown error'}. Retried hourly; until then ${MONEY_LENSES} cannot see its links.`
     : <>Its money was read {funding.fetchedAt === null ? 'from stored data' : <Time ms={funding.fetchedAt} />}{funding.truncated ? '. It has more history than Etherscan pages through, so it is never treated as the shared funder between two others' : ''}.</>;
 
   const first = (pages.trades.page - 1) * TRADES + 1;
@@ -100,7 +113,6 @@ export async function WalletView({ chainId, address, sp, within }: {
   const unreadable = named !== null && named.kind !== 'token' && named.kind !== 'address' && named.kind !== 'prefix';
   const partnerFirst = (pages.partners.page - 1) * COUNTERPARTIES + 1;
 
-  const from = within === undefined ? undefined : sp.from;
   // Outside the tabs: the way into each collection it traded, and that collection's panels when it traded only one.
   const ways: Home[] = within !== undefined ? [] : collections.map((c) => {
     const b = `/c/${chainId}/${c.address}`;
@@ -109,14 +121,14 @@ export async function WalletView({ chainId, address, sp, within }: {
   const home = within?.collection ?? (collections.length === 1 ? collections[0]!.address : undefined);
   return (
     <>
-      {within === undefined ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={within.collection} from={from} of={{ wallet: address }} /></Suspense>}
+      {within === undefined ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={within.collection} from={ctx.from} method={ctx.method} of={{ wallet: address }} /></Suspense>}
       {/* Under a collection's tabs its parent line is the layout's; outside them this page draws one the same way. */}
-      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} /> : null}
+      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} leaf={short(address)} /> : null}
       <Head
         kind="wallet"
-        title={<span className="font-mono">{short(address)}</span>}
+        title={<span className="font-mono break-all">{address}</span>}
         part={<>{counts.trades === 0 ? null : <VerdictChip tone={view.washTrade === null ? null : tone} />}{home === undefined ? null : <Suspense fallback={null}><RingChips chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}</>}
-        sub={<>Wallet on {chainName(chainId)} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{address}</Ext>
+        sub={<>Wallet on {chainName(chainId)}
           {scope === undefined ? null : <> · its trades here · <Link href={walletHref(chainId, address)} className="hover:text-foreground hover:underline">in every collection</Link></>}</>}
       >
         <OpenUnder homes={ways} />
@@ -124,7 +136,7 @@ export async function WalletView({ chainId, address, sp, within }: {
       </Head>
 
       <Answer tone={tone} title={title}>
-        {elsewhere === null ? null : <p>{elsewhere} <Link href={`${base}?flagged=1`} className="font-medium hover:underline">Show the flagged ones</Link></p>}
+        {elsewhere === null ? null : <p>{elsewhere} <Link href={carry(`${base}?flagged=1`, ctx)} className="font-medium hover:underline">Show the flagged ones</Link></p>}
         {transfers.length > 0 && washTrade === null ? <p>{NOT_JUDGED}</p> : null}
         {hits.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by.filter((m) => HEADLINE.includes(m)))}.</p> : null}
         {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
@@ -141,14 +153,16 @@ export async function WalletView({ chainId, address, sp, within }: {
       </Answer>
 
       {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
-      {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} /></Suspense>}
+      {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} transfers={counts.trades} /></Suspense>}
       {/* A wallet with no transfer here is part of nothing here: the rail would name the collection and its share as if it were. */}
-      {home === undefined || counts.trades === 0 ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} wallets={partnersOf(transfers, counterparties, address)} /></Suspense>}
+      {home === undefined || counts.trades === 0 ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} ctx={away} wallets={partnersOf(transfers, counterparties, address, partnerMiddles)} /></Suspense>}
 
       <Section title="Which of its transfers?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (
           <form action={base} method="get" role="search" aria-label="Narrow its trades" className="mb-2 flex flex-wrap items-center gap-2 text-sm">
             {/* The other lists stay where they are; the trades start again at their first page. */}
+            {ctx.method !== undefined ? <input type="hidden" name="method" value={ctx.method} /> : null}
+            {ctx.from !== undefined ? <input type="hidden" name="from" value={ctx.from} /> : null}
             {o.psort !== 'flows' ? <input type="hidden" name="psort" value={o.psort} /> : null}
             {o.partners > 1 ? <input type="hidden" name="partners" value={o.partners} /> : null}
             {other !== undefined ? <input type="hidden" name="with" value={other} /> : null}
@@ -178,13 +192,13 @@ export async function WalletView({ chainId, address, sp, within }: {
           </MatchLine>
         ) : null}
         {counts.trades === 0 ? <Empty>No transfer of it is read in {within?.name ?? 'a watched collection'}.</Empty>
-          : narrowed && transfers.length === 0 ? <Empty>No transfer of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} />}
+          : narrowed && transfers.length === 0 ? <Empty>No transfer of it matches these filters.</Empty> : <Transfers chainId={chainId} transfers={transfers} collection within={scope} ctx={away} />}
         {pages.trades.total > TRADES ? <Pager total={pages.trades.total} page={pages.trades.page} size={TRADES} href={(n) => href({ trades: n })} label="transfers" pageParam="trades" /> : null}
       </Section>
 
       <Section
         title="Who did it move money with?"
-        lead={<>{pages.partners.pages > 1 ? `${num(partnerFirst)}–${num(partnerFirst + counterparties.length - 1)} of ${num(pages.partners.total)} counterparties. ` : ''}These are the links {LENSES.AU.name} and {LENSES.AC.name} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two. Payments are native, internal and wrapped-native, both directions.</>}
+        lead={<>{pages.partners.pages > 1 ? `${num(partnerFirst)}–${num(partnerFirst + counterparties.length - 1)} of ${num(pages.partners.total)} counterparties. ` : ''}These are the links {MONEY_LENSES} follow. A counterparty that also trades a watched collection is the kind of link that flags a trade{linked > 0 ? `: ${linked} here do` : ''}. Each count opens the payments it counts, and the trades between the two. Payments are native, internal and wrapped-native, both directions.</>}
       >
         {counterparties.length === 0 ? <Empty>No money flows read for this wallet.</Empty> : (
           <div className="overflow-x-auto rounded-lg border bg-card">
@@ -203,7 +217,7 @@ export async function WalletView({ chainId, address, sp, within }: {
                     : <Link href={`${href({ filter: { ...o.filter, with: c.address }, dir, flows: 1 })}#between`} prefetch={false} className="font-medium text-foreground underline decoration-muted-foreground/60 underline-offset-2 hover:decoration-foreground">{num(n)}</Link>;
                   return (
                     <tr key={c.address} className={c.watched ? 'border-b bg-muted/60 last:border-b-0' : 'border-b last:border-b-0'}>
-                      <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} /></td>
+                      <td className="px-3 py-1.5"><Wallet chainId={chainId} address={c.address} within={scope} ctx={away} /></td>
                       <td className="px-3 py-1.5">{c.watched ? <span className="font-medium text-foreground">yes</span> : <span className="text-muted-foreground">no</span>}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{opens(c.flows, 'both')}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{opens(c.sent, 'sent')}</td>
@@ -220,11 +234,11 @@ export async function WalletView({ chainId, address, sp, within }: {
 
       {between === null || other === undefined ? null : (
         <Section id="between" title={`What passed between this wallet and ${short(other)}?`}
-          lead={<>The trades where one sold to the other, either way, and the payments between them. <Wallet chainId={chainId} address={other} /> opens its own page.</>}>
+          lead={<>The trades where one sold to the other, either way, and the payments between them. <Wallet chainId={chainId} address={other} within={scope} ctx={away} /> opens its own page.</>}>
           <h3 className="mb-1.5 text-sm font-medium">Which trades were between them?</h3>
           {between.tradesTotal === 0 ? <Empty>Neither sold the other a token in a watched collection.</Empty> : (
             <>
-              <Transfers chainId={chainId} transfers={between.trades} collection within={scope} />
+              <Transfers chainId={chainId} transfers={between.trades} collection within={scope} ctx={away} />
               {between.tradesTotal > TRADES ? (
                 <p className="mt-2 text-sm text-muted-foreground">
                   The latest {TRADES} of {num(between.tradesTotal)} are shown. <Link href={href({ filter: { find: other, with: other }, trades: 1 })} className="font-medium text-foreground hover:underline">Page through all of them</Link> in its trades above.

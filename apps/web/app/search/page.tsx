@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
-import type { SearchHits, SearchKind } from '@washtrace/detect';
+import { moneyFor, type SearchHits, type SearchKind } from '@washtrace/detect';
 import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/ui';
 import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
@@ -9,9 +9,10 @@ import { range, rangeEnds } from '@/lib/metrics';
 import { explorerAddress, explorerTx, txHref } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
 import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, tooShort, type Scope } from '@/lib/search';
-import { KindIcon, type Kind } from '@/components/kit';
+import { KindIcon, RingTag, TierMark, type Kind } from '@/components/kit';
 import { store } from '@/lib/store';
-import { chainName } from '@/lib/chains';
+import { chainName, explorerOf } from '@/lib/chains';
+import { watchedChains } from '@/lib/collection-reads';
 import { configFromSources } from '@/lib/settings';
 
 type Props = { searchParams: Promise<{ q?: string; kind?: string; page?: string; scope?: string }> };
@@ -65,6 +66,8 @@ export default async function SearchPage({ searchParams }: Props) {
   } catch {
     return <>{head}<Problem title={STORE_DOWN}>It could not look up “{q}”.</Problem></>;
   }
+  // The ring tag is the results page's alone: ranking rings reads every ring of the collection, once for the wallets shown, never per keystroke in the box.
+  const rings = c === null ? new Map<string, number>() : await ringRanks(c, hits);
   const kinds = kindsFor(parsed).filter((k) => hits[k].length > 0);
   // The start of a hash can match several transactions; a whole one is one.
   const title = (k: SearchKind) => (k === 'trades' && parsed.kind === 'prefix' ? 'Which transactions start that way?' : SECTIONS[k].title);
@@ -76,10 +79,15 @@ export default async function SearchPage({ searchParams }: Props) {
     // Only names were searched: what was meant may be a token or a wallet, typed too short to be read as one.
     const reason = tooShort(q);
     if (reason !== null) return <>{head}<Empty>Nothing watched is named “{q}”. {reason}</Empty></>;
-    // Chain 1 is the only chain a pasted hash can be looked up on without knowing its chain.
+    // A pasted hash or address names no chain: it is offered on each watched chain with an explorer (Ethereum's when none is watched). The local chain has none.
     const address = addressOf(q);
     const tx = txOf(q);
-    const outside = address ? explorerAddress(1, address) : tx ? explorerTx(1, tx) : null;
+    const onChains = address || tx ? (c ? [c.chainId] : await watchedChains()) : [];
+    const outside = (onChains.length === 0 ? [1] : onChains).flatMap((id) => {
+      const e = explorerOf(id);
+      const href = address ? explorerAddress(id, address) : tx ? explorerTx(id, tx) : null;
+      return e === null || href === null ? [] : [{ id, href, name: e.name }];
+    });
     // A hash no watched collection holds can still be spot checked, on any chain the worker has an RPC for.
     const checkOn = tx ? configFromSources(...await Promise.all([store().sources(), store().settings()])).chains : [];
     return (
@@ -87,7 +95,7 @@ export default async function SearchPage({ searchParams }: Props) {
         {head}
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
-          {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
+          {outside.map((o) => <span key={o.id}> <Ext href={o.href} className="underline">Look it up on {o.name}{outside.length > 1 ? ` (${chainName(o.id)})` : ''}</Ext></span>)}
           {tx !== null && checkOn.length > 0 ? (
             <> Check it on{' '}
               {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={txHref(c, tx)} prefetch={false}>{chainName(c)}</Link></span>)}
@@ -105,7 +113,7 @@ export default async function SearchPage({ searchParams }: Props) {
       {kinds.map((k) => (
         <Section key={k} title={`${title(k)} (${hits.more[k] ? `${SEARCH_LIMIT}+` : hits[k].length})`}>
           <ul className="divide-y rounded-lg border bg-card">
-            {hits[k].map((_, i) => <Row key={i} hits={hits} kind={k} i={i} scope={scope} />)}
+            {hits[k].map((_, i) => <Row key={i} hits={hits} kind={k} i={i} scope={scope} ring={k === 'wallets' ? rings.get(hits.wallets[i]!.address) : undefined} />)}
           </ul>
           {/* The store cannot count the rest, so with more behind this page the total is only a lower bound. */}
           {only ? <Pager total={offset + hits[k].length} open={hits.more[k]} page={page} size={SEARCH_LIMIT} href={(n) => here({ kind: only, page: n })} label={SECTIONS[k].all} /> : null}
@@ -120,6 +128,27 @@ export default async function SearchPage({ searchParams }: Props) {
   );
 }
 
+/**
+ * The rank of the highest ring each wallet hit that traded in collection `c` is in: one read of their rings and one ranking of them.
+ * A failed read draws no tag; the hits are the answer.
+ */
+async function ringRanks(c: { id: number; chainId: number }, hits: SearchHits): Promise<Map<string, number>> {
+  const ranks = new Map<string, number>();
+  const mine = hits.wallets.filter((h) => h.here === true && h.chainId === c.chainId).map((h) => h.address);
+  if (mine.length === 0) return ranks;
+  try {
+    const s = store();
+    const anchors = await s.walletRings(c.id, mine);
+    const lines = await s.ringLines(c.id, [...new Set([...anchors.values()].flat())], { money: moneyFor(c.chainId) });
+    const rank = new Map(lines.map((l) => [l.anchor, l.rank]));
+    for (const [address, a] of anchors) {
+      const best = Math.min(...a.map((x) => rank.get(x) ?? Infinity));
+      if (best !== Infinity) ranks.set(address, best);
+    }
+  } catch { /* no tag */ }
+  return ranks;
+}
+
 /** Each kind of hit drawn as the thing it opens: a trade opens its transaction. */
 const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'token', wallets: 'wallet', trades: 'transaction' };
 
@@ -128,7 +157,7 @@ const KIND: Record<SearchKind, Kind> = { collections: 'collection', tokens: 'tok
  * range of washed sales from its latest analysis (its symbol before the
  * first), a token's flagged trade, whether a wallet traded in the collection
  * searched. A token with none flagged says nothing: it may not be judged yet,
- * which is never shown as clean. A wallet or a trade carries no verdict here.
+ * which is never shown as clean. A wallet's verdict is its mark beside its title, and a trade carries none.
  */
 function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
   if (kind === 'collections') {
@@ -147,16 +176,18 @@ function chipOf(hits: SearchHits, kind: SearchKind, i: number): string | null {
 }
 
 /** One hit: a link led by what names it, what kind of thing it is under that, and what else it knows on the right. */
-function Row({ hits, kind, i, scope }: { hits: SearchHits; kind: SearchKind; i: number; scope: Scope | null }) {
-  const { href, title, hex, detail } = hitRow(hits, kind, i, scope);
+function Row({ hits, kind, i, scope, ring }: { hits: SearchHits; kind: SearchKind; i: number; scope: Scope | null; ring?: number }) {
+  const { href, title, hex, detail, tier } = hitRow(hits, kind, i, scope);
   const chip = chipOf(hits, kind, i);
   return (
     <li>
       <Link href={href} prefetch={false} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 text-sm hover:bg-muted">
         <span aria-hidden className="grid size-8 place-items-center rounded-md border bg-card text-muted-foreground"><KindIcon kind={KIND[kind]} /></span>
         <span className="min-w-0">
-          <span className={`block font-medium text-foreground ${hex ? 'font-mono' : ''}`}>{title}</span>
-          <span className="block text-xs text-muted-foreground">{detail}</span>
+          <span className={`block font-medium text-foreground ${hex ? 'font-mono' : ''}`}>
+            {tier === undefined ? null : <TierMark tone={tier} className="mr-1.5 align-baseline" label />}{title}
+          </span>
+          <span className="block text-xs text-muted-foreground">{detail}{ring === undefined ? null : <> · <RingTag rank={ring} /></>}</span>
         </span>
         {chip === null ? <span /> : <span data-chip className="chip text-muted-foreground">{chip}</span>}
       </Link>

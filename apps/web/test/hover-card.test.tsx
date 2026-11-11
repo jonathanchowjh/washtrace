@@ -1,9 +1,11 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RingLine } from '@washtrace/detect';
 import { HoverCard, KEEP_MS, OPEN_MS, cardLines, forgetCards, type Card } from '@/components/hover-card';
 
 const W = '0x' + 'a'.repeat(40);
-const wallet: Card = { kind: 'wallet', judged: true, address: W, trades: 4, flagged: 2, rings: 2, ring: { anchor: W, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null } };
+const ring: RingLine = { anchor: W, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: [] };
+const wallet: Card = { kind: 'wallet', judged: true, address: W, trades: 4, flagged: 2, rings: 2, ring, tier: 'cycle' };
 const fetchMock = vi.fn();
 beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal('fetch', fetchMock); fetchMock.mockReset(); forgetCards(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -69,13 +71,41 @@ describe('a hover card', () => {
   });
 
   it('says not judged yet before any analysis, never 0 flagged', () => {
-    expect(cardLines({ kind: 'token', judged: false, tokenId: '7', transfers: 2, flagged: 0 }).lines).toEqual(['2 transfers · not judged yet']);
+    expect(cardLines({ kind: 'token', judged: false, tokenId: '7', transfers: 2, flagged: 0, ring: null, tier: null }).lines).toEqual(['2 transfers · not judged yet']);
     expect(cardLines(wallet).lines[1]).toBe('In Ring 3 and 1 more ring');
   });
 
   it('names each count by what it counts: a wallet\'s and a token\'s transfers, a ring\'s flagged sales', () => {
     expect(cardLines(wallet).lines[0]).toBe('4 transfers here · 2 flagged');
-    expect(cardLines({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 4 }).lines).toEqual(['5 transfers · 4 flagged']);
+    expect(cardLines({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 4, ring: null, tier: null }).lines).toEqual(['5 transfers · 4 flagged']);
     expect(cardLines({ kind: 'ring', judged: true, ring: { ...wallet.ring!, wallets: 3, tokens: 2, sales: 4, volumeWei: '0' } }).lines[1]).toBe('4 flagged sales · 0 ETH');
+  });
+
+  it('puts the tier\'s mark before the symbol of a wallet, a token and a ring, and none where there is no tier', async () => {
+    const mark = () => screen.getByRole('tooltip').querySelector('i');
+    fetchMock.mockResolvedValue(reply(wallet));
+    draw();
+    fireEvent.mouseEnter(screen.getByText('wallet').parentElement!);
+    await wait(OPEN_MS);
+    expect(mark()!.className).toContain('bg-cycle');
+    expect(screen.getByRole('tooltip').textContent).toContain('Round trips · the floor: ');
+    cleanup(); forgetCards();
+    fetchMock.mockResolvedValue(reply({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 4, ring, tier: 'ceiling' }));
+    draw();
+    fireEvent.mouseEnter(screen.getByText('wallet').parentElement!);
+    await wait(OPEN_MS);
+    expect(mark()!.className).toContain('repeating-linear-gradient');
+    cleanup(); forgetCards();
+    fetchMock.mockResolvedValue(reply({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 0, ring: null, tier: null }));
+    draw();
+    fireEvent.mouseEnter(screen.getByText('wallet').parentElement!);
+    await wait(OPEN_MS);
+    expect(mark()).toBeNull();
+  });
+
+  it('names the ring a token\'s flagged trades are in, and a ring\'s own tone is its mark', () => {
+    expect(cardLines({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 4, ring, tier: 'cycle' }).lines).toEqual(['5 transfers · 4 flagged', 'In Ring 3']);
+    expect(cardLines({ kind: 'ring', judged: true, ring }).tier).toBe('ceiling');
+    expect(cardLines({ kind: 'ring', judged: true, ring: { ...ring, floorSales: 2 } }).tier).toBe('cycle');
   });
 });

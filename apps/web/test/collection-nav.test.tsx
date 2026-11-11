@@ -1,6 +1,7 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CollectionNav, lensOf, revealTab, tabOf } from '@/components/collection-nav';
+import { caughtLens } from '@/lib/params';
 import { listHref } from '@/lib/links';
 
 const BASE = `/c/1/0x${'b'.repeat(40)}`;
@@ -54,6 +55,11 @@ describe('the collection tab bar', () => {
     expect(of('method=A', 'overview')).toBe('A');
     expect(of('caught=L7,AC,A', 'trades')).toBe('A');
     expect(of('caught=L7', 'trades')).toBe('L7');
+    // Floor, ceiling, then not counted: the order every page names them in, not the engine's.
+    expect(of('caught=AU,AC', 'trades')).toBe('AC');
+    expect(caughtLens(['AU', 'AC'])).toBe('AC');
+    expect(caughtLens(['L7', 'AU'])).toBe('AU');
+    expect(caughtLens([])).toBeUndefined();
     // A caught filter means nothing off Trades.
     expect(of('caught=A', 'tokens')).toBeNull();
     const { tab } = nav(`${BASE}/trades`, 'caught=AC,A');
@@ -151,6 +157,24 @@ describe('the collection tab bar', () => {
     Object.assign(at, { path: BASE, search: '' });
     const el = render(<CollectionNav base={BASE} name="Coll" analyzedAt={1_700_000_000_000} lenses={LENSES} opensOn="AC" counts={{}} rings={null} />).container;
     expect(el.querySelector('p')!.textContent).toMatch(/· analyzed /);
+  });
+
+  it('ends its parent line in a plain-text leaf naming the item page: a token, a wallet, a trade, a ring', () => {
+    const leaf = (path: string) => nav(path).el.querySelector('p')!.textContent;
+    expect(leaf(`${BASE}/t/14`)).toMatch(/^Collections\/Coll\/#14$/);
+    expect(leaf(`${BASE}/w/0x${'a'.repeat(40)}`)).toMatch(/^Collections\/Coll\/0xaaaa…aaaa$/);
+    expect(leaf(`${BASE}/tx/0x${'c'.repeat(64)}`)).toMatch(/^Collections\/Coll\/0xcccc…cccc$/);
+    expect(leaf(`${BASE}/r/0x28ed${'0'.repeat(36)}`)).toMatch(/^Collections\/Coll\/Ring 0x28ed…$/);
+    // The leaf is not a link, and a list or overview page has none.
+    expect(nav(`${BASE}/t/14`).el.querySelectorAll('p a')).toHaveLength(2);
+    expect(leaf(`${BASE}/tokens`)).toBe('Collections/Coll');
+    expect(leaf(BASE)).toBe('Collections/Coll');
+  });
+
+  it('wraps its tabs below md, with no edge fades', () => {
+    const { el } = nav(BASE);
+    expect(el.querySelector('nav')!.className).toContain('max-md:flex-wrap');
+    for (const f of el.querySelectorAll('[data-more]')) expect(f.className).toContain('max-md:hidden');
   });
 
   it('names the collection it belongs to, linked to its overview', () => {

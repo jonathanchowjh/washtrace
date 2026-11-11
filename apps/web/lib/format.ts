@@ -202,8 +202,18 @@ const formatters = new Map<string, Intl.DateTimeFormat>();
 export const LENSES = {
   A: { name: 'Round trips', tone: 'cycle', tier: 'the floor', says: 'The token keeps coming back to wallets that already held it.' },
   AU: { name: 'Money loops back', tone: 'apart', tier: 'not counted', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
-  AC: { name: 'Linked wallets', tone: 'money', tier: 'the ceiling', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
+  AC: { name: 'Linked wallets', tone: 'ceiling', tier: 'the ceiling', says: 'A round trip, or a buyer and seller joined by money, directly or through one wallet between: one paid the other, both paid or were paid by the same wallet, or money passed through it.' },
 } as const;
+
+/**
+ * The built-ins in the order the console shows them: the floor (Round trips),
+ * the ceiling (Linked wallets), then the one never counted, set apart. Said
+ * here, not derived from detect's HEADLINE, because a client module loads this
+ * file and not detect's root; metrics.test holds it to HEADLINE then APART.
+ * METHODS keeps the paper's order, which the API's and CSV's columns keep, and
+ * LENSES' keys are not reordered: trades-url.ts orders `caught=` by them.
+ */
+export const SHOWN: readonly Method[] = ['A', 'AC', 'AU'];
 
 /**
  * Why a built-in did not catch a trade it judged, in one line of its own
@@ -224,6 +234,16 @@ export const NOT_CAUGHT: Record<Method, string> = {
   A: 'The token never comes back to the seller after this trade, or not as often as a pattern needs.',
   AU: 'No money it reads from the buyer finds its way back to the seller within the longest path it follows. It follows none from or through an exchange, a router, a contract or a wallet whose history was too long to read.',
   AC: 'The buyer and seller paid each other nothing it reads, and share no money partner but an exchange, a router, a contract or a wallet whose history was too long to read.',
+};
+
+/**
+ * NOT_CAUGHT for a whole token no money lens flagged, after the lens's name
+ * and a colon: a token may only have been minted or moved, so it speaks of
+ * any buyer and seller of it, not of one trade's.
+ */
+export const TOKEN_NOT_CAUGHT: Record<'AC' | 'AU', string> = {
+  AC: 'no buyer and seller of it paid each other or share a money partner it reads.',
+  AU: 'no money it reads went from a buyer of it back to the seller.',
 };
 
 /**
@@ -273,10 +293,10 @@ export const OWN_BEHIND = 'Not judged yet: this trade is past the block its run 
 export const BUILT_IN_BEHIND = 'Not judged yet: no analysis has read as far as this trade.';
 
 /** Your saved lenses by key, as a page shows them: the name a reader sees, the hue `own`, and the rule in words. */
-export type Lenses = Record<string, { name: string; tone: 'cycle' | 'money' | 'apart' | 'own'; says: string }>;
+export type Lenses = Record<string, { name: string; tone: 'cycle' | 'ceiling' | 'apart' | 'own'; says: string }>;
 
 /** A lens's name, hue and meaning: a built-in's, else one of yours; null for a key that names neither (a deleted lens). */
-export function lensInfo(key: string, own: Lenses): { name: string; tone: 'cycle' | 'money' | 'apart' | 'own'; says: string } | null {
+export function lensInfo(key: string, own: Lenses): { name: string; tone: 'cycle' | 'ceiling' | 'apart' | 'own'; says: string } | null {
   if (Object.hasOwn(LENSES, key)) return LENSES[key as keyof typeof LENSES];
   return Object.hasOwn(own, key) ? own[key]! : null;
 }
@@ -286,7 +306,10 @@ export function andList(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-/** "Round trips, Money loops back and Linked wallets". */
+/** The two lenses that read money, floor first: "Linked wallets and Money loops back". */
+export const MONEY_LENSES = `${LENSES.AC.name} and ${LENSES.AU.name}`;
+
+/** Names in the order given: "Round trips, Linked wallets and Money loops back" for all three, floor first. */
 export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
   return andList(methods.map((m) => LENSES[m].name));
 }
@@ -318,8 +341,7 @@ export function notRunIn(methods: readonly (keyof typeof LENSES)[], where: reado
  * stored trails alone and newer wallets go unchecked.
  */
 export function withoutKey(trailFunded: boolean): string {
-  const money = `${LENSES.AU.name} and ${LENSES.AC.name}`;
-  return trailFunded ? `${money} run only on stored money trails, and newer wallets go unchecked` : `${money} do not run`;
+  return trailFunded ? `${MONEY_LENSES} run only on stored money trails, and newer wallets go unchecked` : `${MONEY_LENSES} do not run`;
 }
 
 /** One collection's stored files, sized: what the suggested list and the add form say of it. */

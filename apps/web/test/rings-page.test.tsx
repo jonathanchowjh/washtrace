@@ -7,7 +7,7 @@ import { tradesHref } from '@/lib/trades-url';
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
 const A = '0x' + 'a1'.repeat(20), B = '0x' + 'b1'.repeat(20), M = '0x' + 'c1'.repeat(20);
-const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wallets: 3, sample: [A, B, M], sales: 3, floorSales, tokens: 1, volumeWei: '9000000000000000000', firstAt: null, lastAt: null });
+const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wallets: 3, sample: [A, B, M], sales: 3, floorSales, tokens: 1, volumeWei: '9000000000000000000', firstAt: null, lastAt: null, tokenSample: ['114'] });
 const X = '0x' + 'd1'.repeat(20);
 const moved = (from: string, to: string, n: number) => ({ txHash: '0x' + String(n).repeat(64), logIndex: 0, blockNumber: n, blockTime: n, tokenId: '114', from, to, marketplace: 'opensea', priceWei: '1', currency: '', flags: {} });
 const MEMBERS = [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }];
@@ -43,7 +43,8 @@ describe('the rings list', () => {
   it('names each ring by rank with its mark, and opens it by its anchor; its counts open its trades', async () => {
     const c = await list();
     const rows = [...c.querySelectorAll('tbody tr')];
-    expect(rows.map((r) => r.querySelector('td a')!.textContent)).toEqual(['Ring 1', 'Ring 2']);
+    // Each mark says its standing to a screen reader before the name.
+    expect(rows.map((r) => r.querySelector('td a')!.textContent)).toEqual(['Round trips · the floor: Ring 1', 'Linked wallets · the ceiling: Ring 2']);
     expect(rows[0]!.querySelector('td a')!.getAttribute('href')).toBe(`${BASE}/r/${A}?from=rings`);
     // Round trips flags some of Ring 1's sales, none of Ring 2's.
     expect(rows[0]!.querySelector('td a i')!.className).toContain('bg-cycle');
@@ -66,7 +67,32 @@ describe('the rings list', () => {
     const rows = [...c.querySelectorAll('tbody tr')];
     expect(cards).toHaveLength(rows.length);
     cards.forEach((card, i) => expect(links(card)).toEqual(links(rows[i]!)));
-    expect(cards[0]!.querySelector('p.tabular-nums')!.textContent!.replace(/\s+/g, ' ')).toBe('1 token3 sales9 ETH');
+    // The card names its tokens where the table's column does, then counts its sales and ETH.
+    const counts = cards[0]!.querySelector('p.tabular-nums')!.textContent!.replace(/\s+/g, ' ');
+    expect(counts).toContain('token #114');
+    expect(counts).toContain('3 sales');
+    expect(counts).toContain('9 ETH');
+  });
+
+  it('says 0 for a ring none of whose flagged trades is a counted sale of a token', async () => {
+    state.list = [{ ...line(1), tokens: 0, tokenSample: [] }];
+    const c = await list();
+    expect(c.querySelector('tbody td:nth-child(3)')!.textContent).toBe('0');
+    expect(c.querySelector('ul[aria-label=Rings] p.tabular-nums')!.textContent).toContain('tokens 0');
+  });
+
+  it('names a ring\'s first tokens in its Tokens cell, each opening its token, and the rest open the ring\'s list of them', async () => {
+    state.list = [{ ...line(1), tokens: 6, tokenSample: ['101', '102', '103'] }, line(2, B)];
+    const c = await list();
+    const [many, one] = [...c.querySelectorAll('tbody tr')].map((r) => r.querySelector('td:nth-child(3)')!);
+    expect(many!.textContent!.replace(/\s+/g, ' ')).toBe('#101, #102, #103 +3');
+    expect(links(many!)).toEqual([
+      ['#101', `${BASE}/t/101`], ['#102', `${BASE}/t/102`], ['#103', `${BASE}/t/103`],
+      [' +3', `${BASE}/r/${A}?from=rings#tokens`],
+    ]);
+    // A ring whose tokens are all named has no "+".
+    expect(one!.textContent).toBe('#114');
+    expect(links(one!)).toEqual([['#114', `${BASE}/t/114`]]);
   });
 
   it('marks each sampled wallet with the wallet symbol, as other wallet links are', async () => {
@@ -225,7 +251,7 @@ describe('the ring chips', () => {
   it('say each ring a thing is in, by rank, and nothing for a thing in none', async () => {
     const { RingChips } = await import('@/components/rings');
     const c = render(<>{await RingChips({ chainId: 1, address: ADDR, of: { wallet: M } })}</>).container;
-    expect(links(c)).toEqual([['Part of Ring 3 ›', `${BASE}/r/${A}`]]);
+    expect(links(c)).toEqual([['Round trips · the floor: Part of Ring 3 ›', `${BASE}/r/${A}`]]);
     cleanup();
     expect(await RingChips({ chainId: 1, address: ADDR, of: { wallet: B } })).toBeNull();
   });

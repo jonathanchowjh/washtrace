@@ -5,17 +5,19 @@ const ADDR = '0x' + 'a'.repeat(40);
 const TX = '0x' + 'c'.repeat(64);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const none = { collections: [], tokens: [], wallets: [], trades: [], more };
-const state = { hits: none as Record<string, unknown>, calls: [] as unknown[], sources: {} as Record<string, unknown>, collection: null as Record<string, unknown> | null };
+const state = { hits: none as Record<string, unknown>, calls: [] as unknown[], rings: [] as string[][], sources: {} as Record<string, unknown>, collection: null as Record<string, unknown> | null, chains: [] as number[] };
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
     search: async (p: unknown, o: unknown) => { state.calls.push([p, o]); return state.hits; },
-    sources: async () => state.sources, settings: async () => new Map<string, string>(), collection: async () => state.collection,
+    walletRings: async (_id: number, a: string[]) => { state.rings.push(a); return new Map(a.filter((x) => x === ADDR).map((x) => [x, ['0xaa', '0xbb']])); },
+    ringLines: async () => [{ anchor: '0xaa', rank: 5 }, { anchor: '0xbb', rank: 3 }],
+    collections: async () => state.chains.map((chainId) => ({ chainId })), sources: async () => state.sources, settings: async () => new Map<string, string>(), collection: async () => state.collection,
   }),
 }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], sources: {}, collection: null }); });
+afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], rings: [], sources: {}, collection: null, chains: [] }); });
 
 async function dom(sp: Record<string, string>): Promise<HTMLElement> {
   const { default: SearchPage } = await import('@/app/search/page');
@@ -40,6 +42,25 @@ describe('the search page', () => {
     const parts = (href: string) => [...c.querySelector(`a[href="${href}"]`)!.querySelectorAll('span.block')].map((s) => [s.textContent, s.className.includes('font-mono')]);
     expect(parts(`/w/1/${ADDR}`)).toEqual([['0xaaaa…aaaa', true], ['Wallet on Ethereum · in 41 transfers of watched collections', false]]);
     expect(parts(`/c/1/${ADDR}/tx/${TX}`)).toEqual([['0xcccc…cccc', true], ['Trade on Ethereum · Meebits #14022', false]]);
+  });
+
+  it('marks a wallet found in a scope with its tier, and names its ring; one with neither has no mark', async () => {
+    state.hits = { ...none, wallets: [
+      { chainId: 1, address: ADDR, transfers: 41, here: true, tier: 'cycle' },
+      { chainId: 1, address: '0x' + 'b'.repeat(40), transfers: 2, here: true, tier: 'ceiling' },
+      { chainId: 1, address: '0x' + 'd'.repeat(40), transfers: 1, here: false },
+    ] };
+    state.collection = { id: 1, chainId: 1, address: ADDR, name: 'Terraforms' };
+    const c = await dom({ q: '0x', scope: `1:${ADDR}` });
+    const hit = (a: string) => c.querySelector(`a[href$="${a}"]`)!;
+    expect(hit(ADDR).querySelector('i')!.className).toContain('bg-cycle');
+    expect(hit(ADDR).textContent).toContain('Round trips · the floor: ');
+    expect(hit(ADDR).textContent).toContain('Ring 3');
+    expect(hit('0x' + 'b'.repeat(40)).querySelector('i')!.className).toContain('repeating-linear-gradient');
+    expect(hit('0x' + 'b'.repeat(40)).textContent).not.toContain('Ring');
+    expect(hit('0x' + 'd'.repeat(40)).querySelector('i')).toBeNull();
+    // One read of the rings, for the wallets that traded there, and the highest-ranked one is named.
+    expect(state.rings).toEqual([[ADDR, '0x' + 'b'.repeat(40)]]);
   });
 
   it('says a token, a wallet and a trade each in a line, with its count in its heading', async () => {
@@ -108,6 +129,15 @@ describe('the search page', () => {
     expect(a?.getAttribute('target')).toBe('_blank');
     cleanup();
     expect((await dom({ q: TX })).querySelector(`a[href="https://etherscan.io/tx/${TX}"]`)).not.toBeNull();
+  });
+
+  it('offers the explorer only on watched chains that have one: none for the local chain, each named when there are two', async () => {
+    state.chains = [31337];
+    expect((await dom({ q: ADDR })).textContent).not.toContain('Look it up');
+    cleanup();
+    state.chains = [1, 8453];
+    const c = await dom({ q: ADDR });
+    expect([...c.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Look it up on Etherscan (Ethereum) ↗', 'Look it up on Basescan (Base) ↗']);
   });
 
   it('shows the hint for empty or too-short text, and asks the store nothing', async () => {

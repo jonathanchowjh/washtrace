@@ -22,7 +22,7 @@ vi.mock('@/lib/views', () => ({
     passes: [], jobs: view.jobs, notices: [], backlog: view.backlog, collections: [],
   }),
 }));
-vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers({ host: 'localhost:8080' }) }));
 
 const refresh = vi.fn();
 const push = vi.fn();
@@ -199,7 +199,8 @@ describe('CollectionControls', () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(screen.getByText(/Delete its transfers and analyses\? Wallet funding is kept\./)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(push).toHaveBeenCalledWith('/'));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(push).not.toHaveBeenCalled();
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/collections/1/0xabc');
     expect(init.method).toBe('DELETE');
@@ -354,6 +355,16 @@ describe('CollectionRow', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('names the collection behind its symbol, and its range behind the marks of the lenses at each end', () => {
+    const t = (flaggedSales: number) => ({ available: true, sales: 100, flaggedSales, flaggedVolumeWei: '0', volumeWei: '0', transfers: 100, flagged: flaggedSales, wallets: 0, tokens: 0 });
+    const totals = { A: t(18), AU: t(0), AC: t(25) };
+    const c = { ...base, latest: { id: 1, ranAt: 0, tookMs: 1, throughBlock: 10, totals, missingData: 0, fundedWallets: 0, wallets: 0, truncatedSearches: 0 } } as typeof base;
+    const { container } = render(<CollectionRow writable c={c} why="" rpcChains={ON} funding silent={false} now={0} />);
+    expect(container.querySelector('a[href="/c/1/0xabc"] svg')).not.toBeNull();
+    const detail = [...container.querySelectorAll('p')].find((p) => p.textContent === 'Round trips → Linked wallets')!;
+    expect([...detail.querySelectorAll('i')].map((m) => m.className)).toEqual([expect.stringContaining('bg-cycle'), expect.stringContaining('repeating-linear-gradient')]);
+  });
+
   it('with no analysis and a download under way, a silent worker claims no progress beside its pill', () => {
     const c = { ...base, cursorBlock: null, startBlock: null, transfers: 0, downloadFile: 'transfers', downloadProgress: 0.4 } as typeof base;
     const { container } = render(<CollectionRow writable c={c} why={analysisWaitText(c, undefined, new Map(), ON, 0, 'UTC', true)} rpcChains={ON} funding silent now={0} />);
@@ -485,7 +496,8 @@ describe('the worker page\'s sources', () => {
       const el = await funding({ trailFunded });
       const line = [...el.querySelectorAll('li')].find((li) => li.textContent!.includes('→ reading stage 5 (Money)'))!;
       expect(line.textContent).toContain('Needs a key:');
-      expect(line.querySelector('.text-money')).not.toBeNull();
+      expect([...line.querySelectorAll('span')].find((x) => x.textContent!.startsWith('Needs a key:'))!.className).toContain('text-foreground');
+      expect(line.querySelector('.text-fault')).toBeNull();
       expect(line.querySelector('.text-muted-foreground')?.textContent).toBe('→ reading stage 5 (Money)');
       const link = [...line.querySelectorAll('a')].find((a) => a.textContent === ETHERSCAN_CTA)!;
       expect(link.getAttribute('href')).toBe(ETHERSCAN_HREF);
@@ -514,6 +526,15 @@ describe('the worker page\'s wallet count', () => {
     Object.assign(view, { funding: null, trailFunded: false, jobs: [job], backlog: [{ chainId: 1, done: 3, pending: 2, failed: 0, stranded: 0, truncated: 0, followed: 1, etaMs: null }] });
     const text = render(await WorkerPage()).container.textContent!;
     expect(text).toContain('3 of 5 wallets on this chain checked');
+    expect(text).toContain('4 that hold or traded a watched token, 1 followed from traders');
+  });
+
+  it('never counts a negative set when pending followed wallets outnumber the done ones', async () => {
+    const job = { job: 'fund', state: 'ok', startedAt: null, finishedAt: null, tookMs: null, detail: null, outcome: null };
+    Object.assign(view, { funding: null, trailFunded: false, jobs: [job], backlog: [{ chainId: 1, done: 1, pending: 6, failed: 0, stranded: 0, truncated: 0, followed: 5, etaMs: null }] });
+    const text = render(await WorkerPage()).container.textContent!;
+    expect(text).toContain('1 of 7 wallets on this chain checked');
+    expect(text).toContain('2 that hold or traded a watched token, 5 followed from traders');
   });
 
   it('counts depth in wallets out and says no hop, with funding on and wallets held back', async () => {

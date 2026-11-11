@@ -1,8 +1,9 @@
-import type { CollectionRow, TokenSort, WalletSort } from '@washtrace/detect';
+import { METHODS, type CollectionRow, type TokenSort, type WalletSort } from '@washtrace/detect';
+import { isOwnKey } from '@washtrace/detect/trades';
 import { lensKeyOf } from './api';
 import { runsOf, tradeContextOf } from './collection-reads';
 import { eth, localTime, ringName, short, tokenLabel } from './format';
-import { txHref, walletHref, withFrom } from './links';
+import { carry, txHref, walletHref, type Context } from './links';
 import { ownLenses } from './metrics';
 import { addressOf, listView, pageOf, pages } from './params';
 import { store } from './store';
@@ -33,6 +34,16 @@ export function fromOf(raw: string | string[] | undefined): { kind: ListKind; pa
   return kind === undefined ? null : { kind, params: new URLSearchParams(query) };
 }
 
+/** The lens and the list a page was opened with, as its links carry them on: a `method` that is a lens and a `from` that names a list, nothing else. */
+export function contextOf(q: Record<string, string | string[] | undefined>): Context {
+  const one = (k: string) => { const v = q[k]; return Array.isArray(v) ? v[0] : v; };
+  const method = one('method'), from = one('from');
+  return {
+    ...(method !== undefined && (METHODS.some((m) => m === method) || isOwnKey(method)) ? { method } : {}),
+    ...(from !== undefined && fromOf(from) !== null ? { from } : {}),
+  };
+}
+
 /** The `from` an item of list `kind` carries, its query being `params` with `page` set (left out on the first). */
 export function fromParam(kind: ListKind, params: URLSearchParams, page: number): string {
   const p = new URLSearchParams(params);
@@ -58,7 +69,9 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
   const ctx = await tradeContextOf(c);
   const zone = ctx.zone;
   const offset = (page - 1) * SIZE[kind];
-  const from = (p: number) => fromParam(kind, params, p);
+  // An item carries the list it is opened from and the lens that list is read under.
+  const method = params.get('method') ?? undefined;
+  const carried = (p: number) => ({ method, from: fromParam(kind, params, p) });
   const placed = <T extends Item>(xs: T[]): (T & { at: number })[] => xs.map((x, i) => ({ ...x, at: offset + i + 1 }));
   if (kind === 'ring') {
     const anchor = addressOf(params.get('anchor') ?? '');
@@ -67,8 +80,8 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
     const tokens = params.get('of') === 'tokens';
     // In the order its page lists them: those that traded, then those in between.
     const items = tokens
-      ? r.tokens.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(1)) }))
-      : [...r.wallets.filter((w) => w.traded), ...r.wallets.filter((w) => !w.traded)].map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(1)) }));
+      ? r.tokens.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: carry(`${base}/t/${t.tokenId}`, carried(1)) }))
+      : [...r.wallets.filter((w) => w.traded), ...r.wallets.filter((w) => !w.traded)].map((w) => ({ id: w.address, label: short(w.address), href: carry(walletHref(c.chainId, w.address, base), carried(1)) }));
     return { items: placed(items), total: items.length, back: { href: `${base}/r/${anchor}`, label: `${ringName(r.line)}'s ${tokens ? 'tokens' : 'wallets'}` } };
   }
   if (kind === 'tokens' || kind === 'wallets') {
@@ -78,14 +91,14 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
     const o = { sort: lv.sort, find: lv.find, limit: LIST_PAGE, offset };
     if (kind === 'tokens') {
       const r = await s.lensTokens(c.id, method, { ...o, sort: o.sort as TokenSort }, ctx);
-      return { total: r.total, items: placed(r.rows.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(page)) }))) };
+      return { total: r.total, items: placed(r.rows.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: carry(`${base}/t/${t.tokenId}`, carried(page)) }))) };
     }
     const r = await s.lensWallets(c.id, method, { ...o, sort: o.sort as WalletSort }, ctx);
-    return { total: r.total, items: placed(r.rows.map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(page)) }))) };
+    return { total: r.total, items: placed(r.rows.map((w) => ({ id: w.address, label: short(w.address), href: carry(walletHref(c.chainId, w.address, base), carried(page)) }))) };
   }
   if (kind === 'rings') {
     const r = await s.rings(c.id, ctx, RINGS_PAGE, offset);
-    return { total: r.total, items: placed(r.rows.map((x) => ({ id: x.anchor, label: ringName(x), href: withFrom(`${base}/r/${x.anchor}`, from(page)) }))) };
+    return { total: r.total, items: placed(r.rows.map((x) => ({ id: x.anchor, label: ringName(x), href: carry(`${base}/r/${x.anchor}`, carried(page)) }))) };
   }
   const { q } = parseView(Object.fromEntries(params), zone, new Set(Object.keys(own)));
   if (holdsNothing(q, ctx.ran) !== null) return { items: [], total: 0 };
@@ -97,7 +110,7 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
     if (seen.has(t.txHash)) return [];
     seen.add(t.txHash);
     const by = q.sort === 'price' ? (t.priceWei == null ? null : eth(t.priceWei)) : t.blockTime == null ? null : localTime(t.blockTime * 1000, 'date', zone, 'en-GB');
-    return [{ id: t.txHash, label: `#${tokenLabel(t.tokenId)}${by === null ? '' : ` · ${by}`}`, href: withFrom(txHref(c.chainId, t.txHash, base), from(page)), at: offset + i + 1 }];
+    return [{ id: t.txHash, label: `#${tokenLabel(t.tokenId)}${by === null ? '' : ` · ${by}`}`, href: carry(txHref(c.chainId, t.txHash, base), carried(page)), at: offset + i + 1 }];
   });
   return { total, items };
 }

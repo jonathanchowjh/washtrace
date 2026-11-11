@@ -75,7 +75,7 @@ describe('an analysis over Payments', () => {
       const p = new Payments();
       p.add(...first!);
       p.add(...second!);
-      expect(witness(p)).toEqual({ kind: 'pair', pair: [a, b], middle: null, flowTx: '0x1' });
+      expect(witness(p)).toEqual({ kind: 'pair', pair: [a, b], middle: null, flowTx: '0x1', shape: 'both' });
     }
     // Through a middle: the tx is the one joining it to the side with fewer neighbours, smallest either way.
     const p = new Payments();
@@ -83,7 +83,7 @@ describe('an analysis over Payments', () => {
     p.add(a, x, '0x3');
     p.add(x, b, '0x5');
     p.add(b, c, '0x7');
-    expect(witness(p)).toEqual({ kind: 'pair', pair: [a, b], middle: x, flowTx: '0x3' });
+    expect(witness(p)).toEqual({ kind: 'pair', pair: [a, b], middle: x, flowTx: '0x3', shape: 'forward' });
   });
 
   it('an analysis of payments added in any order is deep-equal', () => {

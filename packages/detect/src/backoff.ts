@@ -15,6 +15,11 @@ export class Backoff {
     return (this.failed.get(id)?.retryAt ?? 0) > now;
   }
 
+  /** The ids whose wait is still running at `now`, in the order they first failed. */
+  waiting(now: number): number[] {
+    return [...this.failed].filter(([, f]) => f.retryAt > now).map(([id]) => id);
+  }
+
   clear(id: number): void {
     this.failed.delete(id);
   }

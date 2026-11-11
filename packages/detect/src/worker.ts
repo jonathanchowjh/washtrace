@@ -9,7 +9,7 @@ import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
 import { LockedRun } from './locked-run.js';
 import { followOf } from './reach.js';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, LOCKS, retryMs, type CollectionRow, type DuePreview, type DueRun, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, LOCKS, type CollectionRow, type DuePreview, type DueRun, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -281,7 +281,7 @@ export class Worker {
    * Collections whose rings failed to fill, timed as analysesFailed: passed over until their wait is up, so one that
    * fails every time holds up none after it and is tried at most once an hour. Their next analysis fills them too.
    */
-  private readonly ringsFailed = new Map<number, { failures: number; retryAt: number }>();
+  private readonly ringsFailed = new Backoff();
   /**
    * A preview was asked for while an analyze pass was in flight here: that
    * pass may have looked for one before it was queued, so one more runs after
@@ -503,12 +503,9 @@ export class Worker {
     const swept = await this.store.sweepFinished(now).then(() => true, (err) => { failed.set('lens', err); return false; });
     // Rings for an analysis saved before they were (Store.fillRings): one collection a turn, under the lock saveAnalysis is under.
     // A failure is the analyze row's, and is logged: an analysis that runs after it would otherwise write over it with ok.
-    await this.store.fillRings([...this.ringsFailed].filter(([, f]) => f.retryAt > now).map(([id]) => id)).catch((err) => {
+    await this.store.fillRings(this.ringsFailed.waiting(now)).catch((err) => {
       const id = (err as { collectionId?: unknown }).collectionId;
-      if (typeof id === 'number') {
-        const failures = (this.ringsFailed.get(id)?.failures ?? 0) + 1;
-        this.ringsFailed.set(id, { failures, retryAt: now + retryMs(failures) });
-      }
+      if (typeof id === 'number') this.ringsFailed.fail(id, now);
       failed.set('analyze', err);
       this.logFailed('analyze', this.scrubbed(err));
     });
@@ -909,7 +906,7 @@ export class Worker {
         followHops: globalHops,
         rules: c.rules,
         fundingAvailable,
-        custodians: new Set(CUSTODIANS),
+        custodians: new Set(Object.keys(CUSTODIANS)),
         contracts: contractsFor(c.chainId),
         money,
       }, this.locks.get('analyze')?.abort.signal);
@@ -917,7 +914,7 @@ export class Worker {
       if (lost !== null) throw lost;
       await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through, money);
       this.analysesFailed.clear(c.id);
-      this.ringsFailed.delete(c.id);
+      this.ringsFailed.clear(c.id);
     } catch (err) {
       // Not the analysis's failure: the mark goes, uncounted, and the next pass, here or on any replica, takes it.
       if (this.lockLost('analyze')) {

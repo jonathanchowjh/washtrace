@@ -4,9 +4,10 @@ import { connection } from 'next/server';
 import { short } from '@/lib/format';
 import { txHref } from '@/lib/links';
 import { addressOf, chainOf, txOf } from '@/lib/params';
+import { contextOf } from '@/lib/step';
 import { TxView } from '@/app/tx/[chain]/[hash]/view';
 
-type Props = { params: Promise<{ chain: string; address: string; hash: string }>; searchParams?: Promise<{ from?: string }> };
+type Props = { params: Promise<{ chain: string; address: string; hash: string }>; searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
 /** The transaction's own page is the canonical one: it can move tokens of more than one collection. */
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -24,5 +25,6 @@ export default async function CollectionTxPage({ params, searchParams }: Props) 
   const address = addressOf(p.address);
   const tx = txOf(p.hash);
   if (chainId === null || address === null || tx === null) notFound();
-  return TxView({ chainId, tx, within: `/c/${chainId}/${address}`, from: (await searchParams)?.from });
+  const ctx = contextOf((await searchParams) ?? {});
+  return TxView({ chainId, tx, within: `/c/${chainId}/${address}`, from: ctx.from, method: ctx.method });
 }

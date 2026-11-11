@@ -1,5 +1,5 @@
 import { DOWNLOAD_STALL_MS, DOWNLOAD_TOO_LONG, MAX_STREAMS, METHODS, STREAM_MAX_MS, moneyFor, type TradeRow } from '@washtrace/detect';
-import { venueOf, VENUES, type LensKey, type TradeContext } from '@washtrace/detect/trades';
+import { venueName, type LensKey, type TradeContext } from '@washtrace/detect/trades';
 import { bad, collectionFrom, handle, json, readerZone } from '@/lib/api';
 import { LENSES, NOT_RUN, weiToEth, type Lenses } from '@/lib/format';
 import { judgedBy, lensContext, ownLenses } from '@/lib/metrics';
@@ -29,7 +29,7 @@ function csvLine(r: TradeRow, ctx: Pick<TradeContext, 'ran' | 'through'>, cols: 
   return [
     r.blockTime === null ? '' : new Date(r.blockTime * 1000).toISOString(), r.tokenId, r.from, r.to,
     priced ? weiToEth(r.priceWei!) : '', priced ? 'ETH' : '',
-    r.marketplace === null ? '' : VENUES[venueOf(r.marketplace)]?.name ?? r.marketplace,
+    r.marketplace === null ? '' : venueName(r.marketplace),
     r.heldS, r.buyerAgeS, r.floorRatio,
     ...cols.map(lens), r.txHash,
   ].map(cell).join(',') + '\n';

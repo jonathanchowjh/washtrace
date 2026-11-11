@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { HEADLINE, METHODS, type AnalysisRow, type FlaggedTransfer, type Lens, type LensRun, type Method, type MethodTotals, type TradeRow, type Transfer } from '@washtrace/detect';
 import { ruleLine } from '@washtrace/detect/lens-rule';
 import { isOwnKey, type LensKey, type TradeContext } from '@washtrace/detect/trades';
-import { LENSES, NOT_JUDGED_YET, pct, num, type Lenses } from './format';
+import { LENSES, NOT_JUDGED_YET, SHOWN, pct, num, type Lenses } from './format';
 import { runStateWords } from './lens-state';
 
 /**
@@ -28,13 +28,6 @@ export function part(t: MethodTotals, measure: Measure): { part: number; whole: 
 /** The lenses that run and are shown but never counted: all but HEADLINE. */
 export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes(m));
 
-/**
- * The built-ins in the order the console shows them: the floor (Round trips),
- * the ceiling (Linked wallets), then the one never counted, set apart.
- * METHODS keeps the paper's order, which the API's and CSV's columns keep.
- */
-export const SHOWN: readonly Method[] = [...HEADLINE, ...APART];
-
 /** Built-ins in SHOWN's order, for a page that names some of them: a verdict's `by` and `notRun` keep METHODS' order, which the API publishes. */
 export function inShownOrder(ms: readonly Method[]): Method[] {
   return SHOWN.filter((m) => ms.includes(m));
@@ -55,19 +48,19 @@ export const FLAGGED_ONLY_AU = `flagged only by ${LENSES.AU.name}, which is not 
 export const TINT_LEAD = `Rows tinted for ${LENSES.A.name} or ${LENSES.AC.name} are flagged; grey rows are ${FLAGGED_ONLY_AU}`;
 
 /** How a trade, or a whole page, reads: the hue of the strongest counted lens, grey for an apart lens alone. */
-export type Tone = 'cycle' | 'money' | 'apart' | 'clean';
+export type Tone = 'cycle' | 'ceiling' | 'apart' | 'clean';
 
 /** A trade's tone from flags already passed through ranFlags. Round trips outranks the other counted lens. */
 export function toneOf(t: Pick<FlaggedTransfer, 'flags'>): Tone {
   if (t.flags.A) return 'cycle';
-  if (HEADLINE.some((m) => t.flags[m])) return 'money';
+  if (HEADLINE.some((m) => t.flags[m])) return 'ceiling';
   return APART.some((m) => t.flags[m]) ? 'apart' : 'clean';
 }
 
 /** Whether a trade counts toward the verdict: a counted lens flags it. One flagged only by an apart lens is shown grey, and not counted. */
 export function counted(t: Pick<FlaggedTransfer, 'flags'>): boolean {
   const tone = toneOf(t);
-  return tone === 'cycle' || tone === 'money';
+  return tone === 'cycle' || tone === 'ceiling';
 }
 
 /** Whether an analysis covers a transfer: only one that ran through the transfer's block can have judged it. */
@@ -198,7 +191,7 @@ export function verdict(rows: readonly { t: FlaggedTransfer; latest: AnalysisRow
  * verdict it is rather than saying no lens flags it.
  */
 export function answer(v: Verdict, flagged: ReactNode, ownCatch = false): { title: ReactNode; tone: Tone } {
-  if (v.washTrade === true) return { title: flagged, tone: v.by.includes('A') ? 'cycle' : 'money' };
+  if (v.washTrade === true) return { title: flagged, tone: v.by.includes('A') ? 'cycle' : 'ceiling' };
   if (v.washTrade === null) return { title: NOT_JUDGED_YET, tone: 'clean' };
   if (v.apartOnly) return { title: `Flagged only by ${LENSES.AU.name}, which is not counted`, tone: 'apart' };
   const which = ownCatch ? 'the built-in lenses' : v.notRun.length === 0 ? 'any lens' : 'the lenses';

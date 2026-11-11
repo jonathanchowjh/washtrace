@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const ADDR = '0x' + 'a'.repeat(40);
 const TX = '0x' + 'c'.repeat(64);
 const none = { collections: [], tokens: [], wallets: [], trades: [], more: { collections: false, tokens: false, wallets: false, trades: false } };
-const state = { watched: false, hits: none as Record<string, unknown>, asked: undefined as unknown };
+const state = { watched: false, hits: none as Record<string, unknown>, asked: undefined as unknown, chains: [] as number[] };
 vi.mock('@/lib/store', () => ({
-  store: () => ({ collection: async () => (state.watched ? { id: 1, chainId: 1 } : null), search: async (_p: unknown, opts: unknown) => { state.asked = opts; return state.hits; } }),
+  store: () => ({ collection: async () => (state.watched ? { id: 1, chainId: 1 } : null), collections: async () => state.chains.map((chainId) => ({ chainId })), search: async (_p: unknown, opts: unknown) => { state.asked = opts; return state.hits; } }),
 }));
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), connection: async () => {} }));
 
-afterEach(() => { Object.assign(state, { watched: false, hits: none }); });
+afterEach(() => { Object.assign(state, { watched: false, hits: none, chains: [] }); });
 
 async function go(q: string, chain?: string): Promise<string> {
   const { GET } = await import('@/app/go/route');
@@ -84,6 +84,13 @@ describe('/go', () => {
     expect(await go(ADDR)).toBe(`/w/1/${ADDR}`);
     state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 3 }, { chainId: 8453, address: ADDR, transfers: 1 }] };
     expect(await go(ADDR)).toBe(`/search?q=${ADDR}`);
+  });
+
+  it('an address nothing holds opens its wallet on the one chain that is watched, else on Ethereum', async () => {
+    state.chains = [31337, 31337];
+    expect(await go(ADDR)).toBe(`/w/31337/${ADDR}`);
+    state.chains = [1, 8453];
+    expect(await go(ADDR)).toBe(`/w/1/${ADDR}`);
   });
 
   it('redirects to the one thing a name finds', async () => {

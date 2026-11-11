@@ -11,10 +11,10 @@ import { RunsOn, type RunRow } from '@/components/runs-on';
 import { TierMark } from '@/components/kit';
 import { Head, Problem, STORE_DOWN, Section } from '@/components/ui';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
-import { LENSES, pctTenth, short } from '@/lib/format';
+import { LENSES, SHOWN, pctTenth, short } from '@/lib/format';
 import { behindOf, needsWords, runStateWords, staleSinceLastWrite } from '@/lib/lens-state';
 import { lensTabHref } from '@/lib/links';
-import { APART, APART_WHY_TITLE, SHOWN } from '@/lib/metrics';
+import { APART, APART_WHY_TITLE } from '@/lib/metrics';
 import { configFromSources, hopsFollowed } from '@/lib/settings';
 import { store } from '@/lib/store';
 
@@ -48,6 +48,7 @@ function BuiltIns({ base, writable }: { base: string | null; writable: boolean }
             </div>
             <p className="text-sm text-muted-foreground">{LENSES[m].says}</p>
             <p className="text-xs text-muted-foreground">Its rule: {ruleLine(COPIES[m].rule)}</p>
+            {COPIES[m].differs === null ? null : <p className="text-xs text-muted-foreground">{COPIES[m].differs}</p>}
             {base === null ? null : <div className="mt-auto pt-1"><Action href={lensTabHref(base, m, { lens: `copy-${m}` })} writable={writable}>Copy to new lens</Action></div>}
           </li>
         ))}

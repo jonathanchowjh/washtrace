@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { CollectionProfile, LensRun, Lens, Method, MethodTotals, TokenLine, WalletLine } from '@washtrace/detect';
 import { LENSES, NOT_RUN, eth, num, pctTenth, plural, short, tokenLabel } from '@/lib/format';
-import { cardSrc, lensTabHref, listHref, venues, walletHref } from '@/lib/links';
-import { STEPS, worstStage, type Stage, type StageState } from '@/lib/pipeline';
+import { cardSrc, carry, lensTabHref, listHref, venues, walletHref } from '@/lib/links';
+import { fromParam } from '@/lib/step';
+import { STEPS, stageFigure, worstStage, type Stage, type StageState } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { KindIcon, TierMark } from './kit';
+import { INLINE_ICON, KindIcon, TierMark } from './kit';
 import { LensPicture } from './methods';
 import { Time } from './zone';
 import { HoverCard } from './hover-card';
@@ -44,7 +45,7 @@ export function ReadingStrip({ stages, base }: { stages: readonly Stage[]; base:
             <span aria-hidden className={cn('w-4 text-center font-semibold', m.tone)}>{st.state === 'running' ? '◔' : m.mark}</span>
             <span className="font-medium text-foreground">{label}</span>
             <span className={cn('text-xs', m.tone)}>
-              {st.state === 'running' && st.share !== null ? `${Math.floor(st.share * 100)}%` : m.word}
+              {st.state === 'running' && st.share !== null ? stageFigure({ ...st, share: st.share }) : m.word}
               {st.state === 'blocked' && st.needs ? <>: {st.needs.href === null ? st.needs.text : <Link href={st.needs.href} className="underline">{st.needs.text}</Link>}</> : null}
             </span>
           </span>
@@ -65,7 +66,7 @@ export function Facts({ profile: p, creator, base, chainId }: { profile: Collect
     <span key="h" data-supply>{plural(p.holders, 'holder')}</span>,
     p.firstMint === null ? null : <>minted <Time ms={p.firstMint} style="date" /></>,
     sales === 0 ? 'no sale yet' : <>
-      <Link href={tradesHref(base, { sort: 'date', dir: 'asc' })} prefetch={false} className="hover:underline">{plural(sales, 'sale')}</Link>
+      <Link href={tradesHref(base, {})} prefetch={false} className="hover:underline">{plural(sales, 'sale')}</Link>
       {sold.length === 1 ? `, all on ${sold[0]!.name}` : <>: {sold.slice(0, 3).map((v, i) => <span key={v.key}>{i > 0 ? ', ' : ''}{v.name} <Link href={tradesHref(base, { venues: [v.key] })} prefetch={false} className="hover:underline">{num(v.sales)}</Link></span>)}{sold.length > 3 ? ` and ${sold.length - 3} more` : ''}</>}
     </>,
     creator === null ? 'deployer unknown' : <>deployed by <Link href={walletHref(chainId, creator)} prefetch={false} className="font-mono hover:underline">{short(creator)}</Link></>,
@@ -89,10 +90,10 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
   const sales = totals.A.sales;
   // Linked wallets is a superset of Round trips; read as one, its rung is what it adds.
   const added = Math.max(0, totals.AC.flaggedSales - totals.A.flaggedSales);
-  const rungs: { m: Method; tone: 'cycle' | 'money' | 'apart'; name: string; does: string; share: string; count: string; href: string; note?: string }[] = [
+  const rungs: { m: Method; tone: 'cycle' | 'ceiling' | 'apart'; name: string; does: string; share: string; count: string; href: string; note?: string }[] = [
     { m: 'A', tone: 'cycle', name: LENSES.A.name, does: LENSES.A.tier, share: pctTenth(totals.A.flaggedSales, sales),
       count: plural(totals.A.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['A'] }) },
-    { m: 'AC', tone: 'money', name: LENSES.AC.name, does: LENSES.AC.tier, share: `+${pctTenth(added, sales)}`,
+    { m: 'AC', tone: 'ceiling', name: LENSES.AC.name, does: LENSES.AC.tier, share: `+${pctTenth(added, sales)}`,
       count: `+${plural(added, 'sale')}`, href: tradesHref(base, { caught: ['AC'], notCaught: ['A'] }) },
     { m: 'AU', tone: 'apart', name: LENSES.AU.name, does: LENSES.AU.tier, share: pctTenth(totals.AU.flaggedSales, sales),
       count: plural(totals.AU.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['AU'] }),
@@ -126,6 +127,19 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
 }
 
 /**
+ * The head every overview block wears, inside its card: what it is, and under
+ * it on a phone (beside it from `sm`) what it holds.
+ */
+export function CardHead({ title, caption }: { title: React.ReactNode; caption: string }) {
+  return (
+    <h2 className="flex flex-col gap-0.5 border-b px-4 py-2.5 text-sm font-medium text-foreground sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+      <span className="whitespace-nowrap">{title}</span>
+      <span className="text-xs font-normal text-muted-foreground">{caption}</span>
+    </h2>
+  );
+}
+
+/**
  * The few tokens or wallets most of the flagged ETH went through, under
  * Linked wallets, each with the mark of its strongest evidence: a loop is a
  * round trip (the floor), a linked pair alone is money (the ceiling). Rows
@@ -135,21 +149,22 @@ export function TopList({ kind, rows, total, base, chainId }: {
   kind: 'tokens' | 'wallets'; rows: readonly (TokenLine | WalletLine)[]; total: number; base: string; chainId: number;
 }) {
   const unit = kind === 'tokens' ? 'token' : 'wallet';
+  // A row opens under Linked wallets and the list "All N" opens, so its stepper walks that list.
+  const all = listHref(base, kind, { method: 'AC', sort: 'volume' });
+  const ctx = { method: 'AC', from: fromParam(kind, new URL(all, 'http://x.invalid').searchParams, 1) };
   return (
     <section aria-label={`Top ${kind}`} className="rounded-lg border bg-card">
-      <h2 className="flex items-center justify-between border-b px-4 py-2.5 text-sm font-medium text-foreground">
-        <span className="flex items-center gap-1.5"><KindIcon kind={unit} />Top {kind}</span>
-        <span className="text-xs font-normal text-muted-foreground">by ETH flagged</span>
-      </h2>
+      <CardHead title={<span className="flex items-center gap-1.5"><KindIcon kind={unit} />Top {kind}</span>} caption="by ETH flagged" />
       {rows.length === 0 ? <p className="px-4 py-3 text-sm text-muted-foreground">None flagged.</p> : (
         <ol className="divide-y">
           {rows.map((r) => {
-            const href = 'tokenId' in r ? `${base}/t/${r.tokenId}` : walletHref(chainId, r.address, base);
+            const href = carry('tokenId' in r ? `${base}/t/${r.tokenId}` : walletHref(chainId, r.address, base), ctx);
             return (
               <li key={'tokenId' in r ? r.tokenId : r.address}>
                 <HoverCard className="block" src={'tokenId' in r ? cardSrc(base, 'token', r.tokenId) : cardSrc(base, 'wallet', r.address)}>
                 <Link href={href} prefetch={false} className="flex items-center gap-2.5 px-4 py-2 text-sm hover:bg-muted/60">
-                  <TierMark tone={(r.loops ?? 0) > 0 ? 'cycle' : 'money'} />
+                  <TierMark tone={(r.loops ?? 0) > 0 ? 'cycle' : 'ceiling'} label />
+                  <KindIcon kind={'tokenId' in r ? 'token' : 'wallet'} className={INLINE_ICON} />
                   <span className="flex-1 truncate font-mono text-foreground">{'tokenId' in r ? `#${tokenLabel(r.tokenId)}` : short(r.address)}</span>
                   <span className="tabular-nums text-foreground">{eth(r.volumeWei)}</span>
                   <span aria-hidden className="text-muted-foreground">›</span>
@@ -160,7 +175,7 @@ export function TopList({ kind, rows, total, base, chainId }: {
           })}
         </ol>
       )}
-      <Link href={listHref(base, kind, { method: 'AC', sort: 'volume' })} className="block border-t px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline">All {plural(total, unit)} ›</Link>
+      <Link href={all} className="block border-t px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:underline">All {plural(total, unit)} ›</Link>
     </section>
   );
 }
@@ -174,10 +189,9 @@ export function TopList({ kind, rows, total, base, chainId }: {
 export function NotCounted({ apart, base }: { apart: number; base: string }) {
   if (apart === 0) return null;
   return (
-    <section aria-label="Looks suspicious, not counted" className="rounded-lg border border-dashed bg-card p-4">
-      <h2 className="text-sm font-medium text-foreground">Looks suspicious, not counted</h2>
-      <p className="mb-3 text-xs text-muted-foreground">Why the number is not higher</p>
-      <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
+    <section aria-label="Looks suspicious, not counted" className="rounded-lg border border-dashed bg-card">
+      <CardHead title="Looks suspicious, not counted" caption="Why the number is not higher" />
+      <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="m-3 flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
         <TierMark tone="apart" className="mt-1" />
         <span className="text-sm">
           <span className="font-medium text-foreground">{plural(apart, 'sale')} flagged only by {LENSES.AU.name}: money went back to the seller</span>
@@ -191,10 +205,12 @@ export function NotCounted({ apart, base }: { apart: number; base: string }) {
 /** Your lenses on this collection, each with its share of sales; a lens with no run yet says so. */
 export function YourLenses({ runs, base, writable }: { runs: readonly { lens: Lens; run: LensRun | null }[]; base: string; writable: boolean }) {
   if (runs.length === 0 && !writable) return null;
+  // With none yet, no card around one link.
+  if (runs.length === 0) return <Link href={lensTabHref(base, 'AC', { lens: 'new' })} className="text-sm text-muted-foreground hover:text-foreground hover:underline">+ New lens</Link>;
   return (
-    <section aria-label="Your lenses" className="rounded-lg border bg-card p-4">
-      <h2 className="mb-2 text-sm font-medium text-foreground">Your lenses</h2>
-      <ul className="flex flex-wrap gap-2">
+    <section aria-label="Your lenses" className="rounded-lg border bg-card">
+      <CardHead title="Your lenses" caption="each with its share of sales" />
+      <ul className="flex flex-wrap gap-2 p-3">
         {runs.map(({ lens, run }) => {
           const t = run?.totals ?? null;
           return (

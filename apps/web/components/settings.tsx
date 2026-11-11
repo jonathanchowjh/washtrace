@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Section, Warn } from '@/components/ui';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { send } from '@/lib/send';
-import { LENSES, STAGES, num, stageName, withoutKey } from '@/lib/format';
+import { LENSES, MONEY_LENSES, STAGES, num, stageName, withoutKey } from '@/lib/format';
 import { FIELDS, OPEN, variableOf, type FieldView } from '@/lib/settings';
 import { FOLLOW_FANOUT } from '@washtrace/detect/lens-rule';
 
@@ -23,12 +23,11 @@ const SWITCHES = new Set(['tokens.payees']);
 const POLL_MS = 500;
 const TEST_MS = 20_000;
 
-const MONEY = `${LENSES.AU.name} and ${LENSES.AC.name}`;
 
 /** What the worker uses each field for, one line each, so no field is a bare name. */
 const HINTS: Record<string, string> = {
   'rpc.1': "Where the worker reads Ethereum's blocks and transfers. Every lens starts from what it reads here.",
-  'etherscan.key': `Lets the worker see who paid whom, for the money lenses: ${MONEY}.`,
+  'etherscan.key': `Lets the worker see who paid whom, for the money lenses: ${MONEY_LENSES}.`,
   'etherscan.rps': 'How many Etherscan calls the worker makes a second. Higher checks wallets sooner; above your plan\'s limit, Etherscan refuses calls.',
   'etherscan.url': 'Where the worker sends its Etherscan calls. Change it only for a proxy or an Etherscan-compatible API.',
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls. Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".`,
@@ -67,7 +66,7 @@ const GROUPS = [
   {
     id: 'money',
     title: 'Where it checks who paid whom',
-    lead: (trailFunded: boolean) => `${STAGES[4].title}, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
+    lead: (trailFunded: boolean) => `${STAGES[4].title}, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY_LENSES}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
     keys: (k: string) => !k.startsWith('rpc.') && k !== 'stored.repo',
   },
   {
@@ -211,7 +210,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
         const v = String(new FormData(e.currentTarget).get('value') ?? '').trim();
         void put(v === '' ? null : v);
       }}>
-        <input id={id} name="value" key={field.shown ?? ''} defaultValue={field.shown ?? ''} placeholder={fallback} disabled={field.locked || busy}
+        <input id={id} name="value" key={field.shown ?? ''} defaultValue={field.shown ?? ''} disabled={field.locked || busy}
           aria-describedby={hintId} title={field.locked ? lockedWhy : undefined} className={`${INPUT} ${field.key.endsWith('.url') || field.key === 'stored.repo' ? WIDE : 'w-24'} max-w-full`} />
         <button type="submit" disabled={field.locked || busy} aria-label={named('Save')} title={field.locked ? lockedWhy : `Save it; left empty, the worker goes back to ${reset ? 'the .env value' : 'its default'}`} className={BTN}>{busy ? 'Saving…' : 'Save'}</button>
         {clearButton}

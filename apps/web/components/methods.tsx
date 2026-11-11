@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { LensKey, TradeQuery } from '@washtrace/detect/trades';
 import { METHODS, type AnalysisRow, type Bucket, type Method, type MethodTotals, type TimelinePoint } from '@washtrace/detect';
-import { LENSES, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
+import { LENSES, SHOWN, eth, lensInfo, pct, pctTenth, plural, num, type Lenses } from '@/lib/format';
 import type { Qualifier } from '@/lib/lens-state';
-import { APART, APART_WHY_TITLE, part, rangeEnds, type Range, SHOWN } from '@/lib/metrics';
+import { APART, APART_WHY_TITLE, part, rangeEnds, type Range } from '@/lib/metrics';
 import { listHref } from '@/lib/links';
 import { tradesHref } from '@/lib/trades-url';
 import { nextStart } from '@/lib/zone';
@@ -43,8 +43,8 @@ export function LensName({ m, className, href, own = {} }: { m: string; classNam
  */
 export function LensPicture({ m, className }: { m: Method; className?: string }) {
   const node = 'fill-card stroke-foreground';
-  const asset = m === 'A' ? 'stroke-cycle' : 'stroke-money';
-  const head = m === 'A' ? 'fill-cycle' : 'fill-money';
+  const asset = m === 'A' ? 'stroke-cycle' : m === 'AU' ? 'stroke-muted-foreground' : 'stroke-ceiling';
+  const head = m === 'A' ? 'fill-cycle' : m === 'AU' ? 'fill-muted-foreground' : 'fill-ceiling';
   return (
     <svg viewBox="0 0 72 36" className={cn('h-9 w-[72px] shrink-0', className)} aria-hidden>
       <defs>
@@ -84,7 +84,7 @@ export function RangeBar({ range, className }: { range: Range; className?: strin
   const w = (s: number) => (s > 0 ? Math.max(1.5, s * 100) : 0);
   return (
     <span aria-hidden className={cn('relative block h-2.5 overflow-hidden rounded-full bg-muted', className)}>
-      <i className={cn('absolute inset-y-0 left-0 rounded-full opacity-45', FILL[LENSES[range.high].tone])} style={{ width: `${w(range.highShare)}%` }} />
+      <i className={cn('absolute inset-y-0 left-0 rounded-full', FILL[LENSES[range.high].tone])} style={{ width: `${w(range.highShare)}%` }} />
       <i className={cn('absolute inset-y-0 left-0 rounded-full', FILL[LENSES[range.low].tone])} style={{ width: `${w(range.lowShare)}%` }} />
     </span>
   );
@@ -96,7 +96,7 @@ export function RangeKey({ range }: { range: Range }) {
   return (
     <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', FILL[LENSES[range.low].tone])} />{LENSES[range.low].name}</span>
-      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm opacity-45', FILL[LENSES[range.high].tone])} />{LENSES[range.high].name}</span>
+      <span className="flex items-center gap-1.5"><i aria-hidden className={cn('h-2 w-3 rounded-sm', FILL[LENSES[range.high].tone])} />{LENSES[range.high].name}</span>
     </span>
   );
 }

@@ -18,6 +18,11 @@ let sentFlows = 0;
 let receivedFlows = 0;
 /** Trades between the wallet and its first partner. */
 let betweenTrades = 0;
+let middleTokens: number | null = null;
+let ownPairs: { middle: string; shape: string | null }[] = [];
+let middles: { tokenId: string; seller: string; buyer: string; ring: string | null; shape: string | null }[] = [];
+/** The collections it is a never-traded middle of (Store.middleIn). */
+let middleIn: { address: string; name: string | null }[] = [];
 const SELF = `0x${'a'.repeat(40)}`;
 const COLL = '0x' + 'b'.repeat(40);
 const OTHER = '0x' + 'c'.repeat(40);
@@ -57,7 +62,11 @@ vi.mock('@/lib/store', () => ({
     counterpartyCount: async () => counterparties,
     walletTransfers: async (_c: number, _a: string, limit: number, offset: number, f?: WalletFilter) => narrowed(f).slice(offset, offset + limit),
     walletTradeCount: async (_c: number, _a: string, f?: WalletFilter) => narrowed(f).length,
-    walletCollections: async () => [{ address: COLL, name: 'Bees', trades: trades - unjudgedTrades }, ...(unjudgedTrades > 0 ? [{ address: OTHER, name: null, trades: unjudgedTrades }] : [])],
+    middleOf: async () => ({ rows: middles, tokens: middleTokens ?? new Set(middles.map((m) => m.tokenId)).size }),
+    middlesOf: async () => ownPairs,
+    middleIn: async () => middleIn,
+    // As the store groups its trades: a collection it has none in is not one of them.
+    walletCollections: async () => [...(trades > unjudgedTrades ? [{ address: COLL, name: 'Bees', trades: trades - unjudgedTrades }] : []), ...(unjudgedTrades > 0 ? [{ address: OTHER, name: null, trades: unjudgedTrades }] : [])],
     flowsBetween: async (_c: number, _a: string, _b: string, dir: 'sent' | 'received' | 'both', limit: number, offset: number) => flows(dir).slice(offset, offset + limit),
     flowsBetweenCount: async (_c: number, _a: string, _b: string, dir: 'sent' | 'received' | 'both') => flows(dir).length,
   }),
@@ -67,7 +76,7 @@ vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found
 afterEach(() => {
   cleanup();
   trades = 0; flaggedTrades = 0; flaggedFrom = 0; moneyOnlyTrades = 0; unjudgedTrades = 0; counterparties = 0; funding = null;
-  sentFlows = 0; receivedFlows = 0; betweenTrades = 0;
+  sentFlows = 0; receivedFlows = 0; betweenTrades = 0; middles = []; middleTokens = null; ownPairs = []; middleIn = [];
 });
 
 const params = Promise.resolve({ chain: '1', address: SELF });
@@ -98,6 +107,13 @@ describe('the wallet page', () => {
     expect(linkTo(el, '500')).toBe(here);
   });
 
+  it('heads with the whole address once: the title holds it, and the line under it does not repeat it', async () => {
+    trades = 2;
+    const el = await render_();
+    expect(el.querySelector('h1')!.textContent).toBe(SELF);
+    expect(el.textContent!.split(SELF).length - 1).toBe(1);
+  });
+
   it('the title’s flagged count is what the flagged-only list holds', async () => {
     // Round trips flags 4; Money loops back 2, not counted; and 3 of the 10 in a collection no analysis covered.
     trades = 500; flaggedTrades = 4; moneyOnlyTrades = 2; unjudgedTrades = 10;
@@ -123,7 +139,7 @@ describe('the wallet page', () => {
     trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
     const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
-    expect(card.className).toContain('bg-money-surface');
+    expect(card.className).toContain('bg-ceiling-surface');
     expect(el.textContent).toContain('Transfers 1–20 of 150 are shown.');
     expect(el.textContent).not.toContain('covers these');
     cleanup();
@@ -138,7 +154,7 @@ describe('the wallet page', () => {
     trades = 50; flaggedTrades = 2;
     const el = await render_({ q: '999' });
     const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
-    expect(card.className).toContain('bg-money-surface');
+    expect(card.className).toContain('bg-ceiling-surface');
   });
 
   it('a filter that holds none of its flagged trades titles as flagged, and says none matches', async () => {
@@ -393,7 +409,8 @@ describe('the wallet outside any collection\'s tabs', () => {
     trades = 2;
     const el = await render_();
     const line = [...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
-    expect(line.textContent).toBe('Collections/Bees');
+    // The page itself ends the line, as plain text.
+    expect(line.textContent).toMatch(/^Collections\/Bees\/0x/);
     expect(line.closest('header')).toBeNull();
     expect(linkTo(el, 'Open in Bees →')).toBe(`/c/1/${COLL}/w/${SELF}`);
   });
@@ -419,7 +436,7 @@ describe('the wallet outside any collection\'s tabs', () => {
     const nav = el.querySelector('nav[aria-label="Its collections"]')!;
     expect([...nav.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]))
       .toEqual([['Bees', `/c/1/${COLL}/w/${SELF}`], [short(OTHER), `/c/1/${OTHER}/w/${SELF}`]]);
-    expect([...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!.textContent).toBe('Collections');
+    expect([...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!.textContent).toMatch(/^Collections\/0x/);
   });
 });
 
@@ -440,19 +457,48 @@ describe('the wallet under a collection\'s tabs', () => {
     expect(el.textContent).toContain('Every transfer it sent or received in this collection.');
   });
 
-  it('keeps its trades\' links inside the collection, and its money partners\' across every one', async () => {
+  it('keeps its trades\' links and its money partners\' inside the collection', async () => {
     trades = 2; counterparties = 1;
     const el = await scoped();
     const hrefs = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
     expect(hrefs).toContain(`${inColl}/w/0x1`);
     // Each trade still opens its token.
     expect(hrefs).toContain(`/c/1/${COLL}/t/0`);
-    // A money partner need not have traded here: its link is its own page.
-    expect(hrefs).toContain(`/w/1/${partner(0)}`);
-    expect(hrefs).not.toContain(`${inColl}/w/${partner(0)}`);
+    // A money partner opens under the collection's tabs too, as every other wallet here does; the wallet's own page says when it never traded.
+    expect(hrefs).toContain(`${inColl}/w/${partner(0)}`);
+    expect(hrefs).not.toContain(`/w/1/${partner(0)}`);
     expect(linkTo(el, 'in every collection')).toBe(here);
     // Its own links (a sort, a page) stay on this page.
     expect(hrefs.some((h) => h.startsWith(`${inColl}/w/${SELF}?`))).toBe(true);
+  });
+
+  it('opened from a list, every link of its own keeps the lens and the list; one to another kind keeps the lens; it draws no Trades link', async () => {
+    trades = 2; counterparties = 2; flaggedTrades = 1;
+    const from = 'wallets?method=AC';
+    const el = await scoped({ method: 'AC', from });
+    const hrefs = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+    const ctx = `method=AC&from=${encodeURIComponent(from)}`;
+    // Its own sorts and filters stay the same reading.
+    expect(hrefs).toContain(`${inColl}/w/${SELF}?${ctx}`);
+    expect(hrefs).toContain(`${inColl}/w/${SELF}?flagged=1&${ctx}`);
+    expect(hrefs.some((h) => h.startsWith(`${inColl}/w/${SELF}?psort=`) && h.includes(ctx))).toBe(true);
+    // Its partners and tokens are other kinds of item: the lens goes with them, the list does not.
+    expect(hrefs).toContain(`${inColl}/w/${partner(0)}?method=AC`);
+    expect(hrefs).toContain(`${inColl}/t/0?method=AC`);
+    // Its Find form puts both back.
+    const hidden = [...el.querySelectorAll('form[role=search] input[type=hidden]')].map((i) => [i.getAttribute('name'), i.getAttribute('value')]);
+    expect(hidden).toEqual(expect.arrayContaining([['method', 'AC'], ['from', from]]));
+    // R15 for this page: it draws no Trades link of its own (the sales strip's come in a Suspense), so none can gain a list's `from`.
+    expect(hrefs.filter((h) => /\/trades\b/.test(h))).toEqual([]);
+  });
+
+  it('outside the tabs keeps no lens or list: the page across every collection has neither', async () => {
+    trades = 2; counterparties = 1;
+    const el = await render_({ method: 'AC', from: 'wallets?method=AC' });
+    for (const a of el.querySelectorAll('a')) {
+      expect(a.getAttribute('href') ?? '').not.toContain('from=wallets');
+      expect(a.getAttribute('href') ?? '').not.toContain('method=');
+    }
   });
 
   it('with no trade in the collection says so, and not that it is in none', async () => {
@@ -472,6 +518,40 @@ describe('the wallet under a collection\'s tabs', () => {
     expect(text).toContain(`No transfer of it is read in ${short(COLL)}.`);
     expect(text).not.toContain('No transfers read yet');
     expect(text).not.toContain('never traded');
+  });
+
+  it('a never-traded middle leads with its role in Linked wallets\' tone, and says whose payments the table reads', async () => {
+    counterparties = 2;
+    const pair = { seller: partner(0), buyer: partner(1), ring: null };
+    middles = [{ ...pair, tokenId: '114', shape: 'funder' }];
+    const one = await scoped();
+    expect(one.textContent).toContain('Funded the seller and buyer of #114');
+    expect(one.textContent).not.toContain('No transfer of it in');
+    expect(linkTo(one, '#114')).toBe(`${inColl}/t/114`);
+    expect(one.querySelector('p.text-ceiling')?.textContent).toContain('Funded the seller and buyer of #114');
+    expect(one.textContent).toContain('The payments below were read from the wallets it paid or was paid by; its own history is not read.');
+    expect(one.textContent).not.toContain('Its money is not read');
+    // It is the middle of 32 tokens; the store reads 20 rows and counts the rest.
+    middles = Array.from({ length: 20 }, (_, i) => ({ ...pair, tokenId: String(114 + i), shape: 'back' }));
+    middleTokens = 32;
+    expect((await scoped()).textContent).toContain("Passed the buyers' money back to the sellers of #114 and 31 more");
+    // A pair stored without a shape says only that it sat between.
+    middles = [{ ...pair, tokenId: '114', shape: null }];
+    expect((await scoped()).textContent).toContain('Is in between the seller and buyer of #114');
+  });
+
+  it('across every collection, a wallet that traded in none but is a middle in one leads with that role in Linked wallets\' tone, and opens it there', async () => {
+    counterparties = 2;
+    middleIn = [{ address: COLL, name: 'Bees' }];
+    const el = await render_();
+    expect(el.textContent).not.toContain('Not in any watched collection');
+    expect(el.querySelector('p.text-ceiling')?.textContent).toBe('Is in between sellers and buyers in Bees');
+    expect(linkTo(el, 'Bees')).toBe(`${inColl}/w/${SELF}`);
+    expect(el.textContent).toContain('The payments below were read from the wallets it paid or was paid by; its own history is not read.');
+    middleIn = [{ address: COLL, name: 'Bees' }, { address: OTHER, name: null }];
+    const two = await render_();
+    expect(two.querySelector('p.text-ceiling')?.textContent).toBe(`Is in between sellers and buyers in Bees and ${short(OTHER)}`);
+    expect(linkTo(two, short(OTHER))).toBe(`/c/1/${OTHER}/w/${SELF}`);
   });
 
   it('names the wallet\'s own page as the canonical one', async () => {

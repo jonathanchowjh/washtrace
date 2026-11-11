@@ -19,6 +19,15 @@ export async function collectionAt(p: { chain: string; address: string }) {
   return chainId === null || address === null ? null : await collectionOf(chainId, address);
 }
 
+/** The chains the watched collections are on, each once: where an address nothing holds is looked for. None when the store cannot say. */
+export async function watchedChains(): Promise<number[]> {
+  try {
+    return [...new Set((await store().collections()).map((c) => c.chainId))];
+  } catch {
+    return [];
+  }
+}
+
 export const runsOf = cache((collectionId: number) => store().lensRuns(collectionId));
 
 /**

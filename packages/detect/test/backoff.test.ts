@@ -42,4 +42,16 @@ describe('Backoff', () => {
     b.fail(1, 0);
     expect(b.waits(1, retryMs(1))).toBe(false);
   });
+
+  it('lists the ids still waiting at now, in insertion order', () => {
+    const b = new Backoff();
+    expect(b.waiting(0)).toEqual([]);
+    b.fail(3, 0);
+    b.fail(1, 0);
+    b.fail(2, 10_000_000);
+    expect(b.waiting(retryMs(1) - 1)).toEqual([3, 1, 2]);
+    expect(b.waiting(retryMs(1))).toEqual([2]);
+    b.clear(2);
+    expect(b.waiting(retryMs(1))).toEqual([]);
+  });
 });

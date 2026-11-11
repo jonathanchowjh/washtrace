@@ -348,15 +348,15 @@ describe('status', () => {
 
   it('never calls the money lenses unavailable with funding off when a collection loaded a stored money trail', () => {
     const off = { ...CONFIG, funding: false };
-    expect(texts(snapshot({ config: off }), 'info')).toContain('Needs an Etherscan key: Money loops back and Linked wallets do not run without one.');
+    expect(texts(snapshot({ config: off }), 'info')).toContain('Needs an Etherscan key: Linked wallets and Money loops back do not run without one.');
     const text = texts(snapshot({ config: off, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: true }), 'info').find((t) => t.startsWith('Needs an Etherscan key'));
-    expect(text).toBe('Needs an Etherscan key: Money loops back and Linked wallets run on stored money trails only, and newer wallets go unchecked.');
+    expect(text).toBe('Needs an Etherscan key: Linked wallets and Money loops back run on stored money trails only, and newer wallets go unchecked.');
   });
 
   it('asks whether a trail feeds the money lenses as the worker page and Settings do, not whether one loaded', () => {
     // Loaded, but it checked no wallet: the money lenses do not run on it.
     const s = snapshot({ config: { ...CONFIG, funding: false }, collections: [collection({ trailImportedSha: 'feed' })], trailFunded: false });
-    expect(texts(s, 'info')).toContain('Needs an Etherscan key: Money loops back and Linked wallets do not run without one.');
+    expect(texts(s, 'info')).toContain('Needs an Etherscan key: Linked wallets and Money loops back do not run without one.');
   });
 
   it('counts a backfill as work in progress with an ETA', () => {

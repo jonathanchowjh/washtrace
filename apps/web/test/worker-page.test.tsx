@@ -2,18 +2,19 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Notice } from '@/lib/status';
 
-const state = { notices: [] as Notice[], rpc: [1] };
+const state = { notices: [] as Notice[], rpc: [1], collections: [] as unknown[], host: 'localhost:8080' };
 const job = (j: string) => ({ job: j, state: 'ok', startedAt: null, finishedAt: null, tookMs: null, outcome: null, detail: null });
 vi.mock('@/lib/views', () => ({
   workerView: async () => ({
     every: { ingest: 60_000, fund: 60_000, analyze: 60_000, lens: 60_000 }, rpcChains: state.rpc, funding: null, followHops: null, trailFunded: false,
-    passes: [], jobs: ['ingest', 'fund', 'analyze', 'lens'].map(job), notices: state.notices, backlog: [], collections: [],
+    passes: [], jobs: ['ingest', 'fund', 'analyze', 'lens'].map(job), notices: state.notices, backlog: [], collections: state.collections,
   }),
 }));
 vi.mock('@/lib/api', () => ({ readerZone: async () => 'UTC' }));
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: state.host }) }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
-afterEach(() => { cleanup(); state.notices = []; state.rpc = [1]; });
+afterEach(() => { cleanup(); state.notices = []; state.rpc = [1]; state.collections = []; state.host = 'localhost:8080'; });
 
 async function draw(): Promise<HTMLElement> {
   const { default: WorkerPage } = await import('@/app/worker/page');
@@ -66,6 +67,30 @@ describe('the worker page', () => {
     const c = await draw();
     expect(c.textContent).toContain('Ethereum, Local (anvil) · where each comes from, in Settings');
     expect(link(c).textContent).toBe('where each comes from, in Settings');
+  });
+
+  // Moved here from the Methods page: the controls belong to the worker they steer.
+  it('offers Pause, Prioritize, Resume and Delete data per collection, behind a Controls disclosure', async () => {
+    const c = (name: string, address: string, turn: string, priority = false) => ({ chainId: 1, address, name, turn, priority, stages: [] });
+    state.collections = [c('Terraforms', '0x' + 'a'.repeat(40), 'keeping-up'), c('Meebits', '0x' + 'b'.repeat(40), 'paused')];
+    const el = await draw();
+    const section = [...el.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === 'Pause, resume, prioritize or delete data')!;
+    const items = [...section.querySelectorAll('li')];
+    expect(items.map((li) => li.querySelector('summary')?.textContent)).toEqual(['TerraformsEthereum · Controls', 'MeebitsEthereum · Controls · paused']);
+    const buttons = (li: Element) => [...li.querySelectorAll('button')].map((b) => b.textContent);
+    expect(buttons(items[0]!)).toEqual(['Pause', 'Prioritize']);
+    expect(buttons(items[1]!)).toEqual(['Resume', 'Delete data…']);
+  });
+
+  it('off this machine, says changes are refused and disables every control', async () => {
+    state.host = 'console.example.com';
+    state.collections = [{ chainId: 1, address: '0x' + 'a'.repeat(40), name: 'Terraforms', turn: 'keeping-up', priority: false, stages: [] }];
+    const el = await draw();
+    expect(el.textContent).toContain('Changes are only accepted from this machine');
+    const section = [...el.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === 'Pause, resume, prioritize or delete data')!;
+    const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+    expect(buttons.length).toBe(2);
+    expect(buttons.every((b) => b.disabled)).toBe(true);
   });
 
   it('numbers no job, so a job is never read as the reading stage of the same number', async () => {

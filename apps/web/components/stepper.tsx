@@ -7,6 +7,15 @@ import type { Step } from '@/lib/step';
 import { num } from '@/lib/format';
 import { typing } from '@/lib/utils';
 
+/** The line above an item with no list to step through: the way back to its list tab. */
+export function BackLine({ back }: { back: Step['back'] }) {
+  return (
+    <nav aria-label="Back to the list" className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-3 text-xs text-muted-foreground">
+      <Link href={back.href} className="hover:text-foreground hover:underline">‹ {back.label}</Link>
+    </nav>
+  );
+}
+
 /**
  * The line above an item opened from a list: back to the list, where it sits
  * in it, and ‹ › to its neighbours, also on K and J. The links work without

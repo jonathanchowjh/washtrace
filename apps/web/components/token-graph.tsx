@@ -6,12 +6,12 @@ import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
 import type { Drawing, DrawnEdge, DrawnLoop } from '@/lib/layout';
 import { LENSES, andList, short } from '@/lib/format';
-import { txHref, walletHref } from '@/lib/links';
+import { carry, txHref, walletHref, type Context } from '@/lib/links';
 import { cn } from '@/lib/utils';
 
 // Literal class names: Tailwind generates only the classes it can read in the source. A lens of yours is drawn in the flow hue, as its tab is.
-const STROKE = { cycle: 'stroke-cycle', money: 'stroke-money', apart: 'stroke-muted-foreground', clean: 'stroke-clean', own: 'stroke-flow' } as const;
-const FILL = { cycle: 'fill-cycle', money: 'fill-money', apart: 'fill-muted-foreground', clean: 'fill-clean', flow: 'fill-flow' } as const;
+const STROKE = { cycle: 'stroke-cycle', ceiling: 'stroke-ceiling', apart: 'stroke-muted-foreground', clean: 'stroke-clean', own: 'stroke-flow' } as const;
+const FILL = { cycle: 'fill-cycle', ceiling: 'fill-ceiling', apart: 'fill-muted-foreground', clean: 'fill-clean', flow: 'fill-flow' } as const;
 
 /** The least a phone draws the graph at, of its own size: its 10 px labels stay 8 px or more. */
 const MIN_SCALE = 0.8;
@@ -37,8 +37,10 @@ const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:rou
  * Wider than its box, as a big graph is on a phone, it opens scrolled to the
  * part that matters: the marked arrow, else what is lit, else its middle.
  */
-export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = false, label = 'Transfer graph of this token', mark }: {
+export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {}, pick = false, label = 'Transfer graph of this token', mark }: {
   drawing: Drawing; chainId: number; lit: { edges: string[]; nodes: string[] }; base: string;
+  /** What its links to wallets and trades carry on: the lens the page was opened under. */
+  ctx?: Context;
   /** The link to each row, by its 1-based number. */
   rowHrefs?: Record<number, string>;
   pick?: boolean;
@@ -57,6 +59,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   const yours = [...new Set(edges.flatMap((e) => e.yours ?? []))];
   const others = edges.some((e) => e.kind === 'asset' && e.tone === 'own' && e.yours === undefined);
   const money = edges.some((e) => e.kind === 'money');
+  const custody = [...new Set(nodes.flatMap((n) => n.custody ?? []))];
   const marked = new Set(mark === undefined ? [] : edges.filter((e) => e.ids.includes(mark)).map((e) => e.key));
   // A number means the same in every graph (layout's Numbered); the legend says how to read it. A drawing of several tokens marks each number with its token.
   const numbered = labels && edges.some((e) => e.row !== null && !e.label.startsWith('×'));
@@ -78,7 +81,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
         <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px`, '--figure-min': `${Math.round(view.w * MIN_SCALE)}px` } as CSSProperties}
           className="mx-auto block h-auto w-full max-sm:min-w-(--figure-min)" role="group" aria-label={label}>
           <defs>
-            {(['cycle', 'money', 'apart', 'clean', 'flow'] as const).map((k) => (
+            {(['cycle', 'ceiling', 'apart', 'clean', 'flow'] as const).map((k) => (
               <marker key={k} id={`${marker}-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" className={FILL[k]} />
               </marker>
@@ -101,7 +104,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
                 />
                 {/* A 2px line is a poor target, so a wider invisible copy of it takes the click. Out of the tab order, as the clickable path before it was: the table's rows are the keyboard's way to a trade. A bundle opens its first. */}
                 {e.tx === null ? null : (
-                  <a href={txHref(chainId, e.tx, base)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${name}`}>
+                  <a href={carry(txHref(chainId, e.tx, base), ctx)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${name}`}>
                     <path d={e.d} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" className="cursor-pointer" />
                   </a>
                 )}
@@ -118,21 +121,24 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
             const body = (
               <>
                 <title>{n.id}</title>
-                <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
+                {/* A custody wallet is a dashed square, named for what it is: it holds a token without owning it. */}
+                {n.custody === null
+                  ? <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
+                  : <rect x={n.x - 8} y={n.y - 8} width={16} height={16} rx={2} strokeDasharray="3 2" strokeWidth={1.5} className="fill-card stroke-muted-foreground" />}
                 {labels ? (
-                  <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className={cn(HALO, 'fill-body font-mono text-[10px]')}>{short(n.id)}</text>
+                  <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className={cn(HALO, 'fill-body font-mono text-[10px]')}>{n.custody ?? short(n.id)}</text>
                 ) : null}
               </>
             );
             return pick
               ? <g key={n.id} role="button" tabIndex={0} aria-label={`Wallet ${n.id}`} data-wallet={n.id} className={cls}>{body}</g>
-              : <a key={n.id} href={walletHref(chainId, n.id, base)} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
+              : <a key={n.id} href={carry(walletHref(chainId, n.id, base), ctx)} aria-label={`Wallet ${n.id}`} className={cls}>{body}</a>;
           })}
         </svg>
       </div>
       <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {drawn.has('cycle') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />{LENSES.A.name}</span> : null}
-        {drawn.has('money') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-money" />{LENSES.AC.name}</span> : null}
+        {drawn.has('ceiling') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-ceiling" />{LENSES.AC.name}</span> : null}
         {drawn.has('apart') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-muted-foreground" />{LENSES.AU.name} only, not counted</span> : null}
         {drawn.has('clean') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-clean" />not flagged</span> : null}
         {yours.length > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-flow" />not flagged by a built-in lens, on a loop of {andList(yours)}</span> : null}
@@ -140,6 +146,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
         {money ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />money</span> : null}
         {marked.size > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-2 w-4 rounded-full bg-foreground/20" />this trade</span> : null}
         <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span>
+        {custody.length > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 border border-dashed border-muted-foreground" />custody ({andList(custody)}): holds the token, does not own it</span> : null}
         {numbered ? <span>{several ? '#token·n: that token’s transfer n, counted from its first' : 'numbered from the token’s first transfer'}</span> : null}
         {labels ? null : <span>{nodes.length} wallets: hover a node for its address</span>}
       </figcaption>
@@ -167,8 +174,10 @@ function focusOf({ view, nodes, edges }: Drawing, marked: ReadonlySet<string>, l
  * links. `rowHrefs` is the server's link to each row, since only it knows
  * which page of the table's filter holds a row.
  */
-export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHrefs, graphHead, whyHead, empty }: {
+export function TokenLoops({ drawing, chainId, base = '', ctx = {}, items, initial, rowHrefs, graphHead, whyHead, empty }: {
   drawing: Drawing; chainId: number;
+  /** What the graph's links to wallets and trades carry on. */
+  ctx?: Context;
   /** The collection's page, for the token numbers on a lens of yours's arrows. */
   base?: string;
   items: { key: string; body: ReactNode; meta: ReactNode }[];
@@ -204,7 +213,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
   };
   /** The first press lights a wallet's arrows; pressing the lit wallet again opens its page. */
   const pick = (id: string) => {
-    if (wallet === id) { router.push(walletHref(chainId, id, base)); return; }
+    if (wallet === id) { router.push(carry(walletHref(chainId, id, base), ctx)); return; }
     setLit([]);
     setWallet(id);
   };
@@ -213,7 +222,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
     const target = ev.target as Element;
     const w = target.closest('[data-wallet]'), tx = target.closest('[data-tx]');
     if (w !== null) { ev.preventDefault(); pick(w.getAttribute('data-wallet')!); }
-    else if (tx !== null) { ev.preventDefault(); router.push(txHref(chainId, tx.getAttribute('data-tx')!, base)); }
+    else if (tx !== null) { ev.preventDefault(); router.push(carry(txHref(chainId, tx.getAttribute('data-tx')!, base), ctx)); }
   };
   const onKeyDown = (ev: KeyboardEvent) => {
     const w = (ev.target as Element).closest('[data-wallet]');
@@ -226,7 +235,7 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
         {graphHead}
         {/* The figure's presses, delegated here: its wallets and arrows carry what was pressed as data. */}
         <div onClickCapture={onClick} onKeyDown={onKeyDown}>
-          <LoopFigure drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} lit={{ edges: [...litEdges], nodes: [...litNodes] }} pick />
+          <LoopFigure drawing={drawing} chainId={chainId} base={base} ctx={ctx} rowHrefs={rowHrefs} lit={{ edges: [...litEdges], nodes: [...litNodes] }} pick />
         </div>
       </section>
       <section id="why" className="mt-10 scroll-mt-6">
@@ -267,8 +276,10 @@ export function TokenLoops({ drawing, chainId, base = '', items, initial, rowHre
  * `tokenHref` is the token's page, which opens the chosen loop in full.
  * `transfer` is the one the page is about, whose arrow the figure marks.
  */
-export function LensGraph({ drawing, chainId, base, caught, tokenHref, transfer }: {
+export function LensGraph({ drawing, chainId, base, ctx = {}, caught, tokenHref, transfer }: {
   drawing: Drawing; chainId: number; base: string;
+  /** What its links carry on: the lens the page was opened under. */
+  ctx?: Context;
   caught: readonly { key: LensKey; name: string; loop: DrawnLoop | null }[];
   tokenHref: string;
   transfer?: { txHash: string; logIndex: number };
@@ -289,9 +300,9 @@ export function LensGraph({ drawing, chainId, base, caught, tokenHref, transfer 
           ))}
         </div>
       ) : null}
-      <LoopFigure drawing={drawing} chainId={chainId} base={base} lit={chosen.loop ?? { edges: [], nodes: [] }} label={`The loop ${chosen.name} caught, lit in this token’s graph`}
+      <LoopFigure drawing={drawing} chainId={chainId} base={base} ctx={ctx} lit={chosen.loop ?? { edges: [], nodes: [] }} label={`The loop ${chosen.name} caught, lit in this token’s graph`}
         mark={transfer === undefined ? undefined : `${transfer.txHash}:${transfer.logIndex}`} />
-      {chosen.loop === null ? null : <Link href={`${tokenHref}?loop=${chosen.loop.key}`} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">Open it in the token’s graph →</Link>}
+      {chosen.loop === null ? null : <Link href={carry(`${tokenHref}?loop=${chosen.loop.key}`, ctx)} className="mt-2 inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline">Open it in the token’s graph →</Link>}
     </div>
   );
 }

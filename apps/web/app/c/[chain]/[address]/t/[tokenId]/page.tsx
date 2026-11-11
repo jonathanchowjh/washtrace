@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
-import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
+import { ConnectedRail } from '@/components/connected-rail';
+import { notFlaggedLines, railTxs, walletRoles } from '@/lib/why';
 import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segmented } from '@/components/ui';
 import { LensName } from '@/components/methods';
@@ -11,14 +12,15 @@ import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
 import { EvidenceGlyph, KindIcon, VerdictChip } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
-import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
+import { LENSES, SHOWN, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
-import { lensTabHref, tokenLinks } from '@/lib/links';
+import { carry, lensTabHref, tokenLinks } from '@/lib/links';
 import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
+import { contextOf } from '@/lib/step';
 import { tradesHref } from '@/lib/trades-url';
 import { HEADLINE } from '@washtrace/detect';
-import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, SHOWN, TINT_LEAD, answer, counted, inShownOrder, toneOf } from '@/lib/metrics';
+import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, inShownOrder, toneOf } from '@/lib/metrics';
 import { coverage, progress, unread } from '@/lib/coverage';
 import { readerZone } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
@@ -94,10 +96,13 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const shown = kept.slice((page - 1) * PAGE, page * PAGE);
   const shownFlagged = kept.filter((n) => SHOWN.some((m) => transfers[n - 1]!.flags[m])).length;
   const here = `${base}/t/${tokenId}`;
+  // The lens and the list it was opened from stay on the page's own filter links; links out to other kinds of item keep the lens only.
+  const ctx = contextOf(sp);
+  const away = { method: ctx.method };
   /** A link to a page of a filter. Absolute, because the pager's page box takes its form action from it. */
   const hrefFor = (pg: number, s: Show) => {
     const query = [pg > 1 ? `page=${pg}` : '', s === 'all' ? '' : `show=${s}`].filter(Boolean);
-    return query.length === 0 ? here : `${here}?${query.join('&')}`;
+    return carry(query.length === 0 ? here : `${here}?${query.join('&')}`, ctx);
   };
   const place = new Map(kept.map((n, i) => [n, i + 1]));
   /** Where row n is: on its page of this filter, or, if the filter hides it, of the whole list. */
@@ -108,7 +113,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
     const query = [target > 1 ? `page=${target}` : '', s === 'all' ? '' : `show=${s}`].filter(Boolean);
     // An empty query would stay on the page being viewed, which may be another page or filter.
     if (query.length === 0 && (page > 1 || show !== 'all')) query.push('page=1');
-    return `${query.length === 0 ? '' : `?${query.join('&')}`}#t${n}`;
+    return carry(`${query.length === 0 ? '' : `?${query.join('&')}`}#t${n}`, ctx);
   };
 
   const drawing = layout(transfers, flows, middles, own, ownLenses);
@@ -124,7 +129,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   // The list it was opened from, if any: its stepper reads that list in a Suspense of its own.
   return (
     <>
-      <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={sp.from} of={{ token: tokenId }} /></Suspense>
+      <Suspense fallback={null}><StepLine chainId={chainId} address={address} from={ctx.from} method={ctx.method} of={{ token: tokenId }} /></Suspense>
       <Head
         kind="token"
         title={`${name} #${tokenLabel(tokenId)}`}
@@ -165,13 +170,13 @@ export default async function TokenPage({ params, searchParams }: Props) {
 
       <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense>
       <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
-      <ConnectedRail chainId={chainId} address={address} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
+      <ConnectedRail chainId={chainId} address={address} ctx={away} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
 
       <TokenLoops
-        drawing={drawing} chainId={chainId} base={base} rowHrefs={rowHrefs} initial={initial}
+        drawing={drawing} chainId={chainId} base={base} ctx={away} rowHrefs={rowHrefs} initial={initial}
         graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
-        whyHead={<SectionHead title={apartOnly && own.length === 0 ? `Why ${LENSES.AU.name} flags it` : 'Why it was flagged'} lead={drawing.loops.length === 0 ? undefined : `One line per pattern found, with the transfers it covers and the lenses that agree on it${own.length === 0 ? '' : ', then one per loop a lens of yours found'}. Show in graph lights the pattern.`} />}
-        empty={<Empty>{judgedAll ? <>No lens found a pattern: the token never returns to a wallet that held it{notRun.length > 0 ? `. ${notRunAll(notRun)}` : ', and no buyer and seller are linked by money.'}</> : NOT_JUDGED}</Empty>}
+        whyHead={<SectionHead title={apartOnly && own.length === 0 ? `Why ${LENSES.AU.name} flags it` : judgedAll && drawing.loops.length === 0 ? 'Why it was not flagged' : 'Why it was flagged'} lead={drawing.loops.length === 0 ? undefined : `One line per pattern found, with the transfers it covers and the lenses that agree on it${own.length === 0 ? '' : ', then one per loop a lens of yours found'}. Show in graph lights the pattern.`} />}
+        empty={judgedAll ? <ul className="space-y-1.5 text-sm text-muted-foreground">{notFlaggedLines(view.near, notRun).map((line) => <li key={line}>{line}</li>)}</ul> : <Empty>{NOT_JUDGED}</Empty>}
         items={[
           ...why.map((r, i) => ({
             key: drawing.loops[i]!.key,
@@ -214,7 +219,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           <Empty>None of its transfers is {show === 'sales' ? 'a sale' : 'flagged'}.</Empty>
         ) : (
           <>
-            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} within={base} own={ownByRow} names={ownLenses} />
+            <Transfers chainId={chainId} transfers={shown.map((n) => transfers[n - 1]!)} numbers={shown} numbered base={base} within={base} ctx={away} own={ownByRow} names={ownLenses} />
             {pageCount > 1 ? <Pager total={kept.length} page={page} size={PAGE} href={(n) => hrefFor(n, show)} label="transfers" /> : null}
           </>
         )}

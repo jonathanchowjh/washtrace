@@ -17,6 +17,8 @@ const BASE = `/c/1/${ADDR}`;
 const TX = '0x' + 'e'.repeat(64);
 const push = vi.hoisted(() => vi.fn());
 
+// What the store reads for a row with no linked pair: a count for every shape, all zero.
+const NO_SHAPES = { funder: 0, payee: 0, back: 0, forward: 0, 'direct-back': 0, 'direct-forward': 0, both: 0 };
 const totals = (m: 'A' | 'AU' | 'AC') => ({
   transfers: 5000, flagged: 400, sales: 1000, flaggedSales: { A: 41, AU: 300, AC: 120 }[m], volumeWei: String(19_032n * 10n ** 18n),
   flaggedVolumeWei: String(BigInt({ A: 41, AU: 300, AC: 120 }[m]) * 20n * 10n ** 18n), wallets: 1207, tokens: 644, available: true,
@@ -59,8 +61,8 @@ vi.mock('@/lib/store', () => ({
     sources: async () => ({}),
     settings: async () => new Map(),
     importedMoney: async () => false,
-    lensTokens: async () => ({ rows: [{ tokenId: '7', trades: 5, caught: 3, volumeWei: String(10n ** 18n), loops: 2 }], total: 1 }),
-    lensWallets: async () => ({ rows: [{ address: SELF, trades: 5, caught: 3, volumeWei: String(10n ** 18n), loops: 2 }], total: 1 }),
+    lensTokens: async () => ({ rows: [{ tokenId: '7', trades: 5, caught: 3, volumeWei: String(10n ** 18n), loops: 2, shapes: NO_SHAPES }], total: 1 }),
+    lensWallets: async () => ({ rows: [{ address: SELF, trades: 5, caught: 3, volumeWei: String(10n ** 18n), loops: 2, shapes: NO_SHAPES }], total: 1 }),
     token: async () => [trade(1), trade(2)],
     flowsAmong: async () => [],
     lensFlagsOfToken: async () => [],
@@ -76,6 +78,7 @@ vi.mock('@/lib/store', () => ({
     flowsBetweenCount: async () => 0,
     trades: async () => [1, 2].map((i) => ({ ...trade(i), lenses: ['A', 'AU'], judged: true, heldS: 7200, buyerAgeS: 86_400 * 3, floorRatio: 1.25 })),
     tradeCount: async () => ({ total: 2, unjudged: 0 }),
+    tradeFlags: async () => new Map(),
     tradeGroups: async () => [{ key: 'blur', trades: 3, caught: { A: 2, AU: 1, AC: 1 } }, { key: '-', trades: 1, caught: {} }],
   }),
   storedEntry: async () => null,
@@ -230,6 +233,7 @@ const ALLOWED: { why: string; test: (el: Element) => boolean }[] = [
   { why: 'the pipeline’s progress figures: how far a stage has read, not a list', test: (el) => el.closest('[data-progress]') !== null },
   { why: 'a Group by row no filter can hold, such as the unknown group: its trades are in the list below, but no list holds only them', test: (el) => el.closest('tr[data-unlisted]') !== null },
   { why: "a trade's own measure, in its row or its card: it counts no list, and the trade's date opens the trade", test: (el) => el.closest('[data-measure]') !== null },
+  { why: "a price in a row or a card: a link lies over its cell, or over the whole card, so the figure opens the trade", test: (el) => el.hasAttribute('data-opens') },
   { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|sales|changes of owner|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
 ];
 

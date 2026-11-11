@@ -3,24 +3,25 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { HEADLINE, lensRefusal } from '@washtrace/detect';
-import { ConnectedRail, OpenUnder, ParentLine, walletRoles, type Home } from '@/components/connected-rail';
-import { VerdictChip } from '@/components/kit';
+import { ConnectedRail, OpenUnder, ParentLine, type Home } from '@/components/connected-rail';
+import { walletRoles } from '@/lib/why';
+import { EvidenceGlyph, VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
 import { SpotCheck } from '@/components/spot-check';
 import { mayWrite } from '@/lib/auth';
 import { store } from '@/lib/store';
-import { ZERO, type FlaggedTransfer, type Method, type OwnFlag } from '@washtrace/detect';
+import { ZERO, type FlaggedTransfer, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { Answer, Ext, Head, Section } from '@/components/ui';
 import { LensName } from '@/components/methods';
 import { LensGraph } from '@/components/token-graph';
 import { Transfers, because, ownBecause } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
-import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, andList, lensInfo, lensList, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
+import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LINE, NOT_CAUGHT, NOT_JUDGED_YET, OUT_OF_CUSTODY_LINE, OWN_BEHIND, OWN_NOT_CAUGHT, SHOWN, andList, lensInfo, lensList, notRunAll, notRunIn, salesOnlyLine, short, tokenLabel, untimedLine } from '@/lib/format';
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
-import { APART, APART_WHY, NOT_JUDGED, SHOWN, TINT_LEAD, answer, inShownOrder, judged, ownRan } from '@/lib/metrics';
+import { APART, APART_WHY, NOT_JUDGED, TINT_LEAD, answer, inShownOrder, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
@@ -33,7 +34,7 @@ import { StepLine } from '@/components/step-line';
  * transaction whose every transfer is in that collection sits there; any other
  * is sent to its own page, so no row reads as another collection's.
  */
-export async function TxView({ chainId, tx, within, from }: { chainId: number; tx: string; within?: string; from?: string }) {
+export async function TxView({ chainId, tx, within, from, method }: { chainId: number; tx: string; within?: string; from?: string; method?: string }) {
   const v = await txView(chainId, tx);
   const { transfers, washTrade, by, apartOnly, notRun, own, collections, graphs, custody, ownLenses } = v;
   const unread = transfers.length === 0;
@@ -75,9 +76,9 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
   };
   return (
     <>
-      {within === undefined || collection === null ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={collection.address} from={from} of={{ tx }} /></Suspense>}
+      {within === undefined || collection === null ? null : <Suspense fallback={null}><StepLine chainId={chainId} address={collection.address} from={from} method={method} of={{ tx }} /></Suspense>}
       {/* Under a collection's tabs its parent line is the layout's; outside them this page draws one the same way. */}
-      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} /> : null}
+      {within === undefined ? <ParentLine home={ways.length === 1 ? ways[0] : undefined} leaf={short(tx)} /> : null}
       <Head
         kind="transaction"
         title={<span className="font-mono">{short(tx)}</span>}
@@ -107,12 +108,13 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
 
       {/* Its one collection's panels, here or under its tabs: a transaction across several has no one strip or rail. */}
       {collection === null ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={collection.address} of={{ tx }} /></Suspense>}
-      {collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, [], [])} /></Suspense>}
+      {/* The same members the token page names: its middles from the transfers' own pairs, and the money of the drawn tokens' graphs, of which walletRoles keeps what touches this transaction's holders. */}
+      {collection === null ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={collection.address} ctx={{ method }} token={new Set(transfers.map((t) => t.tokenId)).size === 1 ? transfers[0]?.tokenId : undefined} wallets={walletRoles(transfers, graphs.flatMap((g) => g?.flows ?? []), [])} /></Suspense>}
       {unread || washTrade === null ? (
         <SpotCheck chainId={chainId} tx={tx} writable={mayWrite(process.env, await headers())}
           lenses={(await store().lenses()).map((l) => ({ key: l.key, name: l.name, refusal: lensRefusal(l.rule) }))} />
       ) : null}
-      {transfers.length > 0 ? <Section title="What it moved" lead={TINT_LEAD}><Transfers chainId={chainId} transfers={transfers} collection within={within} own={ownByRow} names={ownLenses} /></Section> : null}
+      {transfers.length > 0 ? <Section title="What it moved" lead={TINT_LEAD}><Transfers chainId={chainId} transfers={transfers} collection within={within} ctx={{ method }} own={ownByRow} names={ownLenses} /></Section> : null}
       {transfers.map((t, i) => {
         const c = collections[t.collection?.address ?? ''];
         if (c === undefined) return null;
@@ -155,17 +157,20 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
                         {/* Each built-in's tier, so a card never reads Money loops back as counted, nor the others as equals. */}
                         {isOwnKey(card.key) ? null : <span data-tier className="text-xs text-muted-foreground">· {LENSES[card.key].tier}</span>}
                       </div>
-                      <p className="mt-1 text-sm">
-                        {card.line}
-                        {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} prefetch={false} className="font-medium text-foreground underline">{card.tab}</Link></>}
-                      </p>
+                      <div className="mt-1 flex items-start gap-3">
+                        <p className="min-w-0 flex-1 text-sm">
+                          {card.line}
+                          {card.tab === undefined ? null : <>{' '}<Link href={lensTabHref(base, card.key)} prefetch={false} className="font-medium text-foreground underline">{card.tab}</Link></>}
+                        </p>
+                        {card.witness === undefined ? null : <EvidenceGlyph witness={card.witness} />}
+                      </div>
                     </li>
                   ))}
                 </ul>
                 {/* The token's graph once, not once a card: a switch lights each catching lens's loop in turn. */}
                 {!drawn ? null : (
                   <div className="mt-3">
-                    <LensGraph drawing={drawing} chainId={chainId} base={base} tokenHref={`${base}/t/${t.tokenId}`} transfer={t}
+                    <LensGraph drawing={drawing} chainId={chainId} base={base} ctx={{ method }} tokenHref={`${base}/t/${t.tokenId}`} transfer={t}
                       caught={cards.filter((card) => card.caught).map((card) => ({ key: card.key, name: lensInfo(card.key, ownLenses)?.name ?? 'this lens', loop: card.loop }))} />
                   </div>
                 )}
@@ -207,9 +212,10 @@ function notRunAcross(notRun: readonly Method[], collections: readonly TxCollect
 /**
  * One lens's card on one transfer: its one line, whether it caught the
  * transfer and the loop that lights when it did, and for a lens that has not
- * run here the words of the link to its tab.
+ * run here the words of the link to its tab. A built-in's catch carries its
+ * witness, which the card draws; a lens of yours records none.
  */
-interface Card { key: LensKey; line: ReactNode; caught: boolean; loop: DrawnLoop | null; tab?: string }
+interface Card { key: LensKey; line: ReactNode; caught: boolean; loop: DrawnLoop | null; tab?: string; witness?: Witness }
 
 /**
  * Every lens's card on transfer `t` of collection `c`, whose wallets link
@@ -229,7 +235,7 @@ function lensCards(t: FlaggedTransfer, c: TxCollection, g: { graph: TokenDrawing
     // Money loops back's searches are the built-ins' only capped ones.
     if (w === undefined) return { key: m, line: `${NOT_CAUGHT[m]}${m === 'AU' && (c.latest?.truncatedSearches ?? 0) > 0 ? CAPPED : ''}`, caught: false, loop: null };
     const i = why.findIndex((r) => r.methods.includes(m) && r.rows.includes(row));
-    return { key: m, line: because(w, chainId, base), caught: true, loop: i < 0 ? null : g!.drawing.loops[i]! };
+    return { key: m, line: because(w, chainId, base), caught: true, loop: i < 0 ? null : g!.drawing.loops[i]!, witness: w };
   });
   const ran = ownRan(c.runs);
   const yours = c.runs.map(({ lens, run }): Card => {

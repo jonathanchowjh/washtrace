@@ -99,6 +99,12 @@ describe('a search\'s scope', () => {
     const hits = { collections: [], tokens: [], trades: [], wallets: [{ chainId: 1, address: A, transfers: 1, here: false }], more: { collections: false, tokens: false, wallets: false, trades: false } };
     expect(hitRow(hits, 'wallets', 0, { chainId: 1, address: '0x' + 'c'.repeat(40) }).href).toBe(`/w/1/${A}`);
   });
+
+  it('opens a never-traded middle under the collection\'s tabs, with the ceiling its ring and card give it', () => {
+    const hits = { collections: [], tokens: [], trades: [], wallets: [{ chainId: 1, address: A, transfers: 1, here: false, tier: 'ceiling' as const }], more: { collections: false, tokens: false, wallets: false, trades: false } };
+    const scope = { chainId: 1, address: '0x' + 'c'.repeat(40) };
+    expect(hitRow(hits, 'wallets', 0, scope)).toMatchObject({ href: `/c/1/${scope.address}/w/${A}`, tier: 'ceiling' });
+  });
 });
 
 describe('the order of a search\'s kinds', () => {

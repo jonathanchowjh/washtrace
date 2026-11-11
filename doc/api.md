@@ -59,7 +59,7 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `GET /api/collections/{chain}/{address}/tokens/{tokenId}` | | 200, 404 (no such path, not watched, or no transfer of the token) | `collection`, `tokenId`, `transfers`, `middles`, `flows`, and the verdict keys |
 | `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
 | `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
-| `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`; for a token `transfers`, `flagged`; for a ring `ring` |
+| `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`, `tier`; for a token `transfers`, `flagged`, `ring`, `tier`; for a ring `ring` |
 | `GET /api/collections/{chain}/{address}/counts` | `method` (a lens key, Linked wallets when left out or unknown) | 200, 404 | `trades`, and that lens's `tokens` and `wallets`: each `null` when the lens has not run |
 
 Notes:
@@ -69,15 +69,18 @@ Notes:
 - A changed rule queues the collection for a new analysis. `priority: true` checks its wallets' funding first.
 - `GET /api/collections/{chain}/{address}` lists the 50 tokens and 50 wallets with the most trades caught
   under `method`, each `{rows, total}`. A lens that did not run lists none. `lenses` holds each lens of yours
-  with its `run` on this collection (`run` is null when it has none).
+  with its `run` on this collection (`run` is null when it has none). A row's `shapes` counts its linked pairs
+  by `shape` (see the verdict keys); a pair saved before migration #38 counts in none, and a lens of yours has every count 0.
 - Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
-  sample, sales, floorSales, tokens, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
-  the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
+  sample, sales, floorSales, tokens, tokenSample, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
+  the path, `sample` its first three wallets by address, `tokenSample` its first three tokens by number (`tokens` counts them all), `sales` its counted flagged sales and `floorSales` those
   Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one in between (joined by money only),
   at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
-- `.../card` is the console's hover card: a few counts, never a verdict. A wallet's `trades` and `flagged` are in
+- `.../card` is the console's hover card: a few counts and a `tier`. A wallet's `trades` and `flagged` are in
   this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or
-  Linked wallets flags. `judged` is false before the first analysis.
+  Linked wallets flags, and its `ring` is the highest-ranked ring of its flagged trades (null for none). `tier` is
+  `cycle` when Round trips flags any counted trade of the wallet (as it trades, in this collection) or of the token, `ceiling` when only
+  Linked wallets does, and null for neither. A wallet that never traded in the collection but is a middle wallet of a counted pair is `ceiling`. `judged` is false before the first analysis.
 - Stored-data fields on a collection in `GET /api/collections`: `restoreNote` and `analysisError` say why its
   stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`,
   `analysisRetryAt`); null when nothing failed. `downloadFile` (`transfers` or `trail`) and `downloadProgress`
@@ -125,7 +128,10 @@ leading `'`.
 - `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
   address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
   collection narrows nothing. In a scoped search each wallet hit carries `here`, whether it traded in that
-  collection: false only for one found by its full address.
+  collection: false only for one found by its full address. A scoped wallet hit also carries `tier` (`cycle`, `ceiling` or null, as on the card); an unscoped
+  search carries none, and a hit on another chain null. A wallet not `here` is null too, unless it is a middle wallet of a
+  counted pair there: then `ceiling`, as on the card. The results page also names a wallet's ring, which the API
+  does not answer: ranking rings reads every ring, so the type-ahead never asks for it.
 - Each collection hit carries `totals`, its latest analysis's totals per lens (as in `GET /api/collections`), or
   `null` before the first analysis. The search page draws the range of washed sales from them.
 - The start of a hex string (4 characters or more after `0x`) finds wallets and also trades whose transaction hash
@@ -155,6 +161,15 @@ leading `'`.
 | `methods` | Every lens that ran and flagged it. Money loops back (`AU`) is listed here but not counted in `washTrade`. |
 | `apartOnly` | Only Money loops back flags it: shown, not counted. |
 | `notRun` | The lenses that did not run in some transfer's analysis. A lens that did not run is never in `methods`. |
+
+A transfer's `flags` hold each built-in's witness by its key. A loop is `{kind, wallets, cycles}`, `kind` `scc`, or
+`scc+flow` with `via` the money edges (`[from, to]`) that close it. A linked pair is `{kind: "pair", pair, middle, flowTx, shape}`:
+`pair` is the seller and buyer, `middle` the wallet between them (null when they paid each other directly), and
+`shape` which way the money went. Through a middle it is `funder` (it paid both), `payee` (both paid it), `back`
+(the buyer paid it and it paid the seller) or `forward` (the seller paid it and it paid the buyer); of several that
+hold, the first of `back`, `forward`, `funder`, `payee`. Direct, it is `direct-back` (the buyer paid the seller),
+`direct-forward` (the seller paid the buyer) or `both`. `shape` is absent on a pair an analysis saved before
+migration #38, until the collection is analyzed again.
 
 ### Settings
 
@@ -256,7 +271,9 @@ still queued goes first in the next pass. The console's Check this transaction b
 - `/api/worker` adds each job's last pass, the funding backlog per chain, and which sources are configured
   (never their values). `funding` is null while there is no Etherscan key. Its `perSecond` and `followHops` are
   null while the worker runs on its defaults. Each collection also carries `stages`: its six stages, each with a
-  `state` and a `share`.
+  `state`, a `share` and a `file` (`transfers`, `trail` or null: the stored file stages 1 and 2 are on while
+  running), and `priority`: whether its wallets are checked for money before the other
+  collections'.
 - `/api/health` is `{ok: true}` when the store answers and `{ok: false}` with 503 when it does not. It needs no
   login, for the container's health check.
 

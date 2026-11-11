@@ -141,9 +141,9 @@ export function SectionHead({ title, lead, aside }: { title: string; lead?: Reac
 export function Answer({ tone, title, children, aside }: { tone: Tone; title: ReactNode; children?: ReactNode; aside?: ReactNode }) {
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-4 rounded-lg border p-4 sm:p-5',
-      tone === 'cycle' ? 'border-cycle/30 bg-cycle-surface' : tone === 'money' ? 'border-money/30 bg-money-surface' : tone === 'apart' ? 'border-dashed bg-card' : 'bg-card')}>
+      tone === 'cycle' ? 'border-cycle/30 bg-cycle-surface' : tone === 'ceiling' ? 'border-ceiling/30 bg-ceiling-surface' : tone === 'apart' ? 'border-dashed bg-card' : 'bg-card')}>
       <div className="min-w-0 max-w-3xl">
-        <p className={cn('text-lg font-semibold', tone === 'cycle' ? 'text-cycle' : tone === 'money' ? 'text-money' : 'text-foreground')}>{title}</p>
+        <p className={cn('text-lg font-semibold', tone === 'cycle' ? 'text-cycle' : tone === 'ceiling' ? 'text-ceiling' : 'text-foreground')}>{title}</p>
         {children ? <div className="mt-1 text-sm">{children}</div> : null}
       </div>
       {aside}
@@ -195,13 +195,13 @@ export function Segmented({ label, items }: { label: string; items: { key: strin
   );
 }
 
-/** What a status pill's colour says: working is blue, done is green, only a failure is the fault colour, a limit to lift (a missing key) is its own, and idle is grey. */
+/** What a status pill's colour says: working is blue, done is green, only a failure is the fault colour, a limit to lift (a missing key) is neutral with a border, and idle is plain grey. */
 export type PillTone = 'working' | 'done' | 'fault' | 'limit' | 'idle';
 const PILL_TONE: Record<PillTone, string> = {
   working: 'bg-focus/12 text-focus',
   done: 'bg-ok/12 text-ok',
   fault: 'bg-fault/12 text-fault',
-  limit: 'bg-money/12 text-money',
+  limit: 'border bg-muted text-foreground',
   idle: 'bg-muted text-muted-foreground',
 };
 

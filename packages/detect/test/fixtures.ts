@@ -154,7 +154,7 @@ export const LAB_MIXED = {
     },
     flags: [
       ...flagsOf([mixed.Q1, mixed.Q2, mixed.Q3], ['A', 'AU', 'AC'], { kind: 'scc', wallets: [W10, W11], cycles: 2 }),
-      ...flagsOf([mixed.Q4], ['AC'], { kind: 'pair', pair: [W11, W12], middle: W13, flowTx: '0xlab_x1' }),
+      ...flagsOf([mixed.Q4], ['AC'], { kind: 'pair', pair: [W11, W12], middle: W13, flowTx: '0xlab_x1', shape: 'funder' }),
     ],
     uncounted: [],
     missingData: 0, fundedWallets: 4, wallets: 4, truncatedSearches: 0,

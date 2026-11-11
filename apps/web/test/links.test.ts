@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { collectionLinks, tokenLinks, venueName, venues, walletLinks } from '@/lib/links';
+import { explorerOf } from '@/lib/chains';
+import { collectionLinks, tokenLinks, venues, walletLinks } from '@/lib/links';
 
 const A = '0x4e1f41613c9084fdb9e34e11fae9412427480e56';
 
@@ -28,9 +29,11 @@ describe('links', () => {
     expect(venues([{ name: 'blur-v2', sales: 7 }, { name: 'seaport-1.1', sales: 4 }, { name: 'blur', sales: 5 }, { name: 'wyvern-1', sales: 3 }, { name: 'looksrare', sales: 2 }, { name: 'looksrare-v2', sales: 1 }]))
       .toEqual([{ key: 'blur', name: 'Blur', sales: 12 }, { key: 'opensea', name: 'OpenSea', sales: 7 }, { key: 'looksrare', name: 'LooksRare', sales: 3 }]);
   });
+});
 
-  it('names a marketplace string no table lists as itself, even one that is an Object property', () => {
-    expect(venueName('constructor')).toBe('constructor');
-    expect(venueName('some-new-market')).toBe('some-new-market');
+describe('a chain\'s explorer', () => {
+  it('is its table entry\'s, and null for a chain with none, as the local one', () => {
+    expect(explorerOf(1)).toEqual({ name: 'Etherscan', host: 'https://etherscan.io' });
+    expect(explorerOf(31337)).toBeNull();
   });
 });

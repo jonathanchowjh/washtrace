@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CollectionRow } from '@washtrace/detect';
-import { withFrom } from '@/lib/links';
+import type { Item } from '@/lib/collection-reads';
+import { carry } from '@/lib/links';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
@@ -12,6 +13,7 @@ const RING = '0x' + 'a1'.repeat(20);
 const w = (c: string) => '0x' + c.repeat(40);
 vi.mock('@/lib/store', () => ({
   store: () => ({
+    collection: async () => c,
     lensRuns: async () => [],
     lensTokens: async (_id: number, _m: string, o: { limit: number; offset: number }) => ({
       rows: state.tokens.slice(o.offset, o.offset + o.limit).map((tokenId) => ({ tokenId })), total: state.tokens.length,
@@ -44,8 +46,17 @@ describe('a from', () => {
   it('is written with its page, the first left out, and rides on a link before its hash', () => {
     expect(fromParam('tokens', new URLSearchParams('method=A&page=9'), 1)).toBe('tokens?method=A');
     expect(fromParam('rings', new URLSearchParams(), 3)).toBe('rings?page=3');
-    expect(withFrom(`${BASE}/t/7?method=L7#why`, 'tokens?method=L7')).toBe(`${BASE}/t/7?method=L7&from=tokens%3Fmethod%3DL7#why`);
-    expect(withFrom(`${BASE}/t/7`, undefined)).toBe(`${BASE}/t/7`);
+    expect(carry(`${BASE}/t/7?method=L7#why`, { from: 'tokens?method=L7' })).toBe(`${BASE}/t/7?method=L7&from=tokens%3Fmethod%3DL7#why`);
+    expect(carry(`${BASE}/t/7`, {})).toBe(`${BASE}/t/7`);
+  });
+
+  it('carries the lens first, unless the link names one, and never onto Trades, whose from is a date', () => {
+    expect(carry(`${BASE}/t/7#why`, { method: 'L7', from: 'tokens?method=L7' })).toBe(`${BASE}/t/7?method=L7&from=tokens%3Fmethod%3DL7#why`);
+    expect(carry(`${BASE}/t/7?method=A`, { method: 'AC' })).toBe(`${BASE}/t/7?method=A`);
+    expect(carry(`${BASE}/w/${w('1')}?flagged=1`, { method: 'AC' })).toBe(`${BASE}/w/${w('1')}?flagged=1&method=AC`);
+    for (const trades of [`${BASE}/trades`, `${BASE}/trades?caught=A&from=2026-01-01`, `${BASE}/trades?token=7#top`]) {
+      expect(carry(trades, { method: 'AC', from: 'tokens?method=AC' })).toBe(trades);
+    }
   });
 });
 
@@ -53,15 +64,15 @@ describe('stepping through a list', () => {
   it('steps to the neighbours on the same page, and says where the item sits', async () => {
     const s = (await step('tokens?method=AC', '5'))!;
     expect([s.prev?.label, s.next?.label, s.at, s.total]).toEqual(['#4', '#6', 5, 45]);
-    expect(s.next!.href).toBe(`${BASE}/t/6?from=tokens%3Fmethod%3DAC`);
+    expect(s.next!.href).toBe(`${BASE}/t/6?method=AC&from=tokens%3Fmethod%3DAC`);
     expect(s.back).toEqual({ href: `${BASE}/tokens?method=AC`, label: 'All 45 tokens' });
   });
 
   it('crosses a page\'s edge, carrying the page the neighbour is on', async () => {
     const last = (await step('tokens?method=AC', '20'))!;
-    expect(last.next!.href).toBe(`${BASE}/t/21?from=tokens%3Fmethod%3DAC%26page%3D2`);
+    expect(last.next!.href).toBe(`${BASE}/t/21?method=AC&from=tokens%3Fmethod%3DAC%26page%3D2`);
     const first = (await step('tokens?method=AC&page=2', '21'))!;
-    expect(first.prev!.href).toBe(`${BASE}/t/20?from=tokens%3Fmethod%3DAC`);
+    expect(first.prev!.href).toBe(`${BASE}/t/20?method=AC&from=tokens%3Fmethod%3DAC`);
   });
 
   it('has no step past either end of the list', async () => {
@@ -105,6 +116,55 @@ describe('stepping through a list', () => {
     state.trades = [...Array.from({ length: 19 }, (_, i) => ({ txHash: `0x${i}`, tokenId: String(i) })), { txHash: '0xt', tokenId: '19' }, { txHash: '0xt', tokenId: '20' }, { txHash: '0xn', tokenId: '21' }];
     expect((await step('trades', '0xt'))!.next?.label).toBe('#21');
     expect((await step('trades?page=2', '0xt'))!.prev?.label).toBe('#18');
+  });
+});
+
+describe('the context a page was opened with', () => {
+  it('keeps a lens and a list, and drops a method that is no lens, a from that names no list, and a wrong-kind from', async () => {
+    const { contextOf } = await import('@/lib/step');
+    expect(contextOf({ method: 'AC', from: 'tokens?method=AC' })).toEqual({ method: 'AC', from: 'tokens?method=AC' });
+    expect(contextOf({ method: 'L7' })).toEqual({ method: 'L7' });
+    expect(contextOf({ method: 'nope' })).toEqual({});
+    expect(contextOf({ from: 'nope' })).toEqual({});
+    expect(contextOf({ method: ['A', 'AC'], from: 'http://evil/x' })).toEqual({ method: 'A' });
+  });
+
+  it('keeps a well-formed key of yours whether or not that lens still exists: the page it opens drops a stale one', async () => {
+    const { contextOf } = await import('@/lib/step');
+    expect(contextOf({ method: 'L99', from: 'wallets?method=L99' })).toEqual({ method: 'L99', from: 'wallets?method=L99' });
+    expect(contextOf({ method: 'L' })).toEqual({});
+    expect(contextOf({ method: 'L7x' })).toEqual({});
+  });
+});
+
+describe('the line above an item', () => {
+  const line = async (from: string | undefined, of: Item, method?: string) => {
+    const { StepLine } = await import('@/components/step-line');
+    return render(await StepLine({ chainId: 1, address: ADDR, from, method, of })).container;
+  };
+  const backs = (el: HTMLElement) => [...el.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]);
+
+  it('with no list to step, leads back to the item\'s list tab, under the lens it was opened with', async () => {
+    expect(backs(await line(undefined, { token: '5' }, 'AC'))).toEqual([['‹ All tokens', `${BASE}/tokens?method=AC`]]);
+    cleanup();
+    expect(backs(await line(undefined, { wallet: w('1') }, 'A'))).toEqual([['‹ All wallets', `${BASE}/wallets?method=A`]]);
+    cleanup();
+    expect(backs(await line(undefined, { token: '5' }))).toEqual([['‹ All tokens', `${BASE}/tokens`]]);
+    cleanup();
+    expect(backs(await line(undefined, { ring: RING }))).toEqual([['‹ All rings', `${BASE}/rings`]]);
+    cleanup();
+    expect(backs(await line(undefined, { tx: '0x1' }, 'AC'))).toEqual([['‹ All trades', `${BASE}/trades`]]);
+  });
+
+  it('does the same when its list is another kind, or the item has left its page', async () => {
+    expect(backs(await line('rings', { token: '5' }, 'AC'))).toEqual([['‹ All tokens', `${BASE}/tokens?method=AC`]]);
+    cleanup();
+    expect(backs(await line('tokens?method=AC&page=2', { token: '5' }, 'AC'))).toEqual([['‹ All tokens', `${BASE}/tokens?method=AC`]]);
+  });
+
+  it('with a list to step, steps through it', async () => {
+    const el = await line('tokens?method=AC', { token: '5' }, 'AC');
+    expect(backs(el).map((x) => x[0])).toContain('‹ All 45 tokens');
   });
 });
 

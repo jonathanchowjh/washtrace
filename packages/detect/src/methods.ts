@@ -1,6 +1,6 @@
 import { AddressGraph, chainOrder, compare, tokenGraph, type Hop } from './graph.js';
 import type { Payments } from './payments.js';
-import type { Analysis, Flag, Method, MethodTotals, Transfer, Witness } from './types.js';
+import type { Analysis, Flag, Method, MethodTotals, PairShape, Transfer, Witness } from './types.js';
 
 /**
  * The numbers the methods turn on. Each is data, with the sentence that
@@ -99,7 +99,7 @@ export function analyze(input: Input): Analysis {
     for (const h of real) {
       if (h.from === h.to || flagged.AC.has(h.ref!)) continue;
       const link = money.link(h.from, h.to);
-      if (link) flagged.AC.set(h.ref!, { kind: 'pair', pair: [h.from, h.to], middle: link.middle, flowTx: link.tx });
+      if (link) flagged.AC.set(h.ref!, { kind: 'pair', pair: [h.from, h.to], middle: link.middle, flowTx: link.tx, shape: link.shape });
     }
   }
 
@@ -127,6 +127,22 @@ export function analyze(input: Input): Analysis {
     wallets: wallets.size,
     truncatedSearches: money.truncatedSearches,
   };
+}
+
+/**
+ * The most cycles any loop of one token's own transfers closes, custody folded
+ * as analyze folds it, with that loop's wallets (0 cycles: it never comes back).
+ * Asset hops alone, the count Round trips judges against `minCycles`. For a
+ * page that says why a token was passed by.
+ */
+export function tokenCycles(transfers: readonly Transfer[], custodians: ReadonlySet<string>): { cycles: number; wallets: string[] } {
+  const g = new AddressGraph();
+  for (const h of tokenGraph(transfers, chainOrder(transfers), custodians).hops) g.edge(h.from, h.to, h.ref, false);
+  let best = { cycles: 0, wallets: [] as string[] };
+  for (const c of g.components()) {
+    if (c.cycles > best.cycles) best = { cycles: c.cycles, wallets: [...c.nodes].sort((a, b) => a - b).map((n) => g.names[n]!) };
+  }
+  return best;
 }
 
 /**
@@ -290,23 +306,55 @@ class MoneyGraph {
    * hub. Figure 8's six cycles are exactly these: three directions of a
    * direct flow and the middle's four, less the two AU already finds.
    * Of several middles, the smallest address, named with the payment that
-   * joins it to whichever of `a` and `b` has fewer neighbours.
+   * joins it to whichever of `a` and `b` has fewer neighbours. `a` is the
+   * seller and `b` the buyer, and the shape says which way the money went
+   * (PairShape), read from who paid whom.
    */
-  link(a: string, b: string): { middle: string | null; tx: string } | null {
+  link(a: string, b: string): { middle: string | null; tx: string; shape: PairShape } | null {
     const va = this.id(a);
     const vb = this.id(b);
     if (va < 0 || vb < 0) return null;
     const { near, nearStart, nearTx, hub, payments } = this;
     const direct = this.find(va, vb);
-    if (direct >= 0) return { middle: null, tx: payments.tx(nearTx[direct]!) };
+    if (direct >= 0) {
+      const back = this.paid(vb, va);
+      const shape = !back ? 'direct-forward' : this.paid(va, vb) ? 'both' : 'direct-back';
+      return { middle: null, tx: payments.tx(nearTx[direct]!), shape };
+    }
     const [small, large] = nearStart[va + 1]! - nearStart[va]! <= nearStart[vb + 1]! - nearStart[vb]! ? [va, vb] : [vb, va];
     // Ascending, so the first middle found is the smallest.
     for (let i = nearStart[small]!; i < nearStart[small + 1]!; i++) {
       const x = near[i]!;
       if (x === va || x === vb || hub[x] || this.find(large, x) < 0) continue;
-      return { middle: this.names[x]!, tx: payments.tx(nearTx[i]!) };
+      return { middle: this.names[x]!, tx: payments.tx(nearTx[i]!), shape: this.shape(va, vb, x) };
     }
     return null;
+  }
+
+  /** Seller `s` and buyer `b` joined through middle `m`: the first of back, forward, funder, payee that holds. */
+  private shape(s: number, b: number, m: number): PairShape {
+    const toSeller = this.paid(m, s);
+    const toBuyer = this.paid(m, b);
+    if (toSeller && this.paid(b, m)) return 'back';
+    if (toBuyer && this.paid(s, m)) return 'forward';
+    if (toSeller && toBuyer) return 'funder';
+    // Each of s and b paid m or was paid by it, so when none of the three holds, both paid m.
+    return 'payee';
+  }
+
+  /** Whether `v` sent money to `y`: a search of `v`'s payees, which are ascending. */
+  private paid(v: number, y: number): boolean {
+    const { out } = this;
+    let lo = this.outStart[v]!;
+    let hi = this.outStart[v + 1]! - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      const at = out[mid]!;
+      if (at === y) return true;
+      if (at < y) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return false;
   }
 
   /**

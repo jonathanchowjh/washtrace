@@ -69,7 +69,7 @@ export function toRing(r: Record<string, unknown>): RingLine {
   return {
     anchor: r.ring as string, rank: r.rank as number, wallets: r.wallets as number, sample: r.sample as string[],
     sales: r.sales as number, floorSales: r.floor_sales as number, tokens: r.tokens as number, volumeWei: String(r.volume),
-    firstAt: r.first_at as number | null, lastAt: r.last_at as number | null,
+    firstAt: r.first_at as number | null, lastAt: r.last_at as number | null, tokenSample: r.token_sample as string[],
   };
 }
 

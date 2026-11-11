@@ -52,6 +52,12 @@ describe('Settings, read-only', () => {
     for (const c of controls) expect(c.disabled).toBe(true);
   });
 
+  it('leaves a number field empty when unset: its hint says what the worker uses, so no placeholder repeats it', () => {
+    render(<Settings writable fields={fields()} />);
+    expect(box('etherscan.rps').querySelector('input')!.hasAttribute('placeholder')).toBe(false);
+    expect(box('etherscan.rps').textContent).toContain('so the worker uses');
+  });
+
   it('says why each Test is off', () => {
     render(<Settings writable={false} fields={fields(RPC_SET, true)} />);
     for (const b of screen.getAllByRole('button', { name: /^Test\b/ })) expect(b.getAttribute('title')).toBe(LOCAL_ONLY);
@@ -472,8 +478,8 @@ describe('Settings, Test', () => {
 
 describe('no Etherscan key, and a stored money trail', () => {
   it('says what no key means for the money lenses: off, or on stored money trails only', () => {
-    expect(withoutKey(false)).toBe('Money loops back and Linked wallets do not run');
-    expect(withoutKey(true)).toBe('Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked');
+    expect(withoutKey(false)).toBe('Linked wallets and Money loops back do not run');
+    expect(withoutKey(true)).toBe('Linked wallets and Money loops back run only on stored money trails, and newer wallets go unchecked');
   });
 
   it('never says the money lenses do not run while a loaded trail feeds them', () => {
@@ -481,7 +487,7 @@ describe('no Etherscan key, and a stored money trail', () => {
     expect(text).not.toContain('do not run');
     expect(text).not.toContain('those lenses are off');
     expect(text).not.toContain('funding is off');
-    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key: Money loops back and Linked wallets run only on stored money trails, and newer wallets go unchecked.');
+    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key: Linked wallets and Money loops back run only on stored money trails, and newer wallets go unchecked.');
   });
 
   it('names the stage each group feeds, and says a missing key needs one', () => {
@@ -493,6 +499,6 @@ describe('no Etherscan key, and a stored money trail', () => {
 
   it('says they do not run when nothing feeds them', () => {
     const text = render(<Settings fields={fields()} writable />).container.textContent!;
-    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key, and Money loops back and Linked wallets do not run.');
+    expect(text).toContain('None: not saved here or in .env, so reading stage 5 (Money) needs a key, and Linked wallets and Money loops back do not run.');
   });
 });

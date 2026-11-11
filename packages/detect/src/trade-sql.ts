@@ -1,4 +1,4 @@
-import { HEADLINE, METHODS, type Method, type Transfer, type Witness } from './types.js';
+import { HEADLINE, METHODS, PAIR_SHAPES, type Method, type PairShape, type Transfer, type Witness } from './types.js';
 import { UINT256_DIGITS } from './lens-rule.js';
 import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type Find, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
 
@@ -24,17 +24,19 @@ export type WalletSort = 'caught' | 'share' | 'volume' | 'first';
  * owner (no mints, no custody moves) and `caught` those the lens flags. The
  * rest is over the loops its caught trades point at: `loops` the round trips
  * (`closedByMoney` of them closed by a payment, `laps` their cycles summed),
- * `pairs` the linked pairs (`middles` of them through a third wallet), and
- * `wallets` every wallet in any of them. `volumeWei` is its caught sales priced
- * in money; `lastAt` its newest counted trade. A saved lens has no loops, so
- * those fields are null on its rows.
+ * `pairs` the linked pairs (`middles` of them through a third wallet, and
+ * `shapes` of them by shape), and `wallets` every wallet in any of them.
+ * `volumeWei` is its caught sales priced in money; `lastAt` its newest
+ * counted trade. A saved lens's rows count its stored paths (ownLoopsOf):
+ * `pairs` 0 and every shape at 0. A pair stored before shapes were recorded
+ * counts in no shape.
  */
-export interface TokenLine { tokenId: string; caught: number; trades: number; volumeWei: string; lastAt: number | null; loops: number | null; pairs: number | null; wallets: number | null; closedByMoney: number | null; laps: number | null; middles: number | null }
+export interface TokenLine { tokenId: string; caught: number; trades: number; volumeWei: string; lastAt: number | null; loops: number | null; pairs: number | null; wallets: number | null; closedByMoney: number | null; laps: number | null; middles: number | null; shapes: Record<PairShape, number> | null }
 /**
  * One row of a lens's wallet list, counted as a token's are; `partners` are the other wallets in its loops.
  * `firstAt` is its first *counted* trade, of the trades `trades` counts: a mint into it is not one.
  */
-export interface WalletLine { address: string; caught: number; trades: number; volumeWei: string; firstAt: number | null; loops: number | null; pairs: number | null; partners: number | null }
+export interface WalletLine { address: string; caught: number; trades: number; volumeWei: string; firstAt: number | null; loops: number | null; pairs: number | null; partners: number | null; shapes: Record<PairShape, number> | null }
 /** A lens list's order, its Find box's text (read by findOf), and its page. */
 export interface ListOpts<S> { sort: S; find: string | null; limit: number; offset: number }
 /**
@@ -265,8 +267,12 @@ export const LIST_ORDER = {
   at: 'c.at DESC NULLS LAST',
 } as const;
 
+/** Each PairShape's count as one json column `shapes`, each shape's from `of(shape)`. */
+const shapesOf = (of: (shape: PairShape) => string) => `jsonb_build_object(${PAIR_SHAPES.map((x) => `'${x}', ${of(x)}`).join(', ')}) AS shapes`;
+
 /**
- * A lens list row `c`'s loops: the witnesses in its `ids`, counted by kind, and
+ * A lens list row `c`'s loops: the witnesses in its `ids`, counted by kind and
+ * a pair's by shape (one stored before #38, its `shape` NULL, by none), and
  * the wallets in any of them other than `self`. Distinct by hashing rather than
  * count(DISTINCT), which sorts: a ring wallet's loops can hold 75,000 wallets.
  */
@@ -277,6 +283,7 @@ export function loopsOf(self: string | null): string {
       COALESCE(sum(w.cycles) FILTER (WHERE w.kind IN ('scc', 'scc+flow')), 0)::int AS laps,
       count(*) FILTER (WHERE w.kind = 'pair')::int AS pairs,
       count(*) FILTER (WHERE w.kind = 'pair' AND w.middle IS NOT NULL)::int AS middles,
+      ${shapesOf((x) => `count(*) FILTER (WHERE w.shape = '${x}')`)},
       (SELECT count(*)::int FROM (SELECT DISTINCT a FROM washtrace.witnesses v CROSS JOIN unnest(v.wallets) a
        WHERE v.collection_id = $1 AND v.id = ANY(c.ids)${self === null ? '' : ` AND a <> ${self}`}) d) AS wallets
     FROM washtrace.witnesses w WHERE w.collection_id = $1 AND w.id = ANY(c.ids)) s`;
@@ -287,7 +294,7 @@ export function loopsOf(self: string | null): string {
  * witnesses, so a reader meets one form for every lens: `loops` its flags,
  * `closed` those whose path has a money edge, other tokens included), or `funds`, `middles` those
  * with a wallet that is neither seller nor buyer (a flag's wallets always hold
- * both), `laps` as many as loops, `pairs` none, and `wallets` the distinct
+ * both), `laps` as many as loops, `pairs` none (so every shape 0), and `wallets` the distinct
  * wallets in them, other than `self`. A token row reads the flags on its token;
  * a wallet row (`self` set) those holding the wallet, through the GIN index.
  * The lens is `$2`, as caughtOf bound it; only counted trades, as `caught` is.
@@ -303,6 +310,7 @@ export function ownLoopsOf(key: string, self: string | null): string {
       count(*)::int AS laps,
       0 AS pairs,
       count(*) FILTER (WHERE cardinality(v.wallets) > 2)::int AS middles,
+      ${shapesOf(() => '0')},
       (SELECT count(DISTINCT a)::int ${from} CROSS JOIN LATERAL unnest(v.wallets) a ${where}${self === null ? '' : ` AND a <> ${self}`}) AS wallets
     ${from} ${where}) s`;
 }

@@ -3,7 +3,7 @@ import { runLens } from './lens.js';
 import type { LensRule } from './lens-rule.js';
 import type { LensFlag, LensInput, LensTotals } from './lens.js';
 import { Store, type PreviewResult } from './store.js';
-import { VENUES, venueOf } from './trades.js';
+import { venueName } from './trades.js';
 
 /** Where each request rides in `workerData`; see analysis-thread.ts for why a bare import must find no such key. */
 const REQUEST = 'washtraceLensRequest';
@@ -104,7 +104,7 @@ export async function previewStored(store: Store, request: PreviewRequest, onPro
     if (t.marketplace === null) continue;
     ofSales += 1;
     const key = `${t.txHash}:${t.logIndex}`;
-    if (sample.has(key)) marketOf.set(key, VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace);
+    if (sample.has(key)) marketOf.set(key, venueName(t.marketplace));
   }
   const { totals, flags, judged, hops } = runLens(rule, input, onProgress, sample);
   const byMarket = new Map<string, number>();

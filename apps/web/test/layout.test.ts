@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ZERO, type FlaggedTransfer, type LoopEdge, type OwnFlag } from '@washtrace/detect';
-import { layout } from '@/lib/layout';
+import { layout, reasons } from '@/lib/layout';
 
 const a = '0x' + 'a'.repeat(40), b = '0x' + 'b'.repeat(40), x = '0x' + 'c'.repeat(40);
 
@@ -17,6 +17,14 @@ const lab = (key: string, from: string, to: string, block: number, flagged: bool
   marketplace: flagged ? 'blur' : null, priceWei: flagged ? '1000000000000000000' : null, currency: flagged ? '' : null, flags: flagged ? { A: labScc } : {},
 });
 const LAB = [lab('M1', ZERO, W1, 100, false), lab('S1', W1, W2, 200, true), lab('S2', W2, W3, 300, true), lab('S3', W3, W1, 400, true), lab('S4', W1, W2, 500, true)];
+
+describe('layout custody', () => {
+  it('marks only an escrow wallet, by its name', () => {
+    const blend = '0x29469395eaf6f95920e59f858042f0e28d98a20b';
+    const nodes = layout([t(a, blend), t(blend, a)], [], []).nodes;
+    expect(nodes.map((n) => [n.id === blend ? 'blend' : 'a', n.custody])).toEqual([['a', null], ['blend', 'Blur Blend']]);
+  });
+});
 
 describe('layout', () => {
   it('a built-in drawing is unchanged with no own flags', () => {
@@ -114,6 +122,7 @@ describe('layout', () => {
         "nodes": [
           {
             "anchor": "middle",
+            "custody": null,
             "first": true,
             "id": "0x00000000000000000000000000000000000000w1",
             "lx": 280,
@@ -124,6 +133,7 @@ describe('layout', () => {
           },
           {
             "anchor": "start",
+            "custody": null,
             "first": false,
             "id": "0x00000000000000000000000000000000000000w2",
             "lx": 382.5166604983954,
@@ -134,6 +144,7 @@ describe('layout', () => {
           },
           {
             "anchor": "end",
+            "custody": null,
             "first": false,
             "id": "0x00000000000000000000000000000000000000w3",
             "lx": 177.4833395016046,
@@ -366,5 +377,18 @@ describe('layout', () => {
       expect(d.loops[1]!.edges).toEqual(['t1', 't2']);
       expect(d.edges.some((e) => e.tone === 'own')).toBe(false);
     });
+  });
+  it('reasons come in the shown order, floor then ceiling then not counted, and loops keep their reason index', () => {
+    // One transfer both Money loops back (AU) and Linked wallets (AC) flag, on different wallets: METHODS order would say AU first.
+    const both = t(a, b, { AU: { kind: 'scc+flow', wallets: [a, b], cycles: 1, via: [] }, AC: { kind: 'pair', pair: [a, x], middle: null, flowTx: '0xf' } });
+    const trs = [t(b, a, { A: { kind: 'scc', wallets: [a, b], cycles: 2 } }), both];
+    const why = reasons(trs);
+    expect(why.map((r) => r.methods)).toEqual([['A'], ['AC'], ['AU']]);
+    const drawn = layout(trs, [], []).loops;
+    expect(drawn.map((l) => l.methods)).toEqual(why.map((r) => r.methods));
+    expect(drawn.map((l) => l.key)).toEqual(['r0', 'r1', 'r2']);
+    // Same loop at each index: the pair's wallets are the AC loop's nodes.
+    expect(drawn[1]!.nodes).toEqual([a, x]);
+    expect(drawn[2]!.nodes).toEqual([a, b]);
   });
 });

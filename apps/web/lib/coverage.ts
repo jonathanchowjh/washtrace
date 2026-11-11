@@ -1,5 +1,5 @@
-import { BEHIND_BLOCKS, METHODS, NOT_DONE, type CollectionRow, type Method, type PassRow } from '@washtrace/detect';
-import { LENSES, floorPct, lensList, localTime, pct, plural, num } from './format';
+import { BEHIND_BLOCKS, NOT_DONE, type CollectionRow, type Method, type PassRow } from '@washtrace/detect';
+import { LENSES, SHOWN, floorPct, lensList, localTime, pct, plural, num } from './format';
 
 /**
  * A collection's reading progress, said the way the console shows it: how far
@@ -127,7 +127,7 @@ export function coverage(
   const span = c.headBlock === null || c.startBlock === null ? null : c.headBlock - c.startBlock;
   const blocks = span === null || c.cursorBlock === null || c.startBlock === null ? null : span <= 0 ? 1 : Math.max(0, Math.min(1, (c.cursorBlock - c.startBlock) / span));
   const unchecked = money && wallets.checked < wallets.of;
-  const notFinal: Method[] = unchecked ? METHODS.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
+  const notFinal: Method[] = unchecked ? SHOWN.filter((m) => m !== 'A' && (c.latest?.totals[m].available ?? true)) : [];
   // A load is never resumed after a pause, so progress left on a paused collection is stale.
   // Never shown as done: the data is not there until the load commits, and then the progress is gone.
   const restore = c.pausedAt === null && (c.restoreProgress ?? null) !== null ? Math.min(c.restoreProgress!, NOT_DONE) : null;

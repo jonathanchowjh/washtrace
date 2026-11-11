@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
-import { lensInfo, num, type Lenses } from '@/lib/format';
-import { SHOWN } from '@/lib/metrics';
+import { SHOWN, lensInfo, num, pct, type Lenses } from '@/lib/format';
 import { tradesHref } from '@/lib/trades-url';
 
 type Counts = Partial<Record<LensKey, Partial<Record<LensKey, number>>>>;
@@ -65,7 +64,7 @@ export function Compare({ base, both, not, keys: ran, own, left }: {
                       const shade = cell === 0 ? '' : SHADES[Math.min(4, Math.floor(share * 5))];
                       return (
                         <td key={c} data-cell={`${r}.${c}`} className={`border p-2 tabular-nums ${shade}`}
-                          title={`Of the ${num(total)} sales ${name(r)} caught, ${name(c)} also caught ${num(cell)} (${Math.round(share * 100)}%).`}>
+                          title={`Of the ${num(total)} sales ${name(r)} caught, ${name(c)} also caught ${num(cell)} (${pct(cell, total)}).`}>
                           <Link href={tradesHref(base, { caught: [r, c] })} prefetch={false} className="font-semibold hover:underline">{num(cell)}</Link>
                           <Link href={tradesHref(base, { caught: [r], notCaught: [c] })} prefetch={false} title={`Sales ${name(r)} caught that ${name(c)} judged and did not flag`} className="block text-xs text-muted-foreground hover:underline">{num(n(not, r, c))} not</Link>
                         </td>

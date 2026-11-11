@@ -1,43 +1,70 @@
 import Link from 'next/link';
 import { ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
-import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
-import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
-import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
-import { TierMark } from './kit';
+import { venueName, type LensKey } from '@washtrace/detect/trades';
+import { SHOWN, eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
+import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, carry, type Context } from '@/lib/links';
+import { INLINE_ICON, KindIcon, TierMark } from './kit';
 import { Empty, Ext } from '@/components/ui';
-import { toneOf, SHOWN } from '@/lib/metrics';
+import { toneOf } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/zone';
 import { HoverCard } from '@/components/hover-card';
 
 /**
- * A wallet, linked to its page: under `within`'s tabs when it is given (a
+ * A wallet, linked to its page behind its symbol: under `within`'s tabs when it is given (a
  * collection's base), so a link from inside a collection stays inside it. The
  * zero address is a mint or a burn, not a wallet. It sits in rows of many, so
  * it does not prefetch: each prefetch renders a wallet page.
  */
-export function Wallet({ chainId, address, within, from }: { chainId: number; address: string; within?: string; from?: string }) {
+export function Wallet({ chainId, address, within, ctx = {} }: { chainId: number; address: string; within?: string; ctx?: Context }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} prefetch={false} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={carry(walletHref(chainId, address, within), ctx)} prefetch={false} title={address} className="inline-flex items-center gap-1.5 font-mono hover:underline"><KindIcon kind="wallet" className={INLINE_ICON} />{short(address)}</Link>;
   // Inside a collection there is a card to show: its trades there and its ring.
   return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }
 
-/** Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do. */
-export function because(w: Witness, chainId: number, within?: string): React.ReactNode {
+/**
+ * A token, linked to its page behind its symbol, with its hover card: `#7`, or
+ * `Demo Apes #7` given a `name`. `method` opens the page with that lens's loops
+ * lit and `hash` lands on a section of it. `cardClassName` shapes the card's
+ * box where the link must fill its row.
+ */
+export function TokenLink({ base, tokenId, name, from, method, hash = '', title, className, cardClassName }: {
+  base: string; tokenId: string; name?: string; from?: string; method?: string; hash?: string; title?: string; className?: string; cardClassName?: string;
+}) {
+  const href = carry(`${base}/t/${tokenId}${hash}`, { method, from });
+  return (
+    <HoverCard className={cardClassName} src={cardSrc(base, 'token', tokenId)}>
+      <Link href={href} prefetch={false} title={title} className={cn('inline-flex items-center gap-1.5 hover:underline', className)}>
+        <KindIcon kind="token" className={INLINE_ICON} />{name === undefined ? '' : `${name} `}#{tokenLabel(tokenId)}
+      </Link>
+    </HoverCard>
+  );
+}
+
+/**
+ * Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do.
+ * `plain` is the sentence with no link in it (short addresses as text, no tx link), for a row that is itself one.
+ */
+export function because(w: Witness, chainId: number, within?: string, plain = false): React.ReactNode {
   if (w.kind === 'scc') return `${w.wallets.length} wallets pass it round in ${plural(w.cycles, 'cycle')}`;
   if (w.kind === 'scc+flow') {
     return `${w.wallets.length} wallets in a loop closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
   }
   const [a, b] = w.pair;
-  const tx = explorerTx(chainId, w.flowTx);
-  return (
-    <>
-      <Wallet chainId={chainId} address={a} within={within} /> and <Wallet chainId={chainId} address={b} within={within} />{' '}
-      {w.middle === null ? 'paid each other directly' : <>share money with <Wallet chainId={chainId} address={w.middle} within={within} /></>}
-      {tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}
-    </>
-  );
+  const tx = plain ? null : explorerTx(chainId, w.flowTx);
+  const at = (address: string) => (plain ? short(address) : <Wallet chainId={chainId} address={address} within={within} />);
+  // The pair is the seller and the buyer, in that order; the shape says who paid whom. A pair stored without one says only that they share money.
+  const m = w.middle === null ? null : at(w.middle);
+  const said = w.shape === undefined ? (m === null ? <>{at(a)} and {at(b)} paid each other directly</> : <>{at(a)} and {at(b)} share money with {m}</>)
+    : w.shape === 'funder' ? <>{at(a)} and {at(b)} were both funded by {m}</>
+    : w.shape === 'payee' ? <>{at(a)} and {at(b)} both paid {m}</>
+    : w.shape === 'back' ? <>{at(b)} paid {at(a)} back through {m}</>
+    : w.shape === 'forward' ? <>{at(a)} paid {at(b)} through {m}</>
+    : w.shape === 'direct-back' ? <>{at(b)} paid {at(a)} directly</>
+    : w.shape === 'direct-forward' ? <>{at(a)} paid {at(b)} directly</>
+    : <>{at(a)} and {at(b)} paid each other directly</>;
+  return <>{said}{tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}</>;
 }
 
 /**
@@ -61,10 +88,7 @@ export function rowList(rows: readonly number[]): string {
   return run && sorted.length > 2 ? `${sorted[0]}–${sorted[sorted.length - 1]}` : sorted.join(', ');
 }
 
-/** A marketplace by the name Trades and the overview give it ("OpenSea", not "seaport-1.6"); one no venue lists keeps its own. */
-const marketName = (raw: string) => VENUES[venueOf(raw)]?.name ?? raw;
-
-const ROW_TONE ={ cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
+const ROW_TONE ={ cycle: 'bg-cycle-surface/70', ceiling: 'bg-ceiling-surface/70', apart: 'bg-muted/60', clean: '' } as const;
 // A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
@@ -82,8 +106,10 @@ const ROW_TONE ={ cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', ap
  * element. A card leaves out a cell with nothing to say: it has no column to
  * hold a dash.
  */
-export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, within, own, names = {} }: {
+export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, within, ctx = {}, own, names = {} }: {
   chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string; within?: string;
+  /** What its links to wallets and trades carry on: the lens the page was opened under. */
+  ctx?: Context;
   own?: ReadonlyMap<string, readonly LensKey[]>; names?: Lenses;
 }) {
   if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
@@ -116,22 +142,24 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                 {/* The card's # is drawn, not written: the cell's text stays the row's number, the graph's label for it. */}
                 {numbered ? <td data-row-number className="tabular-nums text-muted-foreground before:content-['#'] sm:px-3 sm:py-2 sm:before:content-none">{n}</td> : null}
                 <td className="whitespace-nowrap sm:px-3 sm:py-2">
-                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade">
+                  <Link className="text-xs tabular-nums hover:underline" href={carry(txHref(chainId, t.txHash, within), ctx)} prefetch={false} title="Open this trade">
                     {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
                   {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
                 </td>
                 {collection && t.collection ? (
                   <td className="basis-full font-medium sm:px-3 sm:py-2 sm:font-normal">
-                    <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`} prefetch={false}>
-                      {t.collection.name ?? short(t.collection.address)} #{tokenLabel(t.tokenId)}
-                    </Link>
+                    <TokenLink base={`/c/${t.collection.chainId}/${t.collection.address}`} tokenId={t.tokenId} name={t.collection.name ?? short(t.collection.address)} method={ctx.method} />
                   </td>
                 ) : null}
-                <td className="whitespace-nowrap sm:px-3 sm:py-2"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
+                <td className="whitespace-nowrap sm:px-3 sm:py-2">
+                  {t.from === ZERO ? <>minted to <Wallet chainId={chainId} address={t.to} within={within} ctx={ctx} /></>
+                    : t.to === ZERO ? <><Wallet chainId={chainId} address={t.from} within={within} ctx={ctx} /> burned</>
+                    : <><Wallet chainId={chainId} address={t.from} within={within} ctx={ctx} /> → <Wallet chainId={chainId} address={t.to} within={within} ctx={ctx} /></>}
+                </td>
                 <td className="whitespace-nowrap sm:px-3 sm:py-2">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{marketName(t.marketplace)}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
+                    <>{venueName(t.marketplace)}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={carry(txHref(chainId, t.txHash, within), ctx)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
                 <td className={cn('basis-full sm:px-3 sm:py-2', keys.length === 0 && 'max-sm:hidden')}>

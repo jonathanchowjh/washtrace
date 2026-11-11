@@ -2,9 +2,8 @@ import Link from 'next/link';
 import type { Bucket, TimelinePoint, TradeRow } from '@washtrace/detect';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { collectionOf, tradeContextOf, tradesOf, whose, type Item } from '@/lib/collection-reads';
-import { LENSES, num, plural } from '@/lib/format';
+import { LENSES, SHOWN, num, plural } from '@/lib/format';
 import { txHref } from '@/lib/links';
-import { SHOWN } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -40,7 +39,7 @@ const SEGMENT = {
   floor: 'bg-cycle',
   ceiling: HATCH,
   apart: 'border border-dashed border-muted-foreground bg-card',
-  clean: 'bg-muted',
+  clean: 'bg-muted-foreground/25',
 } as const;
 
 /**
@@ -55,8 +54,9 @@ const SEGMENT = {
  * squares, their times (ms) the columns they fall in. `label` says whose
  * they are ("this token's"), so a noun follows it; `href` lists them. `cut`:
  * they are only its first, the item has more, so their count is not its own.
+ * `transfers`: all it moved, mints among them, for an item whose page counts those, so the lead says both.
  */
-export type Mine = { keys: ReadonlySet<string>; times: readonly number[]; label: string; href: string; cut?: boolean };
+export type Mine = { keys: ReadonlySet<string>; times: readonly number[]; label: string; href: string; cut?: boolean; transfers?: number };
 
 // Literal classes: an item's own sales, outlined on the strip.
 const OUTLINE = 'ring-2 ring-foreground ring-offset-1 ring-offset-card';
@@ -79,9 +79,9 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground"><KindIcon kind="transaction" />{mine === undefined ? `All ${plural(total, 'sale')}, in order` : `Where ${mine.label} sales sit among all ${num(total)}`}</h2>
         <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          {mine === undefined ? null : <Link href={mine.href} prefetch={false} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{mine.label} {mine.cut ? `first ${num(mine.keys.size)} sales` : plural(mine.keys.size, 'sale')}</Link>}
+          {mine === undefined ? null : <Link href={mine.href} prefetch={false} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{mine.label} {mine.cut ? `first ${num(mine.keys.size)} sales` : plural(mine.keys.size, 'sale')}{mine.transfers === undefined ? '' : ` of ${plural(mine.transfers, 'transfer')}`}</Link>}
           <Link href={tradesHref(base, { caught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} {LENSES.A.name}</Link>
-          <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} + {LENSES.AC.name}</Link>
+          <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="ceiling" />{num(sum.ceiling)} + {LENSES.AC.name}</Link>
           <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} {LENSES.AU.name} alone</Link>
           <Link href={tradesHref(base, { notCaught: [...SHOWN] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="clean" />{num(sum.clean)} not flagged</Link>
         </p>
@@ -124,11 +124,11 @@ const MINE = 2000;
 /**
  * The collection's strip of every sale on a token, wallet, ring or trade page,
  * that item's sales outlined, so where it sits among the rest stays on screen.
- * `of` is the item, whose sales are picked as the Trades tab's filter picks them. Nothing before the
+ * `of` is the item, whose sales are picked as the Trades tab's filter picks them; `transfers` is its count of all it moved, where its page gives one. Nothing before the
  * first analysis, or for an item with no sale. Rendered in a Suspense of its
  * own by the page: it reads the collection's timeline.
  */
-export async function WhereItSits({ chainId, address, of }: { chainId: number; address: string; of: Item }) {
+export async function WhereItSits({ chainId, address, of, transfers }: { chainId: number; address: string; of: Item; transfers?: number }) {
   const c = await collectionOf(chainId, address);
   if (!c?.latest) return null;
   const ctx = await tradeContextOf(c);
@@ -150,7 +150,7 @@ export async function WhereItSits({ chainId, address, of }: { chainId: number; a
   const mine = {
     keys: new Set(outlined.map((r) => `${r.txHash}:${r.logIndex}`)),
     times: outlined.flatMap((r) => (r.blockTime === null ? [] : [r.blockTime * 1000])),
-    label: whose(of), href: tradesHref(base, tradesOf(of)), cut,
+    label: whose(of), href: tradesHref(base, tradesOf(of)), cut, transfers,
   };
   return <SalesStrip timeline={timeline} base={base} zone={zone} chainId={chainId} sales={sold} mine={mine} />;
 }

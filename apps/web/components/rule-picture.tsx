@@ -23,8 +23,9 @@ export function RulePicture({ rule, className }: { rule: LensRule; className?: s
   return (
     <div className={cn('flex flex-wrap items-center gap-3', className)}>
       <svg viewBox="0 0 220 76" role="img" aria-label={ruleLine(rule)} className="h-16 w-48 shrink-0">
-        <path d="M48 20H170" strokeWidth={1.8} className="stroke-money" />
-        <path d="M164 15l7 5-7 5" fill="none" strokeWidth={1.6} className="stroke-money" />
+        {/* The sale in a neutral stroke, as LensPicture draws Money loops back's: gold is Linked wallets' alone. */}
+        <path d="M48 20H170" strokeWidth={1.8} className="stroke-muted-foreground" />
+        <path d="M164 15l7 5-7 5" fill="none" strokeWidth={1.6} className="stroke-muted-foreground" />
         <path d={`M${pts.map(([x, y]) => `${x} ${y}`).join('L')}`} fill="none" strokeWidth={1.5} className="stroke-flow" {...(back ? { strokeDasharray: back } : {})} />
         <circle cx="40" cy="20" r="7" strokeWidth={1.5} className="fill-card stroke-foreground" />
         <circle cx="180" cy="20" r="7" strokeWidth={1.5} className="fill-card stroke-foreground" />

@@ -20,6 +20,11 @@ export const CHAINS: Readonly<Record<number, Chain>> = {
   31337: { name: 'Local (anvil)' },
 };
 
+/** The chain's block explorer, or null for a chain with none (the local one). */
+export function explorerOf(id: number): NonNullable<Chain['explorer']> | null {
+  return CHAINS[id]?.explorer ?? null;
+}
+
 export function chainName(id: number): string {
   return CHAINS[id]?.name ?? `Chain ${id}`;
 }

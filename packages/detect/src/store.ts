@@ -17,7 +17,7 @@ import { factsKey, writeFacts } from './facts.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
 import type { LensFlag, LensInput, LensTotals } from './lens.js';
 import type { SpotResult } from './spot.js';
-import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type TokenFlow, type Transfer, type Witness } from './types.js';
+import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type PairShape, type TokenFlow, type Transfer, type Witness } from './types.js';
 
 /** pg_advisory_lock's first key: this product's namespace. The second is the job. */
 const LOCK_NS = 0x77617368; // "wash"
@@ -230,12 +230,14 @@ export type Bucket = 'hour' | 'day' | 'week' | 'month';
  * smallest wallet in it, its name in a link), its rank among the collection's
  * by the ETH its flagged sales moved, then their count; its wallets, the first
  * few of them by address; and what its counted flagged trades add up to:
- * `sales` of them sales, `floorSales` of those Round trips', `tokens` tokens,
+ * `sales` of them sales, `floorSales` of those Round trips', `tokens` tokens (`tokenSample` names the first),
  * `volumeWei` priced in money, between `firstAt` and `lastAt`.
  */
 export interface RingLine {
   anchor: string; rank: number; wallets: number; sample: string[];
   sales: number; floorSales: number; tokens: number; volumeWei: string; firstAt: number | null; lastAt: number | null;
+  /** Its first three tokens by number, which the rings table names; `tokens` counts them all. */
+  tokenSample: string[];
 }
 
 /** One ring in full: its line, its wallets (`traded` false for one that only moved the money), and its tokens, most ETH first. */
@@ -265,7 +267,7 @@ const RINGS_SQL = `WITH hits AS (
 r AS (
   SELECT h.ring, count(*) FILTER (WHERE t.marketplace IS NOT NULL)::int AS sales,
          count(*) FILTER (WHERE t.marketplace IS NOT NULL AND h.floor)::int AS floor_sales,
-         count(DISTINCT t.token_id)::int AS tokens,
+         count(DISTINCT t.token_id)::int AS tokens, (array_agg(DISTINCT t.token_id ORDER BY t.token_id))[1:3]::text[] AS token_sample,
          COALESCE(sum(CASE WHEN t.marketplace IS NOT NULL AND t.currency = ANY($2::text[]) THEN t.price_wei END), 0) AS volume,
          extract(epoch FROM min(t.block_time))::float8 * 1000 AS first_at, extract(epoch FROM max(t.block_time))::float8 * 1000 AS last_at
   FROM hits h JOIN washtrace.transfers t ON t.collection_id = $1 AND t.tx_hash = h.tx_hash AND t.log_index = h.log_index ${COUNTED_JOIN}
@@ -276,7 +278,7 @@ m AS (
   WHERE w.collection_id = $1 AND w.ring IS NOT NULL GROUP BY w.ring),
 ranked AS (
   SELECT m.ring, COALESCE(r.sales, 0) AS sales, COALESCE(r.floor_sales, 0) AS floor_sales, COALESCE(r.tokens, 0) AS tokens, COALESCE(r.volume, 0) AS volume,
-         r.first_at, r.last_at, m.wallets, m.sample,
+         r.first_at, r.last_at, COALESCE(r.token_sample, '{}') AS token_sample, m.wallets, m.sample,
          row_number() OVER (ORDER BY COALESCE(r.volume, 0) DESC, COALESCE(r.sales, 0) DESC, m.ring)::int AS rank, count(*) OVER ()::int AS total
   FROM m LEFT JOIN r USING (ring))`;
 
@@ -430,6 +432,13 @@ export type DueRun = { lens: Lens; collectionId: number; chainId: number; name: 
 /** What the rings of are asked for: a wallet, a token, or a transaction. */
 export type RingOf = { wallet: string } | { tokenId: string } | { tx: string };
 
+/**
+ * A linked pair a wallet is the middle of: its token, its seller and buyer,
+ * the anchor of the ring it is in (null for none), and its shape (null for a
+ * pair stored before shapes were recorded).
+ */
+export interface MiddleRow { tokenId: string; seller: string; buyer: string; ring: string | null; shape: PairShape | null }
+
 /** A Test the console asked the worker to run. */
 export type CheckKind = 'rpc' | 'etherscan';
 
@@ -445,6 +454,9 @@ export type Parsed =
   | { kind: 'text'; text: string }
   | { kind: 'empty' };
 
+/** A lens tier as a mark draws it: the floor (Round trips) or what the ceiling adds (Linked wallets). */
+export type Tier = 'cycle' | 'ceiling';
+
 export type SearchKind = 'collections' | 'tokens' | 'wallets' | 'trades';
 
 export interface SearchHits {
@@ -452,8 +464,13 @@ export interface SearchHits {
   collections: { chainId: number; address: string; name: string | null; symbol: string | null; totals: Record<Method, MethodTotals> | null }[];
   /** `flagged`: a counted lens flagged one of its trades in the latest analysis. */
   tokens: { chainId: number; address: string; name: string | null; tokenId: string; transfers: number; flagged: boolean }[];
-  /** `here`, in a scoped search: whether it traded in that collection. A full address is found anywhere, so it may not have. */
-  wallets: { chainId: number; address: string; transfers: number; here?: boolean }[];
+  /**
+   * `here`, in a scoped search: whether it traded in that collection. A full address is found anywhere, so it may not have.
+   * `tier`, in a scoped search too: the wallet's standing in that collection's latest analysis, by walletTiers (null for none, or for
+   * one on another chain; one not `here` has the ceiling when it is a middle there). An unscoped search leaves it out, as a wallet
+   * stands differently in each collection.
+   */
+  wallets: { chainId: number; address: string; transfers: number; here?: boolean; tier?: Tier | null }[];
   trades: { chainId: number; txHash: string; address: string; name: string | null; tokenId: string }[];
   /** That kind had a row past `limit`: it is cut, and says so. */
   more: Record<SearchKind, boolean>;
@@ -2460,7 +2477,7 @@ export class Store {
       )).rows.map((r) => r.address));
     }
     moves.seal();
-    return { transfers, through, moves, contracts: contractsFor(chainId), custodians: new Set(CUSTODIANS), money, truncated, tradeTxs, tokensRead };
+    return { transfers, through, moves, contracts: contractsFor(chainId), custodians: new Set(Object.keys(CUSTODIANS)), money, truncated, tradeTxs, tokensRead };
   }
 
   /**
@@ -2623,14 +2640,16 @@ export class Store {
           }
           if (fresh.length) {
             await c.query(
-              `INSERT INTO washtrace.witnesses (collection_id, id, kind, wallets, cycles, middle, ring)
-               SELECT $1, i, k, ARRAY(SELECT jsonb_array_elements_text(w)), cy, mi, r FROM unnest($2::int[], $3::text[], $4::jsonb[], $5::int[], $6::text[], $7::text[]) AS u(i, k, w, cy, mi, r)`,
+              `INSERT INTO washtrace.witnesses (collection_id, id, kind, wallets, cycles, middle, ring, shape)
+               SELECT $1, i, k, ARRAY(SELECT jsonb_array_elements_text(w)), cy, mi, r, sh
+               FROM unnest($2::int[], $3::text[], $4::jsonb[], $5::int[], $6::text[], $7::text[], $8::text[]) AS u(i, k, w, cy, mi, r, sh)`,
               [
                 id, fresh.map((_, n) => written + n), fresh.map((w) => w.kind),
                 // A jsonb array per row, since a text[] cannot nest in a text[]; the insert unpacks it.
                 fresh.map((w) => JSON.stringify(walletsOf(w))),
                 fresh.map((w) => (w.kind === 'pair' ? null : w.cycles)), fresh.map((w) => (w.kind === 'pair' ? w.middle : null)),
                 fresh.map((_, n) => ring.get(written + n) ?? null),
+                fresh.map((w) => (w.kind === 'pair' ? w.shape ?? null : null)),
               ],
             );
             written += fresh.length;
@@ -2806,6 +2825,104 @@ export class Store {
     return rows.map((r) => r.ring);
   }
 
+  /**
+   * Each wallet's standing in the latest analysis, by the rule the wallet's page
+   * uses (web lib/metrics `toneOf`): from its own counted flagged transfers in the
+   * collection, 'cycle' when Round trips flags any, else 'ceiling'. A wallet with
+   * none is left out, though it traded. One that never traded here is in
+   * the collection's evidence only as a middle wallet of a counted witness, and
+   * that is the ceiling's (Linked wallets' evidence). Money loops back never counts.
+   */
+  async walletTiers(id: number, addresses: readonly string[]): Promise<Map<string, Tier>> {
+    if (addresses.length === 0) return new Map();
+    const { rows } = await this.pool.query<{ address: string; floor: boolean }>(
+      `WITH a AS (SELECT DISTINCT unnest($2::text[]) AS addr),
+       own AS (
+         SELECT a.addr, bool_or(f.method = 'A') AS floor
+         FROM a JOIN washtrace.transfers t ON t.collection_id = $1 AND (t.from_address = a.addr OR t.to_address = a.addr) ${COUNTED_JOIN}
+         JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method IN ${COUNTED}
+         GROUP BY a.addr)
+       SELECT addr AS address, floor FROM own
+       UNION ALL
+       SELECT a.addr, false FROM a
+       WHERE NOT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = $1 AND (t.from_address = a.addr OR t.to_address = a.addr))
+         AND EXISTS (SELECT 1 FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
+                     WHERE f.collection_id = $1 AND f.method IN ${COUNTED} AND w.wallets @> ARRAY[a.addr])`,
+      [id, [...addresses]],
+    );
+    return new Map(rows.map((r) => [r.address, r.floor ? 'cycle' : 'ceiling']));
+  }
+
+  /**
+   * The watched collections on `chainId` where `wallet` has walletTiers'
+   * ceiling as a middle: it never traded there, and a counted witness of the
+   * latest analysis names it. By name. The global page of a wallet that traded
+   * nowhere opens each of them, where its role is read.
+   */
+  async middleIn(chainId: number, wallet: string): Promise<{ address: string; name: string | null }[]> {
+    const { rows } = await this.pool.query<{ address: string; name: string | null }>(
+      `SELECT c.address, c.name FROM washtrace.collections c
+       WHERE c.chain_id = $1
+         AND NOT EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = c.id AND (t.from_address = $2 OR t.to_address = $2))
+         AND EXISTS (SELECT 1 FROM washtrace.flags f JOIN washtrace.witnesses w ON w.collection_id = f.collection_id AND w.id = f.witness_id
+                     WHERE f.collection_id = c.id AND f.method IN ${COUNTED} AND w.wallets @> ARRAY[$2])
+       ORDER BY c.name, c.id`,
+      [chainId, wallet],
+    );
+    return rows;
+  }
+
+  /** The anchors of the rings each of some wallets is in, by wallet; a wallet in none is left out. Rank them with `ringLines`. */
+  async walletRings(id: number, addresses: readonly string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (addresses.length === 0) return out;
+    const { rows } = await this.pool.query<{ address: string; ring: string }>(
+      `SELECT DISTINCT x AS address, w.ring FROM washtrace.witnesses w CROSS JOIN LATERAL unnest(w.wallets) x
+       WHERE w.collection_id = $1 AND w.ring IS NOT NULL AND w.wallets && $2::text[] AND x = ANY($2::text[]) ORDER BY w.ring`,
+      [id, [...addresses]],
+    );
+    for (const r of rows) out.set(r.address, [...(out.get(r.address) ?? []), r.ring]);
+    return out;
+  }
+
+  /**
+   * The linked pairs `wallet` is the middle of in the latest analysis: the
+   * first 20 by token (numerically), then seller and buyer, and in `tokens`
+   * how many distinct tokens they are in all. A pair's wallets are its
+   * seller, its buyer and its middle, in that order (walletsOf).
+   */
+  async middleOf(id: number, wallet: string): Promise<{ rows: MiddleRow[]; tokens: number }> {
+    const from = `FROM washtrace.witnesses w
+       JOIN washtrace.flags f ON f.collection_id = w.collection_id AND f.witness_id = w.id AND f.method = 'AC'
+       JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
+       WHERE w.collection_id = $1 AND w.kind = 'pair' AND w.wallets @> ARRAY[$2]::text[] AND w.middle = $2`;
+    const [{ rows }, count] = await Promise.all([
+      this.pool.query<{ token_id: string; seller: string; buyer: string; ring: string | null; shape: PairShape | null }>(
+        `SELECT DISTINCT t.token_id, w.wallets[1] AS seller, w.wallets[2] AS buyer, w.ring, w.shape ${from}
+         ORDER BY t.token_id, seller, buyer LIMIT 20`,
+        [id, wallet],
+      ),
+      this.pool.query<{ n: number }>(`SELECT count(DISTINCT t.token_id)::int AS n ${from}`, [id, wallet]),
+    ]);
+    return { rows: rows.map((r) => ({ tokenId: r.token_id, seller: r.seller, buyer: r.buyer, ring: r.ring, shape: r.shape })), tokens: count.rows[0]!.n };
+  }
+
+  /**
+   * The middles of the linked pairs `wallet` is the seller or buyer of in the
+   * latest analysis, each with its pair's shape (null for a pair stored before
+   * shapes were recorded): who stands between it and a wallet it traded with.
+   */
+  async middlesOf(id: number, wallet: string): Promise<{ middle: string; shape: PairShape | null }[]> {
+    const { rows } = await this.pool.query<{ middle: string; shape: PairShape | null }>(
+      `SELECT DISTINCT w.middle, w.shape FROM washtrace.witnesses w
+       WHERE w.collection_id = $1 AND w.kind = 'pair' AND w.middle IS NOT NULL AND w.wallets @> ARRAY[$2]::text[] AND w.middle <> $2
+         AND (w.wallets[1] = $2 OR w.wallets[2] = $2)
+       ORDER BY w.middle, w.shape`,
+      [id, wallet],
+    );
+    return rows;
+  }
+
   // ---- reads for the console and the API ----------------------------------
 
   /**
@@ -2838,7 +2955,7 @@ export class Store {
     return {
       rows: rows.rows.map((r) => ({
         tokenId: r.token_id, caught: r.caught, trades: r.trades, volumeWei: r.volume, lastAt: r.at,
-        loops: r.loops, pairs: r.pairs, wallets: r.wallets, closedByMoney: r.closed, laps: r.laps, middles: r.middles,
+        loops: r.loops, pairs: r.pairs, wallets: r.wallets, closedByMoney: r.closed, laps: r.laps, middles: r.middles, shapes: r.shapes,
       })),
       total: rows.total,
     };
@@ -2879,7 +2996,7 @@ export class Store {
     const rows = await this.lensPage(params, caughtArgs, 'address', caught, counts, o.sort === 'share' || o.sort === 'first', order, 'c.address', o, isOwnKey(method));
     return {
       rows: rows.rows.map((r) => ({
-        address: r.address, caught: r.caught, trades: r.trades, volumeWei: r.volume, firstAt: r.at, loops: r.loops, pairs: r.pairs, partners: r.wallets,
+        address: r.address, caught: r.caught, trades: r.trades, volumeWei: r.volume, firstAt: r.at, loops: r.loops, pairs: r.pairs, partners: r.wallets, shapes: r.shapes,
       })),
       total: rows.total,
     };
@@ -3012,6 +3129,25 @@ export class Store {
       [id, tokenId],
     );
     return rows.map(toFlagged);
+  }
+
+  /**
+   * The flags on a page of trades, by `txHash:logIndex`, in one query: the
+   * reasons a Trades list says beside its rows. A trade nothing flagged has no entry.
+   */
+  async tradeFlags(id: number, rows: readonly Pick<Transfer, 'txHash' | 'logIndex'>[]): Promise<Map<string, Partial<Record<Method, Witness>>>> {
+    const out = new Map<string, Partial<Record<Method, Witness>>>();
+    if (rows.length === 0) return out;
+    const { rows: found } = await this.pool.query(
+      `SELECT f.tx_hash, f.log_index, f.method, f.witness FROM washtrace.flags f
+       JOIN unnest($2::text[], $3::int[]) AS u(tx, li) ON f.tx_hash = u.tx AND f.log_index = u.li WHERE f.collection_id = $1`,
+      [id, rows.map((r) => r.txHash), rows.map((r) => r.logIndex)],
+    );
+    for (const r of found) {
+      const key = `${r.tx_hash}:${r.log_index}`;
+      out.set(key, { ...out.get(key), [r.method as Method]: r.witness as Witness });
+    }
+    return out;
   }
 
   /** Flows between any two of `wallets`, for drawing the money edges beside a token's graph. */
@@ -3270,6 +3406,14 @@ export class Store {
       [arg, ...page, ...rest],
     )).rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades');
 
+    // In a scope, each wallet on its chain carries its tier there, by walletTiers' rule: a never-traded middle has the ceiling, as its ring and card say. A hit on another chain carries none.
+    const marked = async (found: SearchHits['wallets']) => {
+      const s = opts.scope;
+      if (s === undefined) { hits.wallets = found; return; }
+      const tiers = await this.walletTiers(s.id, found.filter((h) => h.chainId === s.chainId).map((h) => h.address));
+      hits.wallets = found.map((h) => ({ ...h, tier: h.chainId === s.chainId ? tiers.get(h.address) ?? null : null }));
+    };
+
     // The kinds' queries are independent, and the sidebar asks as a person types: they run at once, not one after another.
     const asks: Promise<void>[] = [];
     if ((p.kind === 'text' || p.kind === 'token') && want('collections')) {
@@ -3297,7 +3441,7 @@ export class Store {
         const s = opts.scope;
         const here = s === undefined ? undefined
           : `EXISTS (SELECT 1 FROM washtrace.transfers t WHERE t.collection_id = ${Number(s.id)} AND (t.from_address = w.address OR t.to_address = w.address))`;
-        asks.push(wallets('address = $1', p.address, here).then((h) => { hits.wallets = h; }));
+        asks.push(wallets('address = $1', p.address, here).then(marked));
       }
     }
     if (p.kind === 'prefix') {
@@ -3310,7 +3454,7 @@ export class Store {
           : `chain_id = ${Number(s.chainId)} AND address IN (
               SELECT from_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND from_address LIKE $1 || '%'
               UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND to_address LIKE $1 || '%')`;
-        asks.push(wallets(where, p.prefix, s === undefined ? undefined : 'true').then((h) => { hits.wallets = h; }));
+        asks.push(wallets(where, p.prefix, s === undefined ? undefined : 'true').then(marked));
       }
       if (want('trades')) {
         // The start of a hash as a range on transfers_tx_idx (hashPrefixEnd). The LIKE keeps a collation that

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { analyze } from '../src/methods.js';
+import { analyze, tokenCycles } from '../src/methods.js';
+import { ZERO } from '../src/graph.js';
+import { CUSTODIANS, contractsFor } from '../src/marketplaces.js';
 import { LAB, LAB_MIXED, MONEY, chain, flow, input, transfer, w } from './fixtures.js';
 import type { Analysis, Method } from '../src/types.js';
 
@@ -63,6 +65,67 @@ describe('Figure 8', () => {
     const flows = hops.slice(1).map((to, i) => flow(hops[i]!, to));
     expect(analyze(input(sale(), flows, { rules: { reachDepth: 2 } })).totals.AU.flagged).toBe(0);
     expect(analyze(input(sale(), flows, { rules: { reachDepth: 3 } })).totals.AU.flagged).toBe(1);
+  });
+});
+
+/**
+ * A linked pair's shape: which way the money went between the seller A, the
+ * buyer B and their middle X. Of several that hold, back, then forward, then
+ * funder, then payee.
+ */
+describe('a linked pair\'s shape', () => {
+  const shapeOf = (flows: ReturnType<typeof flow>[]) => {
+    const f = analyze(input(chain('1', a, b), flows)).flags.find((x) => x.method === 'AC');
+    return f?.witness.kind === 'pair' ? f.witness.shape : undefined;
+  };
+  const cases: [string, () => ReturnType<typeof flow>[], string][] = [
+    ['X funded both', () => [flow(x, a), flow(x, b)], 'funder'],
+    ['both paid X', () => [flow(a, x), flow(b, x)], 'payee'],
+    ['B paid A back through X', () => [flow(b, x), flow(x, a)], 'back'],
+    ['A paid B through X', () => [flow(a, x), flow(x, b)], 'forward'],
+    ['B paid A directly', () => [flow(b, a)], 'direct-back'],
+    ['A paid B directly', () => [flow(a, b)], 'direct-forward'],
+    ['A and B paid each other', () => [flow(a, b), flow(b, a)], 'both'],
+  ];
+  for (const [name, flows, shape] of cases) it(`${name}: ${shape}`, () => expect(shapeOf(flows())).toBe(shape));
+
+  it('a direct payment wins over a middle', () => {
+    expect(shapeOf([flow(b, a), flow(x, a), flow(x, b)])).toBe('direct-back');
+  });
+
+  it('of several that hold, back, then forward, then funder, then payee', () => {
+    // Money both ways on both legs: every shape holds.
+    expect(shapeOf([flow(x, a), flow(a, x), flow(x, b), flow(b, x)])).toBe('back');
+    // X funded both, and A also paid X: forward and funder hold.
+    expect(shapeOf([flow(x, a), flow(x, b), flow(a, x)])).toBe('forward');
+    // X funded both, and B also paid X: back and funder hold.
+    expect(shapeOf([flow(x, a), flow(x, b), flow(b, x)])).toBe('back');
+    // Both paid X, and X also paid B: forward and payee hold.
+    expect(shapeOf([flow(a, x), flow(b, x), flow(x, b)])).toBe('forward');
+  });
+
+  it('every way the money can go through a middle has one of the four', () => {
+    // Each leg is X paid it, it paid X, or both: nine ways, none without a shape.
+    const legs = (v: string) => [[flow(x, v)], [flow(v, x)], [flow(x, v), flow(v, x)]];
+    const seen = new Set<string | undefined>();
+    for (const sa of legs(a)) for (const sb of legs(b)) seen.add(shapeOf([...sa, ...sb]));
+    expect([...seen].sort()).toEqual(['back', 'forward', 'funder', 'payee']);
+  });
+
+  it('the demo\'s #112, #114 and #116: paid back, funded, and both paid', () => {
+    const [s2, b2, mule] = [w('f8-2-seller'), w('f8-2-buyer'), w('f8-2-mule')];
+    const [s4, b4, funder] = [w('f8-4-seller'), w('f8-4-buyer'), w('f8-4-funder')];
+    const [s6, b6, sink] = [w('f8-6-seller'), w('f8-6-buyer'), w('f8-6-sink')];
+    const ts = [...chain('112', s2, b2), ...chain('114', s4, b4), ...chain('116', s6, b6)];
+    const flows = [flow(b2, mule), flow(mule, s2), flow(funder, s4), flow(funder, b4), flow(s6, sink), flow(b6, sink)];
+    const r = analyze(input(ts, flows));
+    const witnessOf = (seller: string) => {
+      const sale = ts.find((t) => t.from === seller)!;
+      return r.flags.find((f) => f.method === 'AC' && f.txHash === sale.txHash)!.witness;
+    };
+    expect(witnessOf(s2)).toMatchObject({ kind: 'pair', pair: [s2, b2], middle: mule, shape: 'back' });
+    expect(witnessOf(s4)).toMatchObject({ kind: 'pair', pair: [s4, b4], middle: funder, shape: 'funder' });
+    expect(witnessOf(s6)).toMatchObject({ kind: 'pair', pair: [s6, b6], middle: sink, shape: 'payee' });
   });
 });
 
@@ -220,5 +283,42 @@ describe('the lab fixtures match the engine', () => {
     const [w11, w12, w13] = [w('w11'), w('w12'), w('w13')];
     const flows = [flow(w13, w11, { txHash: '0xlab_x1' }), flow(w13, w12)];
     same(analyze(input(LAB_MIXED.transfers, flows, { money: MONEY })), LAB_MIXED.analysis);
+  });
+});
+
+describe('tokenCycles', () => {
+  const cyclesOf = (a: Analysis) => {
+    const f = a.flags.find((x) => x.method === 'A');
+    return f?.witness.kind === 'scc' ? f.witness.cycles : 0;
+  };
+
+  it('equals the count the analysis flags a looping token on', () => {
+    const ts = chain('1', w('a'), w('b'), w('a'), w('b'), w('a'));
+    const a = analyze(input(ts));
+    expect(cyclesOf(a)).toBeGreaterThanOrEqual(2);
+    expect(tokenCycles(ts, new Set()).cycles).toBe(cyclesOf(a));
+  });
+
+  it('counts one return as 1 cycle, below the minimum, so the analysis flags nothing', () => {
+    const ts = chain('2', w('a'), w('b'), w('a'));
+    const a = analyze(input(ts));
+    expect(a.flags.filter((f) => f.method === 'A')).toEqual([]);
+    const near = tokenCycles(ts, new Set());
+    expect(near.cycles).toBe(1);
+    expect(near.wallets).toEqual([w('a'), w('b')]);
+  });
+
+  it('is 0 when the token never comes back, and folds custody as the analysis does', () => {
+    expect(tokenCycles(chain('3', w('a'), w('b'), w('c')), new Set()).cycles).toBe(0);
+    const blend = w('e');
+    const loan = [transfer('4', ZERO, w('a')), transfer('4', w('a'), blend), transfer('4', blend, w('a')), transfer('4', w('a'), w('b'))];
+    expect(tokenCycles(loan, new Set([blend])).cycles).toBe(0);
+  });
+});
+
+describe('CUSTODIANS', () => {
+  it('names each escrow by address, and the contracts the engine skips still include it', () => {
+    expect(CUSTODIANS['0x29469395eaf6f95920e59f858042f0e28d98a20b']).toBe('Blur Blend');
+    for (const a of Object.keys(CUSTODIANS)) expect(contractsFor(1).has(a)).toBe(true);
   });
 });

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import type { Metadata } from 'next';
 import { connection } from 'next/server';
 import { Sidebar } from '@/components/sidebar';
+import { range } from '@/lib/metrics';
+import type { Watched } from '@/lib/search';
 import { store } from '@/lib/store';
 import './globals.css';
 
@@ -15,9 +17,12 @@ const THEME_SCRIPT = `try{var t=localStorage.getItem('washtrace.theme');if(t==='
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // Reads process.env and the store: never prerendered.
   await connection();
-  let watched: { chainId: number; address: string; name: string | null }[] = [];
+  let watched: Watched[] = [];
   try {
-    watched = (await store().collections()).map((c) => ({ chainId: c.chainId, address: c.address, name: c.name }));
+    watched = (await store().collections()).map((c) => {
+      const r = c.latest === null ? null : range(c.latest.totals, 'sales');
+      return { chainId: c.chainId, address: c.address, name: c.name, range: r === null ? null : { low: r.low, high: r.high } };
+    });
   } catch {
     // The page under this layout says what is wrong; the sidebar just lists nothing.
   }

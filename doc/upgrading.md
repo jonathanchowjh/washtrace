@@ -1,7 +1,7 @@
 # Upgrading
 
 For operators. The schema is defined in one file, [migrations.ts](../packages/detect/src/migrations.ts):
-37 migrations, forward-only, numbered from 1, each safe to run again.
+38 migrations, forward-only, numbered from 1, each safe to run again.
 
 ## How a migration runs
 
@@ -65,6 +65,7 @@ migration creates is built empty, so it costs nothing and is not listed as a wai
 | 35 | Spot checks: creates `spot_checks`, one row per transaction judged without watching its collection. | On the new table: `spot_checks_queued_idx`, `spot_checks_tx_idx` and the unique `spot_checks_open_idx`, built empty. |
 | 36 | Rings: adds `witnesses.ring` and `analyses.rings`. Analyses saved before it have `rings` NULL; the worker works their rings out from the stored witnesses, one collection a turn, and analyses nothing again. | `witnesses_ring_idx` on `witnesses`, plain and partial (`WHERE ring IS NOT NULL`), so it holds no rows on upgrade, though it still scans the table. |
 | 37 | Speeds up the lens lists: a partial index holding only the counted trades' keys, so the counted-trades join is answered from the index alone. | `trade_facts_counted_idx` on `trade_facts`, `CONCURRENTLY`: writes to `trade_facts` carry on while it builds, and an invalid one a stopped build left is dropped first. |
+| 38 | A linked pair's shape: adds `witnesses.shape`, nullable with no default, so no row is rewritten. A witness saved before it keeps `shape` NULL and reads as before; a collection's pairs get their shapes at its next analysis. Nothing is analyzed again for it. | |
 
 A wallet due a read again keeps `status = 'done'` and gets `stale_at` set, so every reader of a done wallet still
 counts it. With `follow.reread` at 0, the default, nothing is marked and #34 changes no behaviour.
@@ -77,6 +78,8 @@ counts it. With `follow.reread` at 0, the default, nothing is marked and #34 cha
   were counted wrote no trade facts and no loops, so its trades read "not judged yet" until the worker has
   analyzed the collection again. A collection with any analysis that counted loops is left alone.
 - **Errors stored with a URL are cleared** by #13, and console settings that `.env` shadowed are deleted by #18.
+- **A linked pair has no shape until its collection's next analysis** after #38. Until then its witness carries
+  no `shape`, the lists count it in no shape, and the console words it as before.
 
 ## Before a big upgrade
 

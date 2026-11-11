@@ -1,11 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
 import { Answer, Bar, Head, Pill, Problem, STORE_DOWN, Section, Warn, type PillTone } from '@/components/ui';
 import { Refresh } from '@/components/refresh';
+import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { chainName } from '@/lib/chains';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, MONEY_LENSES, eta, interval, num, plural, short, stageName, took, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
 import { JOB_STEP, type JobState, type Notice } from '@/lib/status';
 import { workerView } from '@/lib/views';
@@ -13,6 +15,7 @@ import { readerZone } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Time } from '@/components/zone';
 import { PipelineErrors, PipelineTable } from '@/components/pipeline';
+import { CollectionControls } from '@/components/watch';
 
 export const metadata: Metadata = { title: 'Worker' };
 
@@ -25,7 +28,7 @@ const DEFAULT = {
 /** The four jobs in the order data flows through them, each with what it feeds. */
 const STEPS = {
   ingest: { title: JOB_STEP.ingest, does: 'Reads every finalized ERC-721 transfer of each collection, and the receipts that make some of them sales.', feeds: 'every lens' },
-  fund: { title: JOB_STEP.fund, does: 'Asks Etherscan who paid whom, for each wallet that traded, busiest first.', feeds: `${LENSES.AU.name} and ${LENSES.AC.name}` },
+  fund: { title: JOB_STEP.fund, does: 'Asks Etherscan who paid whom, for each wallet that traded, busiest first.', feeds: MONEY_LENSES },
   analyze: { title: JOB_STEP.analyze, does: 'Reruns the three built-in lenses over each collection that has new data.', feeds: 'every number in the console' },
   lens: { title: JOB_STEP.lens, does: 'Runs each lens of yours over the collections it was asked on, after their latest analysis.', feeds: 'the lists and tabs of your lenses' },
 } as const;
@@ -49,6 +52,7 @@ export default async function WorkerPage() {
     return <><Head title="Worker" /><Problem title={STORE_DOWN}>{messageOf(err)}</Problem></>;
   }
   // A pass that started and has not finished is running; its `doing` says what, and for which collection.
+  const writable = mayWrite(process.env, await headers());
   const now = v.passes.filter((p) => (p.finishedAt === null || p.finishedAt < p.startedAt) && p.doing);
   return (
     <>
@@ -90,7 +94,7 @@ export default async function WorkerPage() {
                         <div key={b.chainId}>
                           <p className="flex justify-between"><span>{chainName(b.chainId)}</span><span className="tabular-nums">{num(b.done)} of {num(all)} wallets on this chain checked</span></p>
                           <Bar share={all === 0 ? 0 : b.done / all} className="mt-1" />
-                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the follow limit · ` : ''}{b.truncated} too large to page · {num(b.followed)} followed from traders{b.stale > 0 ? ` · ${num(b.stale)} to read again` : ''}</p>
+                          <p className="mt-0.5 text-muted-foreground">{b.etaMs === null ? '' : `${eta(b.etaMs)} · `}{num(b.pending)} waiting · {b.failed} failed · {b.stranded > 0 ? `${num(b.stranded)} held back while their collections are paused or removed, or further out than the follow limit · ` : ''}{b.truncated} too large to page · {num(all - b.followed)} that hold or traded a watched token, {num(b.followed)} followed from traders{b.stale > 0 ? ` · ${num(b.stale)} to read again` : ''}</p>
                         </div>
                       );
                     })}
@@ -106,15 +110,16 @@ export default async function WorkerPage() {
         <ul className="divide-y rounded-lg border bg-card text-sm">
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ {stageName(4)}</span></span>
+            {/* A missing RPC or key is a limit to lift, not a fault: neutral, with the link to lift it. */}
             {v.rpcChains.length === 0
-              ? <Link href="/settings#rpc.1" className="text-money underline">No RPC. Add an RPC URL in Settings →</Link>
+              ? <Link href="/settings#rpc.1" className="text-foreground underline">No RPC. Add an RPC URL in Settings →</Link>
               // Settings lists every chain's RPC with where it comes from, but saves only Ethereum's: another chain's is set in .env.
               : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc" className="text-muted-foreground underline">{v.rpcChains.every((id) => id === 1) ? 'change in Settings' : 'where each comes from, in Settings'}</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ {stageName(5)}</span></span>
             {v.funding === null
-              ? <span className="text-money">Needs a key: {withoutKey(v.trailFunded)}. <Link href={ETHERSCAN_HREF} className="underline">{ETHERSCAN_CTA}</Link></span>
+              ? <span className="text-foreground">Needs a key: {withoutKey(v.trailFunded)}. <Link href={ETHERSCAN_HREF} className="underline">{ETHERSCAN_CTA}</Link></span>
               : <span>Etherscan API V2, <Link href="/settings#etherscan.rps" className="underline decoration-muted-foreground">{v.funding.perSecond ?? DEFAULT.rps} calls a second</Link>, following money <Link href="/settings#follow.hops" className="underline decoration-muted-foreground">{plural(v.followHops ?? DEFAULT.hops, 'wallet')} out</Link> from traders · <Link href="/settings#etherscan.key" className="text-muted-foreground underline">change in Settings</Link></span>}
           </li>
         </ul>
@@ -124,6 +129,29 @@ export default async function WorkerPage() {
         <PipelineTable rows={v.collections} />
         <PipelineErrors rows={v.collections.map((c) => ({ ...c, paused: c.turn === 'paused', rpc: v.rpcChains.includes(c.chainId) }))} />
       </Section>
+
+      {v.collections.length > 0 ? (
+        <Section id="controls" title="Pause, resume, prioritize or delete data" lead="Prioritize checks a collection's wallets for money before the other collections'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.">
+          {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
+          <ul className="divide-y rounded-lg border bg-card text-sm">
+            {v.collections.map((c) => (
+              <li key={`${c.chainId}:${c.address}`} className="px-4 py-2.5">
+                <details>
+                  <summary className="cursor-pointer">
+                    <span className="font-medium text-foreground">{c.name ?? short(c.address)}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{chainName(c.chainId)} · Controls{c.turn === 'paused' ? ' · paused' : c.priority ? ' · prioritized' : ''}</span>
+                  </summary>
+                  <div className="mt-2 flex flex-col gap-2">
+                    <Link href={`/c/${c.chainId}/${c.address}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">Open the collection ›</Link>
+                    {c.turn === 'paused' ? <p className="text-xs text-muted-foreground">Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.</p> : null}
+                    <CollectionControls writable={writable} chainId={c.chainId} address={c.address} paused={c.turn === 'paused'} priority={c.priority} />
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
     </>
   );
 }

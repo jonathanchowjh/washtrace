@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { RingLine } from '@washtrace/detect';
+import type { RingLine, Tier } from '@washtrace/detect';
 import { eth, num, plural, short, tokenLabel } from '@/lib/format';
-import { KindIcon } from './kit';
+import { KindIcon, TierMark, ringTone } from './kit';
 
 /** What the card route answers (app/api/collections/[chain]/[address]/card). */
 export type Card =
-  | { kind: 'wallet'; judged: boolean; address: string; trades: number; flagged: number; rings: number; ring: RingLine | null }
-  | { kind: 'token'; judged: boolean; tokenId: string; transfers: number; flagged: number }
+  | { kind: 'wallet'; judged: boolean; address: string; trades: number; flagged: number; rings: number; ring: RingLine | null; tier: Tier | null }
+  | { kind: 'token'; judged: boolean; tokenId: string; transfers: number; flagged: number; ring: RingLine | null; tier: Tier | null }
   | { kind: 'ring'; judged: boolean; ring: RingLine };
 
 /** Long enough that a pointer passing over a table opens nothing; short enough to feel like a reply. */
@@ -32,18 +32,23 @@ function cardOf(src: string): Promise<Card | null> {
 export function forgetCards() { cache.clear(); }
 
 /** A card's lines, in the console's words. */
-export function cardLines(c: Card): { title: string; kind: 'wallet' | 'token' | 'ring'; lines: string[] } {
+export function cardLines(c: Card): { title: string; kind: 'wallet' | 'token' | 'ring'; tier: Tier | null; lines: string[] } {
   const judged = (s: string) => (c.judged ? s : 'not judged yet');
   if (c.kind === 'wallet') {
-    return { kind: 'wallet', title: short(c.address), lines: [
+    return { kind: 'wallet', title: short(c.address), tier: c.tier, lines: [
       // The route's `trades` is every transfer it sent or received here, a mint among them (walletTradeCount), as its page counts: so, transfers.
       `${plural(c.trades, 'transfer')} here · ${judged(`${num(c.flagged)} flagged`)}`,
       c.ring === null ? 'In no ring' : `In Ring ${c.ring.rank}${c.rings > 1 ? ` and ${plural(c.rings - 1, 'more ring')}` : ''}`,
     ] };
   }
-  if (c.kind === 'token') return { kind: 'token', title: `#${tokenLabel(c.tokenId)}`, lines: [`${plural(c.transfers, 'transfer')} · ${judged(`${num(c.flagged)} flagged`)}`] };
+  if (c.kind === 'token') {
+    return { kind: 'token', title: `#${tokenLabel(c.tokenId)}`, tier: c.tier, lines: [
+      `${plural(c.transfers, 'transfer')} · ${judged(`${num(c.flagged)} flagged`)}`,
+      ...(c.ring === null ? [] : [`In Ring ${c.ring.rank}`]),
+    ] };
+  }
   const r = c.ring;
-  return { kind: 'ring', title: `Ring ${r.rank}`, lines: [`${plural(r.wallets, 'wallet')} · ${plural(r.tokens, 'token')}`, `${plural(r.sales, 'flagged sale')} · ${eth(r.volumeWei)}`] };
+  return { kind: 'ring', title: `Ring ${r.rank}`, tier: ringTone(r), lines: [`${plural(r.wallets, 'wallet')} · ${plural(r.tokens, 'token')}`, `${plural(r.sales, 'flagged sale')} · ${eth(r.volumeWei)}`] };
 }
 
 /**
@@ -85,7 +90,7 @@ export function HoverCard({ src, children, className = 'inline-flex' }: { src: s
       {shown ? (
         <span id={id} role="tooltip" style={{ left: at!.left, top: at!.top }}
           className="pointer-events-none fixed z-40 w-56 rounded-md border bg-card p-2.5 text-xs text-foreground shadow-md">
-          <span className="flex items-center gap-1.5 font-medium"><KindIcon kind={shown.kind} className="size-3.5" />{shown.title}</span>
+          <span className="flex items-center gap-1.5 font-medium">{shown.tier === null ? null : <TierMark tone={shown.tier} label />}<KindIcon kind={shown.kind} className="size-3.5" />{shown.title}</span>
           {shown.lines.map((l) => <span key={l} className="mt-0.5 block text-muted-foreground">{l}</span>)}
         </span>
       ) : null}

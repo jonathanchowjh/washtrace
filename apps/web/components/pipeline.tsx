@@ -2,16 +2,17 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, RestoreNote } from '@/components/coverage';
+import { INLINE_ICON, KindIcon } from '@/components/kit';
 import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import { Time } from '@/components/zone';
 import { chainName } from '@/lib/chains';
 import { progress, storedOnly, type Coverage } from '@/lib/coverage';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, floorPct, num, pct, plural, short, took } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, num, pct, plural, short, took } from '@/lib/format';
 import { formatBytes } from '@washtrace/detect/bytes';
-import { stateWord, type Stage, type StageState } from '@/lib/pipeline';
+import { stageFigure, stateWord, type Stage, type StageState } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 
-/** A stage's hue: working is blue, a limit to lift (a missing key) is its own colour, and only a failure is the fault colour. */
+/** A stage's hue: working is blue, a limit to lift (a missing key) is neutral, and only a failure is the fault colour. */
 const TONE: Record<StageState, PillTone> = {
   done: 'done',
   running: 'working',
@@ -30,7 +31,7 @@ function StageChip({ n, state }: { n: Stage['n']; state: StageState }) {
   return <Pill tone={TONE[state]} className="shrink-0">{stateWord(n, state)}</Pill>;
 }
 
-type Cell = Pick<Stage, 'n' | 'title' | 'state' | 'share'>;
+type Cell = Pick<Stage, 'n' | 'title' | 'state' | 'share' | 'file'>;
 
 /** A read that failed, as the collection's page and the worker page both say it. */
 function lastReadFailed(error: string): string {
@@ -65,7 +66,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
   const state = (x: Cell) => (
     <>
       <StageChip n={x.n} state={x.state} />
-      {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{x.n === 1 ? floorPct(x.share, 1) : progress(x.share)}</span> : null}
+      {x.state === 'running' && x.share !== null ? <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{stageFigure({ ...x, share: x.share })}</span> : null}
     </>
   );
   return (
@@ -75,7 +76,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
           const href = stagesHref(r);
           return (
             <li key={`${r.chainId}/${r.address}`} data-pipeline-card>
-              <Link href={href} prefetch={false} className="block px-4 pt-2.5 pb-1 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
+              <Link href={href} prefetch={false} className="block px-4 pt-2.5 pb-1 font-medium text-foreground hover:underline"><KindIcon kind="collection" className={`${INLINE_ICON} mr-1.5 inline-block align-text-bottom`} />{r.name ?? short(r.address)}</Link>
               {/* The stages open the same place, out of the tab order, as the table's cells do: the name is the one a keyboard reaches. */}
               <Link href={href} tabIndex={-1} prefetch={false} className="block px-4 pb-2.5">
                 <ol className="space-y-1">
@@ -107,7 +108,7 @@ export function PipelineTable({ rows }: { rows: { chainId: number; address: stri
             {rows.map((r) => (
               <tr key={`${r.chainId}/${r.address}`} className="hover:bg-muted/50">
                 <td className="p-0">
-                  <Link href={stagesHref(r)} prefetch={false} className="block px-4 py-2.5 font-medium text-foreground hover:underline">{r.name ?? short(r.address)}</Link>
+                  <Link href={stagesHref(r)} prefetch={false} className="block px-4 py-2.5 font-medium text-foreground hover:underline"><KindIcon kind="collection" className={`${INLINE_ICON} mr-1.5 inline-block align-text-bottom`} />{r.name ?? short(r.address)}</Link>
                 </td>
                 {r.stages.map((x) => (
                   <td key={x.n} className="p-0">
@@ -139,7 +140,7 @@ export function PipelineErrors({ rows }: { rows: { chainId: number; address: str
       {shown.map((r) => (
         <li key={`${r.chainId}/${r.address}`} className={cn('flex items-start gap-1 text-xs', r.paused ? 'text-muted-foreground' : 'text-fault')}>
           {r.paused ? null : <Warn className="size-3.5" />}
-          <span><Link href={stagesHref(r)} prefetch={false} className="font-medium hover:underline">{r.name ?? short(r.address)}</Link> · {r.paused ? pausedError(r.error!, r.rpc, r.chainId) : lastReadFailed(r.error!)}</span>
+          <span><Link href={stagesHref(r)} prefetch={false} className="font-medium hover:underline"><KindIcon kind="collection" className={`${INLINE_ICON} mr-1.5 inline-block align-text-bottom`} />{r.name ?? short(r.address)}</Link> · {r.paused ? pausedError(r.error!, r.rpc, r.chainId) : lastReadFailed(r.error!)}</span>
         </li>
       ))}
     </ul>
@@ -239,7 +240,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
 
   // Stage 1 and 2: the stored files. The worker's own notes say why one failed and when it is tried again.
   const v1 = s1.state === 'not-needed' ? s1.skipped
-    : s1.state === 'running' ? `${s1.file === 'trail' ? 'Money trail' : 'Transfers'} downloading from stored data · ${floorPct(s1.share!, 1)}${size(s1.file === 'trail' ? trailBytes : transfersBytes)}`
+    : s1.state === 'running' ? `${s1.file === 'trail' ? 'Money trail' : 'Transfers'} downloading from stored data · ${stageFigure({ ...s1, share: s1.share! })}${size(s1.file === 'trail' ? trailBytes : transfersBytes)}`
     : s1.state === 'done' ? 'Downloaded from stored data.'
     // The transfers are in (or loading) and a trail is still to come: the file that is waited for is the trail, not the transfers.
     : s1.state === 'waiting' ? ((c.storedThroughTime !== null || c.restoreProgress !== null) && c.downloadFile !== 'transfers' ? 'Transfers downloaded; the money trail is next.' : 'Waiting to download stored data')
@@ -249,7 +250,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
     : null;
   const trailed = c.trailImportedSha != null;
   const v2 = s2.state === 'not-needed' ? s2.skipped
-    : s2.state === 'running' ? (s2.file === 'trail' ? `Money trail loading from stored data · ${floorPct(s2.share!, 1)}` : `Loading stored data · ${progress(s2.share!)}`)
+    : s2.state === 'running' ? (s2.file === 'trail' ? `Money trail loading from stored data · ${stageFigure({ ...s2, share: s2.share! })}` : `Loading stored data · ${stageFigure({ ...s2, share: s2.share! })}`)
     : s2.state === 'done' ? 'Loaded into the database.'
     : s2.state === 'waiting' ? (s1.state === 'done' ? 'Downloaded; waiting for the load to start.' : 'Waiting for the stored data to download.')
     : s2.state === 'paused' ? 'Paused · stored data is not loaded until you resume it.'
@@ -294,10 +295,10 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
       {/* Three across from md: a rule over the second row keeps each card its own, where the divide lines alone ran 1 into 4. */}
       {/* Each row's last card has no right edge: the divide gives every card but the last one, which doubled the list's own at the end of the first row. */}
       <ol className="grid divide-y rounded-lg border bg-card md:grid-cols-3 md:divide-x md:divide-y-0 md:[&>li:nth-child(3n)]:border-r-0 md:[&>li:nth-child(n+4)]:border-t">
-        <Step stage={s1} figure={s1.state === 'running' ? floorPct(s1.share!, 1) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
+        <Step stage={s1} figure={s1.state === 'running' ? stageFigure({ ...s1, share: s1.share! }) : s1.state === 'done' ? '100%' : DASH} bar={s1.share ?? undefined} value={v1}>
           <DownloadNote c={c} />
         </Step>
-        <Step stage={s2} figure={s2.state === 'running' ? (s2.file === 'trail' ? floorPct(s2.share!, 1) : progress(s2.share!)) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
+        <Step stage={s2} figure={s2.state === 'running' ? stageFigure({ ...s2, share: s2.share! }) : s2.state === 'done' ? '100%' : DASH} bar={s2.share ?? undefined} value={v2}>
           {trailed ? (
             <p className="text-xs text-muted-foreground">
               Money trail loaded from stored data{trail ? ` · ${num(trail.checked)} of ${num(trail.of)} traders in the trail checked` : ''}
@@ -332,7 +333,7 @@ export function Pipeline({ c, stages, cov, why, rpcChains, funding = true, funde
           value={awaited ? 'Funded by the stored money trail once it has loaded. No funding source is set (WASHTRACE_ETHERSCAN_KEY) for wallets it did not check.'
             : !money ? `${trailed ? 'The stored money trail checked no wallet, and no' : 'No'} funding source is set (WASHTRACE_ETHERSCAN_KEY).`
             : a === null ? 'Counted by the first analysis. Funding read for these wallets before is kept.'
-            : `${num(cov.wallets.checked)} of ${num(cov.wallets.of)} wallets that traded it, busiest first`}
+            : `${num(cov.wallets.checked)} of ${num(cov.wallets.of)} wallets that traded it, busiest first. Wallets only minted to are checked too, but no trade of theirs is judged.`}
         >
           {trailed && !funding && fed ? (
             <p className="text-xs text-muted-foreground">

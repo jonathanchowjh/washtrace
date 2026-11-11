@@ -96,13 +96,13 @@ function FindAndSort({ view, sort, dir, find, matched, of }: { view: View; sort:
         {view.sort ? <input type="hidden" name="sort" value={view.sort} /> : null}
         {view.dir ? <input type="hidden" name="dir" value={view.dir} /> : null}
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          Find
+          Filter this list
           <input
-            type="search" name="find" defaultValue={find} placeholder="name or address"
+            type="search" name="find" defaultValue={find} placeholder="collection name or address"
             className="field w-56 text-sm"
           />
         </label>
-        <button type="submit" className="btn-secondary text-sm">Find</button>
+        <button type="submit" className="btn-secondary text-sm">Filter</button>
       </form>
       {find ? <MatchLine n={matched} of={`${of} collections in this tab`} query={find} clear={homeHref({ ...view, find: undefined })} /> : null}
       {/* Also on the column headers on a wide screen; here at every width. */}

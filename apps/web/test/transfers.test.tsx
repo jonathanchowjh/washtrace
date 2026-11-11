@@ -1,7 +1,8 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
-import { Transfers } from '@/components/transfers';
+import { Transfers, because } from '@/components/transfers';
+import type { PairShape, Witness } from '@washtrace/detect';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const BASE = `/c/1/${ADDR}`;
@@ -18,6 +19,19 @@ const ROUND = { A: { kind: 'scc' as const, wallets: [S, B], cycles: 2 } };
 afterEach(cleanup);
 
 const links = (el: Element) => [...el.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]);
+
+describe('a mint or a burn in the From → To cell', () => {
+  const ZERO = '0x' + '0'.repeat(40);
+  const cell = (from: string, to: string) => render(<Transfers chainId={1} transfers={[{ ...sale(1), from, to, marketplace: null }]} base={BASE} within={BASE} />).container.querySelectorAll('tbody td')[1]!.textContent;
+
+  it('reads "minted to 0x…" and "0x… burned", and a move between wallets keeps its arrow', () => {
+    expect(cell(ZERO, B)).toBe('minted to 0x2222…2222');
+    cleanup();
+    expect(cell(S, ZERO)).toBe('0x1111…1111 burned');
+    cleanup();
+    expect(cell(S, B)).toBe('0x1111…1111 → 0x2222…2222');
+  });
+});
 
 describe('the transfer table on a phone', () => {
   it('lays each row out as a card below sm and as a table row from sm, its head hidden there', () => {
@@ -103,5 +117,29 @@ describe('the transfer table’s lens tags and marketplaces', () => {
     const sold = [...el.querySelectorAll('tbody tr')].map((r) => r.querySelectorAll('td')[3]!.firstChild!.textContent);
     expect(sold).toEqual(['OpenSea', 'Blur', 'Elsewhere']);
     expect(el.textContent).not.toContain('seaport');
+  });
+});
+
+describe('why a linked pair was flagged, by its shape', () => {
+  const M = '0x' + '3'.repeat(40);
+  const said = (shape: PairShape | undefined, middle: string | null) => {
+    const w: Witness = { kind: 'pair', pair: [S, B], middle, flowTx: '0x1', ...(shape === undefined ? {} : { shape }) };
+    return render(<>{because(w, 1)}</>).container.textContent;
+  };
+  const [s, b, m] = ['0x1111…1111', '0x2222…2222', '0x3333…3333'];
+
+  it('says who paid whom, the seller first in a funder, payee or forward pair and the buyer first in a pay-back', () => {
+    expect(said('funder', M)).toContain(`${s} and ${b} were both funded by ${m}`);
+    expect(said('payee', M)).toContain(`${s} and ${b} both paid ${m}`);
+    expect(said('back', M)).toContain(`${b} paid ${s} back through ${m}`);
+    expect(said('forward', M)).toContain(`${s} paid ${b} through ${m}`);
+    expect(said('direct-back', null)).toContain(`${b} paid ${s} directly`);
+    expect(said('direct-forward', null)).toContain(`${s} paid ${b} directly`);
+    expect(said('both', null)).toContain(`${s} and ${b} paid each other directly`);
+  });
+
+  it('keeps today\'s words for a pair stored without a shape', () => {
+    expect(said(undefined, M)).toContain(`${s} and ${b} share money with ${m}`);
+    expect(said(undefined, null)).toContain(`${s} and ${b} paid each other directly`);
   });
 });

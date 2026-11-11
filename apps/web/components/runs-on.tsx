@@ -33,7 +33,7 @@ export function RowPreview({ chainId, address, rule, writable }: { chainId: numb
       done: (body) => body.status !== 'queued' && body.status !== 'running',
       onRow: (body) => { setLost(false); setSaid(body); },
       onLost: () => setLost(true),
-      onGone: (body) => { setLost(false); setError(body?.error ?? 'This preview is gone. Run it again.'); setId(null); },
+      onGone: (body) => { setLost(false); setError(body?.error ?? 'This preview is gone. Run it again.'); setSaid(null); setId(null); },
     });
   }, [id]);
 

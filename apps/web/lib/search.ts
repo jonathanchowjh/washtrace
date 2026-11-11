@@ -1,4 +1,4 @@
-import type { Parsed, SearchHits, SearchKind } from '@washtrace/detect';
+import type { Method, Parsed, SearchHits, SearchKind, Tier } from '@washtrace/detect';
 import { chainName } from './chains';
 import { plural, short, tokenLabel } from './format';
 import { txHref, walletHref } from './links';
@@ -15,6 +15,9 @@ import { MAX_TEXT, addressOf, chainOf, pageOf, tokenIdOf } from './params';
 export const SEARCH_LIMIT = 20;
 
 const SEARCH_KINDS: readonly SearchKind[] = ['collections', 'tokens', 'wallets', 'trades'];
+
+/** A watched collection as the sidebar lists it: its name, and the lenses at each end of its range of washed sales (null before one is read). */
+export type Watched = { chainId: number; address: string; name: string | null; range: { low: Method; high: Method } | null };
 
 /** A search narrowed to one collection, as `scope=<chain>:<address>` carries it. */
 export type Scope = { chainId: number; address: string };
@@ -120,8 +123,11 @@ export function tradeHref(hits: SearchHits, h: SearchHits['trades'][number]): st
   return txHref(h.chainId, h.txHash, one ? `/c/${h.chainId}/${h.address}` : null);
 }
 
-/** One hit as a link: where it opens, what names it, whether that name is hex (an address or hash), and what kind of thing it is, on which chain. */
-export type HitRow = { href: string; title: string; hex: boolean; detail: string };
+/**
+ * One hit as a link: where it opens, what names it, whether that name is hex (an address or hash), and what kind of thing it is, on which chain.
+ * A wallet found in a scope also carries its `tier` there, when it has one.
+ */
+export type HitRow = { href: string; title: string; hex: boolean; detail: string; tier?: Tier };
 
 /**
  * One hit as a link, led by what was searched for: a collection's name, a
@@ -142,9 +148,12 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Sco
   }
   if (kind === 'wallets') {
     const h = hits.wallets[i]!;
-    // A full address is found wherever it traded: one that never traded in the scope opens on its own page.
-    const within = scope !== null && scope.chainId === h.chainId && h.here !== false ? `/c/${scope.chainId}/${scope.address}` : null;
-    return { href: walletHref(h.chainId, h.address, within), title: short(h.address), hex: true, detail: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections` };
+    // A full address is found wherever it traded: one that never traded in the scope opens on its own page, unless it stands there as a middle (its tier), whose role its page under the tabs leads with.
+    const within = scope !== null && scope.chainId === h.chainId && (h.here !== false || h.tier) ? `/c/${scope.chainId}/${scope.address}` : null;
+    return {
+      href: walletHref(h.chainId, h.address, within), title: short(h.address), hex: true, detail: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`,
+      ...(h.tier ? { tier: h.tier } : {}),
+    };
   }
   const h = hits.trades[i]!;
   return { href: tradeHref(hits, h), title: short(h.txHash), hex: true, detail: `Trade on ${chainName(h.chainId)} · ${h.name ?? short(h.address)} #${tokenLabel(h.tokenId)}` };

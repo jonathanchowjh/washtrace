@@ -3,6 +3,7 @@ import Link from 'next/link';
 import type { CollectionRow as Collection } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/ui';
+import { INLINE_ICON, KindIcon, TierMark } from '@/components/kit';
 import { RangeBar, RangeFigure, VolumeDetail } from '@/components/methods';
 import { Time } from '@/components/zone';
 import { CollectionControls } from '@/components/watch';
@@ -11,16 +12,18 @@ import { LENSES, plural, short } from '@/lib/format';
 import { coverage, storedOnly } from '@/lib/coverage';
 import { range, type Range } from '@/lib/metrics';
 import { tradesHref } from '@/lib/trades-url';
-import { lensTabHref } from '@/lib/links';
+
+/** A lens by its name behind its tier's mark, as a range is read: floor to ceiling. */
+const lensMark = (m: Range['low']) => <span className="inline-flex items-center gap-1.5"><TierMark tone={LENSES[m].tone} />{LENSES[m].name}</span>;
 
 /** The columns of the list and of every row in it, so a row lines up under the headings. */
 export const COLS = 'md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(11.5rem,0.7fr)]';
 
-/** Each end of a range opens the collection's evidence for the lens at that end. Above the row's whole-row link, like the controls. */
-function Share({ r, label, detail, href }: { r: Range | null; label: string; detail: ReactNode; href: string }) {
+/** Each end of a range opens the sales the lens at that end flagged, on Trades; a volume's, the dearest first. Above the row's whole-row link, like the controls. */
+function Share({ r, label, detail, href, byPrice = false }: { r: Range | null; label: string; detail: ReactNode; href: string; byPrice?: boolean }) {
   if (r === null) return <div className="text-sm text-muted-foreground">{detail}</div>;
   const end = (text: string, lens: Range['low']) => (
-    <Link href={lensTabHref(href, lens, { evidence: true })} prefetch={false} title={`Open the evidence for ${LENSES[lens].name}`} className="relative z-10 hover:underline">{text}</Link>
+    <Link href={tradesHref(href, { caught: [lens], ...(byPrice ? { sort: 'price', dir: 'desc' } : {}) })} prefetch={false} title={`Open the sales ${LENSES[lens].name} flagged`} className="relative z-10 hover:underline">{text}</Link>
   );
   return (
     <div className="min-w-0">
@@ -54,7 +57,7 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
     <li className={`relative grid gap-x-6 gap-y-3 px-4 py-4 hover:bg-muted/40 ${COLS}`}>
       <div className="min-w-0">
         {/* The whole row opens the collection; the name is the link a screen reader announces. */}
-        <Link href={href} prefetch={false} className="font-semibold text-foreground after:absolute after:inset-0 hover:underline">{c.name ?? short(c.address)}</Link>
+        <Link href={href} prefetch={false} className="inline-flex items-center gap-1.5 font-semibold text-foreground after:absolute after:inset-0 hover:underline"><KindIcon kind="collection" className={INLINE_ICON} />{c.name ?? short(c.address)}</Link>
         <p className="text-xs text-muted-foreground">{chainName(c.chainId)} · <span className="font-mono">{short(c.address)}</span></p>
         {/* Above the row's overlay like the range ends: sales open the sales list. The transfer count is plain:
             no list holds every transfer, as every change of owner leaves out mints and custody moves. */}
@@ -68,8 +71,8 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
           // On a chain with no RPC the error is the old "No RPC": the limit is what to say.
           ? <p className="mt-1 max-w-sm text-xs text-muted-foreground">{rpcChains.has(c.chainId) ? `Paused · last error before the pause: ${c.error}` : `Paused · no RPC is set for ${chainName(c.chainId)}.`}</p>
           : !rpcChains.has(c.chainId)
-            // A missing RPC is a limit to lift, not a fault: the worker writes it as an error, but it reads as the RPC it needs.
-            ? <p className="mt-1 max-w-sm text-xs text-money">No RPC is set for {chainName(c.chainId)}.</p>
+            // A missing RPC is a limit to lift, not a fault, so it is not the fault colour: the worker writes it as an error, but it reads as the RPC it needs.
+            ? <p className="mt-1 max-w-sm text-xs text-foreground">No RPC is set for {chainName(c.chainId)}.</p>
             : <p className="mt-1 flex max-w-sm items-start gap-1 text-xs text-fault"><Warn className="size-3.5" />{c.error}</p> : null}
         {/* Not a fault: the chain is read instead where there is an RPC, and the note says when the stored data is tried again. */}
         <RestoreNote c={c} rpcChains={rpcChains} now={now} className="mt-1 max-w-sm" />
@@ -83,10 +86,10 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
         <>
           <Share
             r={sales} label="of sales" href={href}
-            detail={sales ? sales.low === sales.high ? LENSES[sales.low].name : `${LENSES[sales.low].name} → ${LENSES[sales.high].name}` : 'No sale read yet'}
+            detail={sales ? sales.low === sales.high ? lensMark(sales.low) : <>{lensMark(sales.low)} → {lensMark(sales.high)}</> : 'No sale read yet'}
           />
           <Share
-            r={volume} label="of volume" href={href}
+            r={volume} label="of volume" href={href} byPrice
             detail={volume ? <VolumeDetail volume={volume} totals={a.totals} base={href} overlay /> : 'No priced sale read yet'}
           />
         </>
@@ -98,7 +101,7 @@ export function CollectionRow({ c, why, rpcChains, funding, silent, writable, no
         <RestoreProgress cov={cov} />
         <p className="text-xs text-muted-foreground">{a === null ? '' : <>analyzed <Time ms={a.ranAt} /></>}</p>
         {cov.reading === 'checking' ? <p className="text-xs text-muted-foreground">money lenses not final yet</p> : null}
-        {/* Above the link's whole-row overlay, so a press reaches the button and not the collection page. Prioritize stays on the collection page. */}
+        {/* Above the link's whole-row overlay, so a press reaches the button and not the collection page. Prioritize lives on the Worker page. */}
         <div className="relative z-10 mt-1"><CollectionControls writable={writable} chainId={c.chainId} address={c.address} paused={c.pausedAt !== null} priority={c.priority} compact /></div>
       </div>
     </li>

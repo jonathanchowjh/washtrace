@@ -6,7 +6,7 @@ import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 const ADDR = '0x' + 'b'.repeat(40);
 const ran = (m: string) => ({ available: m === 'A' || state.moneyRan });
 // `each`, when set, gives each transfer its own flags in place of `flagged`.
-const state = { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[] };
+const state = { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[], moves: null as [string, string][] | null };
 
 /** A lens of yours and its run here: a done run has figures, so it is in `ctx.ran`; a queued one has none yet. */
 function lensRun(id: number, name: string, done = true) {
@@ -20,7 +20,7 @@ vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => state.missing ? null : ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 0, cursorBlock: state.behind ? 640 : 1000, headBlock: 1000, latest: state.latestNull ? null : { throughBlock: state.throughBlock, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, ran(m)])) } }),
     token: async () => (state.empty ? [] : state.blocks).map((b, i) => ({
-      txHash: '0x' + i, logIndex: 0, blockNumber: b, blockTime: null, tokenId: '7', from: '0x1', to: '0x2', marketplace: state.sales.includes(i) ? 'Seaport' : null, priceWei: null, currency: null,
+      txHash: '0x' + i, logIndex: 0, blockNumber: b, blockTime: null, tokenId: '7', from: state.moves?.[i]?.[0] ?? '0x1', to: state.moves?.[i]?.[1] ?? '0x2', marketplace: state.sales.includes(i) ? 'Seaport' : null, priceWei: null, currency: null,
       flags: Object.fromEntries((state.each?.[i] ?? state.flagged).map((m) => [m, { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 }])),
     })),
     flowsAmong: async () => [],
@@ -34,7 +34,7 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
-afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [] }); });
+afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [], moves: null }); });
 
 async function dom(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
@@ -83,6 +83,36 @@ describe('the token page when not everything is judged', () => {
     expect(text).not.toContain('No lens found a pattern');
   });
 
+  it('an unflagged token that came back once says so against what Round trips needs, in a section titled for what happened', async () => {
+    const A = '0x' + 'a'.repeat(40), B = '0x' + 'c'.repeat(40);
+    Object.assign(state, { blocks: [5, 6], moves: [[A, B], [B, A]] });
+    const text = await page();
+    expect(text).toContain('Why it was not flagged');
+    expect(text).not.toContain('Why it was flagged');
+    expect(text).toMatch(/Round trips: it came back to 0xaaaa…aaaa once; a pattern needs 2 cycles\./);
+    expect(text).not.toContain('never comes back to a wallet that held it');
+    expect(text).toContain('Linked wallets: ');
+  });
+
+  it('an unflagged token held in Blur Blend custody names the custodian and labels the wallet in the graph', async () => {
+    const BLEND = '0x29469395eaf6f95920e59f858042f0e28d98a20b', A = '0x' + 'a'.repeat(40);
+    Object.assign(state, { blocks: [5, 6], moves: [[A, BLEND], [BLEND, A]] });
+    const c = await dom();
+    const text = c.textContent ?? '';
+    expect(text).toContain('loans held in custody (Blur Blend), not sales: no lens judges them.');
+    expect(text).toContain('the token never comes back to a wallet that held it');
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent).join('|')).toContain('custody (Blur Blend)');
+    expect(c.querySelector('figure svg')?.textContent).toContain('Blur Blend');
+  });
+
+  it('an unflagged token whose lens did not run says so instead of finding nothing', async () => {
+    Object.assign(state, { moneyRan: false });
+    const text = await page();
+    expect(text).toContain('Why it was not flagged');
+    expect(text).toContain('Money loops back did not run in the latest analysis');
+    expect(text).not.toContain('Money loops back: ');
+  });
+
   it('a judged token flagged only by Money loops back says it is not counted', async () => {
     Object.assign(state, { flagged: ['AU'] });
     const text = await page();
@@ -96,7 +126,7 @@ describe('the token page when not everything is judged', () => {
     const c = await dom();
     const text = c.textContent ?? '';
     expect(c.querySelector('p.text-lg')?.textContent).toBe('Flagged only by Money loops back, which is not counted');
-    expect(c.querySelector('.bg-money, .bg-money-surface\\/70, .text-money')?.outerHTML).toBeUndefined();
+    expect(c.querySelector('.bg-ceiling, .bg-ceiling-surface\\/70, .text-ceiling')?.outerHTML).toBeUndefined();
     expect(text).toContain('Why Money loops back flags it');
     expect(text).not.toContain('Why it was flagged');
     expect(text).toContain('Money loops back only, not counted');
@@ -236,6 +266,27 @@ describe('the token page paging and filter', () => {
     expect(hrefOf(c, 'All')).toBe(T);
     expect(hrefOf(c, 'Flagged')).toBe(`${T}?show=flagged`);
     expect(hrefOf(c, 'Sales')).toBe(`${T}?show=sales`);
+  });
+
+  it('opened from a list, the filter links keep its lens and the list; none to Trades gains that from', async () => {
+    Object.assign(state, { blocks: many(250), each: many(250).map((n) => (n === 150 ? ['A'] : [])) });
+    const from = 'tokens?method=AC&page=3';
+    const c = await dom({ page: '2', method: 'AC', from });
+    const ctx = `method=AC&from=${encodeURIComponent(from)}`;
+    expect(hrefOf(c, 'All')).toBe(`${T}?${ctx}`);
+    expect(hrefOf(c, 'Flagged')).toBe(`${T}?show=flagged&${ctx}`);
+    expect(whyHref(c, '150')).toBe(`?page=2&${ctx}#t150`);
+    // R15: Trades reads `from` as its date filter, so a list's `from` never rides on its links.
+    const toTrades = [...c.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '').filter((h) => /\/trades\b/.test(h));
+    expect(toTrades.length).toBeGreaterThan(0);
+    for (const h of toTrades) expect(h).not.toContain('from=');
+  });
+
+  it('opened with a lens, its links to a wallet or a trade keep the lens', async () => {
+    const c = await dom({ method: 'AC' });
+    const inside = [...c.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '').filter((h) => /^\/c\/.*\/(w|tx)\//.test(h));
+    expect(inside.length).toBeGreaterThan(0);
+    for (const h of inside) expect(h).toContain('method=AC');
   });
 
   const label = (c: HTMLElement, n: string) => [...c.querySelectorAll('svg a')].find((a) => a.textContent === n)?.getAttribute('href');

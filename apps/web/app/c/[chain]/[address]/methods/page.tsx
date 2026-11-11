@@ -12,10 +12,9 @@ import { LensEditor } from '@/components/lens-editor';
 import { LensTabs } from '@/components/lens-tabs';
 import { History, LensStats, Trend } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
-import { CollectionControls } from '@/components/watch';
 import { lensKeyOf, readerZone } from '@/lib/api';
 import { editorStart } from '@/lib/lens-api';
-import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
+import { mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
 import { NOT_RUN_LATEST, lensInfo, pct, pctTenth, plural, short } from '@/lib/format';
 import { builtinCauses, runStateWords, shareQualifier } from '@/lib/lens-state';
@@ -27,7 +26,8 @@ import { chartLenses, evidenceLead, leftOut, ownLenses } from '@/lib/metrics';
 import { trailComing } from '@/lib/pipeline';
 import { store, storedEntry } from '@/lib/store';
 import { listView } from '@/lib/params';
-import { clampedPage, collectionStatus, collectionView } from '@/lib/views';
+import { fromParam } from '@/lib/step';
+import { LIST_PAGE, clampedPage, collectionStatus, collectionView } from '@/lib/views';
 
 /** Rows of each lens list a page in the lens panel; the flagged page has all of them. */
 const TOP = 10;
@@ -98,6 +98,9 @@ export default async function MethodsPage({ params, searchParams }: Props) {
     return `${base}/methods?${pairs.filter(([, x]) => x !== null).map(([k, x]) => `${k}=${encodeURIComponent(x!)}`).join('&')}#evidence`;
   };
   const flagged = (kind: 'tokens' | 'wallets', view: { sort: string; find: string | null }) => listHref(base, kind, { method, sort: view.sort, q: view.find });
+  // The Tokens or Wallets list this panel's rows are the head of, as an item's `from`: its page holds this panel's ten, which never straddle two.
+  const fromList = (kind: 'tokens' | 'wallets', view: { sort: string; find: string | null }, page: number) =>
+    fromParam(kind, new URL(flagged(kind, view), 'http://x.invalid').searchParams, Math.floor(((page - 1) * TOP) / LIST_PAGE) + 1);
   const a = c.latest;
   const rules = rulesNote(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
@@ -155,17 +158,19 @@ export default async function MethodsPage({ params, searchParams }: Props) {
               <div className="grid gap-6 lg:grid-cols-2">
                 <div>
                   <LensList
-                    kind="tokens" method={method} own={own} base={base} chainId={chainId} rows={tokens.rows} total={tokens.total} of={tokenCount}
+                    kind="tokens" method={method} own={own} base={base} chainId={chainId} rows={tokens.rows} total={tokens.total} of={tokenCount} flaggedWei={t?.flaggedVolumeWei ?? null}
                     sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
                     pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
+                    from={fromList('tokens', tv, tokens.page)}
                   />
                   <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} ›</MoreLink>
                 </div>
                 <div>
                   <LensList
-                    kind="wallets" method={method} own={own} base={base} chainId={chainId} rows={wallets.rows} total={wallets.total} of={walletCount}
+                    kind="wallets" method={method} own={own} base={base} chainId={chainId} rows={wallets.rows} total={wallets.total} of={walletCount} flaggedWei={t?.flaggedVolumeWei ?? null}
                     sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
                     pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
+                    from={fromList('wallets', wv, wallets.page)}
                   />
                   <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} ›</MoreLink>
                 </div>
@@ -197,11 +202,6 @@ export default async function MethodsPage({ params, searchParams }: Props) {
             <div className="mt-2"><Trend history={history} zone={zone} /></div>
           </details>
         ) : null}
-      </Section>
-
-      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the other collections\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
-        {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
-        <CollectionControls writable={writable} chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>
     </>
   );

@@ -23,7 +23,8 @@ const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', ov
 const fresh = () => ({
   runs: [] as ReturnType<typeof ownRun>[], moneyRan: true, analysed: true, loops: undefined as object | null | undefined, rows: [row('0xs1'), row('0xs2', { lenses: ['A', 'AU'] })] as ReturnType<typeof row>[], count: { total: 2, unjudged: 0 },
   groups: [{ key: 'blur', trades: 3, caught: { A: 2, AU: 1 } }, { key: '-', trades: 1, caught: {} }],
-  calls: { trades: [] as unknown[][], count: [] as unknown[][], groups: [] as unknown[][] },
+  flags: new Map<string, object>(),
+  calls: { trades: [] as unknown[][], count: [] as unknown[][], groups: [] as unknown[][], flags: [] as unknown[][] },
 });
 const state = fresh();
 
@@ -35,6 +36,7 @@ vi.mock('@/lib/store', () => ({
     lensWallets: async () => ({ rows: [], total: 0 }),
     trades: async (...a: unknown[]) => { state.calls.trades.push(a); return state.rows; },
     tradeCount: async (...a: unknown[]) => { state.calls.count.push(a); return state.count; },
+    tradeFlags: async (...a: unknown[]) => { state.calls.flags.push(a); return state.flags; },
     tradeGroups: async (...a: unknown[]) => { state.calls.groups.push(a); return state.groups; },
   }),
 }));
@@ -279,7 +281,9 @@ describe('the trades page', () => {
     const el = await dom({ caught: 'A' });
     expect(linkTo(el, `${BASE}/trades?caught=A&wallet=${SELLER}`)?.title).toBe('Only trades with this wallet');
     expect(linkTo(el, `${BASE}/trades?caught=A&token=7`)?.title).toBe('Only trades with this token');
-    expect(linkTo(el, `${BASE}/t/7`)).toBeDefined();
+    // A list filtered by a lens opens the token under that lens, loops lit, and the wallet under it too.
+    expect(linkTo(el, `${BASE}/t/7?method=A`)).toBeDefined();
+    expect(linkTo(el, `${BASE}/w/${SELLER}?method=A`)).toBeDefined();
   });
 
   it('a page past the last shows the last page', async () => {
@@ -369,13 +373,39 @@ describe('the trades page', () => {
     expect(form.textContent).toContain('remove the date chip to change it.');
   });
 
-  it('a trade row opens its trade on the price; its hold, buyer age and floor are plain measures', async () => {
+  it('a trade row opens its trade from any cell with no link of its own: price, market, measures, verdicts, why; only the date is in the tab order', async () => {
     state.rows = [row('0xs1')];
     const el = await dom();
     const cells = [...el.querySelectorAll('tbody td[data-measure]')];
     expect(cells.map((td) => td.textContent)).toEqual(['2 h', '3 d', '1.25×']);
-    expect(cells.every((td) => td.querySelector('a') === null)).toBe(true);
-    expect([...el.querySelectorAll('tbody a')].find((a) => a.textContent === '1.5 ETH')?.getAttribute('href')?.split('?')[0]).toBe(`${BASE}/tx/0xs1`);
+    const tr = el.querySelector('tbody tr')!;
+    const tx = (a: Element | null) => a?.getAttribute('href')?.split('?')[0];
+    for (const td of [...cells, ...[...tr.querySelectorAll('td')].filter((c) => ['Blur', '1.5 ETH'].includes(c.textContent!) || c.hasAttribute('data-why'))]) {
+      expect(tx(td.querySelector('a')), td.textContent!).toBe(`${BASE}/tx/0xs1`);
+      expect(td.querySelector('a')!.getAttribute('tabindex')).toBe('-1');
+    }
+    const open = [...tr.querySelectorAll('a')].filter((a) => tx(a) === `${BASE}/tx/0xs1`);
+    expect(open.filter((a) => a.getAttribute('tabindex') !== '-1').map((a) => a.textContent)).toEqual([tr.querySelector('time')!.textContent]);
+    // The date's link fills its cell however tall the row grows: a full-height link needs its cell's height set (h-px).
+    const date = tr.querySelector('time')!.closest('a')!;
+    expect([date.className, date.closest('td')!.className]).toEqual([expect.stringContaining('h-full'), expect.stringContaining('h-px')]);
+    // The cells that already link keep their own, and no link holds a link.
+    expect(tr.querySelectorAll('a a')).toHaveLength(0);
+    expect(tx([...tr.querySelectorAll('a')].find((a) => a.textContent === '#7') ?? null)).toBe(`${BASE}/t/7`);
+  });
+
+  it('says in a short plain line why a trade was flagged, with no link in it, for the lens the list is read under first', async () => {
+    const pair = { kind: 'pair', pair: [SELLER, BUYER], middle: '0x' + 'c'.repeat(40), shape: 'funder', flowTx: '0xf' };
+    state.rows = [row('0xs1', { lenses: ['A', 'AC'] }), row('0xs2', { lenses: [] })];
+    state.flags = new Map([['0xs1:0', { A: { kind: 'scc', wallets: [SELLER, BUYER], cycles: 3 }, AC: pair }]]);
+    const whys = async (sp = {}) => [...(await dom(sp)).querySelectorAll('tbody td[data-why]')].map((td) => td.textContent);
+    expect(await whys()).toEqual(['2 wallets pass it round in 3 cycles', '—']);
+    expect((await whys({ caught: 'AC' }))[0]).toMatch(/were both funded by 0xcccc/);
+    const el = await dom({ caught: 'AC' });
+    expect(el.querySelector('td[data-why] a')!.getAttribute('href')).toMatch(/\/tx\/0xs1/);
+    expect(el.querySelector('td[data-why] a a')).toBeNull();
+    expect(state.calls.flags).toHaveLength(3);
+    expect(state.calls.flags[0]![1]).toHaveLength(2);
   });
 
   it('a midnight bound goes back as a day field, not a hidden one', async () => {
@@ -455,11 +485,37 @@ describe('the trades page', () => {
       expect(state.calls.groups[0]![3]).toMatchObject({ through: { L7: 8 } });
     });
 
+    it('says in Why which of your lenses flagged a row, after the built-in reason when it has one, on the row and on the card', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+      state.rows = [row('0xs1', { lenses: ['L7'] }), row('0xs2', { lenses: ['A', 'L7'] }), row('0xs3', { lenses: [] })];
+      state.flags = new Map([['0xs2:0', { A: { kind: 'scc', wallets: [SELLER, BUYER], cycles: 3 } }]]);
+      const el = await dom();
+      expect([...el.querySelectorAll('tbody td[data-why]')].map((td) => td.textContent)).toEqual([
+        'Flagged by Blur 3-hop', '2 wallets pass it round in 3 cycles. Also flagged by Blur 3-hop', '—']);
+      expect([...el.querySelectorAll('ul[aria-label="Trades"] [data-why]')].map((p) => p.textContent)).toEqual([
+        'Flagged by Blur 3-hop', '2 wallets pass it round in 3 cycles. Also flagged by Blur 3-hop']);
+    });
+
+    it('names two of your lenses in Why in their order, joined as a list is; a deleted one is not named, so a row nothing else flagged reads —', async () => {
+      state.runs = [ownRun(7, 'Blur 3-hop'), ownRun(8, 'Fast flips')];
+      state.rows = [row('0xs1', { lenses: ['L7', 'L8'] }), row('0xs2', { lenses: ['L99'] })];
+      const el = await dom();
+      expect([...el.querySelectorAll('tbody td[data-why]')].map((td) => td.textContent)).toEqual(['Flagged by Blur 3-hop and Fast flips', '—']);
+    });
+
+    it('keeps a cell\'s open-trade link out of the tab order and the accessibility tree, and the row shows focus as it shows hover', async () => {
+      const el = await dom();
+      const link = el.querySelector('tbody td[data-measure] a')!;
+      expect([link.getAttribute('tabindex'), link.getAttribute('aria-hidden')]).toEqual(['-1', 'true']);
+      expect(el.querySelector('tbody tr')!.className).toContain('focus-within:bg-muted/40');
+    });
+
     it('marks a trade past that block not judged yet in your lens\'s column, as a trade no analysis covered is', async () => {
       state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
       state.rows = [row('0xs1', { blockNumber: 8, lenses: ['A', 'L7'] }), row('0xs2', { blockNumber: 9, lenses: ['A'] })];
       const el = await dom();
-      const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.lastElementChild!);
+      // The lens's column is the one before Why.
+      const cells = [...el.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td:nth-last-child(2)')!);
       expect(cells[0]!.querySelector('[aria-label="Flagged by Blur 3-hop"]')).not.toBeNull();
       expect(cells[1]!.textContent).toBe('Not judged yet');
       expect(cells[1]!.querySelector('[aria-label="Not flagged"]')).toBeNull();
@@ -536,12 +592,16 @@ describe('the trades list on a phone', () => {
 
   it('links each card to all its row links to: the trade with the same from, the token, the wallets, the only-this filters', async () => {
     const { cards, rows } = await both({ caught: 'A' });
-    cards.forEach((card, i) => expect(sorted(card)).toEqual(sorted(rows[i]!)));
+    // Everything but the trade's own link, which a row repeats in its cells.
+    const apart = (c: Element) => sorted(c).filter((h) => !h?.startsWith(`${BASE}/tx/`));
+    cards.forEach((card, i) => expect(apart(card)).toEqual(apart(rows[i]!)));
     const opens = hrefs(cards[1] as HTMLElement, 'a').filter((h) => h?.startsWith(`${BASE}/tx/0xs2`));
-    // The date and the price both open the trade, as in the row.
-    expect(opens).toHaveLength(2);
+    // A card opens its trade from one link, the date's, reaching over the whole card; a row has one in each cell with no link of its own.
+    expect(opens).toHaveLength(1);
     expect(opens[0]).toMatch(/\?from=/);
     expect(opens[0]).toBe(hrefs(rows[1] as HTMLElement, 'a').find((h) => h?.startsWith(`${BASE}/tx/0xs2`)));
+    expect(cards[1]!.className).toContain('relative');
+    expect(cards[1]!.querySelector(`a[href^="${BASE}/tx/0xs2"]`)!.className).toContain('after:inset-0');
   });
 
   it('keeps the wallets\' hover cards: the seller and buyer are the row\'s own markup', async () => {
@@ -556,7 +616,8 @@ describe('the trades list on a phone', () => {
   it('puts the token and date first, then the lenses that flagged it, then the facts the row has', async () => {
     const { cards } = await both();
     const card = cards[1]!;
-    expect(card.firstElementChild!.textContent).toMatch(/^#7⊕/);
+    expect(card.firstElementChild!.textContent).toMatch(/^#7/);
+    expect(card.firstElementChild!.querySelector('a[aria-label="Only trades with this token"] svg')).not.toBeNull();
     expect(card.firstElementChild!.querySelector('time')).not.toBeNull();
     expect([...card.querySelectorAll('[role="img"]')].map((m) => m.getAttribute('aria-label'))).toEqual(['Flagged by Round trips', 'Flagged by Money loops back']);
     expect(card.textContent).toContain('1.5 ETH');

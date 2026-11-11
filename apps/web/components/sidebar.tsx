@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { short } from '@/lib/format';
+import { LENSES, short } from '@/lib/format';
+import type { Watched } from '@/lib/search';
+import { INLINE_ICON, KindIcon, TierMark } from './kit';
 import { SearchBox } from './search-box';
 import { ZonePicker } from './zone';
 
@@ -38,7 +40,12 @@ export function ThemeToggle() {
       }}
       className="field flex items-center gap-2 whitespace-nowrap hover:bg-muted"
     >
-      {next === 'dark' ? '☾ Dark mode' : '☀ Light mode'}
+      <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4 shrink-0">
+        {next === 'dark'
+          ? <path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z" />
+          : <><circle cx="8" cy="8" r="2.75" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" /></>}
+      </svg>
+      {next === 'dark' ? 'Dark mode' : 'Light mode'}
     </button>
   );
 }
@@ -53,7 +60,7 @@ const ITEM = 'flex items-center gap-2 rounded-md px-2 py-1 whitespace-nowrap hov
  * links, wrapping onto as many rows as they need. A row that scrolled sideways hid Settings and
  * the theme past a phone's edge, and a fade at that edge did not say enough that they were there.
  */
-export function Sidebar({ watched }: { watched: { chainId: number; address: string; name: string | null }[] }) {
+export function Sidebar({ watched }: { watched: Watched[] }) {
   const path = usePathname();
   const current = (href: string, exact = false) => (exact ? path === href : path === href || path.startsWith(`${href}/`)) ? 'page' : undefined;
   return (
@@ -76,7 +83,17 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
             const href = `/c/${c.chainId}/${c.address}`;
             return (
               <Link key={href} href={href} aria-current={current(href)} className={`${ITEM} md:pl-5`}>
+                <KindIcon kind="collection" className={INLINE_ICON} />
                 <span className="truncate">{c.name ?? short(c.address)}</span>
+                {/* Where its washed sales fall, floor to ceiling, in the marks the lenses wear everywhere; a screen reader hears the range as words. */}
+                {c.range === null ? null : (
+                  <>
+                    <span aria-hidden title={c.range.low === c.range.high ? LENSES[c.range.low].name : `${LENSES[c.range.low].name} → ${LENSES[c.range.high].name}`} className="ml-auto flex shrink-0 items-center gap-1">
+                      <TierMark tone={LENSES[c.range.low].tone} />{c.range.low === c.range.high ? null : <TierMark tone={LENSES[c.range.high].tone} />}
+                    </span>
+                    <span className="sr-only">, {c.range.low === c.range.high ? LENSES[c.range.low].name : `${LENSES[c.range.low].name} to ${LENSES[c.range.high].name}`}</span>
+                  </>
+                )}
               </Link>
             );
           })}

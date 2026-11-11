@@ -1,5 +1,6 @@
 import { BEHIND_BLOCKS, NOT_DONE, TRAIL_NOTES, reaches, type CollectionRow, type StoredEntry } from '@washtrace/detect';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES } from './format';
+import { progress } from './coverage';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, MONEY_LENSES, STAGES, floorPct } from './format';
 
 type StageKey = 'download' | 'load' | 'stored-analysis' | 'chain' | 'money' | 'analysis';
 export type StageState = 'waiting' | 'running' | 'done' | 'not-needed' | 'blocked' | 'failed' | 'paused' | 'live' | 'silent';
@@ -32,6 +33,13 @@ interface PipelineInput {
   silent: boolean;
 }
 
+/**
+ * A running stage's share as the console says it, everywhere: a download or a
+ * trail load is floored (41.6% of the bytes reads 41%, never a step ahead of
+ * them); any other stage is `progress`, which holds back 100% until it is done.
+ */
+export const stageFigure = (x: Pick<Stage, 'n' | 'file'> & { share: number }): string => (x.n === 1 || x.file === 'trail' ? floorPct(x.share, 1) : progress(x.share));
+
 /** The chip's word for each state; a missing key reads as the action it needs, never as Off. */
 export const STATE_WORDS: Record<StageState, string> = {
   waiting: 'Waiting', running: 'Running', done: 'Done', 'not-needed': 'Not needed',
@@ -43,10 +51,10 @@ export const stateWord = (n: Stage['n'], state: StageState): string => (n === 4 
 
 const FEEDS = [
   'stage 2: the history it holds arrives once it has downloaded.',
-  `every lens: the history up to where the stored data stops, and the money trail for ${LENSES.AU.name} and ${LENSES.AC.name}.`,
+  `every lens: the history up to where the stored data stops, and the money trail for ${MONEY_LENSES}.`,
   'every number on this page until the chain is read.',
   'every lens. Unread history can move any share either way.',
-  `${LENSES.AU.name} and ${LENSES.AC.name}. An unchecked wallet hides its links, so their shares are not final until it is checked.`,
+  `${MONEY_LENSES}. An unchecked wallet hides its links, so their shares are not final until it is checked.`,
   'every number on this page: it turns stages 1 to 5 into them.',
 ] as const;
 const NO_STORED = 'No stored data for this collection.';

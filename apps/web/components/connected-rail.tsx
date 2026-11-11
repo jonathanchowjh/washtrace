@@ -1,74 +1,18 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import type { Flow, Transfer } from '@washtrace/detect';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { collectionOf, tradeContextOf, tradesOf, type Item } from '@/lib/collection-reads';
 import { plural, short, tokenLabel } from '@/lib/format';
-import { cardSrc, txHref, walletHref } from '@/lib/links';
+import { railTxs, type RailTx, type RailWallet } from '@/lib/why';
+import { cardSrc, carry, txHref, walletHref, type Context } from '@/lib/links';
 import { range, rangeEnds } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { HoverCard } from './hover-card';
 import { KindIcon } from './kit';
 
-/** One wallet on the rail, with what it did here. */
-type RailWallet = { address: string; role: string };
-/** One transaction on the rail: a sale of a token, or a payment. */
-type RailTx = { hash: string; block: number; what: string };
-
 // A group past this many lists the first; the page's own sections hold the rest, or Trades a ring's.
 const SHOWN = 6;
-const ZERO = '0x' + '0'.repeat(40);
-
-/**
- * Each wallet with its role here, in the order they first appear: the seller
- * and buyer of a sale (a transfer that was no sale: sent it, got it), then
- * those that only moved money between them, a funder paying one and a payee
- * paid by one, and AC's `middles`, in between. `self`, the page's own wallet,
- * is left out.
- */
-export function walletRoles(transfers: readonly Transfer[], flows: readonly Flow[], middles: readonly string[], self?: string): RailWallet[] {
-  const roles = new Map<string, string[]>();
-  const add = (a: string, role: string) => {
-    if (a === ZERO || a === self) return;
-    const r = roles.get(a) ?? [];
-    if (!r.includes(role)) r.push(role);
-    roles.set(a, r);
-  };
-  for (const t of transfers) {
-    add(t.from, t.marketplace ? 'seller' : 'sent it');
-    add(t.to, t.marketplace ? 'buyer' : 'got it');
-  }
-  const held = new Set(transfers.flatMap((t) => [t.from, t.to]));
-  for (const m of middles) add(m, 'in between');
-  for (const f of flows) {
-    if (held.has(f.to) && !held.has(f.from)) add(f.from, 'funder');
-    if (held.has(f.from) && !held.has(f.to)) add(f.to, 'payee');
-  }
-  return [...roles].map(([address, r]) => ({ address, role: r.join(' · ') }));
-}
-
-/**
- * A wallet's page: those it traded with, by their side of the trade, then its
- * money partners not among them: a funder paid it, a payee was paid by it.
- */
-export function partnersOf(transfers: readonly Transfer[], partners: readonly { address: string; sent: number; received: number }[], self: string): RailWallet[] {
-  const traded = walletRoles(transfers, [], [], self);
-  const seen = new Set(traded.map((w) => w.address));
-  const money = partners.filter((p) => !seen.has(p.address) && p.address !== self)
-    .map((p) => ({ address: p.address, role: p.sent > 0 && p.received > 0 ? 'funder · payee' : p.received > 0 ? 'funder' : 'payee' }));
-  return [...traded, ...money];
-}
-
-/** The sales and payments that tie them, by block: one line a transaction, its sales named first. */
-export function railTxs(transfers: readonly Transfer[], flows: readonly Flow[]): RailTx[] {
-  const out = new Map<string, RailTx>();
-  for (const t of transfers) {
-    if (!out.has(t.txHash)) out.set(t.txHash, { hash: t.txHash, block: t.blockNumber, what: `${t.marketplace ? 'Sale' : 'Transfer'} of #${tokenLabel(t.tokenId)}` });
-  }
-  for (const f of flows) if (!out.has(f.txHash)) out.set(f.txHash, { hash: f.txHash, block: f.blockNumber, what: 'Payment' });
-  return [...out.values()].sort((a, b) => a.block - b.block || a.hash.localeCompare(b.hash));
-}
 
 const CHIP = 'chip max-w-full hover:bg-muted';
 
@@ -81,10 +25,12 @@ const CHIP = 'chip max-w-full hover:bg-muted';
  * rings are the header's chips, so they are not said twice. Rendered in a
  * Suspense of its own by the page: it reads the collection.
  */
-export async function ConnectedRail({ chainId, address, token, wallets = [], txs = [], salesOf }: {
+export async function ConnectedRail({ chainId, address, token, ctx = {}, wallets = [], txs = [], salesOf }: {
   chainId: number; address: string;
   /** The token a trade is of. */
   token?: string;
+  /** What its chips carry on: the lens the page was opened under. */
+  ctx?: Context;
   wallets?: readonly RailWallet[]; txs?: readonly RailTx[];
   /** A page without its transactions to hand (a ring's): this item's first sales, read here, the rest linked on Trades. */
   salesOf?: Item;
@@ -114,13 +60,13 @@ export async function ConnectedRail({ chainId, address, token, wallets = [], txs
     <section aria-label="Connected to" className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-[auto_1fr_1fr]">
       {group('Part of', [
         <li key="c"><Link href={base} prefetch={false} className={CHIP}><KindIcon kind="collection" className="size-3.5" />{c.name ?? short(address)}{ends === null ? null : <span className="text-muted-foreground">{ends.same ? ends.high : `${ends.low}–${ends.high}`} washed</span>}</Link></li>,
-        ...(token === undefined ? [] : [<li key="t"><HoverCard src={cardSrc(base, 'token', token)}><Link href={`${base}/t/${token}`} prefetch={false} className={CHIP}><KindIcon kind="token" className="size-3.5" />#{tokenLabel(token)}</Link></HoverCard></li>]),
+        ...(token === undefined ? [] : [<li key="t"><HoverCard src={cardSrc(base, 'token', token)}><Link href={carry(`${base}/t/${token}`, ctx)} prefetch={false} className={CHIP}><KindIcon kind="token" className="size-3.5" />#{tokenLabel(token)}</Link></HoverCard></li>]),
       ], null)}
       {group('Wallets', wallets.slice(0, SHOWN).map((w) => (
-        <li key={w.address}><HoverCard src={cardSrc(base, 'wallet', w.address)}><Link href={walletHref(chainId, w.address, base)} prefetch={false} className={CHIP}><KindIcon kind="wallet" className="size-3.5" /><span className="font-mono">{short(w.address)}</span><span className="text-muted-foreground">{w.role}</span></Link></HoverCard></li>
+        <li key={w.address}><HoverCard src={cardSrc(base, 'wallet', w.address)}><Link href={carry(walletHref(chainId, w.address, base), ctx)} prefetch={false} className={CHIP}><KindIcon kind="wallet" className="size-3.5" /><span className="font-mono">{short(w.address)}</span><span className="text-muted-foreground">{w.role}</span></Link></HoverCard></li>
       )), below(wallets.length - SHOWN))}
       {group('Transactions', txs.slice(0, SHOWN).map((t) => (
-        <li key={t.hash}><Link href={txHref(chainId, t.hash, base)} prefetch={false} className={CHIP}><KindIcon kind="transaction" className="size-3.5" />{t.what}<span className="font-mono text-muted-foreground">{short(t.hash)}</span></Link></li>
+        <li key={t.hash}><Link href={carry(txHref(chainId, t.hash, base), ctx)} prefetch={false} className={CHIP}><KindIcon kind="transaction" className="size-3.5" />{t.what}<span className="font-mono text-muted-foreground">{short(t.hash)}</span></Link></li>
       )), salesOf === undefined ? below(txs.length - SHOWN) : onTrades)}
     </section>
   );
@@ -130,9 +76,10 @@ export async function ConnectedRail({ chainId, address, token, wallets = [], txs
  * The parent line of a trade or wallet page outside any collection's tabs,
  * drawn as the collection pages draw theirs (CollectionNav): above the head,
  * Collections, then the one watched collection it belongs to, "/" between.
- * One in several collections has no one parent: OpenUnder lists them.
+ * One in several collections has no one parent: OpenUnder lists them. `leaf`
+ * names the page itself, as the collection pages' parent line ends in it.
  */
-export function ParentLine({ home }: { home?: Home }) {
+export function ParentLine({ home, leaf }: { home?: Home; leaf: string }) {
   return (
     <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 pt-4 text-xs text-muted-foreground">
       <Link href="/" className="hover:text-foreground hover:underline">Collections</Link>
@@ -142,6 +89,8 @@ export function ParentLine({ home }: { home?: Home }) {
           <Link href={home.base} prefetch={false} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline"><KindIcon kind="collection" />{home.name}</Link>
         </>
       )}
+      <span aria-hidden>/</span>
+      <span className="font-mono">{leaf}</span>
     </p>
   );
 }

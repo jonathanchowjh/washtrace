@@ -103,9 +103,9 @@ describe('toneOf', () => {
   const w = flag;
   it('reads a trade by the strongest counted lens, and AU alone as apart', () => {
     expect(toneOf({ flags: { A: w } })).toBe('cycle');
-    expect(toneOf({ flags: { AC: w } })).toBe('money');
+    expect(toneOf({ flags: { AC: w } })).toBe('ceiling');
     expect(toneOf({ flags: { AU: w } })).toBe('apart');
-    expect(toneOf({ flags: { AU: w, AC: w } })).toBe('money');
+    expect(toneOf({ flags: { AU: w, AC: w } })).toBe('ceiling');
     expect(toneOf({ flags: {} })).toBe('clean');
   });
 });
@@ -113,7 +113,7 @@ describe('toneOf', () => {
 describe('answer', () => {
   const v = { judged: true, washTrade: false, by: [] as Method[], apartOnly: false, notRun: [] as Method[] };
   it('says one title and tone per rung', () => {
-    expect(answer({ ...v, washTrade: true, by: ['AC'] }, 'X')).toEqual({ title: 'X', tone: 'money' });
+    expect(answer({ ...v, washTrade: true, by: ['AC'] }, 'X')).toEqual({ title: 'X', tone: 'ceiling' });
     expect(answer({ ...v, washTrade: true, by: ['A', 'AC'] }, 'X')).toEqual({ title: 'X', tone: 'cycle' });
     expect(answer({ ...v, judged: false, washTrade: null }, 'X')).toEqual({ title: 'Not judged yet', tone: 'clean' });
     expect(answer({ ...v, by: ['AU'], apartOnly: true }, 'X')).toEqual({ title: 'Flagged only by Money loops back, which is not counted', tone: 'apart' });

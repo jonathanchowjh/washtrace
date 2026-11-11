@@ -43,7 +43,7 @@ vi.mock('@/lib/store', () => ({
     importedMoney: async () => false,
     lensTokens: async () => ({ rows: [], total: 0 }),
     lensWallets: async () => ({ rows: [], total: 0 }),
-    rings: async () => ({ rows: [{ anchor: ADDR, rank: 1, wallets: 2, sample: [], sales: 3, floorSales: 1, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null }], total: state.rings }),
+    rings: async () => ({ rows: [{ anchor: ADDR, rank: 1, wallets: 2, sample: [], sales: 3, floorSales: 1, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: ['5'] }], total: state.rings }),
   }),
   storedEntry: async () => null,
 }));
@@ -126,12 +126,12 @@ describe('the lens panel on the collection page', () => {
 });
 
 describe('its facts line', () => {
-  it('opens each marketplace on its sales, and the sales count on all of them oldest first', async () => {
+  it('opens each marketplace on its sales, and the sales count on all of them, newest first, as every other count of them does', async () => {
     const about = (await draw()).querySelector('[aria-label="The collection"]')!;
     expect(named(about, '650')).toEqual([tradesHref(BASE, { venues: ['opensea'] })]);
     expect(named(about, '300')).toEqual([tradesHref(BASE, { venues: ['blur'] })]);
     const hrefs = [...about.querySelectorAll('a')].map((x) => x.getAttribute('href'));
-    expect(hrefs).toContain(tradesHref(BASE, { sort: 'date', dir: 'asc' }));
+    expect(hrefs).toContain(tradesHref(BASE, {}));
   });
 });
 

@@ -11,11 +11,13 @@ const totals = (m: string) => ({
   // The analysis also counts a token or wallet whose every flagged trade is uncounted, so its totals run over the lists' own counts.
   wallets: 40, tokens: 700, available: m === 'A' || state.moneyRan,
 });
+// What the store reads: a count for every shape, zero for those a row has none of.
+const shapes = (some: Record<string, number> = {}) => ({ funder: 0, payee: 0, back: 0, forward: 0, 'direct-back': 0, 'direct-forward': 0, both: 0, ...some });
 const token = (tokenId: string, over: Record<string, unknown> = {}) => ({
-  tokenId, caught: 11, trades: 14, volumeWei: '2500000000000000000', lastAt: 1_680_000_000_000, loops: 1, pairs: 0, wallets: 3, closedByMoney: 0, laps: 2, middles: 0, ...over,
+  tokenId, caught: 11, trades: 14, volumeWei: '2500000000000000000', lastAt: 1_680_000_000_000, loops: 1, pairs: 0, wallets: 3, closedByMoney: 0, laps: 2, middles: 0, shapes: shapes(), ...over,
 });
 const wallet = (address: string, over: Record<string, unknown> = {}) => ({
-  address, caught: 5, trades: 9, volumeWei: '0', firstAt: 1_670_000_000_000, loops: 2, pairs: 1, partners: 4, ...over,
+  address, caught: 5, trades: 9, volumeWei: '0', firstAt: 1_670_000_000_000, loops: 2, pairs: 1, partners: 4, shapes: shapes(), ...over,
 });
 const tokens = (n: number) => Array.from({ length: n }, (_, i) => token(String(7 + i)));
 
@@ -23,7 +25,7 @@ const tokens = (n: number) => Array.from({ length: n }, (_, i) => token(String(7
 /** A saved lens of yours and its run on this collection (null: it has none here). */
 const ownRun = (id: number, name: string, status: 'done' | 'queued' = 'done', over: Record<string, unknown> = {}) => ({
   lens: { id, key: `L${id}`, name, rule: DEFAULT_RULE, version: 1, createdAt: 0, updatedAt: 0 },
-  run: { lensId: id, collectionId: 1, status, progress: null, lensVersion: 1, analysisId: 1, throughBlock: 10, totals: status === 'done' ? { available: true } : null, error: null, retryAt: null, finishedAt: null, tookMs: 1, ...over },
+  run: { lensId: id, collectionId: 1, status, progress: null, lensVersion: 1, analysisId: 1, throughBlock: 10, totals: status === 'done' ? { available: true, flaggedVolumeWei: '10000000000000000000' } : null, error: null, retryAt: null, finishedAt: null, tookMs: 1, ...over },
 });
 
 const fresh = () => ({
@@ -101,23 +103,47 @@ describe('the lens lists on the collection page', () => {
     const el = list(await collectionPage({ method: 'A' }), 'tokens');
     expect(named(el, '11')).toEqual([`${BASE}/trades?caught=A&token=7&all=1`]);
     expect(named(el, '14')).toEqual([`${BASE}/trades?token=7&all=1`]);
-    expect(named(el, '1 loop')).toEqual([`${BASE}/t/7?method=A`]);
+    // Every link to the token keeps the lens, and the list it sits in for stepping.
+    const page7 = `${BASE}/t/7?method=A&from=tokens%3Fmethod%3DA`;
+    expect(named(el, '1 loop')).toEqual([page7]);
     expect(named(el, '3 wallets')).toEqual([`${BASE}/trades?group=A.t.7&all=1`]);
-    expect(linkTo(el, `${BASE}/t/7`)?.textContent).toBe('#7');
+    expect(linkTo(el, page7)?.textContent).toBe('#7');
     expect(el.textContent).toContain('1 loop among 3 wallets, 2 cycles');
     expect(el.textContent).toContain('11 of 14 trades');
     expect(el.textContent).toContain('2.5 ETH');
     expect(el.textContent).toContain('flagged of its counted trades');
   });
 
+  it('a row\'s bar is its share of the lens\'s flagged ETH, and a row with no priced sale has none', async () => {
+    state.tokens = { rows: [token('7', { volumeWei: '1000000000000000000' }), token('8', { volumeWei: '0' })], total: 2 };
+    const el = list(await collectionPage({ method: 'A' }), 'tokens');
+    const bars = [...el.querySelectorAll('li')].map((li) => (li.querySelector('span[aria-hidden] > i') as HTMLElement | null)?.style.width ?? null);
+    // 1 ETH of the 2 ETH Round trips flagged.
+    expect(bars).toEqual(['50%', null]);
+  });
+
+  it('a token row names its linked pair by shape, and a row stored without one keeps the old words', async () => {
+    state.tokens = { rows: [token('7', { loops: 0, pairs: 1, wallets: 3, laps: 0, middles: 1, shapes: shapes({ funder: 1 }) })], total: 1 };
+    expect((await collectionPage({ method: 'AC' })).textContent).toContain('1 linked pair among 3 wallets, both funded by a third');
+    state.tokens = { rows: [token('7', { loops: 0, pairs: 1, wallets: 3, laps: 0, middles: 1 })], total: 1 };
+    expect((await collectionPage({ method: 'AC' })).textContent).toContain('1 linked pair among 3 wallets, 1 through a middle wallet');
+  });
+
   it('a wallet row says why in its own words, and its counts open its trades', async () => {
     const el = list(await collectionPage({ method: 'A' }), 'wallets');
-    expect(el.textContent).toContain('in 2 loops and 1 linked pair with 4 wallets');
+    expect(el.textContent).toContain('in 2 loops and 1 linked pair with 4 other wallets');
     expect(named(el, '2 loops and 1 linked pair')).toEqual([`${BASE}/trades?caught=A&wallet=${WAL}&all=1`]);
-    expect(named(el, '4 wallets')).toEqual([`${BASE}/trades?group=A.w.${WAL}&all=1`]);
+    expect(named(el, '4 other wallets')).toEqual([`${BASE}/trades?group=A.w.${WAL}&all=1`]);
     expect(named(el, '5')).toEqual([`${BASE}/trades?caught=A&wallet=${WAL}&all=1`]);
     expect(named(el, '9')).toEqual([`${BASE}/trades?wallet=${WAL}&all=1`]);
     expect((el.querySelector('input[name=wq]') as HTMLInputElement).placeholder).toBe('Find a wallet (0x…)');
+  });
+
+  it('draws a token row\'s evidence from its counts, and a wallet row\'s none: its rows do not know how its loops closed', async () => {
+    const glyph = (el: Element) => [...el.querySelectorAll('li svg[role=img]')].map((g) => [g.getAttribute('aria-label'), g.querySelectorAll('circle').length]);
+    const page = await collectionPage({ method: 'A' });
+    expect(glyph(list(page, 'tokens'))).toEqual([['1 loop among 3 wallets', 3]]);
+    expect(glyph(list(page, 'wallets'))).toEqual([]);
   });
 
   it('reads ten a list, with the lenses that ran, the money and the reader zone', async () => {
@@ -313,7 +339,7 @@ describe('the lens lists on the flagged page', () => {
 });
 
 describe('the list of a lens of yours', () => {
-  const NONE = { loops: null, pairs: null, wallets: null, partners: null, closedByMoney: null, laps: null, middles: null };
+  const NONE = { loops: null, pairs: null, wallets: null, partners: null, closedByMoney: null, laps: null, middles: null, shapes: shapes() };
 
   it('draws its name and the bg-flow dot, links by its key, and says nothing of loops it has none of', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop')];
@@ -325,6 +351,8 @@ describe('the list of a lens of yours', () => {
     expect(named(section, '11')).toEqual([`${BASE}/trades?caught=L7&token=7&all=1`]);
     expect(section.textContent).toContain('11 of 14 trades');
     expect(section.textContent).not.toMatch(/loop|0 /);
+    // It records no counts, so its rows draw no evidence.
+    expect(section.querySelector('svg[role=img]')).toBeNull();
     expect(reads(el)).not.toMatch(/\bL7\b/);
     expect(state.calls.tokens[0]![1]).toBe('L7');
   });
@@ -332,14 +360,14 @@ describe('the list of a lens of yours', () => {
   it('opens a token as its page with the lens\'s loops lit, says why in the built-ins\' words, and promises what a built-in does', async () => {
     state.runs = [ownRun(7, 'Blur 3-hop', 'done', { totals: { ...totals('A'), truncated: 0, untimed: 0 } })];
     state.tokens = { rows: [token('7', { loops: 3, wallets: 4, closedByMoney: 2, middles: 1, laps: 3, pairs: 0 })], total: 1 };
-    // The full list's links also say which list they came from, for stepping (lib/step.ts).
-    for (const [page, from] of [[() => collectionPage({ method: 'L7' }), ''], [() => flaggedPage({ method: 'L7', kind: 'tokens' }), '&from=tokens%3Fmethod%3DL7']] as const) {
+    // Both lists' links also say which list they came from, for stepping (lib/step.ts).
+    for (const [page, from] of [[() => collectionPage({ method: 'L7' }), '&from=tokens%3Fmethod%3DL7'], [() => flaggedPage({ method: 'L7', kind: 'tokens' }), '&from=tokens%3Fmethod%3DL7']] as const) {
       const el = await page();
       const page7 = `${BASE}/t/7?method=L7${from}#why`;
       const section = el.querySelector('section[aria-label="Tokens Blur 3-hop flagged"]')!;
       expect(named(section, '#7')).toEqual([page7]);
       expect(named(section, '3 loops')).toEqual([page7]);
-      expect(section.textContent).toContain('3 loops among 4 wallets, 2 closed by money, 1 through a middle wallet');
+      expect(section.textContent).toContain('2 closed by money, 1 through a middle wallet');
       expect(reads(el)).not.toMatch(/\bL7\b/);
       cleanup();
     }

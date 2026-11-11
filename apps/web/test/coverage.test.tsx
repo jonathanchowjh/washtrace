@@ -392,10 +392,10 @@ describe('a money trail loaded from stored data', () => {
     const latest = { ranAt: 0, tookMs: 1, throughBlock: 10, totals: { A: lens(true), AU: lens(true), AC: lens(true) }, missingData: 0, fundedWallets: 20, wallets: 80, truncatedSearches: 0 } as unknown as CollectionRow['latest'];
     const c = row({ latest, wallets: 80, fundedWallets: 20 });
     const checking = trust(c, coverage(c, ON, 0))!.text;
-    expect(checking).toBe('25% of wallets that traded it checked for money so far, so Money loops back and Linked wallets are not final: checking the rest can move them either way.');
+    expect(checking).toBe('25% of wallets that traded it checked for money so far, so Linked wallets and Money loops back are not final: checking the rest can move them either way.');
     expect(checking).not.toMatch(/floors|rise|at least/);
     const idle = trust(c, coverage(c, ON, 0, 'UTC', false))!.text;
-    expect(idle).toBe('25% of wallets that traded it were checked for money, so Money loops back and Linked wallets are not final: with no Etherscan key the rest go unchecked.');
+    expect(idle).toBe('25% of wallets that traded it were checked for money, so Linked wallets and Money loops back are not final: with no Etherscan key the rest go unchecked.');
     expect(idle).not.toMatch(/floors|rise|at least/);
     // The summary names the same set as stage 5.
     expect(render(<ReadingSummary c={c} cov={coverage(c, ON, 0)} href="#reading" />).container.textContent).toContain('25%of wallets that traded it checked for money');
@@ -822,6 +822,7 @@ describe('the reading, said once and truthfully', () => {
     const name = el.querySelector('tbody td')!;
     expect(name.className).toContain('p-0');
     expect(name.querySelector('a')!.className).toContain('block');
+    expect(name.querySelector('a svg')).not.toBeNull();
   });
 });
 
@@ -1031,8 +1032,8 @@ describe('the time chart', () => {
     const point = (at: number) => ({ at, lens: { A: { part: 1, whole: 10 }, AU: { part: 2, whole: 10 }, AC: { part: 3, whole: 10 } }, sales: 10, transfers: 10 });
     const el = render(<TimeChart kind="analyses" points={[point(0), point(86_400_000)]} zone="UTC" />).container;
     // The money hue is Linked wallets' (undashed); Money loops back, dashed, never wears it.
-    expect(el.querySelector('polyline.stroke-money[stroke-dasharray]')).toBeNull();
-    expect(el.querySelector('polyline.stroke-money')).not.toBeNull();
+    expect(el.querySelector('polyline.stroke-ceiling[stroke-dasharray]')).toBeNull();
+    expect(el.querySelector('polyline.stroke-ceiling')).not.toBeNull();
     expect(el.querySelector('polyline.stroke-muted-foreground')?.getAttribute('stroke-dasharray')).toBe('5 3');
     expect(el.querySelector('rect.fill-muted-foreground')).not.toBeNull();
   });

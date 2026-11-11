@@ -2,7 +2,6 @@ import { statSync, type Stats } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type pg from 'pg';
-import { messageOf } from './env.js';
 import { Backoff } from './backoff.js';
 import { LockedRun } from './locked-run.js';
 import { HUB, download, fetchManifest, hubUrl, partPath, removeStaleParts } from './hub.js';
@@ -414,7 +413,7 @@ export class StoredSync {
   private startTrailImport(due: TrailDue): void {
     const abort = new AbortController();
     const done = this.store.locked(LOCKS.trail, false, (client) => this.importTrail(client, due, abort))
-      .then(() => {}, (err) => console.error('[washtrace] collection %d: money trail not loaded: %s', due.c.id, this.worker.scrubbed(err)))
+      .then(() => {}, this.logged(due.c.id, 'money trail not loaded'))
       .finally(() => { if (this.importing?.abort === abort) this.importing = null; });
     this.importing = { id: due.c.id, sha: due.entry.trail!.sha256, abort, done };
   }
@@ -524,9 +523,9 @@ export class StoredSync {
    * another replica is importing now (see clearStaleTrailProgress).
    */
   async clearStaleProgress(): Promise<void> {
-    await this.store.clearRestoreProgress().catch((err) => console.warn('[worker] stale stored-data progress not cleared: %s', messageOf(err)));
-    await this.store.clearDownloads().catch((err) => console.warn('[worker] stale download progress not cleared: %s', messageOf(err)));
-    await this.clearStaleTrailProgress().catch((err) => console.warn('[worker] stale money trail progress not cleared: %s', messageOf(err)));
+    await this.store.clearRestoreProgress().catch((err) => console.warn('[washtrace] stale stored-data progress not cleared: %s', this.worker.scrubbed(err)));
+    await this.store.clearDownloads().catch((err) => console.warn('[washtrace] stale download progress not cleared: %s', this.worker.scrubbed(err)));
+    await this.clearStaleTrailProgress().catch((err) => console.warn('[washtrace] stale money trail progress not cleared: %s', this.worker.scrubbed(err)));
   }
 
   /** Say on the collection why its trail was not loaded, or with null that nothing is wrong. Fail-soft: the rest of the pass goes on. */
@@ -758,7 +757,7 @@ export class StoredSync {
       if (c.downloadNote !== null) await this.store.clearDownloadNote(c.id, false).catch(this.logged(c.id, 'download note not cleared'));
       return this.fetchStored(client, c.id, file, parts, abort);
     })
-      .then(() => {}, (err) => console.error('[washtrace] collection %d: stored data not downloaded: %s', c.id, this.worker.scrubbed(err)))
+      .then(() => {}, this.logged(c.id, 'stored data not downloaded'))
       .finally(() => { if (this.downloading?.abort === abort) this.downloading = null; });
     this.downloading = { id: c.id, file, abort, done };
   }

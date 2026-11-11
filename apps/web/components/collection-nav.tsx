@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { num } from '@/lib/format';
+import { num, short, tokenLabel } from '@/lib/format';
+import { caughtLens } from '@/lib/params';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './zone';
@@ -26,6 +27,20 @@ export function tabOf(base: string, path: string): CollectionTab {
 }
 
 /**
+ * What the item page at `path` is called, for the end of the parent line: a
+ * token's `#114`, a wallet's or a transaction's shortened address, a ring's
+ * anchor. Null for the collection's own pages: their tab says where they are.
+ */
+export function leafOf(base: string, path: string): { word: string; id: string } | null {
+  const rest = path.startsWith(base) ? path.slice(base.length) : '';
+  const [, kind, id] = rest.split('/');
+  if (id === undefined || id === '') return null;
+  if (kind === 't') return { word: '', id: `#${tokenLabel(id)}` };
+  if (kind === 'w' || kind === 'tx') return { word: '', id: short(id) };
+  return kind === 'r' ? { word: 'Ring ', id: `${id.slice(0, 6)}…` } : null;
+}
+
+/**
  * The lens the Tokens and Wallets tabs open on: the one the address bar
  * names, or on Trades the first lens its "flagged by" filter holds, a
  * built-in before yours. `lenses` are the keys that exist, the built-ins
@@ -36,8 +51,7 @@ export function lensOf(sp: URLSearchParams, tab: CollectionTab, lenses: readonly
   const named = sp.get('method');
   if (named !== null) return lenses.includes(named) ? named : null;
   if (tab !== 'trades') return null;
-  const caught = (sp.get('caught') ?? '').split(',');
-  return lenses.find((m) => caught.includes(m)) ?? null;
+  return caughtLens((sp.get('caught') ?? '').split(',').filter((m) => lenses.includes(m))) ?? null;
 }
 
 /**
@@ -158,6 +172,7 @@ export function CollectionNav({ base, name, analyzedAt, lenses, opensOn, counts,
 }) {
   const path = usePathname();
   const current = tabOf(base, path);
+  const leaf = leafOf(base, path);
   const bar = useRef<HTMLElement>(null);
   const off = useOffEdges(bar);
   useEffect(() => {
@@ -191,11 +206,12 @@ export function CollectionNav({ base, name, analyzedAt, lenses, opensOn, counts,
         <Link href={base} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
           <KindIcon kind="collection" />{name}
         </Link>
+        {leaf === null ? null : <><span aria-hidden>/</span><span>{leaf.word}<span className="font-mono">{leaf.id}</span></span></>}
         {analyzedAt === null ? null : <span>· analyzed <Time ms={analyzedAt} /></span>}
       </p>
       {/* The fades sit over the bar, outside what scrolls, so they stay at its edges; the bar's bottom rule shows under them. */}
       <div className="relative mt-2">
-        <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative flex max-w-full gap-1 overflow-x-auto border-b">
+        <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative flex max-w-full gap-1 overflow-x-auto border-b max-md:flex-wrap max-md:overflow-visible">
           {TABS.map(({ tab, label, kind }) => (
             <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
               className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
@@ -205,8 +221,8 @@ export function CollectionNav({ base, name, analyzedAt, lenses, opensOn, counts,
             </Link>
           ))}
         </nav>
-        <div aria-hidden data-more="left" hidden={!off.left} className="pointer-events-none absolute top-0 bottom-px left-0 w-8 bg-linear-to-r from-background to-transparent" />
-        <div aria-hidden data-more="right" hidden={!off.right} className="pointer-events-none absolute top-0 right-0 bottom-px w-8 bg-linear-to-l from-background to-transparent" />
+        <div aria-hidden data-more="left" hidden={!off.left} className="pointer-events-none absolute top-0 bottom-px left-0 w-8 bg-linear-to-r from-background to-transparent max-md:hidden" />
+        <div aria-hidden data-more="right" hidden={!off.right} className="pointer-events-none absolute top-0 right-0 bottom-px w-8 bg-linear-to-l from-background to-transparent max-md:hidden" />
       </div>
     </div>
   );

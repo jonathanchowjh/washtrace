@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
 import { STAGES } from '@/lib/format';
-import { pipeline, STATE_WORDS, stateWord, trailComing } from '@/lib/pipeline';
+import { pipeline, STATE_WORDS, stageFigure, stateWord, trailComing } from '@/lib/pipeline';
 
 const LATEST = { throughBlock: 1000 };
 const TRAIL = { file: 'trail.parquet', rows: 3, bytes: 30, sha256: 'feed', files: { wallets: { bytes: 1, sha256: 'w' }, flows: { bytes: 2, sha256: 'f' } } } as unknown as StoredEntry['trail'];
@@ -166,10 +166,10 @@ describe('pipeline', () => {
     expect(s.map((x) => x.title)).toEqual(STAGES.map((x) => x.title));
     expect(s.map((x) => x.feeds)).toEqual([
       'stage 2: the history it holds arrives once it has downloaded.',
-      'every lens: the history up to where the stored data stops, and the money trail for Money loops back and Linked wallets.',
+      'every lens: the history up to where the stored data stops, and the money trail for Linked wallets and Money loops back.',
       'every number on this page until the chain is read.',
       'every lens. Unread history can move any share either way.',
-      'Money loops back and Linked wallets. An unchecked wallet hides its links, so their shares are not final until it is checked.',
+      'Linked wallets and Money loops back. An unchecked wallet hides its links, so their shares are not final until it is checked.',
       'every number on this page: it turns stages 1 to 5 into them.',
     ]);
   });
@@ -216,5 +216,19 @@ describe('trailComing', () => {
     expect(trailComing(c({ trailNote: TRAIL_NOTES.unreadable }), T({ sha256: 'x' }))).toBe(false);
     expect(trailComing(c(), entry())).toBe(false);
     expect(trailComing(c(), null)).toBe(false);
+  });
+});
+
+describe('stageFigure', () => {
+  it('floors a download and a trail load, and rounds the rest, so each stage reads the same everywhere', () => {
+    expect(stageFigure({ n: 1, file: 'transfers', share: 0.425 })).toBe('42%');
+    expect(stageFigure({ n: 2, file: 'trail', share: 0.425 })).toBe('42%');
+    expect(stageFigure({ n: 2, file: 'transfers', share: 0.425 })).toBe('43%');
+    expect(stageFigure({ n: 4, file: null, share: 0.425 })).toBe('43%');
+  });
+
+  it('never reads a running stage as done', () => {
+    expect(stageFigure({ n: 1, file: 'transfers', share: 0.9996 })).toBe('99%');
+    expect(stageFigure({ n: 4, file: null, share: 0.9996 })).toBe('>99%');
   });
 });

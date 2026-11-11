@@ -169,7 +169,7 @@ export function AddCollection({ writable, stored, start }: { writable: boolean; 
  * stops reading new blocks, its data stays) or move it up the worker's queue.
  * Paused: resume it, or delete its data, which asks inline first and is only
  * offered here because the API refuses to delete a collection still in sync.
- * `compact` is for a list row: no Prioritize, which lives on the collection's page.
+ * `compact` is for a list row: no Prioritize, which lives on the Worker page.
  * `writable` as in Suggested: every button is disabled when a write would be refused.
  */
 export function CollectionControls({ writable, chainId, address, paused, priority, compact = false }: { writable: boolean; chainId: number; address: string; paused: boolean; priority: boolean; compact?: boolean }) {
@@ -179,13 +179,13 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   const [error, setError] = useState<string | null>(null);
   const path = `/api/collections/${chainId}/${address}`;
 
-  async function run(method: 'POST' | 'DELETE', to: string, body?: object, after?: () => void) {
+  async function run(method: 'POST' | 'DELETE', to: string, body?: object) {
     setBusy(true);
     setError(null);
     const { error: failed } = await send(to, method, body);
     setBusy(false);
     if (failed) { setError(failed); return; }
-    if (after) after(); else router.refresh();
+    router.refresh();
   }
 
   const no = !writable;
@@ -216,7 +216,7 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
   return (
     <span className="flex flex-wrap items-center gap-2 text-xs">
       <span>Delete its transfers and analyses? Wallet funding is kept. Watching it again starts over (or restores stored data).</span>
-      <button type="button" disabled={busy || no} onClick={() => run('DELETE', path, {}, compact ? undefined : () => { router.push('/'); router.refresh(); })} className="btn border-foreground">Delete</button>
+      <button type="button" disabled={busy || no} onClick={() => run('DELETE', path, {})} className="btn border-foreground">Delete</button>
       <button type="button" onClick={() => { setArmed(false); setError(null); }} className="btn">Keep</button>
       {fail}
     </span>

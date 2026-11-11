@@ -1,6 +1,6 @@
-import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
-import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
-import { LENSES, andList, tokenLabel, weiToEth, type Lenses } from './format';
+import { CUSTODIANS, METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
+import { venueName, type LensKey } from '@washtrace/detect/trades';
+import { LENSES, SHOWN, andList, tokenLabel, weiToEth, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
 
 /** Two witnesses that would read as the same sentence share a key. */
@@ -15,7 +15,9 @@ interface Reason { witness: Witness; methods: Method[]; rows: number[] }
 /**
  * A token's flags grouped by reason, so a pattern that four transfers share
  * is said once with the four rows it covers, and the lenses that agree on it
- * are named together. Rows are 1-based, as the graph labels them.
+ * are named together. Rows are 1-based, as the graph labels them. They are
+ * ordered as the lenses are shown (floor, ceiling, not counted), by each
+ * reason's first lens; layout() and the pages all read this one order.
  */
 export function reasons(transfers: readonly FlaggedTransfer[]): Reason[] {
   const by = new Map<string, Reason>();
@@ -30,7 +32,8 @@ export function reasons(transfers: readonly FlaggedTransfer[]): Reason[] {
       by.set(key, r);
     }
   });
-  return [...by.values()];
+  const rank = (r: Reason) => Math.min(...r.methods.map((m) => SHOWN.indexOf(m)));
+  return [...by.values()].sort((x, y) => rank(x) - rank(y));
 }
 
 /** Unordered: A→B and B→A are one pair, and share one fan. */
@@ -46,7 +49,9 @@ const SPACING = 160;
 const FAN_CLEAR = 76;
 
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it; `anchor`, which end of the label sits there. */
-interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; anchor: 'start' | 'middle' | 'end'; middle: boolean; first: boolean }
+interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; anchor: 'start' | 'middle' | 'end'; middle: boolean; first: boolean;
+  /** The escrow's name (Blur Blend) when this wallet holds tokens in custody, else null. */
+  custody: string | null }
 /**
  * `tx` and `row` are the transfer an asset arrow opens and numbers (a bundle's
  * first), and null for money. `from` and `to` are the wallets it joins. Tone
@@ -154,11 +159,11 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
       const y = lone ? c : c + r * Math.sin(angle);
       // A pair's labels hang under their wallets, reaching outward from just inside them: set beside, each would add its
       // whole width to the strip's, and a phone would have to shrink the strip's text below reading to show it.
-      if (pair) return { id, x, y, lx: x + (i === 0 ? 10 : -10), ly: y + 24, anchor: i === 0 ? 'end' : 'start', middle, first: i === 0 };
+      if (pair) return { id, x, y, lx: x + (i === 0 ? 10 : -10), ly: y + 24, anchor: i === 0 ? 'end' : 'start', middle, first: i === 0, custody: CUSTODIANS[id] ?? null };
       const out = lone ? 0 : middle ? -Math.PI / 2 : angle;
       const gap = lone ? 0 : 26;
       const lx = x + gap * Math.cos(out);
-      return { id, x, y, lx, ly: (lone ? y + 24 : y + gap * Math.sin(out)), anchor: lx < x - 4 ? 'end' : lx > x + 4 ? 'start' : 'middle', middle, first: !middle && i === 0 };
+      return { id, x, y, lx, ly: (lone ? y + 24 : y + gap * Math.sin(out)), anchor: lx < x - 4 ? 'end' : lx > x + 4 ? 'start' : 'middle', middle, first: !middle && i === 0, custody: CUSTODIANS[id] ?? null };
     });
   // Neighbours on the ring sit SPACING apart, so a loop of a few wallets is drawn small, not on the big ring a crowd needs;
   // past six the ring stops growing, leaving room in the square for a label set outward (an address is about 70 px of mono text).
@@ -189,7 +194,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
   }
   const bundles = new Map<string, { first: number; rows: number[]; tone: Tone; ids: string[] }>();
-  const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
+  const RANK: Record<Tone, number> = { clean: 0, apart: 1, ceiling: 2, cycle: 3 };
 
   // Each arrow's number (Numbered). A drawing of several tokens, as a ring's, puts each number under its token: two tokens both have a sale 2.
   const several = new Set(transfers.map((t) => t.tokenId)).size > 1;
@@ -220,7 +225,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     const tone = toneOf(t);
     edges.push({
       key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: numberOf(i), ids: [idOf(t)],
-      title: `${named(i)} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
+      title: `${named(i)} ${t.marketplace ? `sale on ${venueName(t.marketplace)}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
     edgeOf.set(i, `t${i}`);
@@ -249,7 +254,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     const [from, to] = key.split('>') as [string, string];
     const k = nextIn(from, to);
     edges.push({
-      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '', ids: [],
+      key: `m${key}`, kind: 'money', tone: 'clean', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '', ids: [],
       title: `${count} money ${count === 1 ? 'flow' : 'flows'}`, ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }

@@ -165,7 +165,7 @@ export function surveyInput(transfers) {
     fundingAvailable: false,
     funded: new Set(),
     truncated: new Set(),
-    custodians: new Set(CUSTODIANS),
+    custodians: new Set(Object.keys(CUSTODIANS)),
     contracts: contractsFor(1),
     money: moneyFor(1),
   };

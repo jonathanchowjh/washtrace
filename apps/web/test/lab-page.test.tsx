@@ -62,6 +62,9 @@ describe('the Lab', () => {
       expect(a).toContain('The token keeps coming back to wallets that already held it.');
       expect(a).toContain(`Its rule: ${ruleLine(COPIES.A.rule)}`);
       expect(ac).toContain('the ceiling');
+      expect(ac).toContain('directly or through one wallet between');
+      expect(ac).toContain(COPIES.AC.differs!);
+      expect(a).not.toContain(COPIES.AC.differs!);
       expect(au).toContain('not counted');
       expect(cards[2]!.querySelector('[title^="On real data it flags"]')?.textContent).toBe('not counted');
       expect(cards.map((li) => li.querySelector('a')?.getAttribute('href'))).toEqual(['A', 'AC', 'AU'].map((m) => `/c/1/${A}/methods?method=${m}&lens=copy-${m}`));
@@ -177,7 +180,7 @@ describe('a row\'s preview', () => {
     vi.useRealTimers();
   });
 
-  it('says the preview is gone on a 404 mid-poll, keeps the last row it read, and stops asking', async () => {
+  it('says the preview is gone on a 404 mid-poll, lets the button read Preview again, and stops asking', async () => {
     vi.useFakeTimers();
     let polls = 0;
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -193,8 +196,10 @@ describe('a row\'s preview', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(screen.getByRole('alert').textContent).toBe('This preview is gone. Run it again.');
-    // As before: the last row read ("running") is kept, so the button still reads as going.
-    expect((screen.getByRole('button', { name: 'Previewing…' }) as HTMLButtonElement).disabled).toBe(true);
+    // The last row read ("running") is dropped with the preview, so the button is free to run it again.
+    expect((screen.getByRole('button', { name: 'Preview' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('Previewing');
+    expect(document.body.textContent).not.toContain('Loading the collection');
     const calls = fetchMock.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(fetchMock.mock.calls.length).toBe(calls);
@@ -220,6 +225,11 @@ describe('the rule picture', () => {
     expect(back(await draw(only(true)))).toBe('4 3');
     cleanup();
     expect(back(await draw(only(false)))).toBeNull();
+  });
+
+  it('draws the sale in a neutral stroke: gold is Linked wallets\' alone', async () => {
+    const sale = [...(await draw(DEFAULT_RULE)).querySelectorAll('path')].slice(0, 2).map((p) => p.getAttribute('class'));
+    expect(sale).toEqual(['stroke-muted-foreground', 'stroke-muted-foreground']);
   });
 });
 

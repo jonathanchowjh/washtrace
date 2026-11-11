@@ -134,6 +134,17 @@ const caughtOwn = (id: number, collectionId = 1, logIndex = 5): OwnFlag => ({
 });
 
 describe('the trade page: one card per lens', () => {
+  it('draws the evidence of each built-in that caught the trade, in its card, and nothing in the card of one that did not or of a lens of yours', async () => {
+    roundTrip();
+    state.lenses = [lens(7, 'Fast flips', { 1: {} })];
+    state.own = [caughtOwn(7)];
+    const card = cards(await txPage(), 'How each lens reads First #7');
+    // Round trips caught it as a loop of two wallets; the others' cards, and yours, hold no witness to draw.
+    expect(card.get('Round trips')!.querySelector('svg[role=img]')!.getAttribute('aria-label')).toBe('The token went round 2 wallets, 2 cycles');
+    expect(card.get('Linked wallets')!.querySelector('svg[role=img]')).toBeNull();
+    expect(card.get('Fast flips')!.querySelector('svg[role=img]')).toBeNull();
+  });
+
   it("a caught trade's loop is lit in the token's one graph, for a built-in and for a lens of yours", async () => {
     roundTrip();
     state.lenses = [lens(7, 'Fast flips', { 1: {} })];
@@ -704,6 +715,16 @@ describe('the trade page outside a collection\'s tabs', () => {
     expect(link?.getAttribute('href')).toBe(`/c/1/${A1}/tx/${TX}`);
   });
 
+  it('names on Connected to a wallet that only paid one of its holders, as the token page does', async () => {
+    roundTrip();
+    const F = '0x' + '3'.repeat(40);
+    flows.mockResolvedValueOnce([{ txHash: '0xf1', kind: 'native', from: F, to: S, valueWei: '1', token: '', blockNumber: 2, blockTime: null }]);
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail).map((e) => e.props.wallets))
+      .toEqual([[{ address: S, role: 'seller' }, { address: B, role: 'buyer' }, { address: F, role: 'funder' }]]);
+  });
+
   it('in several collections: no one collection\'s panels, and each collection a link', async () => {
     state.tx = [transfer(A1, '7', TX, 5, 5), transfer(A2, '8', TX, 9, 5)];
     const t = await tree();
@@ -727,7 +748,8 @@ describe('the trade page\'s parent line', () => {
     roundTrip();
     const c = await txPage();
     const line = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
-    expect(line.textContent).toBe('Collections/First');
+    // The page itself ends the line, as plain text.
+    expect(line.textContent).toMatch(/^Collections\/First\/0x/);
     expect([...line.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['/', `/c/1/${A1}`]);
     expect(c.querySelector('header nav[aria-label="Trail"]')).toBeNull();
   });

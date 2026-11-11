@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters, type Log } from 'viem';
 import { MARKETPLACES, ORDER_FULFILLED, seaportPrice, tagSales } from '../src/marketplaces.js';
-import { VENUES, venueOf } from '../src/trades.js';
+import { VENUES, venueName, venueOf } from '../src/trades.js';
 import { transfer, w } from './fixtures.js';
 
 const SEAPORT_16 = '0x0000000000000068f116a894984e2db1123eb395';
@@ -155,5 +155,16 @@ describe('venueOf', () => {
   });
   it('keeps a string no venue knows as its own key', () => {
     expect(venueOf('sudoswap')).toBe('sudoswap');
+  });
+});
+
+describe('venueName', () => {
+  it('names every Seaport as OpenSea, and Blur v2 as Blur', () => {
+    expect(venueName('seaport-1.6')).toBe('OpenSea');
+    expect(venueName('blur-v2')).toBe('Blur');
+  });
+  it('keeps a string no venue lists as itself, even one that is an Object property', () => {
+    expect(venueName('some-new-market')).toBe('some-new-market');
+    expect(venueName('constructor')).toBe('constructor');
   });
 });

@@ -43,7 +43,7 @@ try {
   };
   const settings = {
     fundingAvailable: true,
-    custodians: new Set(CUSTODIANS),
+    custodians: new Set(Object.keys(CUSTODIANS)),
     contracts: contractsFor(c.chainId),
     money: moneyFor(c.chainId),
     rules: c.rules,

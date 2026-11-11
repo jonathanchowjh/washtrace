@@ -73,6 +73,12 @@ export function venueOf(raw: string): string {
   return VENUE_OF.get(raw) ?? raw;
 }
 
+/** A marketplace by the name the console gives it ("OpenSea", not "seaport-1.6"); one no venue lists keeps its own string, even one that spells a prototype key. */
+export function venueName(raw: string): string {
+  const key = venueOf(raw);
+  return Object.hasOwn(VENUES, key) ? VENUES[key]!.name : raw;
+}
+
 export type TradeSort = 'date' | 'price' | 'held' | 'buyerAge' | 'floor' | 'token' | 'marketplace' | 'seller' | `lens-${LensKey}`;
 /** The wallets in one lens's loops: those on a token, or those sharing a loop with a wallet. */
 export type GroupRef = { method: LensKey; token: string } | { method: LensKey; wallet: string };

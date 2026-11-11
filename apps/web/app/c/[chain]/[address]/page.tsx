@@ -5,7 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { connection } from 'next/server';
 import { NO_FILTER } from '@washtrace/detect/trades';
 import { Elsewhere, Empty, Ext, Head, Silent } from '@/components/ui';
-import { Facts, HowSure, NotCounted, ReadingStrip, TopList, YourLenses } from '@/components/overview';
+import { CardHead, Facts, HowSure, NotCounted, ReadingStrip, TopList, YourLenses } from '@/components/overview';
 import { SQUARES, SalesStrip } from '@/components/sales-strip';
 import { RingsTable } from '@/components/rings';
 import { RangeBar, RangeFigure, RangeKey, VolumeDetail } from '@/components/methods';
@@ -17,6 +17,7 @@ import { num, plural, short } from '@/lib/format';
 import { collectionLinks, explorerAddress } from '@/lib/links';
 import { range } from '@/lib/metrics';
 import { addressOf, chainOf } from '@/lib/params';
+import { fromParam } from '@/lib/step';
 import { store, storedEntry } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { collectionStatus } from '@/lib/views';
@@ -134,12 +135,8 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
           {rings && rings.total > 0 ? (
             <section aria-label="Who did it">
-              {/* Stacked on a phone, so the caption never squeezes the heading onto two lines. */}
-              <h2 className="mb-2 flex flex-col gap-0.5 text-sm font-medium text-foreground sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
-                <span className="whitespace-nowrap">Who did it</span>
-                <span className="text-xs font-normal text-muted-foreground">Top {Math.min(RINGS_TOP, rings.total)} of {plural(rings.total, 'ring')}: wallets the evidence ties together, not one person</span>
-              </h2>
-              <RingsTable rows={rings.rows} base={base} chainId={chainId} total={rings.total} />
+              <RingsTable rows={rings.rows} base={base} chainId={chainId} total={rings.total} from={fromParam('rings', new URLSearchParams(), 1)}
+                head={<CardHead title="Who did it" caption={`Top ${Math.min(RINGS_TOP, rings.total)} of ${plural(rings.total, 'ring')}: wallets the evidence ties together, not one person`} />} />
             </section>
           ) : null}
 

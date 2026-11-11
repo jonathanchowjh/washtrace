@@ -5,9 +5,11 @@ const W = '0x' + '12'.repeat(20);
 const fake = {
   collection: vi.fn(async () => ({ id: 1, latest: { id: 4 } })),
   walletTradeCount: vi.fn(async (_c: number, _a: string, f: { flaggedOnly?: boolean }) => (f.flaggedOnly ? 1 : 5)),
-  ringsOf: vi.fn(async () => [W]),
+  ringsOf: vi.fn(async (_id: number, _of: unknown) => [W]),
   ringLines: vi.fn(async (_id: number, anchors: string[]) => anchors.map((anchor) => ({ anchor, rank: 2 }))),
-  token: vi.fn(async (_id: number, tokenId: string) => (tokenId === '7' ? [{ flags: { A: {} } }, { flags: {} }, { flags: { AU: {} } }] : [])),
+  token: vi.fn(async (_id: number, tokenId: string) => (tokenId === '7' ? [{ flags: { A: {} } }, { flags: {} }, { flags: { AU: {} } }]
+    : tokenId === '9' ? [{ flags: { AC: {} } }] : tokenId === '10' ? [{ flags: { AU: {} } }] : [])),
+  walletTiers: vi.fn(async (_id: number, wallets: string[]) => new Map(wallets.map((a) => [a, 'ceiling']))),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 
@@ -18,7 +20,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('GET a hover card', () => {
   it('says a wallet\'s trades here, those counted flagged, and its highest-ranked ring', async () => {
-    expect(await (await card(`wallet=${W}`)).json()).toMatchObject({ kind: 'wallet', judged: true, trades: 5, flagged: 1, rings: 1, ring: { rank: 2 } });
+    expect(await (await card(`wallet=${W}`)).json()).toMatchObject({ kind: 'wallet', judged: true, trades: 5, flagged: 1, rings: 1, ring: { rank: 2 }, tier: 'ceiling' });
     expect(fake.walletTradeCount.mock.calls[0]![2]).toEqual({ collection: ADDR });
   });
 
@@ -31,8 +33,17 @@ describe('GET a hover card', () => {
   });
 
   it('counts a token\'s transfers and those a counted lens flags, Money loops back left out', async () => {
-    expect(await (await card('token=7')).json()).toEqual({ kind: 'token', judged: true, tokenId: '7', transfers: 3, flagged: 1 });
+    expect(await (await card('token=7')).json()).toMatchObject({ kind: 'token', judged: true, tokenId: '7', transfers: 3, flagged: 1 });
     expect((await card('token=8')).status).toBe(404);
+  });
+
+  it('gives a token its tier and its highest ring: the floor if Round trips flags it, else the ceiling, else none', async () => {
+    expect(await (await card('token=7')).json()).toMatchObject({ tier: 'cycle', ring: { anchor: W, rank: 2 } });
+    expect(fake.ringsOf.mock.calls[0]![1]).toEqual({ tokenId: '7' });
+    expect((await (await card('token=9')).json()).tier).toBe('ceiling');
+    // Only Money loops back flags it: not counted, so no tier; and in no ring.
+    fake.ringsOf.mockResolvedValueOnce([]);
+    expect(await (await card('token=10')).json()).toMatchObject({ flagged: 0, tier: null, ring: null });
   });
 
   it('wants exactly one of wallet, token or ring', async () => {

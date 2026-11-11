@@ -8,6 +8,8 @@
 
 import type { FlowDir, PartnerSort, WalletFilter } from '@washtrace/detect';
 import { UINT256_DIGITS } from '@washtrace/detect/lens-rule';
+import { SHOWN } from './format';
+import { carry, type Context } from './links';
 
 const TOKEN_ID = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
 
@@ -108,7 +110,7 @@ export function walletOpts(q: Record<string, string | string[] | undefined>): Wa
  * and pager here builds on the page as shown, so moving one list keeps the
  * others where they are.
  */
-export function hrefOf(base: string, o: WalletOpts): string {
+export function hrefOf(base: string, o: WalletOpts, ctx: Context = {}): string {
   const sp = new URLSearchParams();
   const f = o.filter;
   if (f.collection !== undefined) sp.set('collection', f.collection);
@@ -123,5 +125,14 @@ export function hrefOf(base: string, o: WalletOpts): string {
     if (o.flows > 1) sp.set('flows', String(o.flows));
   }
   const q = sp.toString();
-  return q === '' ? base : `${base}?${q}`;
+  return carry(q === '' ? base : `${base}?${q}`, ctx);
+}
+
+/**
+ * The lens a Trades filter names: the first it is filtered by, floor then
+ * ceiling then not counted (the order every page names them in), then yours as
+ * they were typed. One reading for the tabs' lens, the list's and its links'.
+ */
+export function caughtLens<T extends string>(caught: readonly T[]): T | undefined {
+  return SHOWN.map((s) => caught.find((m) => m === s)).find((m) => m !== undefined) ?? caught[0];
 }

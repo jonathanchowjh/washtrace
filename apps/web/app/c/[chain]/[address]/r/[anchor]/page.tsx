@@ -3,15 +3,17 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { moneyFor } from '@washtrace/detect';
-import { ConnectedRail, walletRoles } from '@/components/connected-rail';
+import { ConnectedRail } from '@/components/connected-rail';
+import { walletRoles } from '@/lib/why';
 import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Empty, Head, MoreLink, Section } from '@/components/ui';
-import { KindIcon, VerdictChip } from '@/components/kit';
-import { RingFigure, ringTone } from '@/components/rings';
+import { KindIcon, VerdictChip, ringTone } from '@/components/kit';
+import { RingFigure } from '@/components/rings';
+import { TokenLink } from '@/components/transfers';
 import { Time } from '@/components/zone';
 import { collectionAt } from '@/lib/collection-reads';
-import { eth, num, plural, ringName, short, tokenLabel } from '@/lib/format';
-import { cardSrc, txHref, walletHref, withFrom } from '@/lib/links';
+import { eth, num, plural, ringName, short } from '@/lib/format';
+import { cardSrc, carry, txHref, walletHref } from '@/lib/links';
 import { fromParam } from '@/lib/step';
 import { layout } from '@/lib/layout';
 import { ringDrawing } from '@/lib/views';
@@ -78,11 +80,10 @@ export default async function RingPage(props: Props) {
   // Its loops drawn as a token's are, for a ring small enough to read; the list below holds every wallet either way.
   const drawn = walletsCut ? null : await ringDrawing(store(), chainId, r.c, ring);
   const drawing = drawn === null ? null : layout(drawn.transfers, drawn.flows, drawn.middles);
-  // Its wallets on the rail as every item page lists them: a trader by its side of the sales drawn, else "traded"; the rest in between.
-  // A ring's wallet on none of its flagged trades is in its evidence only as the middle of a linked pair or on a loop's money path:
-  // the glossary's in between, which is how ringDrawing draws it too. Whether it also paid or was paid first (funder, payee) the ring does not keep.
-  const sides = new Map((drawn === null ? [] : walletRoles(drawn.transfers, [], [])).map((w) => [w.address, w.role]));
-  const railWallets = wallets.map((w) => ({ address: w.address, role: w.traded ? sides.get(w.address) ?? 'traded' : 'in between' }));
+  // Its wallets on the rail as every item page lists them, by the one role set: a trader by its side of the sales drawn, else "traded"; one on none
+  // of its flagged trades is in its evidence only as the middle of a linked pair or on a loop's money path, in between unless its pair's shape says funder or payee.
+  const sides = new Map((drawn === null ? [] : walletRoles(drawn.transfers, drawn.flows, drawn.middles)).map((w) => [w.address, w.role]));
+  const railWallets = wallets.map((w) => ({ address: w.address, role: sides.get(w.address) ?? (w.traded ? 'traded' : 'in between') }));
   const name = r.c.name ?? short(address);
   // An empty group is noise beside the other: it is said in the lead instead.
   const groups = [{ title: `Traded (${num(traders.length)})`, list: traders }, { title: `In between (${num(movers.length)})`, list: movers }].filter((g) => g.list.length > 0);
@@ -139,7 +140,7 @@ export default async function RingPage(props: Props) {
                 {g.list.map((w) => (
                   <li key={w.address}>
                     <HoverCard className="block" src={cardSrc(base, 'wallet', w.address)}>
-                      <Link href={withFrom(walletHref(chainId, w.address, base), member('wallets'))} prefetch={false} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
+                      <Link href={carry(walletHref(chainId, w.address, base), { from: member('wallets') })} prefetch={false} className="flex items-center gap-2 px-4 py-1.5 font-mono text-sm hover:bg-muted/60">
                         <KindIcon kind="wallet" className={w.traded ? 'text-foreground' : 'text-flow'} />{short(w.address)}
                       </Link>
                     </HoverCard>
@@ -151,12 +152,12 @@ export default async function RingPage(props: Props) {
         </div>
       </Section>
 
-      <Section title="Which tokens" lead="The tokens its flagged sales were of, the most ETH first. Open one to see why its sales were flagged, a loop or a linked pair.">
+      <Section id="tokens" title="Which tokens" lead="The tokens its flagged sales were of, the most ETH first. Open one to see why its sales were flagged, a loop or a linked pair.">
         {tokens.length === 0 ? <Empty>None of its flagged trades is a counted sale.</Empty> : (
           <ul className="divide-y rounded-lg border bg-card">
             {tokens.map((t) => (
               <li key={t.tokenId} className="flex items-center gap-3 px-4 py-2 text-sm">
-                <HoverCard className="flex flex-1" src={cardSrc(base, 'token', t.tokenId)}><Link href={withFrom(`${base}/t/${t.tokenId}`, member('tokens'))} prefetch={false} className="flex items-center gap-2 font-mono font-medium hover:underline"><KindIcon kind="token" />#{tokenLabel(t.tokenId)}</Link></HoverCard>
+                <TokenLink base={base} tokenId={t.tokenId} from={member('tokens')} cardClassName="flex flex-1" className="font-mono font-medium" />
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId })} prefetch={false} className="text-xs text-muted-foreground tabular-nums hover:underline">{plural(t.sales, 'sale')}</Link>
                 <Link href={tradesHref(base, { ring: anchor, token: t.tokenId, sort: 'price', dir: 'desc' })} prefetch={false} className="w-20 text-right tabular-nums hover:underline">{eth(t.volumeWei)}</Link>
               </li>

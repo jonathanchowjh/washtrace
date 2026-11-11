@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MethodTotals, TimelinePoint, TokenLine, TradeRow } from '@washtrace/detect';
-import { HowSure, NotCounted, TopList } from '@/components/overview';
+import { HowSure, NotCounted, ReadingStrip, TopList, YourLenses } from '@/components/overview';
 import { SalesStrip, WhereItSits, saleStanding, standing } from '@/components/sales-strip';
 import { worstStage, type Stage } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
@@ -38,6 +38,18 @@ describe('the reading in four steps', () => {
   it('calls a step not needed only when every stage of it is', () => {
     expect(worstStage([stage('download', 'not-needed'), stage('load', 'not-needed')], ['download', 'load'])?.state).toBe('not-needed');
     expect(worstStage([stage('download', 'not-needed'), stage('load', 'done')], ['download', 'load'])?.state).toBe('done');
+  });
+});
+
+describe('the reading strip\'s figure', () => {
+  const running = (key: Stage['key'], n: Stage['n'], file: Stage['file']): Stage => ({ ...stage(key, 'running'), n, file, share: 0.425 });
+  const strip = (stages: Stage[]) => render(<ReadingStrip stages={stages} base={BASE} />).container.querySelector('[data-step]')!.textContent;
+
+  it('says a share the way the Worker grid does: floored for a download or a trail load, else held back from 100%', () => {
+    expect(strip([running('download', 1, 'transfers')])).toContain('42%');
+    expect(strip([running('load', 2, 'trail')])).toContain('42%');
+    expect(strip([running('load', 2, 'transfers')])).toContain('43%');
+    expect(strip([{ ...running('chain', 4, null), share: 0.9996 }])).toContain('>99%');
   });
 });
 
@@ -147,13 +159,19 @@ describe('every sale, in order', () => {
     expect(await legend(2500)).toBe('this wallet\'s first 2,000 sales');
   });
 
+  it('on a wallet\'s page the lead says its sales of its transfers, since the headline counts mints too', async () => {
+    strip.own = 5;
+    const c = render((await WhereItSits({ chainId: 1, address: '0x' + 'b'.repeat(40), of: { wallet: '0x' + 'c'.repeat(40) }, transfers: 12 }))!).container;
+    expect([...c.querySelectorAll('a')].some((a) => a.textContent === 'this wallet\'s 5 sales of 12 transfers')).toBe(true);
+  });
+
   it('draws nothing for a collection with no sale', () => {
     expect(render(<SalesStrip timeline={{ bucket: 'day', points: [] }} base={BASE} zone="UTC" chainId={1} />).container.innerHTML).toBe('');
   });
 });
 
 describe('the top lists', () => {
-  const token = (tokenId: string, loops: number): TokenLine => ({ tokenId, caught: 1, trades: 1, volumeWei: '1000000000000000000', lastAt: null, loops, pairs: loops === 0 ? 1 : 0, wallets: 2, closedByMoney: 0, laps: 0, middles: 0 });
+  const token = (tokenId: string, loops: number): TokenLine => ({ tokenId, caught: 1, trades: 1, volumeWei: '1000000000000000000', lastAt: null, loops, pairs: loops === 0 ? 1 : 0, wallets: 2, closedByMoney: 0, laps: 0, middles: 0, shapes: null });
 
   it('marks a token with a loop as a round trip, and one linked only by money as the ceiling\'s', () => {
     const c = render(<TopList kind="tokens" rows={[token('1', 1), token('2', 0)]} total={6} base={BASE} chainId={1} />).container;
@@ -161,6 +179,26 @@ describe('the top lists', () => {
     expect(marks[0]).toContain('bg-cycle');
     expect(marks[1]).toContain('repeating-linear-gradient');
     expect(links(c)).toContainEqual(['All 6 tokens ›', `${BASE}/tokens?method=AC&sort=volume`]);
+  });
+
+  it('opens a row under Linked wallets and the list "All N" opens, so it steps through that list', () => {
+    const c = render(<TopList kind="tokens" rows={[token('1', 1)]} total={6} base={BASE} chainId={1} />).container;
+    const from = encodeURIComponent('tokens?method=AC&sort=volume');
+    expect(links(c).map((l) => l[1])).toContain(`${BASE}/t/1?method=AC&from=${from}`);
+  });
+});
+
+describe('the heads of the overview blocks', () => {
+  it('sit inside their cards, and Your lenses with none is one link, not a card', () => {
+    const own = { lens: { key: 'L1', name: 'Fast flips' }, run: null } as unknown as Parameters<typeof YourLenses>[0]['runs'][number];
+    const c = render(<YourLenses runs={[own]} base={BASE} writable />).container;
+    expect(c.querySelector('section > h2')!.textContent).toBe('Your lenseseach with its share of sales');
+    cleanup();
+    const none = render(<YourLenses runs={[]} base={BASE} writable />).container;
+    expect(none.querySelector('section')).toBeNull();
+    expect(none.textContent).toBe('+ New lens');
+    cleanup();
+    expect(render(<NotCounted apart={2} base={BASE} />).container.querySelector('section > h2')!.textContent).toBe('Looks suspicious, not countedWhy the number is not higher');
   });
 });
 

@@ -1,4 +1,4 @@
-import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type OwnFlag, type PassRow, type SettingSource, type Store, type StoredEntry } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, RULES, type Rules, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, tokenCycles, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type MiddleRow, type OwnFlag, type PassRow, type SettingSource, type Store, type StoredEntry } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
 import type { LensRule } from '@washtrace/detect/lens-rule';
 import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
@@ -35,11 +35,16 @@ export interface TokenDrawing {
   own: OwnFlag[];
 }
 
+/** The most cycles one loop of the token closes, the collection's `minCycles`, and the escrows its moves touch (address and name). */
+export type Near = { cycles: number; wallets: string[]; minCycles: number; custody: { address: string; name: string }[] };
+
 type TokenView = {
   collection: { id: number; chainId: number; address: string; name: string | null };
   tokenId: string;
   /** Your lenses' names, for their chips and lines. */
   ownLenses: Lenses;
+  /** How near Round trips came, for a page that says why it passed the token by. */
+  near: Near;
 } & TokenDrawing & Verdict;
 
 /** Tokens or wallets to a page in a collection's Tokens and Wallets lists, as many as a screen shows without scrolling far. */
@@ -113,9 +118,16 @@ export async function tokenView(chainId: number, address: string, tokenId: strin
   if (all.length === 0) return { empty: true, c };
   const graph = await drawingInputs(s, chainId, c, tokenId, all, ownRanIds(c.latest, runs));
   return {
-    collection: { id: c.id, chainId, address, name: c.name }, tokenId, ...graph, ownLenses: ownLenses(runs),
+    collection: { id: c.id, chainId, address, name: c.name }, tokenId, ...graph, ownLenses: ownLenses(runs), near: nearOf(all, c.rules),
     ...verdict(graph.transfers.map((t) => ({ t, latest: c.latest }))),
   };
+}
+
+/** How near Round trips came to the token, as the analysis counts it (tokenCycles), with the collection's own `minCycles`. */
+function nearOf(all: readonly FlaggedTransfer[], rules: Partial<Rules>): Near {
+  const touched = new Set(all.flatMap((t) => [t.from, t.to]));
+  const custody = Object.entries(CUSTODIANS).filter(([a]) => touched.has(a)).map(([address, name]) => ({ address, name }));
+  return { ...tokenCycles(all, ESCROWS), minCycles: { ...RULES, ...rules }.minCycles, custody };
 }
 
 /** What GET /api/transfers answers, and the trade page's verdict: a transaction's transfers, each with the flags of the built-ins that ran on its collection. */
@@ -211,7 +223,7 @@ export async function txView(chainId: number, tx: string): Promise<TxView> {
 }
 
 /** The escrows the engine folds custody through, as the worker and a lens run pass them (graph.ts adds the zero address itself). */
-const ESCROWS: ReadonlySet<string> = new Set(CUSTODIANS);
+const ESCROWS: ReadonlySet<string> = new Set(Object.keys(CUSTODIANS));
 
 /** Whether `address` is an escrow: the one test of it the trade page and this file make, over the list the engine is given. */
 export function inEscrow(address: string): boolean {
@@ -250,6 +262,17 @@ function paged(asked: number, total: number, size: number): { page: number; page
 }
 
 /**
+ * What the pairs in `home` say of a wallet: those it is the middle of when it has no transfer there (`all` is 0),
+ * else the middles of its own pairs, which give its partners their role. Nothing outside a collection.
+ */
+async function homeMiddles(s: Store, chainId: number, home: string | undefined, address: string, all: number) {
+  const none = { rows: [] as MiddleRow[], tokens: 0 };
+  const c = home === undefined ? null : await s.collection(chainId, home);
+  if (c === null) return [none, []] as const;
+  return all === 0 ? [await s.middleOf(c.id, address), []] as const : [none, await s.middlesOf(c.id, address)] as const;
+}
+
+/**
  * A wallet: its funding, a page of its money partners, a page of its trades
  * under the filter, with the one verdict of the trades shown, and with
  * `filter.with` what passed between it and that wallet. Its counts are over
@@ -279,7 +302,11 @@ export async function walletView(chainId: number, address: string, opts: WalletO
     other === undefined ? [] : s.walletTransfers(chainId, address, TRADES, 0, { with: other, ...inHome }),
     other === undefined ? [] : s.flowsBetween(chainId, address, other, opts.dir, FLOWS, offset(pages.flows, FLOWS)),
   ]);
-  const latest = await latestByAddress(s, chainId, [...shown, ...betweenShown]);
+  const [latest, [middles, partnerMiddles], middleIn] = await Promise.all([
+    latestByAddress(s, chainId, [...shown, ...betweenShown]),
+    homeMiddles(s, chainId, home, address, all),
+    home === undefined && all === 0 ? s.middleIn(chainId, address) : [],
+  ]);
   // The API's `cut`: which list has more than one page.
   const hasMore = { trades: pages.trades.pages > 1, counterparties: pages.partners.pages > 1 };
   const withLatest = (ts: readonly FlaggedTransfer[]) => ts.map((t) => ({ t, latest: latest.get(t.collection?.address ?? '') ?? null }));
@@ -288,6 +315,12 @@ export async function walletView(chainId: number, address: string, opts: WalletO
     funding,
     collections,
     counterparties,
+    /** The linked pairs it is the middle of in `home` (the first rows, and how many tokens in all), read only when it has no transfer there. */
+    middles,
+    /** The middles of its own pairs in `home`, whatever page or filter shows its transfers: they give its partners their role. */
+    partnerMiddles,
+    /** Across every collection, when it traded in none: those it is a middle of, each opened under its tabs, where its role is read. */
+    middleIn,
     transfers: rows.map((r) => ranFlags(r.t, r.latest)),
     /** Every trade it has, and those counted flagged, whatever the filter. */
     counts: { trades: all, flagged },
@@ -414,11 +447,12 @@ export async function workerView(zone = 'UTC') {
       chainId: c.chainId, address: c.address, name: c.name, startBlock: c.startBlock, cursorBlock: c.cursorBlock,
       headBlock: c.headBlock, ingestedAt: c.ingestedAt, error: c.error, errorAt: c.errorAt, stale: c.stale,
       analyzedAt: c.latest?.ranAt ?? null, analysisMs: c.latest?.tookMs ?? null, analysisError: c.analysisError, analysisRetryAt: c.analysisRetryAt,
+      priority: c.priority,
       turn: report.collections.find((r) => r.chainId === c.chainId && r.address === c.address)?.turn ?? 'keeping-up',
       // Paused or not: its "No RPC" is no fault while its stored data is there.
       storedOnly: storedOnly(c, new Set(config.chains)),
       stages: pipeline({ c, entry: manifest === null ? null : entryFor(manifest, c.chainId, c.address), rpcChains: new Set(config.chains), funding: config.funding, analyzing: analyzingOn(passes, c.id), silent })
-        .map(({ key, n, title, state, share }) => ({ key, n, title, state, share })),
+        .map(({ key, n, title, state, share, file }) => ({ key, n, title, state, share, file })),
       backfillEtaMs: c.readRate && c.headBlock !== null && c.cursorBlock !== null ? (Math.max(0, c.headBlock - c.cursorBlock) / c.readRate) * 1000 : null,
     })),
   };

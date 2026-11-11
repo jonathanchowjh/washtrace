@@ -105,22 +105,29 @@ describe('the collections page', () => {
     expect(names(await draw())).toEqual(['Low', 'High']);
   });
 
-  it('the low end of the sales range links to its lens evidence, and the high end to the other', async () => {
+  it('the low end of the sales range opens the sales its lens flagged, and the high end the other’s', async () => {
     state.rows = [analysed(1, 'Ape', 18, 25)];
     const c = await draw();
-    const links = [...c.querySelectorAll('li a[href*="#evidence"]')];
+    const base = `/c/1/0x${'1'.repeat(40)}`;
+    const links = [...c.querySelectorAll('li a[title^="Open the sales"]')];
     expect(links.map((a) => [a.textContent, a.getAttribute('href')]).slice(0, 2)).toEqual([
-      ['18', `/c/1/0x${'1'.repeat(40)}/methods?method=A#evidence`],
-      ['25%', `/c/1/0x${'1'.repeat(40)}/methods?method=AC#evidence`],
+      ['18', tradesHref(base, { caught: ['A'] })],
+      ['25%', tradesHref(base, { caught: ['AC'] })],
     ]);
     expect(links[0]!.className).toContain('relative z-10');
+  });
+
+  it('the volume range opens the same lens’s sales, the dearest first', async () => {
+    state.rows = [analysed(1, 'Ape', 18, 25)];
+    const links = [...(await draw()).querySelectorAll('li a[title^="Open the sales"]')].map((a) => a.getAttribute('href'));
+    expect(links).toContain(tradesHref(`/c/1/0x${'1'.repeat(40)}`, { caught: ['A'], sort: 'price', dir: 'desc' }));
   });
 
   it('a range whose ends agree is one link', async () => {
     state.rows = [analysed(1, 'Ape', 20, 20)];
     const c = await draw();
-    expect([...c.querySelectorAll('li a[href*="#evidence"]')].slice(0, 1).map((a) => a.textContent)).toEqual(['20%']);
-    expect(c.querySelectorAll('li a[href*="#evidence"]').length).toBe(2); // one per measure
+    expect([...c.querySelectorAll('li a[title^="Open the sales"]')].slice(0, 1).map((a) => a.textContent)).toEqual(['20%']);
+    expect(c.querySelectorAll('li a[title^="Open the sales"]').length).toBe(2); // one per measure
   });
 
   it('the row’s sales count opens the sales, above the row link; its transfer count is plain, as no list holds every transfer', async () => {
@@ -159,6 +166,10 @@ describe('the collections page', () => {
     state.rows = [analysed(1, 'Ape', 10, 20)];
     const c = await draw({ sort: 'washed', tab: 'all' });
     expect(c.textContent).toContain('Sort by');
+    // The box filters this tab's list, and says so; the sidebar's searches everything.
+    expect(c.querySelector('form[method="get"] label')!.textContent).toBe('Filter this list');
+    expect(c.querySelector('input[name=find]')!.getAttribute('placeholder')).toBe('collection name or address');
+    expect(c.querySelector('form[method="get"] button')!.textContent).toBe('Filter');
     // The arrow is the link's ::after, so the sort in force is read from aria-current and the arrow's class.
     const on = [...c.querySelectorAll('a[aria-current="true"]')];
     expect(on.map((a) => a.textContent)).toEqual(['washed', 'Sales that look washed']);

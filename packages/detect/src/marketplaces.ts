@@ -29,10 +29,10 @@ export const MARKETPLACES: Readonly<Record<string, string>> = {
 };
 
 /** Escrows that hold a token without owning it. See tokenGraph. */
-export const CUSTODIANS: readonly string[] = [
+export const CUSTODIANS: Readonly<Record<string, string>> = {
   // Blur Blend: NFT-backed loans. The token sits here for the loan's life.
-  '0x29469395eaf6f95920e59f858042f0e28d98a20b',
-];
+  '0x29469395eaf6f95920e59f858042f0e28d98a20b': 'Blur Blend',
+};
 
 /** Wrapped native tokens per chain id. Their transfers are money, and their amounts are volume. */
 export const WRAPPED: Readonly<Record<number, readonly string[]>> = {
@@ -70,7 +70,7 @@ const INFRASTRUCTURE: readonly string[] = [
 ];
 
 export function contractsFor(chainId: number): Set<string> {
-  return new Set([...Object.keys(MARKETPLACES), ...CUSTODIANS, ...INFRASTRUCTURE, ...(WRAPPED[chainId] ?? [])]);
+  return new Set([...Object.keys(MARKETPLACES), ...Object.keys(CUSTODIANS), ...INFRASTRUCTURE, ...(WRAPPED[chainId] ?? [])]);
 }
 
 export function moneyFor(chainId: number): Set<string> {

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '@/components/sidebar';
+import type { Watched } from '@/lib/search';
 
 const push = vi.fn();
 const nav = { path: '/', search: '' };
@@ -10,6 +11,7 @@ const ADDR = '0x' + 'a'.repeat(40);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const hits = (over: Record<string, unknown>) => ({ collections: [], tokens: [], wallets: [], trades: [], more, ...over });
 const terra = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA', totals: null };
+const watched: Watched = { chainId: 1, address: ADDR, name: 'Terraforms', range: null };
 
 const fetchMock = vi.fn();
 beforeEach(() => {
@@ -175,7 +177,7 @@ describe('the search box on the results page', () => {
 });
 
 describe('the search box under a collection', () => {
-  const under = () => { nav.path = `/c/1/${ADDR}/t/7`; render(<Sidebar watched={[terra]} />); };
+  const under = () => { nav.path = `/c/1/${ADDR}/t/7`; render(<Sidebar watched={[watched]} />); };
 
   it('searches that collection: says so, and asks with its scope', async () => {
     fetchMock.mockResolvedValue(reply(hits({})));
@@ -197,7 +199,7 @@ describe('the search box under a collection', () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     under();
     fireEvent.click(screen.getAllByRole('button', { name: /In Terraforms/ })[0]!);
-    expect(box().getAttribute('placeholder')).toBe('Name, #token or 0x…  /');
+    expect(box().getAttribute('placeholder')).toBe('Search everything…  /');
     await type('#7');
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
   });
@@ -234,7 +236,7 @@ describe('the search box on a collection nobody watches', () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     const missing = '0x' + '0'.repeat(39) + '1';
     nav.path = `/c/1/${missing}`;
-    render(<Sidebar watched={[terra]} />);
+    render(<Sidebar watched={[watched]} />);
     expect(box().getAttribute('placeholder')).not.toContain('0x0000');
     expect(screen.queryByRole('button', { name: /^In / })).toBeNull();
     expect(document.querySelector('input[name=scope]')).toBeNull();
@@ -245,7 +247,7 @@ describe('the search box on a collection nobody watches', () => {
 
 describe('the sidebar on a phone', () => {
   it('reads in order: the name first, then the search box, then the links, wrapping so none is past the edge', () => {
-    render(<Sidebar watched={[terra]} />);
+    render(<Sidebar watched={[watched]} />);
     const top = document.querySelector('a[href="/"]')!;
     expect(top.textContent).toBe('washtrace');
     expect(top.compareDocumentPosition(document.getElementById('q-top')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -272,5 +274,43 @@ describe('the / shortcut', () => {
     other.focus();
     fireEvent.keyDown(other, { key: '/' });
     expect(document.activeElement).toBe(other);
+  });
+});
+
+describe('the sidebar\'s collections', () => {
+  // A range's marks say its ends after the name.
+  const link = () => screen.getByRole('link', { name: /^Terraforms/ });
+
+  it('wear the marks of their range, floor then ceiling, and one mark when both ends are one lens', () => {
+    const { rerender } = render(<Sidebar watched={[{ ...watched, range: { low: 'A', high: 'AC' } }]} />);
+    expect([...link().querySelectorAll('i')].map((m) => m.className)).toEqual([expect.stringContaining('bg-cycle'), expect.stringContaining('repeating-linear-gradient')]);
+    expect(link().querySelector('[title]')!.getAttribute('title')).toBe('Round trips → Linked wallets');
+    // A screen reader hears the range once, as words, after the name: no trailing colon, no floor tied to the ceiling's name.
+    expect(screen.getByRole('link', { name: 'Terraforms, Round trips to Linked wallets' })).toBe(link());
+    rerender(<Sidebar watched={[{ ...watched, range: { low: 'A', high: 'A' } }]} />);
+    expect(link().querySelectorAll('i')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Terraforms, Round trips' })).toBe(link());
+    // Not read yet: no mark, which is never shown as clean.
+    rerender(<Sidebar watched={[watched]} />);
+    expect(link().querySelectorAll('i')).toHaveLength(0);
+  });
+
+  it('start with the collection symbol, and the name is still all the link says', () => {
+    render(<Sidebar watched={[watched]} />);
+    expect(link().querySelector('svg')).not.toBeNull();
+    expect(link().textContent).toBe('Terraforms');
+  });
+});
+
+describe('a wallet hit in a scope', () => {
+  it('carries its tier\'s mark, said in words too, and no ring: ranking rings is not asked per keystroke', async () => {
+    nav.path = `/c/1/${ADDR}`;
+    fetchMock.mockResolvedValue(reply(hits({ wallets: [{ chainId: 1, address: ADDR, transfers: 3, here: true, tier: 'ceiling' }] })));
+    render(<Sidebar watched={[watched]} />);
+    await type('0xaaaa');
+    const option = screen.getByRole('option');
+    expect(option.querySelector('i')!.className).toContain('repeating-linear-gradient');
+    expect(option.textContent).toContain('Linked wallets · the ceiling: ');
+    expect(option.textContent).not.toContain('Ring');
   });
 });

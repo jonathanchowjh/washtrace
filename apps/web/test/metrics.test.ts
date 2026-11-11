@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, analysisWaitText } from '@/lib/coverage';
 import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
-import { APART_WHY, inShownOrder, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
+import { APART, APART_WHY, inShownOrder, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes } from '@washtrace/detect/bytes';
-import { localTime } from '@/lib/format';
+import { SHOWN, localTime } from '@/lib/format';
+import { HEADLINE } from '@washtrace/detect';
 
 function totals(m: Partial<MethodTotals> = {}): MethodTotals {
   return {
@@ -113,7 +114,7 @@ describe('coverage', () => {
   it('marks the money lenses as floors while wallets are still being checked', () => {
     const c = cov(row({ fundedWallets: 20 }));
     expect(c.reading).toBe('checking');
-    expect(c.notFinal).toEqual(['AU', 'AC']);
+    expect(c.notFinal).toEqual(['AC', 'AU']);
   });
 
   it('is loading stored data while a load runs, with how far it has got', () => {
@@ -213,7 +214,7 @@ describe('coverage', () => {
       expect(idle.reading).toBe('complete');
       expect(idle.label).toBe('Up to date');
       // Still floors: an unchecked wallet hides links, key or not.
-      expect(idle.notFinal).toEqual(['AU', 'AC']);
+      expect(idle.notFinal).toEqual(['AC', 'AU']);
     }
     expect(coverage(row({ fundedWallets: 20 }), new Set([1]), 0, 'UTC', true).reading).toBe('checking');
   });
@@ -494,6 +495,10 @@ describe('inShownOrder', () => {
     expect(inShownOrder(['A', 'AU', 'AC'])).toEqual(['A', 'AC', 'AU']);
     expect(inShownOrder(['AU', 'AC'])).toEqual(['AC', 'AU']);
     expect(inShownOrder([])).toEqual([]);
+  });
+
+  it('takes its order from format\'s SHOWN, which is the counted lenses then the one apart', () => {
+    expect(SHOWN).toEqual([...HEADLINE, ...APART]);
   });
 });
 

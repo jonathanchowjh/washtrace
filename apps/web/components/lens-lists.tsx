@@ -1,33 +1,34 @@
 import Link from 'next/link';
 import type { TokenLine, WalletLine } from '@washtrace/detect';
 import { findOf, isOwnKey, type LensKey } from '@washtrace/detect/trades';
-import { eth, lensInfo, num, plural, tokenLabel, type Lenses } from '@/lib/format';
+import { eth, lensInfo, num, plural, type Lenses } from '@/lib/format';
 import { tradesHref } from '@/lib/trades-url';
 import { SORTS } from '@/lib/params';
 import { tokenWhy, walletWhy, type WhyPart } from '@/lib/why';
 import { cn } from '@/lib/utils';
 import { Empty } from './ui';
 import { Pager } from './pager';
-import { Wallet } from './transfers';
-import { HoverCard } from './hover-card';
-import { FILL, KindIcon, SearchIcon } from './kit';
-import { cardSrc, withFrom } from '@/lib/links';
+import { TokenLink, Wallet } from './transfers';
+import { CountGlyph, FILL, SearchIcon, type Counts } from './kit';
+import { carry } from '@/lib/links';
 
 /**
  * The tokens or wallets one lens flagged trades of, each saying why in words,
  * with every count a link to the trades it counts: the loops to the token
  * page with them lit (or to a wallet's flagged trades), the wallets to their
  * group, the flagged and the total to those trades. A token opens its page
- * (a lens of yours's with its loops lit). Above it, the orders and a
+ * with this lens's loops lit. Above it, the orders and a
  * Find box that keeps every other parameter; below it, its pages. A Find that
  * names nothing this list holds says so.
  */
-export function LensList({ kind, method, own = {}, base, chainId, rows, total, of, sort, sortHref, find, findParam, pager, empty, from }: {
+export function LensList({ kind, method, own = {}, base, chainId, rows, total, of, flaggedWei, sort, sortHref, find, findParam, pager, empty, from }: {
   kind: 'tokens' | 'wallets'; method: LensKey;
   /** Your lenses by key, for the name of a list that is one of them. */
   own?: Lenses; base: string; chainId: number; rows: TokenLine[] | WalletLine[]; total: number;
   /** How many the list holds with no Find. */
   of: number;
+  /** The lens's flagged volume in ETH, in wei, which a row's bar is the share of; null when the lens has no figures. */
+  flaggedWei: string | null;
   sort: string; sortHref: (s: string) => string; find: string | null; findParam: string;
   pager: { page: number; size: number; href: (p: number) => string; param?: string }; empty: string;
   /** The list as an item's `from` (lib/step.ts), so an item opened from it can step to its neighbours. */
@@ -84,10 +85,10 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
         <ol start={start + 1} className="rounded-lg border bg-card">
           {kind === 'tokens'
             ? (rows as TokenLine[]).map((l, i) => (
-              <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
+              <Row key={l.tokenId} n={start + i + 1} line={l} share={shareOf(l.volumeWei, flaggedWei)} tone={lens.tone} why={tokenWhy(method, l)} counts={l}
                 // A lens of yours opens the token page with its loops lit, down at the why section.
-                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} prefetch={false} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="inline-flex items-center gap-1.5 font-mono font-medium text-foreground hover:underline"><KindIcon kind="token" className="size-3.5 text-muted-foreground" />#{tokenLabel(l.tokenId)}</Link></HoverCard>}
-                loops={withFrom(`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`, from)}
+                name={<TokenLink base={base} tokenId={l.tokenId} from={from} method={method} hash={yours ? '#why' : undefined} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground" />}
+                loops={carry(`${base}/t/${l.tokenId}${yours ? '#why' : ''}`, { method, from })}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
                 caught={tradesHref(base, { kind: 'all', caught: [method], token: l.tokenId })}
@@ -95,9 +96,9 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
               />
             ))
             : (rows as WalletLine[]).map((l, i) => (
-              <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
+              <Row key={l.address} n={start + i + 1} line={l} share={shareOf(l.volumeWei, flaggedWei)} tone={lens.tone} why={walletWhy(method, l)}
                 // Wallet draws the link alone, so its mark sits just before it.
-                name={<span className="inline-flex items-center gap-1.5"><KindIcon kind="wallet" className="size-3.5 text-muted-foreground" /><Wallet chainId={chainId} address={l.address} within={base} from={from} /></span>}
+                name={<Wallet chainId={chainId} address={l.address} within={base} ctx={{ method, from }} />}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}
                 trades={tradesHref(base, { kind: 'all', wallet: l.address })}
@@ -126,9 +127,15 @@ export function MatchLine({ n, of, query, clear, children }: { n: number; of: st
   );
 }
 
-/** One row: its number, its name, why in words, its flagged of its trades, its flagged volume, and the share as a bar in the lens's hue. */
-function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }: {
-  n: number; line: TokenLine | WalletLine; tone: keyof typeof FILL; why: WhyPart[]; name: React.ReactNode; loops: string; group: string; trades: string; caught: string; volume: string;
+/** A row's flagged ETH as a share of the lens's, 0 to 1; null for a row with no priced sale, which has no bar. */
+function shareOf(volumeWei: string, flaggedWei: string | null): number | null {
+  if (flaggedWei === null || volumeWei === '0' || BigInt(flaggedWei) === 0n) return null;
+  return Math.min(1, Number((BigInt(volumeWei) * 10_000n) / BigInt(flaggedWei)) / 10_000);
+}
+
+/** One row: its number, its name, why in words, its flagged of its trades, its flagged volume, and its share of the lens's flagged ETH as a bar in the lens's hue. */
+function Row({ n, line, share, tone, why, counts, name, loops, group, trades, caught, volume }: {
+  n: number; line: TokenLine | WalletLine; share: number | null; tone: keyof typeof FILL; why: WhyPart[]; counts?: Counts; name: React.ReactNode; loops: string; group: string; trades: string; caught: string; volume: string;
 }) {
   const number = 'font-medium text-foreground hover:underline';
   return (
@@ -148,14 +155,17 @@ function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }:
         </span>
       </div>
       <div className="mt-1 flex items-center gap-3 pl-9">
+        {counts === undefined ? null : <CountGlyph counts={counts} className="-my-1.5 h-7 w-12" />}
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
           {why.map((p, i) => p.opens === undefined ? <span key={i}>{p.text}</span> : (
             <Link key={i} href={p.opens === 'loops' ? loops : group} prefetch={false} className="text-foreground hover:underline">{p.text}</Link>
           ))}
         </p>
-        <span aria-hidden className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
-          <i className={cn('block h-full rounded-full', FILL[tone])} style={{ width: `${(line.caught / Math.max(1, line.trades)) * 100}%` }} />
-        </span>
+        {share === null ? null : (
+          <span aria-hidden title="Its share of the flagged ETH" className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
+            <i className={cn('block h-full rounded-full', FILL[tone])} style={{ width: `${share * 100}%` }} />
+          </span>
+        )}
       </div>
     </li>
   );

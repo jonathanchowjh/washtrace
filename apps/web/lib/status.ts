@@ -1,6 +1,6 @@
 import { BEHIND_BLOCKS, BUDGET_MS, EVERY, NOT_DONE, STUCK_MS, entryFor, type CollectionRow, type Job, type Manifest, type PassRow } from '@washtrace/detect';
 import { chainName } from './chains';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, STAGES, eta, floorPct, localTime, num } from './format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, MONEY_LENSES, STAGES, eta, floorPct, localTime, num } from './format';
 import { formatBytes } from '@washtrace/detect/bytes';
 import { analysisRetry, isRunning, progress, restoreText, storedOnly } from './coverage';
 import { FIELDS, type SourcesConfig } from './settings';
@@ -249,8 +249,8 @@ export function status(s: Snapshot, now: number, zone = 'UTC') {
   if (!s.config.funding) {
     // A money trail loaded from stored data is funding the worker does not have to fetch.
     notice('info', s.trailFunded
-      ? `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} run on stored money trails only, and newer wallets go unchecked.`
-      : `Needs an Etherscan key: ${LENSES.AU.name} and ${LENSES.AC.name} do not run without one.`, { label: ETHERSCAN_CTA, href: ETHERSCAN_HREF });
+      ? `Needs an Etherscan key: ${MONEY_LENSES} run on stored money trails only, and newer wallets go unchecked.`
+      : `Needs an Etherscan key: ${MONEY_LENSES} do not run without one.`, { label: ETHERSCAN_CTA, href: ETHERSCAN_HREF });
   }
   // With no key nothing retries failed wallets, and the notice above says why.
   for (const f of s.config.funding ? s.funding : []) {

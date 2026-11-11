@@ -4,10 +4,10 @@ import { type Lens, type LensRun, type Method, type MethodTotals } from '@washtr
 import type { LensKey } from '@washtrace/detect/trades';
 import { COPIES, ruleLine } from '@washtrace/detect/lens-rule';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, floorPct, pctTenth, type Lenses } from '@/lib/format';
+import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, SHOWN, floorPct, pctTenth, type Lenses } from '@/lib/format';
 import type { MoneyReason } from '@washtrace/detect/lens-reads';
 import { behindOf, builtinCauses, causeSentence, runStateWords, shareCauses, shareQualifier, type Behind, type Qualifier, type TokensFloor } from '@/lib/lens-state';
-import { APART, APART_WHY, ownLenses, part, SHOWN } from '@/lib/metrics';
+import { APART, APART_WHY, ownLenses, part } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
 import { LensName, LensPicture, TierWord } from './methods';
@@ -31,7 +31,7 @@ interface Funding {
   silent: boolean;
 }
 
-const ACCENT = { cycle: 'border-t-cycle', money: 'border-t-money', apart: 'border-t-muted-foreground', own: 'border-t-flow' } as const;
+const ACCENT = { cycle: 'border-t-cycle', ceiling: 'border-t-ceiling', apart: 'border-t-muted-foreground', own: 'border-t-flow' } as const;
 
 /** No token cause: a lens the page gave no tokens figure for. */
 const NO_TOKENS: TokensFloor = { reason: null, payees: false };

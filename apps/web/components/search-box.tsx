@@ -5,13 +5,14 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { SearchKind } from '@washtrace/detect';
 import { short, tokenLabel } from '@/lib/format';
 import { typing } from '@/lib/utils';
-import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, tooShort, type HitRow, type Scope, type SearchReply } from '@/lib/search';
+import { TierMark } from './kit';
+import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, tooShort, type HitRow, type Scope, type SearchReply, type Watched } from '@/lib/search';
 
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
 const SHOWN = 5;
 const WAIT_MS = 200;
 /** Short enough to show whole in the sidebar's box; the label says it in full. */
-const PLACEHOLDER = 'Name, #token or 0x…  /';
+const PLACEHOLDER = 'Search everything…  /';
 
 const HEADING: Record<SearchKind, string> = { collections: 'Collections', tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' };
 
@@ -61,7 +62,7 @@ function connectedRows(hits: SearchReply, kind: SearchKind, scope: Scope | null)
  * page focuses it.
  */
 export function SearchBox({ id, className, watched = [], wide }: {
-  id: string; className: string; watched?: readonly { chainId: number; address: string; name: string | null }[];
+  id: string; className: string; watched?: readonly Watched[];
   /** Which layout this box is on show in: the sidebar holds one for each, and only the one on show takes '/'. */
   wide: boolean;
 }) {
@@ -143,7 +144,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
   let seen = -1;
   return (
     <form action="/go" className={`relative ${className}`}>
-      <label className="sr-only" htmlFor={id}>{scopeName === null ? 'Collection, token number, wallet or transaction' : `Search ${scopeName}: token number, wallet or transaction`}</label>
+      <label className="sr-only" htmlFor={id}>{scopeName === null ? 'Search all watched collections: collection, token number, wallet or transaction' : `Search ${scopeName}: token number, wallet or transaction`}</label>
       {scope === null ? null : <input type="hidden" name="scope" value={scopeParam(scope)} />}
       <input
         ref={input}
@@ -183,7 +184,9 @@ export function SearchBox({ id, className, watched = [], wide }: {
             >
               {'sub' in r ? <span className="text-muted-foreground"><span aria-hidden>↳ </span>{r.title}</span> : (
                 <>
-                  <span className={`font-medium ${r.hex ? 'font-mono' : ''}`}>{r.title}</span>
+                  <span className={`font-medium ${r.hex ? 'font-mono' : ''}`}>
+                    {r.tier === undefined ? null : <TierMark tone={r.tier} className="mr-1.5 align-baseline" label />}{r.title}
+                  </span>
                   <span className="text-[11px] text-muted-foreground">{r.detail}</span>
                 </>
               )}

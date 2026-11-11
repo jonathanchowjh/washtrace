@@ -3,11 +3,25 @@ import { cache } from 'react';
 import { moneyFor, type RingLine } from '@washtrace/detect';
 import { collectionOf, type Item } from '@/lib/collection-reads';
 import { eth, num, plural, ringName, short } from '@/lib/format';
-import { cardSrc, walletHref, withFrom } from '@/lib/links';
+import { cardSrc, carry, walletHref, type Context } from '@/lib/links';
+import { cn } from '@/lib/utils';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
-import { KindIcon, TierMark } from './kit';
+import { INLINE_ICON, KindIcon, TierMark, ringTone } from './kit';
 import { HoverCard } from './hover-card';
+import { TokenLink } from './transfers';
+
+/**
+ * A ring, linked to its page: its tier's mark, then the ring's symbol, then
+ * its name, or `children` in the name's place. It carries `ctx` when it is given.
+ */
+export function RingLink({ base, ring, ctx = {}, className, children }: { base: string; ring: RingLine; ctx?: Context; className?: string; children?: React.ReactNode }) {
+  return (
+    <Link href={carry(`${base}/r/${ring.anchor}`, ctx)} prefetch={false} className={cn('inline-flex items-center gap-1.5', className)}>
+      <TierMark tone={ringTone(ring)} label /><KindIcon kind="ring" className={INLINE_ICON} />{children ?? ringName(ring)}
+    </Link>
+  );
+}
 
 /**
  * Rings (methods.md, Rings) as the console draws them: a table of them, a
@@ -15,29 +29,32 @@ import { HoverCard } from './hover-card';
  * wallet or trade page carries.
  */
 
-/** A ring's mark: the floor's when Round trips flags any of its sales, else the ceiling's. */
-export const ringTone = (r: Pick<RingLine, 'floorSales'>) => (r.floorSales > 0 ? 'cycle' : 'money');
-
 /**
  * Rings as rows: its name and mark, a few of its wallets, then what its
  * flagged sales add up to. Each row opens the ring. Below `sm` the table is
  * too wide for the screen, so each ring is a card there instead, as a trade is
  * on Trades: both draw the same cells and the breakpoint shows one.
  */
-export function RingsTable({ rows, base, chainId, total, from }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string }) {
+export function RingsTable({ rows, base, chainId, total, from, head }: { rows: readonly RingLine[]; base: string; chainId: number; total?: number; from?: string; head?: React.ReactNode }) {
   // Each ring's cells, made once: the table row and the card both draw these.
   const rings = rows.map((r) => {
-    const href = withFrom(`${base}/r/${r.anchor}`, from);
+    const href = carry(`${base}/r/${r.anchor}`, { from });
     return {
       key: r.anchor,
-      name: <HoverCard src={cardSrc(base, 'ring', r.anchor)}><Link href={href} prefetch={false} className="inline-flex items-center gap-2 font-medium text-foreground hover:underline"><TierMark tone={ringTone(r)} /><KindIcon kind="ring" />{ringName(r)}</Link></HoverCard>,
+      name: <HoverCard src={cardSrc(base, 'ring', r.anchor)}><RingLink base={base} ring={r} ctx={{ from }} className="font-medium text-foreground hover:underline" /></HoverCard>,
       wallets: (
         <>
-          {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<HoverCard src={cardSrc(base, 'wallet', a)}><Link href={walletHref(chainId, a, base)} prefetch={false} className="inline-flex items-center gap-1 font-mono hover:underline"><KindIcon kind="wallet" className="size-3.5" />{short(a)}</Link></HoverCard></span>)}
+          {r.sample.map((a, i) => <span key={a}>{i > 0 ? ' · ' : ''}<HoverCard src={cardSrc(base, 'wallet', a)}><Link href={walletHref(chainId, a, base)} prefetch={false} className="inline-flex items-center gap-1.5 font-mono hover:underline"><KindIcon kind="wallet" className={INLINE_ICON} />{short(a)}</Link></HoverCard></span>)}
           {r.wallets > r.sample.length ? <Link href={href} prefetch={false} className="hover:underline"> +{num(r.wallets - r.sample.length)}</Link> : null}
         </>
       ),
-      tokens: <Link href={href} prefetch={false} className="hover:underline">{num(r.tokens)}</Link>,
+      // Its first tokens by name, each opening its token; the rest are one link to the ring's list of them.
+      tokens: r.tokens === 0 ? '0' : (
+        <>
+          {r.tokenSample.map((t, i) => <span key={t}>{i > 0 ? ', ' : ''}<TokenLink base={base} tokenId={t} /></span>)}
+          {r.tokens > r.tokenSample.length ? <Link href={`${href}#tokens`} prefetch={false} className="hover:underline"> +{num(r.tokens - r.tokenSample.length)}</Link> : null}
+        </>
+      ),
       sales: <Link href={tradesHref(base, { ring: r.anchor })} prefetch={false} className="hover:underline">{num(r.sales)}</Link>,
       eth: <Link href={tradesHref(base, { ring: r.anchor, sort: 'price', dir: 'desc' })} prefetch={false} className="hover:underline">{eth(r.volumeWei, '')}</Link>,
       // A card names its counts, having no column heads to.
@@ -47,13 +64,14 @@ export function RingsTable({ rows, base, chainId, total, from }: { rows: readonl
   });
   return (
     <div className="rounded-lg border bg-card">
+      {head}
       <ul aria-label="Rings" className="divide-y text-sm sm:hidden">
         {rings.map((r) => (
           <li key={r.key} data-ring-card className="space-y-1 px-3 py-2">
             <div>{r.name}</div>
             <div className="text-xs text-muted-foreground">{r.wallets}</div>
             <p className="flex flex-wrap gap-x-3 tabular-nums">
-              <span>{r.tokens} {r.tokensWord}</span>
+              <span>{r.tokensWord} {r.tokens}</span>
               <span>{r.sales} {r.salesWord}</span>
               <span>{r.eth} ETH</span>
             </p>
@@ -166,9 +184,7 @@ export async function RingChips({ chainId, address, of }: { chainId: number; add
   return (
     <>
       {lines.slice(0, CHIPS).map((r) => (
-        <Link key={r.anchor} href={`${base}/r/${r.anchor}`} prefetch={false} className="chip font-medium hover:bg-muted">
-          <TierMark tone={ringTone(r)} /><KindIcon kind="ring" className="size-3.5" />Part of {ringName(r)} ›
-        </Link>
+        <RingLink key={r.anchor} base={base} ring={r} className="chip font-medium hover:bg-muted">Part of {ringName(r)} ›</RingLink>
       ))}
       {lines.length > CHIPS ? <span className="text-xs text-muted-foreground">and {plural(lines.length - CHIPS, 'more ring')}</span> : null}
     </>

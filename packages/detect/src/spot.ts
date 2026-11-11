@@ -193,7 +193,7 @@ export class SpotCheck {
       histories.set(t.collection, [...(histories.get(t.collection) ?? []), ...read]);
     }
 
-    const custodians = new Set(CUSTODIANS);
+    const custodians = new Set(Object.keys(CUSTODIANS));
     const trades = tradesOf(histories, tx, custodians);
     if (trades.length === 0) throw new Error('This transaction holds no trade: a mint, a burn or a move into or out of custody.');
 

@@ -1,18 +1,18 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { type Method, type TradeRow } from '@washtrace/detect';
-import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { type Method, type TradeRow, type Witness } from '@washtrace/detect';
+import { VENUES, isOwnKey, venueName, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { Time } from '@/components/zone';
 import { SortHead } from '@/components/ui';
 import { FunnelIcon, SearchIcon, TierMark } from '@/components/kit';
-import { Wallet } from '@/components/transfers';
-import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
-import { cardSrc, txHref, withFrom } from '@/lib/links';
-import { judgedBy, SHOWN } from '@/lib/metrics';
+import { TokenLink, Wallet, because } from '@/components/transfers';
+import { NOT_JUDGED_YET, NOT_RUN, SHOWN, andList, eth, lensInfo, localTime, num, pct, weiToEth, type Lenses } from '@/lib/format';
+import { carry, txHref } from '@/lib/links';
+import { judgedBy } from '@/lib/metrics';
+import { caughtLens } from '@/lib/params';
 import { dateIn, midnight } from '@/lib/zone';
 import { MEDIAN, bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { HoverCard } from './hover-card';
 import { TierWord } from './methods';
 
 /**
@@ -178,7 +178,7 @@ const UNKNOWN: Readonly<Record<TradeGroupBy, string>> = {
 
 function groupLabel(by: TradeGroupBy, key: string): string {
   if (key === '-') return UNKNOWN[by];
-  if (by === 'marketplace') return VENUES[key]?.name ?? key;
+  if (by === 'marketplace') return venueName(key);
   if (by === 'month') {
     const m = /^(\d{4})-(\d{2})$/.exec(key);
     return m ? localTime(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1), 'month', 'UTC', 'en-US') : key;
@@ -281,6 +281,22 @@ function verdictOf(r: TradeRow, m: LensKey, through: TradeContext['through']): '
 }
 
 /**
+ * A cell with no link of its own that opens the trade: an empty link laid over
+ * the whole cell, so a click anywhere in it, to the cell's full height, lands.
+ * It is out of the tab order (the date is the link a keyboard reaches) and out
+ * of the accessibility tree (one link a trade), while the cell's own text stays
+ * readable. A `tr` can't be wrapped in a link, so each cell carries its own.
+ */
+function Open({ href, title, className, children, ...td }: { href: string; title?: string; className?: string; children: ReactNode } & React.TdHTMLAttributes<HTMLTableCellElement>) {
+  return (
+    <td {...td} className={cn('relative px-3 py-2', className)}>
+      {children}
+      <Link href={href} tabIndex={-1} aria-hidden="true" prefetch={false} title={title} className="absolute inset-0" />
+    </td>
+  );
+}
+
+/**
  * One page of trades: a dot per lens that ran, and links from every name and
  * number to what it opens. `through` is, for each lens of yours, the block its
  * run read (lensContext): a trade past it reads not judged yet in that lens's
@@ -290,24 +306,31 @@ function verdictOf(r: TradeRow, m: LensKey, through: TradeContext['through']): '
  * Its links do not prefetch: each one renders the collection's layout, counts
  * and all, and a page of them queues the click that matters behind them.
  */
-export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
+export function TradesTable({ chainId, rows, ran, through, money, from, flags, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
+  /** Why each trade was flagged, by `txHash:logIndex` (Store.tradeFlags): the reason says in a short plain line beside it. */
+  flags: ReadonlyMap<string, Partial<Record<Method, Witness>>>;
   /** The list as a trade's `from` (lib/step.ts), so a trade opened from it can step to its neighbours. */
   from?: string;
 }) {
   const { base, q, view, own = {} } = where;
   const lenses = withOwn(ran);
+  // A wallet or token opened from a list filtered by a lens is read under that lens: the first it names, floor first.
+  const method = caughtLens(q.caught);
   const only = (extra: Partial<TradeQuery>, title: string) => (
-    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} prefetch={false} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
+    // Drawn on the row's hover or focus where there is a pointer to hover with, always where there is not (a phone's cards).
+    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} prefetch={false} title={title} aria-label={title}
+      className="ml-1 inline-flex align-middle text-muted-foreground hover:text-foreground focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100">
+      <FunnelIcon className="size-3.5" />
+    </Link>
   );
   const wallet = (a: string) => (
-    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
+    <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} ctx={{ method }} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
   );
   // Each trade's cells, made once: the table row and the card both draw these.
   const trades = rows.map((r) => {
-    const venue = r.marketplace === null ? null : venueOf(r.marketplace);
     const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
-    const href = withFrom(txHref(chainId, r.txHash, base), from);
+    const href = carry(txHref(chainId, r.txHash, base), { from });
     const verdicts = lenses.map((m) => {
       const v = verdictOf(r, m, through);
       const name = lensInfo(m, own)?.name;
@@ -318,16 +341,28 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
           : <span aria-label="Not flagged" className="text-muted-foreground">–</span>;
       return { m, v, name, mark };
     });
+    // The reason of the lens the list is read under, else the strongest that flagged it: a counted lens's before one never counted.
+    const flagged = flags.get(`${r.txHash}:${r.logIndex}`);
+    const witness = [...SHOWN.filter((m) => m === method), ...SHOWN].map((m) => flagged?.[m]).find((w) => w !== undefined);
+    // A lens of yours has no witness here: its row says which flagged it, as the verdict column does.
+    const names = (ms: readonly LensKey[]) => andList(ms.map((m) => lensInfo(m, own)?.name).filter((n) => n !== undefined));
+    const also = names(witness === undefined ? r.lenses : r.lenses.filter(isOwnKey));
+    const reason = witness === undefined ? null : because(witness, chainId, undefined, true);
+    const why = also === '' ? reason : reason === null ? `Flagged by ${also}` : <>{reason}. Also flagged by {also}</>;
+    const when = r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />;
     return {
       key: `${r.txHash}-${r.logIndex}`,
+      href,
       judged: r.judged,
       verdicts,
-      date: <Link href={href} prefetch={false} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>,
-      token: <><HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} prefetch={false} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>{only({ token: r.tokenId }, 'Only trades with this token')}</>,
+      why,
+      // The table's date is the keyboard link and fills its cell; a card's reaches over the whole card.
+      date: <Link href={href} prefetch={false} className="block h-full px-3 py-2 hover:underline">{when}</Link>,
+      cardDate: <Link href={href} prefetch={false} className="hover:underline after:absolute after:inset-0">{when}</Link>,
+      token: <><TokenLink base={base} tokenId={r.tokenId} method={method} />{only({ token: r.tokenId }, 'Only trades with this token')}</>,
       parties: <>{wallet(r.from)} → {wallet(r.to)}</>,
-      // The price opens the trade, as a price does in the transfer tables.
-      price: priced ? <Link href={href} prefetch={false} title="Open this trade" className="hover:underline">{eth(r.priceWei)}</Link> : '—',
-      market: venue === null ? '—' : VENUES[venue]?.name ?? venue,
+      price: priced ? eth(r.priceWei) : '—',
+      market: r.marketplace === null ? '—' : venueName(r.marketplace),
       held: span(r.heldS),
       buyerAge: span(r.buyerAgeS),
       floor: r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`,
@@ -340,10 +375,11 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
           // Only the lenses with something to say: a card has no column to hold a dash.
           const said = t.verdicts.filter((x) => x.v !== 'clear');
           return (
-            <li key={t.key} className="space-y-1 px-3 py-2">
+            // The whole card opens the trade (the date's link reaches over it); the token, wallets and filters stay above it, with their own.
+            <li key={t.key} className="group relative space-y-1 px-3 py-2">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                <span className="whitespace-nowrap font-mono">{t.token}</span>
-                <span className="text-xs text-muted-foreground">{t.date}</span>
+                <span className="relative z-10 whitespace-nowrap font-mono">{t.token}</span>
+                <span className="text-xs text-muted-foreground">{t.cardDate}</span>
               </div>
               {lenses.length === 0 ? null : (
                 <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
@@ -353,12 +389,13 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
                   ))}
                 </div>
               )}
-              <div>{t.parties}</div>
+              <div className="relative z-10 w-fit">{t.parties}</div>
               <div className="flex flex-wrap gap-x-3 tabular-nums">
-                <span>{t.price}</span>
+                <span data-opens>{t.price}</span>
                 <span className="text-muted-foreground">{t.market}</span>
               </div>
               <p data-measure className="text-xs text-muted-foreground tabular-nums">Held {t.held} · buyer age {t.buyerAge} · {t.floor} vs {MEDIAN}</p>
+              {t.why === null ? null : <p data-why className="text-xs text-muted-foreground">{t.why}</p>}
             </li>
           );
         })}
@@ -369,24 +406,27 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
             <tr>
               {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
               {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
+              {lenses.length > 0 ? <th scope="col" className="px-3 py-2 text-left font-medium">Why</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y">
             {trades.map((t) => (
-              <tr key={t.key}>
-                <td className="whitespace-nowrap px-3 py-2">{t.date}</td>
+              <tr key={t.key} className="group hover:bg-muted/40 focus-within:bg-muted/40">
+                {/* h-px: a cell's height counts as set, so the link's h-full fills a row grown tall by another cell. */}
+                <td className="h-px whitespace-nowrap p-0">{t.date}</td>
                 <td className="whitespace-nowrap px-3 py-2 font-mono">{t.token}</td>
                 <td className="px-3 py-2">{t.parties}</td>
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{t.price}</td>
-                <td className="whitespace-nowrap px-3 py-2">{t.market}</td>
-                {/* The trade's own measures count no list, and the row's date opens the trade. */}
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.held}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.buyerAge}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.floor}</td>
+                <Open href={t.href} title="Open this trade" data-opens className="whitespace-nowrap tabular-nums">{t.price}</Open>
+                <Open href={t.href} className="whitespace-nowrap">{t.market}</Open>
+                {/* The trade's own measures count no list; like every cell with no link of its own, they open the trade. */}
+                <Open href={t.href} data-measure className="whitespace-nowrap tabular-nums">{t.held}</Open>
+                <Open href={t.href} data-measure className="whitespace-nowrap tabular-nums">{t.buyerAge}</Open>
+                <Open href={t.href} data-measure className="whitespace-nowrap tabular-nums">{t.floor}</Open>
                 {t.judged
-                  ? t.verdicts.map((x) => <td key={x.m} className="px-3 py-2">{x.mark}</td>)
+                  ? t.verdicts.map((x) => <Open key={x.m} href={t.href}>{x.mark}</Open>)
                   // With no lens run there is no lens column to say it in.
-                  : lenses.length > 0 ? <td colSpan={lenses.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
+                  : lenses.length > 0 ? <Open href={t.href} colSpan={lenses.length} className="text-muted-foreground">{NOT_JUDGED_YET}</Open> : null}
+                {lenses.length > 0 ? <Open href={t.href} data-why className="min-w-56 text-xs text-muted-foreground">{t.why ?? '—'}</Open> : null}
               </tr>
             ))}
           </tbody>

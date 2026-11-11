@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { BUILT_INS, TimeChart, type TimePoint } from '@/components/trend';
-import { SHOWN } from '@/lib/metrics';
+import { TimeChart, type TimePoint } from '@/components/trend';
 
 // The chart opens a period through the router.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -35,7 +34,7 @@ describe('the time chart, with lenses of yours', () => {
     const lines = [...el.querySelectorAll('polyline.stroke-flow')].map((l) => l.getAttribute('stroke-dasharray'));
     expect(lines).toEqual(['2 2', '6 2']);
     // Its table cell opens what it caught.
-    expect(within(table).getAllByRole('link', { name: '40%' })[0]!.getAttribute('href')).toBe('/c/1/0xabc/trades?caught=L7');
+    expect(within(table).getAllByRole('link', { name: '40.0%' })[0]!.getAttribute('href')).toBe('/c/1/0xabc/trades?caught=L7');
     // Never its code.
     expect(el.textContent).not.toMatch(/\bL[78]\b/);
   });
@@ -48,8 +47,8 @@ describe('the time chart, with lenses of yours', () => {
     expect(entry('Quick flips')).not.toMatch(/at least/);
     fireEvent.focus(el.querySelector('[role="group"]')!);
     const tip = screen.getByRole('status').textContent!;
-    expect(tip).toMatch(/at least\s*50%\s*Washed twice/);
-    expect(tip).not.toMatch(/at least\s*40%/);
+    expect(tip).toMatch(/at least\s*50\.0%\s*Washed twice/);
+    expect(tip).not.toMatch(/at least\s*40\.0%/);
   });
 
   it('past 3, the line under the chart names the rest, each linking to its tab', () => {
@@ -136,7 +135,7 @@ describe('the time chart, for a history in one period', () => {
     const fig = el.querySelector<HTMLElement>('figure[data-one-period]')!;
     expect(fig.querySelector('p')!.textContent).toMatch(/^All 12 sales in one hour, .*2023/);
     expect(within(fig).getByRole('link', { name: /^All 12 sales/ }).getAttribute('href')).toBe('/c/1/0xabc/trades?from=1');
-    expect(within(fig).getByRole('link', { name: '25%' }).getAttribute('href')).toBe('/c/1/0xabc/trades?caught=A');
+    expect(within(fig).getByRole('link', { name: '25.0%' }).getAttribute('href')).toBe('/c/1/0xabc/trades?caught=A');
     expect(fig.textContent).toContain('6 of 12 sales');
     expect(fig.textContent).toContain('Linked wallets');
     expect(el.querySelector('polyline')).toBeNull();
@@ -144,11 +143,10 @@ describe('the time chart, for a history in one period', () => {
   });
 
   it('lists the lenses in the order every page does, each in its own lens\'s hue', () => {
-    expect(BUILT_INS).toEqual(SHOWN);
     const el = one({ ...point(at), sales: 12, lens: { A: frac(3, 12), AU: frac(1, 12), AC: frac(6, 12) } });
     const items = [...el.querySelectorAll('figure[data-one-period] li')];
     expect(items.map((li) => li.textContent?.match(/Round trips|Linked wallets|Money loops back/)?.[0])).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
-    expect(items[1]!.querySelector('line')!.getAttribute('class')).toContain('stroke-money');
+    expect(items[1]!.querySelector('line')!.getAttribute('class')).toContain('stroke-ceiling');
   });
 
   it('says one sale as one, and a period read only part way says how far the chain is read', () => {

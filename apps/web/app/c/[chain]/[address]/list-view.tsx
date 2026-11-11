@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS, moneyFor, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
+import { moneyFor, type Method, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort, type Witness } from '@washtrace/detect';
 import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
 import { Empty, Head } from '@/components/ui';
 import { LensList } from '@/components/lens-lists';
@@ -11,11 +11,11 @@ import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
 import { collectionAt, runsOf } from '@/lib/collection-reads';
-import { LENSES, NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, SHOWN, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
 import { behindLine, behindOf } from '@/lib/lens-state';
 import { listHref } from '@/lib/links';
-import { lensContext, ownLenses, SHOWN } from '@/lib/metrics';
-import { listView, pages } from '@/lib/params';
+import { lensContext, ownLenses } from '@/lib/metrics';
+import { caughtLens, listView, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
@@ -29,7 +29,7 @@ type Props = { params: Promise<{ chain: string; address: string }>; searchParams
 const WORD = { tokens: 'Tokens', wallets: 'Wallets', trades: 'Trades' } as const;
 
 /** Each lens's standing in plain words, said after its name wherever the page names it. */
-const TIER = { cycle: LENSES.A.tier, money: LENSES.AC.tier, apart: LENSES.AU.tier, own: 'your lens' } as const;
+const TIER = { cycle: LENSES.A.tier, ceiling: LENSES.AC.tier, apart: LENSES.AU.tier, own: 'your lens' } as const;
 
 /** The lens a list opens on, whose count its tab shows: the title names a lens only when it is another. */
 const OPENS_ON = lensKeyOf(null, {});
@@ -83,9 +83,9 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   // A sort on a lens that did not run has nothing to sort by: it falls back to the default order, and says nothing.
   const unrunSort = asked.sort.startsWith('lens-') && !ran.includes(asked.sort.slice(5) as LensKey);
   const query: TradeQuery = unrunSort ? { ...asked, sort: NO_FILTER.sort, dir: NO_FILTER.dir } : asked;
-  // On Trades the Tokens and Wallets tabs keep the first lens the list is filtered to: first in METHODS' order, as
-  // CollectionNav's lensOf picks the tabs' lens from the same filter, so the two never name different lenses.
-  const method: LensKey = kind === 'trades' ? (METHODS.find((m) => query.caught.includes(m)) ?? query.caught[0] ?? lensKeyOf(one('method'), own)) : lensKeyOf(one('method'), own);
+  // On Trades the Tokens and Wallets tabs keep the first lens the list is filtered to: floor first (caughtLens), as
+  // CollectionNav's lensOf and Trades' own links pick it from the same filter, so none names a different lens.
+  const method: LensKey = kind === 'trades' ? (caughtLens(query.caught) ?? lensKeyOf(one('method'), own)) : lensKeyOf(one('method'), own);
   const list = kind === 'trades' ? 'tokens' : kind;
   // On Trades, sort, q and page are the Trades list's own, so the lists' are their defaults.
   const lv = listView(list, kind === 'trades' ? {} : { page: one('page'), sort: one('sort'), find: one('q') });
@@ -103,6 +103,8 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   ]);
   // The list's own count, never the analysis totals: those also count a token or wallet whose every flagged trade is uncounted.
   const of = unfound?.total ?? rows?.total ?? 0;
+  // The lens's flagged ETH, which each row's bar is the share of: the latest analysis's for a built-in, its last run's for yours.
+  const flaggedWei = (isOwnKey(method) ? runs.find((r) => r.lens.key === method)?.run?.totals : c.latest?.totals[method as Method])?.flaggedVolumeWei ?? null;
   /** This list with its lens, order, Find or page changed; another lens keeps the order and Find. */
   const href = (over: { method?: string; page?: number; sort?: string }) =>
     listHref(base, list, { method: over.method ?? method, sort: over.sort ?? lv.sort, q: lv.find, page: over.page });
@@ -172,7 +174,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
               <GroupBy base={base} q={query} view={view} zone={zone} own={own} groups={trades.groups} ran={trades.ran} />
               {trades.total === 0 ? null : (
                 <>
-                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money}
+                  <TradesTable base={base} q={query} view={view} zone={zone} own={own} chainId={chainId} rows={trades.rows} ran={trades.ran} through={ctx.through} money={trades.money} flags={trades.flags}
                     from={fromParam('trades', new URL(tradesHref(base, query, { by: view.by }), 'http://x.invalid').searchParams, trades.page)} />
                   <Pager total={trades.total} page={trades.page} size={TRADES_PAGE} href={(n) => tradesHref(base, query, { by: view.by, page: n })} label={unit.many} />
                   <p className="mt-3 text-sm"><a href={csv} className="font-medium hover:underline">Download CSV ↓</a></p>
@@ -188,7 +190,7 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
             <div className="max-w-3xl"><Empty>{notRun(method)}</Empty></div>
           ) : (
             <LensList
-              kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of}
+              kind={list} method={method} own={own} base={base} chainId={chainId} rows={rows.rows as TokenLine[] | WalletLine[]} total={rows.total} of={of} flaggedWei={flaggedWei}
               sort={lv.sort} sortHref={(sort) => href({ sort })} find={lv.find} findParam="q"
               pager={{ page: rows.page, size: LIST_PAGE, href: (n) => href({ page: n }) }} empty={`${lens.name} flags no ${list === 'tokens' ? 'token' : 'wallet'}.`}
               from={fromParam(list, new URL(href({}), 'http://x.invalid').searchParams, rows.page)}
@@ -223,10 +225,11 @@ function unjudged(latest: Coll['latest'], n: number): string {
 async function tradesOf(s: Store, c: Coll, query: TradeQuery, by: TradeGroupBy | null, asked: number, ctx: TradeContext) {
   const { ran } = ctx;
   const nothing = holdsNothing(query, ran);
-  const none = { ran, money: ctx.money, absent: nothing?.state === 'absent' ? nothing.absent : [], total: 0, unjudged: 0, page: 1, rows: [] as TradeRow[], groups: null as TradeGroup[] | null };
+  const none = { ran, money: ctx.money, flags: new Map<string, Partial<Record<Method, Witness>>>(), absent: nothing?.state === 'absent' ? nothing.absent : [], total: 0, unjudged: 0, page: 1, rows: [] as TradeRow[], groups: null as TradeGroup[] | null };
   if (nothing !== null) return { ...none, state: nothing.state };
   const { total, unjudged } = await s.tradeCount(c.id, query, ctx);
   const page = Math.min(pages(total, TRADES_PAGE), asked);
   const [rows, groups] = await Promise.all([s.trades(c.id, query, ctx, TRADES_PAGE, (page - 1) * TRADES_PAGE), by !== null && total > 0 ? s.tradeGroups(c.id, query, by, ctx) : null]);
-  return { ...none, state: 'ok' as const, total, unjudged, page, rows, groups };
+  // The page's reasons, in one read.
+  return { ...none, state: 'ok' as const, total, unjudged, page, rows, groups, flags: await s.tradeFlags(c.id, rows) };
 }

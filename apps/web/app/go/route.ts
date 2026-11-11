@@ -3,6 +3,7 @@ import { connection } from 'next/server';
 import { txHref, walletHref } from '@/lib/links';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, scopeOf, scopeParam, tradeHref } from '@/lib/search';
+import { watchedChains } from '@/lib/collection-reads';
 import { store } from '@/lib/store';
 
 /**
@@ -15,7 +16,8 @@ import { store } from '@/lib/store';
  * with none given it is searched for as text is and goes to the chain that
  * holds it: a Base collection's address opens on Base, not as an empty wallet
  * on Ethereum. An address nothing holds still opens its wallet page, on
- * Ethereum, which says it is in no watched collection.
+ * the one chain watched (Ethereum when that is not one), which says it is in no
+ * watched collection.
  */
 export async function GET(req: NextRequest): Promise<Response> {
   await connection();
@@ -41,7 +43,11 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (address && hits !== null) {
     // A watched collection's contract can also have traded as a wallet; the collection is what was meant.
     if (hits.collections.length === 1 && !hits.more.collections) return to(`/c/${hits.collections[0]!.chainId}/${address}`);
-    if (hits.collections.length === 0 && hits.wallets.length === 0) return to(walletHref(1, address));
+    if (hits.collections.length === 0 && hits.wallets.length === 0) {
+      // Its wallet page, on the chain it was searched in, or the one chain that is watched; Ethereum when that is not one.
+      const chains = scoped ? [scoped.chainId] : await watchedChains();
+      return to(walletHref(chains.length === 1 ? chains[0]! : 1, address));
+    }
   }
   // A hash's hits are its transfers, which its page lists in full: more of them past the limit is still one transaction.
   const cut = hits !== null && Object.entries(hits.more).some(([k, more]) => more && !(parsed.kind === 'tx' && k === 'trades'));

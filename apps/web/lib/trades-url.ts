@@ -8,7 +8,7 @@
  * still opens a list.
  */
 
-import { AGE_BANDS, FLOOR_BANDS, FLOOR_DAYS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
+import { AGE_BANDS, FLOOR_BANDS, FLOOR_DAYS, HELD_BANDS, NO_FILTER, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, venueName, type GroupRef, type LensKey, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { LENSES, ethToWei, localTime, short, weiToEth } from './format';
 import { addressOf, findText, pageOf, tokenIdOf } from './params';
 import { dateIn, midnight } from './zone';
@@ -247,7 +247,7 @@ export function chips(base: string, q: TradeQuery, view: View, zone: string, nam
   const all: [string, string | null, Partial<TradeQuery>][] = [
     ['caught', named(q.caught).length ? `Flagged by ${named(q.caught).join(' and ')}` : null, { caught: [] }],
     ['not', named(q.notCaught).length ? `Not flagged by ${named(q.notCaught).join(' and ')}` : null, { notCaught: [] }],
-    ['market', q.venues.length ? `Marketplace: ${q.venues.map((v) => VENUES[v]?.name ?? v).join(', ')}` : null, { venues: [] }],
+    ['market', q.venues.length ? `Marketplace: ${q.venues.map(venueName).join(', ')}` : null, { venues: [] }],
     ['price', price && `Price ${price} ETH`, { priceMinWei: null, priceMaxWei: null }],
     ['held', held && `Held ${held}`, { heldOverS: null, heldUnderS: null }],
     ['age', age && `Bought by a wallet ${age} old`, { buyerAgeOverS: null, buyerAgeUnderS: null }],
