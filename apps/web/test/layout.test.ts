@@ -26,6 +26,9 @@ describe('layout', () => {
           {
             "d": "M 280 187.62395692965987 Q 306.143593539449 264.905989232415 351.41828539142705 316.42307533065843",
             "from": "0x00000000000000000000000000000000000000w1",
+            "ids": [
+              "0xlab_s1:0",
+            ],
             "key": "t1",
             "kind": "asset",
             "label": "2",
@@ -40,6 +43,9 @@ describe('layout', () => {
           {
             "d": "M 360 326.18802153517004 Q 280 310.18802153517004 212.74754878398196 323.6385117783737",
             "from": "0x00000000000000000000000000000000000000w2",
+            "ids": [
+              "0xlab_s2:0",
+            ],
             "key": "t2",
             "kind": "asset",
             "label": "3",
@@ -54,6 +60,9 @@ describe('layout', () => {
           {
             "d": "M 200 326.1880215351701 Q 253.85640646055103 264.905989232415 275.83416582459097 199.93841289096787",
             "from": "0x00000000000000000000000000000000000000w3",
+            "ids": [
+              "0xlab_s3:0",
+            ],
             "key": "t3",
             "kind": "asset",
             "label": "4",
@@ -68,6 +77,9 @@ describe('layout', () => {
           {
             "d": "M 280 187.62395692965987 Q 276.69872981077805 281.905989232415 348.5211079256864 320.0859696879419",
             "from": "0x00000000000000000000000000000000000000w1",
+            "ids": [
+              "0xlab_s4:0",
+            ],
             "key": "t4",
             "kind": "asset",
             "label": "5",
@@ -276,10 +288,13 @@ describe('layout', () => {
       expect(asset.map((e) => [e.label, e.title])).toEqual([['#1·2', '#1·2 transfer'], ['#114·2', '#114·2 transfer']]);
     });
 
-    it('is said for a bundle’s first and last', () => {
+    it('is said for a bundle’s first and last, and a bundle holds every transfer it draws', () => {
       const ping = Array.from({ length: 14 }, (_, i) => ({ ...(i % 2 === 0 ? t(a, b) : t(b, a)), txHash: `0xp${i}` }));
       const bundle = layout([t(ZERO, a), ...ping], [], []).edges.find((e) => e.from === a)!;
       expect(bundle.title).toBe('7 transfers this way, #2 to #14');
+      expect(bundle.ids).toEqual([0, 2, 4, 6, 8, 10, 12].map((i) => `0xp${i}:0`));
+      // An arrow holds its one transfer, by hash and log index; money holds none.
+      expect(layout(ts, [], []).edges.map((e) => e.ids)).toEqual([['0xs1:0'], ['0xs2:3']]);
     });
   });
 

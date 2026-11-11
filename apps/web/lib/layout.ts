@@ -55,7 +55,9 @@ interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; 
  * this token no built-in flagged that a loop of yours lights: `yours` then
  * names those lenses, so the arrow is never drawn or called "not flagged".
  */
-export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[] }
+export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[];
+  /** The transfers of the drawing it draws, each as `txHash:logIndex` (a bundle all of its own), so a page can mark the one it is about; none for money or another token. */
+  ids: string[] }
 /** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. A lens of yours's loop is one reason, of its one lens. */
 export interface DrawnLoop { key: string; methods: LensKey[]; edges: string[]; nodes: string[] }
 /**
@@ -183,7 +185,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     const key = pairKey(t.from, t.to);
     pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
   }
-  const bundles = new Map<string, { first: number; rows: number[]; tone: Tone }>();
+  const bundles = new Map<string, { first: number; rows: number[]; tone: Tone; ids: string[] }>();
   const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
 
   // Each arrow's number (Numbered). A drawing of several tokens, as a ring's, puts each number under its token: two tokens both have a sale 2.
@@ -194,6 +196,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
   };
   /** The number as a title says it: "#2", or "#114·2" already marked. */
   const named = (i: number) => (several ? numberOf(i) : `#${numberOf(i)}`);
+  const idOf = (t: FlaggedTransfer) => `${t.txHash}:${t.logIndex}`;
 
   const edges: DrawnEdge[] = [];
   /** Which arrow draws each transfer (by index), so a reason can name its arrows. */
@@ -201,8 +204,9 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
   transfers.forEach((t, i) => {
     if (t.from === ZERO || t.to === ZERO) return;
     if (pairCount.get(pairKey(t.from, t.to))! > FAN_MAX) {
-      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], tone: 'clean' as Tone };
+      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], tone: 'clean' as Tone, ids: [] };
       b.rows.push(i + 1);
+      b.ids.push(idOf(t));
       const v = toneOf(t);
       if (RANK[v] > RANK[b.tone]) b.tone = v;
       bundles.set(`${t.from}>${t.to}`, b);
@@ -212,7 +216,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     const k = nextIn(t.from, t.to);
     const tone = toneOf(t);
     edges.push({
-      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: numberOf(i),
+      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: numberOf(i), ids: [idOf(t)],
       title: `${named(i)} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
@@ -226,7 +230,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     // Money between the pair keeps the fan, and starts in the middle.
     const k = from < to ? 1 : 2;
     edges.push({
-      key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`,
+      key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`, ids: b.ids,
       title: `${b.rows.length} transfers this way, ${named(b.rows[0]! - 1)} to ${named(b.rows[b.rows.length - 1]! - 1)}${flaggedNote(b.tone)}`,
       ...curve(at.get(from)!, at.get(to)!, k, c),
     });
@@ -242,7 +246,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
     const [from, to] = key.split('>') as [string, string];
     const k = nextIn(from, to);
     edges.push({
-      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '',
+      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '', ids: [],
       title: `${count} money ${count === 1 ? 'flow' : 'flows'}`, ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }
@@ -274,7 +278,7 @@ export function layout(transfers: readonly Numbered[], flows: readonly Flow[], m
       const asset = e.kind === 'nft-token' || e.kind === 'nft-collection';
       const key = `o${i}e${j}`;
       edges.push({
-        key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null,
+        key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null, ids: [],
         label: asset ? (e.kind === 'nft-collection' && e.tokenId !== null ? `#${e.tokenId}` : '') : tokenPaid(e) ?? amount(e.amountWei),
         title: ownTitle(e), ...(e.kind === 'nft-collection' && e.tokenId !== null ? { token: e.tokenId } : {}),
         ...curve(at.get(e.from)!, at.get(e.to)!, nextIn(e.from, e.to), c),

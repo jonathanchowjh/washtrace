@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
 import { layout } from '@/lib/layout';
-import { LoopFigure, TokenLoops } from '@/components/token-graph';
+import { LensGraph, LoopFigure, TokenLoops } from '@/components/token-graph';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
@@ -228,6 +228,29 @@ describe('the numbers on the arrows', () => {
   });
 });
 
+describe('a trade page’s graph', () => {
+  const caught = [{ key: 'A' as const, name: 'Round trips', loop: d.loops[0]! }];
+
+  it('marks the arrow of the trade it is about, undimmed, and says so in the legend and the arrow’s name', () => {
+    render(<LensGraph drawing={d} chainId={1} base="" tokenHref="/t/1" caught={caught} transfer={{ txHash: '0xs2', logIndex: 0 }} />);
+    expect([...document.querySelectorAll('[data-mark]')].map((e) => e.getAttribute('data-edge'))).toEqual(['t2']);
+    expect(document.querySelector('[data-edge="t2"]')!.getAttribute('class') ?? '').not.toContain('opacity-25');
+    expect(document.querySelector('[data-edge="t2"] a')!.getAttribute('aria-label')).toBe('Open the trade: #3 transfer · flagged · this trade');
+    expect([...document.querySelectorAll('figcaption span')].map((s) => s.textContent)).toContain('this trade');
+  });
+
+  it('marks the bundle that holds the trade, and nothing without one', () => {
+    const ping = Array.from({ length: 14 }, (_, i) => t(i % 2 === 0 ? A : B, i % 2 === 0 ? B : A, `0xp${i}`, { A: scc([A, B]) }));
+    const bundled = layout(ping, [], []);
+    render(<LensGraph drawing={bundled} chainId={1} base="" tokenHref="/t/1" caught={[{ key: 'A', name: 'Round trips', loop: bundled.loops[0]! }]} transfer={{ txHash: '0xp5', logIndex: 0 }} />);
+    expect([...document.querySelectorAll('[data-mark]')].map((e) => e.getAttribute('data-edge'))).toEqual([`b${B}>${A}`]);
+    cleanup();
+    render(<LensGraph drawing={d} chainId={1} base="" tokenHref="/t/1" caught={caught} />);
+    expect(document.querySelector('[data-mark]')).toBeNull();
+    expect([...document.querySelectorAll('figcaption span')].map((s) => s.textContent)).not.toContain('this trade');
+  });
+});
+
 describe('a graph wider than its box', () => {
   // jsdom lays nothing out: give the box a phone's width, the drawing twice that, and the svg its drawn width.
   const wide = (svgWidth: number) => {
@@ -253,6 +276,15 @@ describe('a graph wider than its box', () => {
       const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
       expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.round(mid) - d.view.x - 150);
       expect(mid).toBeGreaterThan(d.view.x + d.view.w / 2 + 10);
+    } finally { restore(); }
+  });
+
+  it('opens on the arrow it marks, before what is lit', () => {
+    const restore = wide(d.view.w);
+    try {
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: d.loops[0]!.edges, nodes: d.loops[0]!.nodes }} mark="0xs3:0" />).container;
+      const arrow = d.edges.find((e) => e.key === 't3')!;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.max(0, Math.round(arrow.lx) - d.view.x - 150));
     } finally { restore(); }
   });
 
