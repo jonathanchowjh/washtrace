@@ -34,9 +34,16 @@ const HINTS: Record<string, string> = {
   'follow.hops': `How many wallets out from the traders the worker follows money, for ${LENSES.AU.name}. More finds longer loops, and takes more calls. Lowering it stops reading wallets past the new limit, except on collections where a lens asked for more; a lens that needs them reads "at least".`,
   'follow.reread': "Read a trader's money and other tokens again when it trades, at most once every this many days. 0 is off. Each re-read is about 4 Etherscan calls, and the token read about 1 more. Turning it off stops new re-reads; any already due are read once.",
   // What it buys, what it costs, and what it never reads, with the fan-out the worker follows by.
+  'stored.repo': 'The Hugging Face dataset (owner/name) the worker downloads stored data from. Change it only for a dataset of your own, laid out as the default one is.',
   'tokens.payees': `On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
     + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`,
 };
+
+/** A field's hint: its line in HINTS, or for another chain's RPC, which only .env sets, what it reads. */
+function hintOf(field: FieldView): string | undefined {
+  if (HINTS[field.key] !== undefined || !field.key.startsWith('rpc.')) return HINTS[field.key];
+  return `Where the worker reads the blocks and transfers of collections on ${field.label.replace(/ RPC URL$/, '')}. Shown as the worker reported it.`;
+}
 
 /**
  * What not setting a source means; a number not set falls back to its
@@ -49,17 +56,25 @@ function unset(key: string, trailFunded: boolean): string | undefined {
   return undefined;
 }
 
-/** The fields in groups, by the worker stage they feed. */
+/** The fields in groups, by the worker stage they feed; `id` is the group's anchor (/settings#rpc). */
 const GROUPS = [
   {
+    id: 'rpc',
     title: 'Where it reads the chain',
-    lead: () => `${STAGES[3].title}, ${stageName(4)} for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read.`,
+    lead: () => `${STAGES[3].title}, ${stageName(4)} for every collection, needs an RPC for each chain it reads. Without one, nothing newer is read. Ethereum's is set here; any other chain's in .env (WASHTRACE_RPC_ and the chain's id), and each one the worker reads is listed.`,
     keys: (k: string) => k.startsWith('rpc.'),
   },
   {
+    id: 'money',
     title: 'Where it checks who paid whom',
     lead: (trailFunded: boolean) => `${STAGES[4].title}, ${stageName(5)} for every collection, needs an Etherscan key. It feeds ${MONEY}; without a key ${trailFunded ? 'they run only on stored money trails' : 'they do not run'}.`,
-    keys: (k: string) => !k.startsWith('rpc.'),
+    keys: (k: string) => !k.startsWith('rpc.') && k !== 'stored.repo',
+  },
+  {
+    id: 'stored',
+    title: 'Where it downloads stored data',
+    lead: () => `${STAGES[0].title}, ${stageName(1)} for every collection, fetches its transfers and money trail from a Hugging Face dataset, so its chain is read only from where they stop. A collection the dataset does not hold is read from the chain alone.`,
+    keys: (k: string) => k === 'stored.repo',
   },
 ];
 
@@ -80,13 +95,16 @@ export function Settings({ fields, writable, open = false, trailFunded = false }
     <div>
       {writable ? null : <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{LOCAL_ONLY}</p>}
       {open ? <p role="note" className="rounded-lg border bg-card px-4 py-3 text-sm text-body">{OPEN}</p> : null}
-      {GROUPS.map((g) => (
-        <Section key={g.title} title={g.title} lead={g.lead(trailFunded)}>
-          <div className="divide-y rounded-lg border bg-card">
-            {fields.filter((f) => g.keys(f.key)).map((f) => <SettingField key={f.key} field={f} writable={writable} trailFunded={trailFunded} />)}
-          </div>
-        </Section>
-      ))}
+      {GROUPS.map((g) => {
+        const shown = fields.filter((f) => g.keys(f.key));
+        return shown.length === 0 ? null : (
+          <Section key={g.id} id={g.id} title={g.title} lead={g.lead(trailFunded)}>
+            <div className="divide-y rounded-lg border bg-card">
+              {shown.map((f) => <SettingField key={f.key} field={f} writable={writable} trailFunded={trailFunded} />)}
+            </div>
+          </Section>
+        );
+      })}
     </div>
   );
 }
@@ -119,7 +137,9 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const [draft, setDraft] = useState('');
   // A switch shows its flip at once, before the refresh brings the saved value; a refused save puts it back.
   const [flipped, setFlipped] = useState<boolean | null>(null);
-  const check = field.key === 'etherscan.key' ? { kind: 'etherscan' as const } : field.key.startsWith('rpc.') ? { kind: 'rpc' as const, chainId: Number(field.key.slice(4)) } : null;
+  // A chain's RPC that only .env sets is not one the API tests (it tests the RPCs in FIELDS), so it has no Test.
+  const check = field.key === 'etherscan.key' ? { kind: 'etherscan' as const }
+    : field.key.startsWith('rpc.') && FIELDS.some((f) => f.key === field.key) ? { kind: 'rpc' as const, chainId: Number(field.key.slice(4)) } : null;
   const test = useTest(check);
   const fallback = FIELDS.find((x) => x.key === field.key)?.fallback;
   const id = `setting-${field.key}`;
@@ -225,7 +245,7 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
         {hasInput
           ? <label id={labelId} htmlFor={id} className="font-medium text-foreground">{field.label}</label>
           : <p id={labelId} className="font-medium text-foreground">{field.label}</p>}
-        <p id={hintId} data-hint className="max-w-3xl text-xs text-muted-foreground">{HINTS[field.key]}</p>
+        <p id={hintId} data-hint className="max-w-3xl text-xs text-muted-foreground">{hintOf(field)}</p>
       </div>
       {/* One row on a wide screen. On a phone a value or a field being typed takes its own line, and every button, Test too, shares the next. */}
       <div className="flex flex-wrap items-center gap-2">

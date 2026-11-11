@@ -107,7 +107,8 @@ export default async function WorkerPage() {
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ {stageName(4)}</span></span>
             {v.rpcChains.length === 0
               ? <Link href="/settings#rpc.1" className="text-money underline">No RPC. Add an RPC URL in Settings →</Link>
-              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
+              // Settings lists every chain's RPC with where it comes from, but saves only Ethereum's: another chain's is set in .env.
+              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc" className="text-muted-foreground underline">{v.rpcChains.every((id) => id === 1) ? 'change in Settings' : 'where each comes from, in Settings'}</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ {stageName(5)}</span></span>

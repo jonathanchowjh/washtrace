@@ -2,11 +2,11 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Notice } from '@/lib/status';
 
-const state = { notices: [] as Notice[] };
+const state = { notices: [] as Notice[], rpc: [1] };
 const job = (j: string) => ({ job: j, state: 'ok', startedAt: null, finishedAt: null, tookMs: null, outcome: null, detail: null });
 vi.mock('@/lib/views', () => ({
   workerView: async () => ({
-    every: { ingest: 60_000, fund: 60_000, analyze: 60_000, lens: 60_000 }, rpcChains: [1], funding: null, followHops: null, trailFunded: false,
+    every: { ingest: 60_000, fund: 60_000, analyze: 60_000, lens: 60_000 }, rpcChains: state.rpc, funding: null, followHops: null, trailFunded: false,
     passes: [], jobs: ['ingest', 'fund', 'analyze', 'lens'].map(job), notices: state.notices, backlog: [], collections: [],
   }),
 }));
@@ -14,7 +14,7 @@ vi.mock('@/lib/api', () => ({ readerZone: async () => 'UTC' }));
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
-afterEach(() => { cleanup(); state.notices = []; });
+afterEach(() => { cleanup(); state.notices = []; state.rpc = [1]; });
 
 async function draw(): Promise<HTMLElement> {
   const { default: WorkerPage } = await import('@/app/worker/page');
@@ -57,6 +57,16 @@ describe('the worker page', () => {
     // A working or info notice has no Do this line, and an info one keeps its action link.
     expect(c.textContent?.match(/Do this:/g)).toHaveLength(2);
     expect([...c.querySelectorAll('a')].find((a) => a.textContent === 'How to turn it on')?.getAttribute('href')).toBe('/worker#sources');
+  });
+
+  it('sends the chain RPC to Settings, saying change only where Settings can change every one', async () => {
+    const link = (c: Element) => [...c.querySelectorAll('a')].find((a) => a.getAttribute('href') === '/settings#rpc')!;
+    expect(link(await draw()).textContent).toBe('change in Settings');
+    cleanup();
+    state.rpc = [1, 31337];
+    const c = await draw();
+    expect(c.textContent).toContain('Ethereum, Local (anvil) · where each comes from, in Settings');
+    expect(link(c).textContent).toBe('where each comes from, in Settings');
   });
 
   it('spans each job card over shared rows, so its figures line up with its neighbours', async () => {

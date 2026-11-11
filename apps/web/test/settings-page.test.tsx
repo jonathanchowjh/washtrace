@@ -104,6 +104,31 @@ describe('Settings, each field', () => {
     expect(box('etherscan.rps').textContent).toContain('None: not saved here or in .env');
   });
 
+  it('shows another chain\'s RPC under the chain\'s heading, read-only, with where it comes from and no Test', () => {
+    const anvil: FieldView = {
+      key: 'rpc.31337', label: 'Local (anvil) RPC URL', secret: true, set: true, shown: 'http://anvil:8545/••••8545', source: 'env', env: 'http://anvil:8545/••••8545',
+      locked: true, pinned: "Only .env sets this chain's RPC: the console saves Ethereum's alone.", invalid: null,
+    };
+    render(<Settings writable fields={[...fields(), anvil]} />);
+    expect(box('rpc.31337').closest('section')!.querySelector('h2')!.textContent).toBe('Where it reads the chain');
+    expect(box('rpc.31337').textContent).toContain('http://anvil:8545/••••8545');
+    expect(box('rpc.31337').textContent).toContain("Only .env sets this chain's RPC: the console saves Ethereum's alone. From .env (WASHTRACE_RPC_31337).");
+    expect(box('rpc.31337').querySelector('[data-hint]')!.textContent).toBe('Where the worker reads the blocks and transfers of collections on Local (anvil). Shown as the worker reported it.');
+    expect((screen.getByRole('button', { name: 'Replace Local (anvil) RPC URL' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(box('rpc.31337').querySelector('button[data-test]')).toBeNull();
+  });
+
+  it('puts the stored data dataset under a heading of its own, not with who paid whom', () => {
+    const repo: FieldView = { key: 'stored.repo', label: 'Stored data dataset', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
+    render(<Settings writable fields={[...fields(), repo]} />);
+    const section = box('stored.repo').closest('section')!;
+    expect(section.id).toBe('stored');
+    expect(section.querySelector('h2')!.textContent).toBe('Where it downloads stored data');
+    expect(section.textContent).toContain('Download stored data, reading stage 1 (Download) for every collection');
+    expect(box('etherscan.key').closest('section')!.querySelector('#stored\\.repo')).toBeNull();
+    expect(box('stored.repo').querySelector('[data-hint]')!.textContent).toMatch(/^The Hugging Face dataset/);
+  });
+
   it('shows a value from .env with where it came from, and lets it be replaced', () => {
     render(<Settings writable fields={fields({ 'rpc.1': { set: true, source: 'env', shown: 'https://x.example/••••a1b2', env: 'https://x.example/••••a1b2' } })} />);
     expect(box('rpc.1').textContent).toContain('https://x.example/••••a1b2');

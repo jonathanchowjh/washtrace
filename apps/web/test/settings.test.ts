@@ -89,6 +89,19 @@ describe('view', () => {
     expect(field(fieldViews(new Map(), sources, false), 'rpc.1')).toMatchObject({ shown: '••••', env: '••••' });
   });
 
+  it('lists every other chain the worker reads an RPC for, read-only after the fields, in chain order, saying only .env sets it', () => {
+    const anvil = 'http://anvil:8545/••••8545';
+    const sources = { 'rpc.1': src('env', MASKED_RPC, MASKED_RPC), 'rpc.31337': src('env', anvil, anvil), 'rpc.8453': src('env', '••••', '••••') };
+    const fields = fieldViews(new Map(), sources, true);
+    expect(fields.map((f) => f.key)).toEqual([...FIELDS.map((f) => f.key), 'rpc.8453', 'rpc.31337']);
+    expect(field(fields, 'rpc.31337')).toEqual({
+      key: 'rpc.31337', label: 'Local (anvil) RPC URL', secret: true, set: true, shown: anvil, source: 'env', env: anvil,
+      locked: true, pinned: "Only .env sets this chain's RPC: the console saves Ethereum's alone.", invalid: null,
+    });
+    // As a secret is to a reader who may not change settings: no part of it.
+    expect(field(fieldViews(new Map(), sources, false), 'rpc.31337')).toMatchObject({ shown: '••••', env: '••••', locked: true });
+  });
+
   it("falls back to the environment's value the moment a console value is cleared, before the worker reports", () => {
     const rpc = field(fieldViews(new Map(), { 'rpc.1': src('console', MASKED_RPC, 'https://eth-mainnet.g.alchemy.com/••••ZZ99') }, true), 'rpc.1');
     expect(rpc).toMatchObject({ source: 'env', shown: 'https://eth-mainnet.g.alchemy.com/••••ZZ99' });
