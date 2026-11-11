@@ -5,7 +5,7 @@ import { MOVE_KIND, Moves } from './moves.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
 import { findOf, isOwnKey, NO_FILTER, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
-import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_JOIN, LATEST, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
+import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_JOIN, LATEST, hashPrefixEnd, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
 import { FOLLOW_FANOUT, checkRule, type EdgeKind, type LensRule } from './lens-rule.js';
 import type { FollowEstimate } from './lens-reads.js';
 import type { Rules } from './methods.js';
@@ -3296,13 +3296,9 @@ export class Store {
         asks.push(wallets(where, p.prefix, s === undefined ? undefined : 'true').then((h) => { hits.wallets = h; }));
       }
       if (want('trades')) {
-        // The start of a hash as a range on transfers_tx_idx: the collation is not C, so a LIKE alone reads every
-        // transfer. Lowercase hex sorts in its own order under any collation, so the range is the strings that
-        // start with the prefix: up to it with its last character one higher ('9' is followed by 'a').
-        // The LIKE keeps a collation that sorted otherwise from adding a stray row.
-        const last = p.prefix.at(-1)!;
-        const end = p.prefix.slice(0, -1) + (last === '9' ? 'a' : String.fromCharCode(last.charCodeAt(0) + 1));
-        asks.push(trades(`t.tx_hash >= $1 AND t.tx_hash < $4 AND t.tx_hash LIKE $1 || '%'`, 't.tx_hash, c.id, t.log_index', p.prefix, end).then((h) => { hits.trades = h; }));
+        // The start of a hash as a range on transfers_tx_idx (hashPrefixEnd). The LIKE keeps a collation that
+        // sorted otherwise from adding a stray row.
+        asks.push(trades(`t.tx_hash >= $1 AND t.tx_hash < $4 AND t.tx_hash LIKE $1 || '%'`, 't.tx_hash, c.id, t.log_index', p.prefix, hashPrefixEnd(p.prefix)).then((h) => { hits.trades = h; }));
       }
     }
     if (p.kind === 'tx' && want('trades')) {

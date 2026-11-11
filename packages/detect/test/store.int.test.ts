@@ -5133,13 +5133,17 @@ describe('a wallet', () => {
     expect(await store.walletTokens(CHAIN, W, ran, 2)).toEqual(['1', '2']);
   });
 
-  it('a Find reads a token number, or the other side of the trade by its address or the start of it; anything else matches nothing', async () => {
+  it('a Find reads a token number, the other side of the trade by its address or the start of it, or a transaction by its hash; anything else matches nothing', async () => {
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '#1' }))).toEqual(['u1', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: P }))).toEqual(['u1', 't2', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '0xbb0000' }))).toEqual(['u1', 't2', 't1']);
     // The wallet itself is no other side.
     expect(await store.walletTradeCount(CHAIN, W, { find: W })).toBe(0);
-    for (const find of ['hello', tx(1)]) expect(await store.walletTradeCount(CHAIN, W, { find })).toBe(0);
+    expect(await store.walletTradeCount(CHAIN, W, { find: 'hello' })).toBe(0);
+    // A transaction's hash finds its trade, and so does the start of one longer than an address.
+    expect(await store.walletTradeCount(CHAIN, W, { find: tx(1) })).toBe(1);
+    // tx(n) are zero-padded: their first 50 characters are every one of its trades' hashes.
+    expect(await store.walletTradeCount(CHAIN, W, { find: tx(1).slice(0, 50) })).toBe(await store.walletTradeCount(CHAIN, W));
   });
 
   it('with another wallet, holds the trades where the two are seller and buyer, either way', async () => {

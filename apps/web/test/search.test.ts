@@ -6,6 +6,8 @@ describe('parseSearch', () => {
     expect(parseSearch(' 0x' + 'A'.repeat(64))).toEqual({ kind: 'tx', tx: '0x' + 'a'.repeat(64) });
     expect(parseSearch('0x' + 'B'.repeat(40))).toEqual({ kind: 'address', address: '0x' + 'b'.repeat(40) });
     expect(parseSearch('0x3A1f')).toEqual({ kind: 'prefix', prefix: '0x3a1f' });
+    // Longer than an address, only a transaction hash is that long: its start.
+    expect(parseSearch('0x' + 'C'.repeat(48))).toEqual({ kind: 'prefix', prefix: '0x' + 'c'.repeat(48) });
     expect(parseSearch('#12')).toEqual({ kind: 'token', tokenId: '12', text: '12' });
     expect(parseSearch('1234')).toEqual({ kind: 'token', tokenId: '1234', text: '1234' });
     expect(parseSearch('12')).toEqual({ kind: 'text', text: '12' });
@@ -19,7 +21,8 @@ describe('parseSearch', () => {
     expect(parseSearch('#')).toEqual({ kind: 'empty' });
     expect(parseSearch('0x')).toEqual({ kind: 'text', text: '0x' });
     expect(parseSearch('0xabc')).toEqual({ kind: 'text', text: '0xabc' });
-    expect(parseSearch('0x' + 'a'.repeat(50))).toEqual({ kind: 'text', text: '0x' + 'a'.repeat(50) });
+    // Longer than a transaction hash, hex is no address or hash, nor the start of one.
+    expect(parseSearch('0x' + 'a'.repeat(70))).toEqual({ kind: 'text', text: '0x' + 'a'.repeat(70) });
     expect(parseSearch('#hello')).toEqual({ kind: 'text', text: 'hello' });
     expect(parseSearch('1'.repeat(200)).kind).toBe('text');
   });

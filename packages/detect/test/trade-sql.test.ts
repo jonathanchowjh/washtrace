@@ -12,6 +12,21 @@ const rich: TradeQuery = {
 
 /** Pins the SQL text and bound parameters the console's trade queries build, so moving them changes nothing. */
 describe('the console trade SQL', () => {
+  it('a Find longer than an address is the start of a transaction hash, as a range on its index, on Trades and on a wallet', () => {
+    const start = '0x' + 'ab'.repeat(24);
+    const params: unknown[] = [];
+    expect(tradeWhere(7, { ...NO_FILTER, find: start }, ctx, params)).toContain("t.tx_hash >= $2 AND t.tx_hash < $3 AND t.tx_hash LIKE $2 || '%'");
+    expect(params.slice(1)).toEqual([start, start.slice(0, -1) + 'c']);
+    // A wallet's Find reads a whole hash and the start of one too, where it once matched nothing.
+    const w: unknown[] = [];
+    expect(walletWhere(1, '0xwallet', { find: '0x' + 'd'.repeat(64) }, w)).toContain('t.tx_hash = $3');
+    expect(w[2]).toBe('0x' + 'd'.repeat(64));
+    const v: unknown[] = [];
+    expect(walletWhere(1, '0xwallet', { find: start }, v)).toContain('t.tx_hash >= $3 AND t.tx_hash < $4');
+    // A shorter start is still a wallet's.
+    expect(walletWhere(1, '0xwallet', { find: '0xdead' }, [])).toContain('LIKE $3');
+  });
+
   it('tradeWhere builds one WHERE from every filter, in a fixed bind order', () => {
     const params: unknown[] = [];
     expect(tradeWhere(7, rich, ctx, params)).toBe("t.collection_id = $1 AND (x.counted OR x.tx_hash IS NULL) AND t.marketplace IS NOT NULL AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $2 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND x.tx_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = t.collection_id AND f.method = $3 AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index) AND t.marketplace = ANY($4::text[]) AND t.price_wei IS NOT NULL AND t.currency = ANY($5::text[]) AND t.price_wei >= $6::numeric AND t.price_wei <= $7::numeric AND x.held_s >= $8::float8 AND x.held_s < $9::float8 AND x.buyer_age_s >= $10::float8 AND x.buyer_age_s < $11::float8 AND x.floor_ratio >= $12::float8 AND x.floor_ratio < $13::float8 AND t.block_time >= to_timestamp($14::float8) AND t.block_time < to_timestamp($15::float8) AND (t.from_address = $16 OR t.to_address = $16) AND t.token_id = $17::numeric AND t.from_address = ANY(ARRAY(SELECT DISTINCT unnest(w.wallets) FROM washtrace.witnesses w WHERE w.collection_id = $1 AND w.wallets @> ARRAY[$19]::text[]\n           AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = w.collection_id AND f.method = $18 AND f.witness_id = w.id))) AND t.to_address = ANY(ARRAY(SELECT DISTINCT unnest(w.wallets) FROM washtrace.witnesses w WHERE w.collection_id = $1 AND w.wallets @> ARRAY[$19]::text[]\n           AND EXISTS (SELECT 1 FROM washtrace.flags f WHERE f.collection_id = w.collection_id AND f.method = $18 AND f.witness_id = w.id))) AND (t.from_address LIKE $20 OR t.to_address LIKE $20)");

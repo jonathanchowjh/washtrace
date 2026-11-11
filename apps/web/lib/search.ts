@@ -77,7 +77,8 @@ export function parseSearch(raw: string): Parsed {
     const hex = text.toLowerCase();
     if (hex.length === 66) return { kind: 'tx', tx: hex };
     if (hex.length === 42) return { kind: 'address', address: hex };
-    if (hex.length >= 2 + PREFIX_HEX && hex.length < 42) return { kind: 'prefix', prefix: hex };
+    // Past an address's 42 characters only a transaction hash is that long: still its start.
+    if (hex.length >= 2 + PREFIX_HEX && hex.length < 66) return { kind: 'prefix', prefix: hex };
   }
   const tokenId = tokenIdOf(text);
   if (tokenId !== null && (hashed || text.length >= TOKEN_DIGITS)) return { kind: 'token', tokenId, text };
