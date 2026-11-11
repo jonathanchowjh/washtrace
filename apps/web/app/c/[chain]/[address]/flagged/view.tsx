@@ -7,7 +7,6 @@ import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy
 import { Empty, Head } from '@/components/ui';
 import { LensList } from '@/components/lens-lists';
 import { LensName } from '@/components/methods';
-import { TierMark } from '@/components/kit';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
@@ -130,10 +129,11 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
 
   return (
     <>
-      {/* The tab bar names the collection, so the heading names the list; the count is said once, by the pager under it. */}
+      {/* The tab bar names the collection, so the heading names the list; the count is said once, by the pager under it.
+          The lens is named twice, in the heading and on its chip in the switch below, which also gives its tier: a third chip
+          under the heading said both again. */}
       <Head
         title={kind === 'trades' ? WORD.trades : `${WORD[kind]} flagged by ${lens.name}`}
-        part={kind === 'trades' ? undefined : <span className="chip font-medium"><TierMark tone={lens.tone} />{lens.name} · {TIER[lens.tone]}</span>}
         sub={kind === 'trades'
           ? `${query.kind === 'all' ? 'Every change of owner' : 'Every sale'}, filtered by what you ask: a lens, a marketplace, a price, a wallet. Open a date to see the trade itself.`
           : `Each count opens the trades it counts. ${kind === 'tokens' ? 'Open a token to see why each trade was flagged.' : 'Open a wallet to see its trades and who it moved money with.'}`}

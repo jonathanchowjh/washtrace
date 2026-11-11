@@ -292,13 +292,15 @@ describe('the lens lists on the flagged page', () => {
     expect((await tokensTitle(missing)).title).toBe('Tokens');
   });
 
-  it('heads with its lens and that lens\'s tier, which the lens switch says of every lens', async () => {
+  it('names its lens twice: in the heading, and on its chip in the switch, which gives every lens\'s tier', async () => {
     const el = await flaggedPage({ kind: 'wallets' });
     const head = el.querySelector('header')!;
     expect(head.querySelector('h1')?.textContent).toBe('Wallets flagged by Linked wallets');
-    expect(head.textContent).toContain('Linked wallets · the ceiling');
+    expect(head.textContent).not.toContain('the ceiling');
     const lenses = [...el.querySelectorAll('nav[aria-label=Lens] a')].map((a) => a.textContent);
     expect(lenses).toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back · not counted']);
+    expect(el.querySelector('nav[aria-label=Lens] a[aria-current=page]')?.textContent).toBe('Linked wallets · the ceiling');
+    expect((el.textContent ?? '').split('Linked wallets · the ceiling').length - 1).toBe(1);
   });
 
   it('marks each row with its kind, and spans the page as the tab bar does', async () => {
