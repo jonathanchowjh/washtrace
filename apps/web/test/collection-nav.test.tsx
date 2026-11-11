@@ -15,7 +15,7 @@ const srcs = (n: string) => Object.fromEntries(LENSES.map((m) => [m, `/counts?me
 
 function nav(path: string, search = '', o: { counts?: Record<string, string>; rings?: number | null } = {}) {
   Object.assign(at, { path, search });
-  const el = render(<CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} opensOn="AC" counts={o.counts ?? {}} rings={o.rings ?? null} />).container;
+  const el = render(<CollectionNav base={BASE} name="Coll" analyzedAt={null} lenses={LENSES} opensOn="AC" counts={o.counts ?? {}} rings={o.rings ?? null} />).container;
   const tab = (label: string) => [...el.querySelectorAll('nav a')].find((a) => a.textContent?.startsWith(label))!;
   return { el, tab };
 }
@@ -122,6 +122,12 @@ describe('the collection tab bar', () => {
     expect(nav(BASE).tab('Methods').getAttribute('href')).toBe(`${BASE}/methods`);
   });
 
+  it('says when it was analyzed, spelled as Collections and Worker spell it', () => {
+    Object.assign(at, { path: BASE, search: '' });
+    const el = render(<CollectionNav base={BASE} name="Coll" analyzedAt={1_700_000_000_000} lenses={LENSES} opensOn="AC" counts={{}} rings={null} />).container;
+    expect(el.querySelector('p')!.textContent).toMatch(/· analyzed /);
+  });
+
   it('names the collection it belongs to, linked to its overview', () => {
     const { el } = nav(`${BASE}/t/14`);
     const up = [...el.querySelectorAll('p a')].map((a) => [a.textContent, a.getAttribute('href')]);
@@ -153,7 +159,7 @@ describe('the lit tab on a narrow screen', () => {
     const restore = laidOut();
     try {
       at.path = `${BASE}/trades`;
-      const page = () => <CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} opensOn="AC" counts={{}} rings={null} />;
+      const page = () => <CollectionNav base={BASE} name="Coll" analyzedAt={null} lenses={LENSES} opensOn="AC" counts={{}} rings={null} />;
       const { container, rerender } = render(page());
       const bar = container.querySelector('nav')!;
       // Trades sits at 500-600px: the bar scrolls until its right edge shows, and no further than its end.

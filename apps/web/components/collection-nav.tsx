@@ -135,10 +135,10 @@ const TABS: readonly { tab: CollectionTab; label: string; kind: Kind }[] = [
  * matches are said by the list's own line. A chosen lens is carried to the
  * Tokens and Wallets tabs.
  */
-export function CollectionNav({ base, name, analysedAt, lenses, opensOn, counts, rings }: {
+export function CollectionNav({ base, name, analyzedAt, lenses, opensOn, counts, rings }: {
   base: string;
   name: string;
-  analysedAt: number | null;
+  analyzedAt: number | null;
   /** Every lens key that exists here, the built-ins first in METHODS' order. */
   lenses: readonly string[];
   /** The lens a list opens on with no lens named: the one whose counts show then. */
@@ -183,7 +183,7 @@ export function CollectionNav({ base, name, analysedAt, lenses, opensOn, counts,
         <Link href={base} className="inline-flex items-center gap-1 font-medium text-foreground hover:underline">
           <KindIcon kind="collection" />{name}
         </Link>
-        {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
+        {analyzedAt === null ? null : <span>· analyzed <Time ms={analyzedAt} /></span>}
       </p>
       {/* The fades sit over the bar, outside what scrolls, so they stay at its edges; the bar's bottom rule shows under them. */}
       <div className="relative mt-2">

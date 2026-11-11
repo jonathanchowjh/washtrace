@@ -36,7 +36,7 @@ export default async function CollectionLayout({ params, children }: Props) {
     `/api/collections/${chainId}/${address}/counts?method=${encodeURIComponent(m)}&${stamp}${finished.has(m) ? `&run=${finished.get(m)}` : ''}`]));
   return (
     <>
-      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analysedAt={c.latest?.ranAt ?? null} lenses={lenses}
+      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analyzedAt={c.latest?.ranAt ?? null} lenses={lenses}
         opensOn={lensKeyOf(null, {})} counts={counts} rings={c.latest?.rings ?? null} />
       {children}
     </>

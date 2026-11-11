@@ -110,7 +110,7 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
         className={cn('rounded-lg rounded-tl-none border border-t-[3px] bg-card p-4', ACCENT[tone])}
       >
         {editor ?? (selected === 'compare' ? children : chosen
-          ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analysed={totals !== null}
+          ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analyzed={totals !== null}
             behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} funding={coverage.funding} money={moneyReasons[chosen.lens.key] ?? null} tokens={tokens[chosen.lens.key] ?? NO_TOKENS}>{children}</YourLens>
           : <BuiltIn base={base} m={selected as Method} t={totals?.[selected as Method] ?? null} coverage={coverage} writable={writable}>{children}</BuiltIn>)}
       </section>
@@ -190,8 +190,8 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
   );
 }
 
-function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, funding, money, tokens, children }: {
-  base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analysed: boolean;
+function YourLens({ base, chainId, address, lens, own, run, analyzed, behind, paused, writable, notFinal, funded, funding, money, tokens, children }: {
+  base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analyzed: boolean;
   behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; funding: boolean; money: MoneyReason | null; tokens: TokensFloor; children: ReactNode;
 }) {
   const t = run?.totals ?? null;
@@ -211,7 +211,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
       </div>
       <p className="mb-3 text-sm text-muted-foreground">{ruleLine(lens.rule)}</p>
       <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <RunLine name={lens.name} run={run} analysed={analysed} behind={behind} paused={paused} />
+        <RunLine name={lens.name} run={run} analyzed={analyzed} behind={behind} paused={paused} />
         {/* No run here, or one that failed (after three in a row it waits to be asked): a queued or running one is on its way, and a done one runs again on its own. */}
         {run === null || run.status === 'failed' ? <RunHere id={lens.id} chainId={chainId} address={address} writable={writable} /> : null}
       </div>
@@ -232,7 +232,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
  * run that is current. A paused collection runs no lens, so a run waiting on
  * it says so.
  */
-function RunLine({ name, run, analysed, behind, paused }: { name: string; run: LensRun | null; analysed: boolean; behind: Behind | null; paused: boolean }) {
+function RunLine({ name, run, analyzed, behind, paused }: { name: string; run: LensRun | null; analyzed: boolean; behind: Behind | null; paused: boolean }) {
   const words = runStateWords(run, behind);
   if (words === null) return null;
   const said = `${name} ${words.full}`;
@@ -240,7 +240,7 @@ function RunLine({ name, run, analysed, behind, paused }: { name: string; run: L
   if (run === null) return <p className="text-muted-foreground">{said}</p>;
   switch (run.status) {
     case 'queued':
-      return <p className="text-muted-foreground">{said} {paused ? resumed : run.totals !== null ? null : analysed ? 'The worker runs it next.' : "It waits for this collection's first analysis."}</p>;
+      return <p className="text-muted-foreground">{said} {paused ? resumed : run.totals !== null ? null : analyzed ? 'The worker runs it next.' : "It waits for this collection's first analysis."}</p>;
     case 'running':
       return <p className="text-muted-foreground">{said}{run.progress === null ? '' : ` It is ${floorPct(run.progress, 1)} done.`}</p>;
     case 'failed':
