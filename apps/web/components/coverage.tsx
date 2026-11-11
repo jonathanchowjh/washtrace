@@ -2,7 +2,11 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { CollectionRow } from '@washtrace/detect';
 import { floorPct, num } from '@/lib/format';
-import { TRAIL_LOADING, progress, restoreNext, trust, type Coverage } from '@/lib/coverage';
+import { TRAIL_LOADING, evidenceWords, progress, restoreNext, trust, type Coverage } from '@/lib/coverage';
+import { configFromSources } from '@/lib/settings';
+import { collectionOf } from '@/lib/collection-reads';
+import { store } from '@/lib/store';
+import { trailFunded } from '@/lib/views';
 import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import type { Stage } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
@@ -173,4 +177,34 @@ export function RestoreProgress({ cov }: { cov: Coverage }) {
   if (cov.download !== null) return <div className="w-full max-w-44"><Bar share={cov.download} name="download" /></div>;
   if (cov.restore === null) return null;
   return <div className="w-full max-w-44"><Bar share={cov.restore} name="restore" /></div>;
+}
+
+/**
+ * The line under a verdict that says how complete its evidence is: the money
+ * read for the `wallets` it stands on (evidenceWords), then the analysis it
+ * is from. `home`, the address of the collection the item sits in, gives the analysis and
+ * whether a stored trail feeds the money lenses; without one the line says
+ * the money alone. `block`: the latest block of the item, so the line can say
+ * an analysis read up to a block before it. One query reads every wallet.
+ */
+export async function EvidenceLine({ chainId, wallets, home, block, viaPartners, untraded, first, className }: {
+  chainId: number; wallets: readonly string[]; home?: string; block?: number; viaPartners?: boolean; untraded?: boolean; first?: boolean; className?: string;
+}) {
+  const s = store();
+  const collection = home === undefined ? null : await collectionOf(chainId, home);
+  const [reads, sources, settings] = await Promise.all([s.wallets(chainId, wallets), s.sources(), s.settings()]);
+  const funding = configFromSources(sources, settings).funding;
+  const funded = funding || (collection === null ? await trailFunded(s, await s.collections()) : await s.importedMoney(collection.id));
+  const latest = collection?.latest ?? null;
+  const moneyRan = latest === null || latest.totals.AC.available || latest.totals.AU.available;
+  const words = evidenceWords({ wallets, reads, funded, funding, moneyRan, viaPartners, untraded, first });
+  if (words === null) return null;
+  const behind = latest !== null && latest.throughBlock !== null && block !== undefined && block > latest.throughBlock ? ` read up to block ${num(latest.throughBlock)}, before this trade` : '';
+  return (
+    <p className={cn('text-xs text-muted-foreground', className)}>
+      {words.head}{words.at === null ? null : <> <Time ms={words.at} /></>}
+      {words.tail.map((t) => <span key={t}> · {t}</span>)}
+      {collection === null ? null : latest === null ? ' · not analyzed yet' : <> · analysis <Time ms={latest.ranAt} />{behind}</>}
+    </p>
+  );
 }

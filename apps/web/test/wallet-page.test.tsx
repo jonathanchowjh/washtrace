@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer, Flow, WalletFilter } from '@washtrace/detect';
 import { TINT_LEAD } from '@/lib/metrics';
 import { short } from '@/lib/format';
+import { EvidenceLine } from '@/components/coverage';
+import { Answer } from '@/components/ui';
 
 let funding: object | null = null;
 let trades = 0;
@@ -56,8 +58,12 @@ function flows(dir: 'sent' | 'received' | 'both'): Flow[] {
 }
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    wallet: async () => funding,
-    collection: async (c: number, a: string) => ({ id: 1, chainId: c, address: a, latest: a === OTHER ? null : { throughBlock: 1000, totals } }),
+    sources: async () => ({}),
+    settings: async () => new Map(),
+    importedMoney: async () => false,
+    collections: async () => [],
+    wallets: async (_c: number, addresses: string[]) => new Map(funding === null ? [] : [[addresses[0], funding]]),
+    collection: async (c: number, a: string) => ({ id: 1, chainId: c, address: a, latest: a === OTHER ? null : { ranAt: 1_700_000_000_000, throughBlock: 1000, totals } }),
     counterparties: async (_c: number, _a: string, limit: number, offset: number) => Array.from({ length: counterparties }, (_, i) => ({ address: partner(i), flows: 2, sent: 1, received: 1, watched: false })).slice(offset, offset + limit),
     counterpartyCount: async () => counterparties,
     walletTransfers: async (_c: number, _a: string, limit: number, offset: number, f?: WalletFilter) => narrowed(f).slice(offset, offset + limit),
@@ -82,9 +88,18 @@ afterEach(() => {
 const params = Promise.resolve({ chain: '1', address: SELF });
 const here = `/w/1/${SELF}`;
 
+/** The last page rendered, as its tree: the evidence line reads in its own Suspense, so its words are read from here. */
+let tree: unknown = null;
 async function render_(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: WalletPage } = await import('@/app/w/[chain]/[address]/page');
-  return render(await WalletPage({ params, searchParams: Promise.resolve(sp) })).container;
+  const t = await WalletPage({ params, searchParams: Promise.resolve(sp) });
+  tree = t;
+  return render(t).container;
+}
+/** What the evidence line under the last page's verdict says, rendered from the props the page gave it. */
+async function evidence(): Promise<string> {
+  const [line] = elementsOf(tree, EvidenceLine);
+  return line === undefined ? '' : render(await EvidenceLine(line.props as Parameters<typeof EvidenceLine>[0])).container.textContent ?? '';
 }
 async function page(sp: Record<string, string> = {}): Promise<string> {
   return (await render_(sp)).textContent ?? '';
@@ -176,7 +191,9 @@ describe('the wallet page', () => {
 
   it('says a wallet read from stored data was, with no dangling space before the full stop', async () => {
     funding = { status: 'done', transfers: 0, truncated: false, fetchedAt: null, error: null };
-    expect(await page()).toContain('Its money was read from stored data.');
+    await page();
+    expect(elementsOf(tree, EvidenceLine).map((e) => [e.props.chainId, e.props.wallets])).toEqual([[1, [SELF]]]);
+    expect(await evidence()).toBe('Its money was read from stored data');
   });
 
   it('a wallet with exactly 20 trades is one page and says nothing about a cut', async () => {
@@ -287,6 +304,16 @@ describe('the wallet page', () => {
     cleanup();
     flaggedTrades = 0;
     expect(await page()).not.toContain('What this means');
+  });
+
+  it('its answer ends in the evidence line, after what the flag means, as the token page has it', async () => {
+    trades = 5; flaggedTrades = 2;
+    await render_();
+    const [answer] = elementsOf(tree, Answer);
+    const kids = [answer!.props.children].flat(Infinity).filter(isValidElement);
+    const [means, last] = kids.slice(-2) as { props: Record<string, unknown> }[];
+    expect(render(<>{means}</>).container.textContent).toContain('What this means');
+    expect(elementsOf(last, EvidenceLine).map((e) => e.props.className)).toEqual(['mt-2']);
   });
 
   it('its payment counts look like the links they are, and the kinds of payment sit in the lead, not floated beside it', async () => {
@@ -444,7 +471,9 @@ describe('the wallet under a collection\'s tabs', () => {
   const inColl = `/c/1/${COLL}`;
   async function scoped(sp: Record<string, string> = {}): Promise<HTMLElement> {
     const { default: Page } = await import('@/app/c/[chain]/[address]/w/[wallet]/page');
-    return render(await Page({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve(sp) })).container;
+    const t = await Page({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve(sp) });
+    tree = t;
+    return render(t).container;
   }
 
   it('counts and lists only its trades in that collection, whatever ?collection= says', async () => {
@@ -514,7 +543,9 @@ describe('the wallet under a collection\'s tabs', () => {
     const { ConnectedRail } = await import('@/components/connected-rail');
     expect(elementsOf(t, ConnectedRail)).toEqual([]);
     const text = render(t).container.textContent ?? '';
-    expect(text).toContain('Its money is not read: no transfer of it is read in a watched collection.');
+    tree = t;
+    expect(elementsOf(tree, EvidenceLine).map((e) => e.props.untraded)).toEqual([true]);
+    expect(await evidence()).toContain('Its money is not read: no transfer of it is read in a watched collection');
     expect(text).toContain(`No transfer of it is read in ${short(COLL)}.`);
     expect(text).not.toContain('No transfers read yet');
     expect(text).not.toContain('never traded');
@@ -529,8 +560,7 @@ describe('the wallet under a collection\'s tabs', () => {
     expect(one.textContent).not.toContain('No transfer of it in');
     expect(linkTo(one, '#114')).toBe(`${inColl}/t/114`);
     expect(one.querySelector('p.text-ceiling')?.textContent).toContain('Funded the seller and buyer of #114');
-    expect(one.textContent).toContain('The payments below were read from the wallets it paid or was paid by; its own history is not read.');
-    expect(one.textContent).not.toContain('Its money is not read');
+    expect(await evidence()).toMatch(/^The payments below were read from the wallets it paid or was paid by; its own history is not read · analysis /);
     // It is the middle of 32 tokens; the store reads 20 rows and counts the rest.
     middles = Array.from({ length: 20 }, (_, i) => ({ ...pair, tokenId: String(114 + i), shape: 'back' }));
     middleTokens = 32;
@@ -547,7 +577,7 @@ describe('the wallet under a collection\'s tabs', () => {
     expect(el.textContent).not.toContain('Not in any watched collection');
     expect(el.querySelector('p.text-ceiling')?.textContent).toBe('Is in between sellers and buyers in Bees');
     expect(linkTo(el, 'Bees')).toBe(`${inColl}/w/${SELF}`);
-    expect(el.textContent).toContain('The payments below were read from the wallets it paid or was paid by; its own history is not read.');
+    expect(await evidence()).toBe('The payments below were read from the wallets it paid or was paid by; its own history is not read');
     middleIn = [{ address: COLL, name: 'Bees' }, { address: OTHER, name: null }];
     const two = await render_();
     expect(two.querySelector('p.text-ceiling')?.textContent).toBe(`Is in between sellers and buyers in Bees and ${short(OTHER)}`);

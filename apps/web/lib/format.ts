@@ -16,6 +16,12 @@ export function num(n: number | bigint): string {
   return n.toLocaleString('en-US');
 }
 
+/** Between an arrow's number and what it paid, as a graph labels it ("2 · 9 ETH"): layout counts it to set the label clear, the graph draws it. */
+export const LABEL_SEP = ' · ';
+
+/** Past this many wallets a graph names none and numbers no arrow, and its key says to hover a wallet instead: the one rule its layout, its picture and its key read. */
+export const LABELLED_MAX = 24;
+
 export function short(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }

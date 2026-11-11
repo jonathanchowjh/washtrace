@@ -65,7 +65,7 @@ console.info(
   '[worker] started: ingest every %ds, fund every %ds, analyze every %ds; RPC for %s; funding %s; following money %d hops out.',
   EVERY.ingest / 1000, EVERY.fund / 1000, EVERY.analyze / 1000,
   config.rpc.size === 0 ? 'no chain (set WASHTRACE_RPC_<chainId> or an RPC in Settings)' : `chain ${[...config.rpc.keys()].join(', ')}`,
-  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY or the key in Settings), so SCC AU and AC are unavailable' : 'from Etherscan',
+  config.etherscanKey === null ? 'off (set WASHTRACE_ETHERSCAN_KEY or the key in Settings), so Linked wallets and Money loops back are unavailable' : 'from Etherscan',
   config.followHops,
 );
 

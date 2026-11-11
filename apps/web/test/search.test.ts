@@ -105,6 +105,17 @@ describe('a search\'s scope', () => {
     const scope = { chainId: 1, address: '0x' + 'c'.repeat(40) };
     expect(hitRow(hits, 'wallets', 0, scope)).toMatchObject({ href: `/c/1/${scope.address}/w/${A}`, tier: 'ceiling' });
   });
+
+  it('words a wallet that never traded as what it is, not as one in 0 transfers', () => {
+    const none = { collections: [], tokens: [], trades: [], more: { collections: false, tokens: false, wallets: false, trades: false } };
+    const scope = { chainId: 1, address: '0x' + 'c'.repeat(40) };
+    const middle = { ...none, wallets: [{ chainId: 1, address: A, transfers: 0, here: false, tier: 'ceiling' as const }] };
+    expect(hitRow(middle, 'wallets', 0, scope).detail).toBe('Wallet on Ethereum · in between sellers and buyers here, no trades');
+    // Unscoped, or outside a ring, it only did not trade.
+    const bare = { ...none, wallets: [{ chainId: 1, address: A, transfers: 0 }] };
+    expect(hitRow(bare, 'wallets', 0).detail).toBe('Wallet on Ethereum · no trades in watched collections');
+    expect(hitRow(bare, 'wallets', 0).href).toBe(`/w/1/${A}`);
+  });
 });
 
 describe('the order of a search\'s kinds', () => {

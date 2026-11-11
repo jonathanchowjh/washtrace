@@ -136,6 +136,20 @@ describe('/go from inside a collection', () => {
     expect(many.pathname + many.search).toBe(`/search?q=0xbbbbbb&scope=1:${ADDR}`);
   });
 
+  it('opens a ring’s middle it finds, one that never traded here, under the collection’s tabs, where its role is said', async () => {
+    state.watched = true;
+    // As the store finds a funder by the start of its address: no transfer, not here, the ceiling's tier.
+    state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 0, here: false, tier: 'ceiling' }] };
+    const { GET } = await import('@/app/go/route');
+    const { NextRequest } = await import('next/server');
+    const to = new URL((await GET(new NextRequest(`http://x/go?q=0xbbbbbb&scope=1:${ADDR}`))).headers.get('location')!, 'http://x');
+    expect(to.pathname).toBe(`/c/1/${ADDR}/w/${W}`);
+    // One that never traded here and is no middle opens on its own page.
+    state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 0, here: false, tier: null }] };
+    const away = new URL((await GET(new NextRequest(`http://x/go?q=0xbbbbbb&scope=1:${ADDR}`))).headers.get('location')!, 'http://x');
+    expect(away.pathname).toBe(`/w/1/${W}`);
+  });
+
   it('ignores a scope that names no watched collection', async () => {
     state.watched = false;
     state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }] };

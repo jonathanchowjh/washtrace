@@ -68,11 +68,11 @@ collection the manifest does not, nor columns other than the ones written. It ho
 
 ## How a collection gets its stored data
 
-The worker does these in the background. The console shows each step.
+The worker does these in the background. The console shows each stage.
 
 1. **Ask the Hub.** The worker fetches the dataset's manifest about hourly, and at once when a collection is
    newly watched. It keeps the last one, so an unreachable Hub only means the chain is read instead. The
-   dataset is `WASHTRACE_STORED_REPO`, or the console's `stored.repo` setting, which wins over the environment.
+   dataset is the "Stored data dataset" setting ([operating.md](operating.md#settings)).
 2. **Download.** If the manifest holds the collection, the worker downloads its files into `WASHTRACE_STORED_DIR`
    (default `data/stored`): the transfers first, then the trail's two files. Every download is pinned to the
    manifest's `revision`, checked against its sha256, and written to a `.part` file, so a restart resumes it
@@ -82,7 +82,7 @@ The worker does these in the background. The console shows each step.
 4. **Import the trail.** The money trail's flows go in first, batch by batch, then the checked wallets. A big
    trail takes over an hour for the biggest collections. Progress is kept (`trail_resume`, `trail_progress`), so
    a restart goes on from the last batch it wrote. When it is in, the analysis runs again. A trail gives
-   Money loops back and Linked wallets their money without an Etherscan key.
+   Linked wallets and Money loops back their money without an Etherscan key.
 
 The wallets a trail import adds are marked checked (`status = 'done'`) with no read time (`fetched_at` null). A
 wallet with no read time is never marked to be read again by `follow.reread`.
@@ -104,8 +104,7 @@ longer names are deleted, as are the old single trail files of a version 2 datas
 
 Delete `data/stored/`. Under Compose the folder is the named volume `stored`, written by the worker and mounted
 read only into the api: stop the services and run `docker volume rm <project>_stored`. Under Compose,
-`WASHTRACE_STORED_DIR` must match the volume's mount (`/app/data/stored`), or the worker and the api look in
-different places.
+`WASHTRACE_STORED_DIR` must match the volume's mount, or the worker and the api look in different places.
 
 ## Publishing (maintainers)
 

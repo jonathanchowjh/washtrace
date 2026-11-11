@@ -1,8 +1,9 @@
-import { CUSTODIANS, EVERY, RULES, type Rules, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, tokenCycles, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type MiddleRow, type OwnFlag, type PassRow, type SettingSource, type Store, type StoredEntry } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, evidenceLegs, evidencePayments, RULES, type Rules, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, tokenCycles, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type MiddleRow, type OwnFlag, type PassRow, type SettingSource, type Store, type StoredEntry } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
 import type { LensRule } from '@washtrace/detect/lens-rule';
 import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
 import { short, type Lenses } from './format';
+import type { RingEvidence } from './why';
 import { pages as pagesOf, type WalletOpts } from './params';
 import { authConfigured, mayWrite } from './auth';
 import { analysisWaitText, analyzingOn, storedOnly, unread, type Coverage } from './coverage';
@@ -10,6 +11,7 @@ import { shareCauses, shareQualifier, staleSinceLastWrite, runStateWords, type T
 import { lensContext, ownLenses, ranFlags, verdict, type Verdict } from './metrics';
 import { callsPerSecond, configFromSources, fieldViews, hopsFollowed, type SourcesConfig } from './settings';
 import { pipeline } from './pipeline';
+import { transactionOf } from './collection-reads';
 import { status, workerSilent } from './status';
 import { store, storedManifest } from './store';
 
@@ -28,7 +30,7 @@ import { store, storedManifest } from './store';
  */
 export interface TokenDrawing {
   transfers: FlaggedTransfer[];
-  /** Wallets that joined two holders by money without holding the token: AC's middles. */
+  /** Wallets that joined two holders by money without holding the token: AC's middles and those on Money loops back's paths. */
   middles: string[];
   flows: Flow[];
   /** In chain order, then by lens: each one loop, drawn and said beside the built-ins'. */
@@ -68,37 +70,86 @@ async function latestByAddress(s: Store, chainId: number, transfers: readonly Fl
 async function drawingInputs(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, tokenId: string, all: readonly FlaggedTransfer[], ran: readonly number[]): Promise<TokenDrawing> {
   // Only the lenses that ran: the verdict, the middles and the rows all read these.
   const transfers = all.map((t) => ranFlags(t, c.latest));
+  const holders = new Set(transfers.flatMap((t) => [t.from, t.to]));
   const middles = [...new Set(transfers.flatMap((t) => {
-    const w = t.flags.AC;
-    return w?.kind === 'pair' && w.middle !== null ? [w.middle] : [];
+    const { AC, AU } = t.flags;
+    return [
+      ...(AC?.kind === 'pair' && AC.middle !== null ? [AC.middle] : []),
+      // The wallets a loop's money passed through but its holders, who are drawn as holders. A witness saved before paths has none.
+      ...(AU?.kind === 'scc+flow' ? (AU.paths ?? []).flatMap((p) => p.wallets.filter((a) => !holders.has(a))) : []),
+    ];
   }))];
-  const holders = [...new Set(transfers.flatMap((t) => [t.from, t.to]))].filter((a) => a !== ZERO);
-  const [flows, own] = await Promise.all([
-    holders.length === 0 ? [] : s.flowsAmong(chainId, [...holders, ...middles]),
-    s.lensFlagsOfToken(c.id, tokenId, ran),
-  ]);
-  return { transfers, middles, flows, own };
+  // Only the legs a lens may use are read, so the read's cap is spent on evidence: a path's wallets beyond the holders come with them.
+  const [flows, own] = await Promise.all([s.flowsAmong(chainId, c.id, evidenceLegs(transfers)), s.lensFlagsOfToken(c.id, tokenId, ran)]);
+  return { transfers, middles, flows: evidencePayments(flows, transfers), own };
 }
 
 /** Past this many wallets a ring's loops are a tangle: its page draws who is in it instead. */
-const RING_DRAWN = 25;
+export const RING_DRAWN = 25;
+
+/** The most payments a ring's drawing reads, earliest first; past it the later ones are not read, so its story says no time word. */
+export const RING_FLOWS = 500;
 
 /**
  * A ring's loops as a token's graph draws them (layout()): each of its tokens
  * changing hands between two of its wallets, with the flags of the lenses that
- * ran, and the money among its wallets; those on none of its flagged trades
- * sit inside as middles, in between. Null past RING_DRAWN wallets, or for one with no such transfer.
+ * ran, and the payments Linked wallets used among its wallets (evidencePayments over pairsOnly): a ring is Round
+ * trips' and Linked wallets' evidence, and Round trips uses no money. Those on none of its flagged trades
+ * sit inside as middles, in between. `capped` when its payments are more than RING_FLOWS, of which the
+ * first are drawn. Null past RING_DRAWN wallets, or for one with no such transfer.
  */
-export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> | null> {
+export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<RingDrawn | null> {
   if (ring.wallets.length === 0 || ring.wallets.length > RING_DRAWN) return null;
   const inRing = new Set(ring.wallets.map((w) => w.address));
   // Each transfer keeps its place in its token's history (the mint is 1), so an arrow's number is the one its token page gives it.
   const all = (await Promise.all(ring.tokens.map((t) => s.token(c.id, t.tokenId)))).flatMap((h) => h.map((t, i) => ({ ...t, n: i + 1 })));
-  const transfers = all.filter((t) => inRing.has(t.from) && inRing.has(t.to)).map((t) => ranFlags(t, c.latest))
+  const ran = all.map((t) => ranFlags(t, c.latest));
+  const transfers = ran.filter((t) => inRing.has(t.from) && inRing.has(t.to))
     .sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
   if (transfers.length === 0) return null;
-  const flows = await s.flowsAmong(chainId, [...inRing]);
-  return { transfers, middles: ring.wallets.filter((w) => !w.traded).map((w) => w.address), flows };
+  // Only the payments the analysis used; the sale legs are known from every transfer of the ring's tokens, not just those among its wallets.
+  const pairs = ran.map(pairsOnly);
+  const legs = evidenceLegs(pairs).filter(([a, b]) => inRing.has(a) && inRing.has(b));
+  // One past the cap tells a read that stopped short from one that read them all.
+  const read = await s.flowsAmong(chainId, c.id, legs, RING_FLOWS + 1);
+  const flows = evidencePayments(read.slice(0, RING_FLOWS), pairs);
+  return { transfers, middles: ring.wallets.filter((w) => !w.traded).map((w) => w.address), flows, capped: read.length > RING_FLOWS };
+}
+
+/** A ring's drawing (ringDrawing): `capped` when its payments ran past RING_FLOWS. */
+type RingDrawn = Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> & { capped: boolean };
+
+/**
+ * A transfer as a ring's evidence reads its money: its Linked wallets witness
+ * alone, so the legs and payments (legsOf, through evidenceLegs and
+ * evidencePayments) are a pair's, never Money loops back's, which no ring holds.
+ */
+const pairsOnly = (t: FlaggedTransfer): FlaggedTransfer => ({ ...t, flags: t.flags.AC === undefined ? {} : { AC: t.flags.AC } });
+
+/**
+ * A drawn ring's evidence as its story reads it (ringStory): each loop of
+ * Round trips once, in chain order, and each linked pair of a sale, a loop's
+ * too, with the blocks of the drawn payments on its pair's own legs
+ * (evidenceLegs), so its story can say when they were against the sale. A
+ * capped read holds only the earliest payments, so it gives none: no time word.
+ */
+export function ringEvidence(drawn: Pick<RingDrawn, 'transfers' | 'flows' | 'capped'>): RingEvidence[] {
+  const out: RingEvidence[] = [];
+  const loops = new Set<string>();
+  for (const t of drawn.transfers) {
+    const { A, AC } = t.flags;
+    if (A !== undefined && A.kind !== 'pair') {
+      const key = `${t.tokenId}|${[...A.wallets].sort().join(',')}|${A.cycles}`;
+      if (!loops.has(key)) out.push({ kind: 'loop', token: t.tokenId, wallets: A.wallets.length, cycles: A.cycles });
+      loops.add(key);
+    }
+    if (AC?.kind === 'pair') {
+      const legs = new Set(evidenceLegs([pairsOnly(t)]).map(([from, to]) => `${from}|${to}`));
+      const paid = drawn.capped ? [] : drawn.flows.filter((f) => legs.has(`${f.from}|${f.to}`)).map((f) => f.blockNumber);
+      out.push({ kind: 'pair', token: t.tokenId, shape: AC.shape ?? null, middle: AC.middle, sale: t.blockNumber, paid });
+    }
+  }
+  return out;
 }
 
 /** Your lenses that ran on a collection, by id: a lens of yours with no finished run there has flagged nothing on it yet. */
@@ -144,7 +195,7 @@ export type TxVerdict = {
  */
 export async function txVerdict(chainId: number, tx: string): Promise<TxVerdict> {
   const s = store();
-  const moved = await s.transaction(chainId, tx);
+  const moved = await transactionOf(chainId, tx);
   const watched: TxVerdict['watched'] = {};
   await Promise.all([...new Set(moved.map((t) => t.collection?.address ?? ''))].map(async (address) => {
     const c = await s.collection(chainId, address);
@@ -288,7 +339,7 @@ export async function walletView(chainId: number, address: string, opts: WalletO
   const narrowed = Object.keys(asked).length > 0;
   const narrow = { ...asked, ...inHome };
   const [funding, collections, all, flagged, matched, counterpartiesTotal, flowsTotal, betweenTotal] = await Promise.all([
-    s.wallet(chainId, address), home === undefined ? s.walletCollections(chainId, address) : [],
+    s.wallets(chainId, [address]).then((m) => m.get(address) ?? null), home === undefined ? s.walletCollections(chainId, address) : [],
     s.walletTradeCount(chainId, address, inHome), s.walletTradeCount(chainId, address, { flaggedOnly: true, ...inHome }),
     narrowed ? s.walletTradeCount(chainId, address, narrow) : null, s.counterpartyCount(chainId, address),
     other === undefined ? 0 : s.flowsBetweenCount(chainId, address, other, opts.dir),

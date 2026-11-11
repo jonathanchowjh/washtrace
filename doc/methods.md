@@ -1,8 +1,9 @@
 # The methods
 
 For readers who want to know what a flag means before they trust one. It covers the two graphs washtrace builds,
-the three methods of the paper, what is never counted, rings, the thresholds, why the headline leaves Money loops
-back out, what a read cannot see, and how a spot check is narrower. Each method is shown on a token of the [demo](../README.md#quick-start), so you can open the same
+the three methods of the paper (Round trips, Linked wallets and Money loops back), what is never counted, rings,
+the thresholds, why the headline leaves Money loops back out, what a read cannot see, and how a spot check is
+narrower. Each method is shown on a token of the [demo](../README.md#quick-start), so you can open the same
 token in the console and see the verdict described here.
 
 ## Two graphs
@@ -13,16 +14,16 @@ token in the console and see the verdict described here.
   missing-data share. Mints and burns are not trades.
 - **The money graph**, one per collection. Each payment between two wallets is an edge from payer to payee: ETH,
   internal ETH, WETH and Blur Pool, and, when they are read, payments in [Other tokens](glossary.md#reading-money).
-  The worker reads who paid whom for every trader, then follows the money out `follow.hops` wallets (default 3),
-  so a payment can return through wallets that never traded the collection.
+  The worker reads who paid whom for every trader, then follows the money out the setting "Follow money
+  (wallets out)" wallets (default 3), so a payment can return through wallets that never traded the collection.
 
 A sale's own payment, buyer to seller in the same transaction, is left out of the money graph. Otherwise every
 sale would close its own loop.
 
-## SCC A: Round trips
+## Round trips (the floor)
 
-A transfer is flagged when it lies in a strongly connected component (SCC) of its token's graph with at least
-two independent cycles (`minCycles`). The cycle count of a component is its cyclomatic number,
+A transfer is flagged when it lies in a loop of wallets the token went round (a strongly connected component of
+its graph) with at least two independent cycles (`minCycles`). The cycle count of a loop is its cyclomatic number,
 E − V + 1 (edges minus wallets plus one).
 
 **Demo #101** is sold back and forth four times between two wallets: 4 edges, 2 wallets, 3 cycles. Flagged.
@@ -38,10 +39,28 @@ flowchart LR
 **Demo #130** is sold once and bought back once: 2 edges, 2 wallets, 1 cycle. Collectors do that, so one cycle
 is not enough. Clean.
 
-SCC A needs no money data, so it runs on any collection, and the [NFT-70M survey](../CONTRIBUTING.md#nft-70m-survey)
+Round trips needs no money data, so it runs on any collection, and the [NFT-70M survey](../CONTRIBUTING.md#nft-70m-survey)
 runs it alone.
 
-## SCC AU: Money loops back
+## Linked wallets (the ceiling)
+
+A transfer is flagged when Round trips flags it, or when its seller and buyer are joined by money within two
+hops, in either direction: one paid the other, both were paid by one funder, both paid one payee, or money passed
+through a wallet between them. This is the paper's Figure 8 generalised, and close to the Dune filter
+that looks for a buyer and seller funded by the same wallet.
+
+**Demo #114**: one funder paid both the seller and the buyer before the sale.
+
+```mermaid
+flowchart LR
+  F((funder)) -- "1 ETH" --> S((seller))
+  F -- "10 ETH" --> B((buyer))
+  S -- "token, 9 ETH sale" --> B
+```
+
+**Demo #116**: after the sale, the seller and the buyer both paid the same wallet.
+
+## Money loops back (not counted)
 
 The token graph is joined with the money graph between the token's holders. If a holder's money reaches another
 holder within 30 wallets (`reachDepth`), that reach becomes one edge in the token's graph. A transfer is flagged
@@ -60,32 +79,15 @@ flowchart LR
   H3 -- "3.9 ETH" --> S
 ```
 
-The worker finds #113's way back only because it follows the buyer's money out three wallets. At `follow.hops`
-0, as in the paper, it would read the traders alone and miss the loop.
+The worker finds #113's way back only because it follows the buyer's money out three wallets. At 0 wallets out,
+as in the paper, it would read the traders alone and miss the loop. When it flags a loop, the analysis keeps the
+chain of payments that closes it, and the token's graph draws that path.
 
-AU follows money one way only, out of each trader. A path back through an exchange or a wallet that paid more
-than 25 others (`FOLLOW_FANOUT`) is not followed, so it stays unseen.
+Linked wallets does not flag #113: its way back is four wallets long, past its two hops. Money loops back does
+not flag #114 or #116: money never runs from the buyer back to the seller.
 
-## SCC AC: Linked wallets
-
-A transfer is flagged when SCC A flags it, or when its seller and buyer are joined by money within two hops, in
-either direction. That covers four cases: one paid the other, both were paid by one funder, both paid one sink,
-or a middle wallet sits between them. This is the paper's Figure 8 generalised, and close to the Dune filter
-that looks for a buyer and seller funded by the same wallet.
-
-**Demo #114**: one funder paid both the seller and the buyer before the sale.
-
-```mermaid
-flowchart LR
-  F((funder)) -- "1 ETH" --> S((seller))
-  F -- "10 ETH" --> B((buyer))
-  S -- "token, 9 ETH sale" --> B
-```
-
-**Demo #116**: after the sale, the seller and the buyer both paid the same wallet.
-
-AC does not flag #113: its way back is four wallets long, past AC's two hops. AU does not flag #114 or #116:
-money never runs from the buyer back to the seller.
+Money loops back follows money one way only, out of each trader. A path back through an exchange or a wallet that
+paid more than 25 others (`FOLLOW_FANOUT`) is not followed, so it stays unseen.
 
 ## What is never counted
 
@@ -95,7 +97,7 @@ These are the three corrections to the 2023 method. Each has a test.
 |---|---|---|
 | The sale's payment closing a loop | Flows that share a transaction with a transfer are left out of the money graph. | every sale |
 | A round trip through a loan | Custody is not a change of owner. A → escrow → A is no hop, so two Blur Blend loans are not a back-and-forth trade. | #120 |
-| A common funder that is an exchange | A wallet joined by money to more than 20 of the collection's wallets (`hubDegree`), a known contract, or a wallet with more history than Etherscan pages through is never the middle of an AC path. | #1–#40, all funded by one exchange |
+| A common funder that is an exchange | A wallet joined by money to more than 20 of the collection's wallets (`hubDegree`), a known contract, or a wallet with more history than Etherscan pages through is never the middle of a Linked wallets path. | #1–#40, all funded by one exchange |
 
 ## Rings
 
@@ -108,7 +110,8 @@ of its witnesses, a trade two of them flag counted once.
   the reason [the headline leaves it out](#why-the-headline-leaves-money-loops-back-out).
 - **A ring is named by its smallest wallet**, its anchor, not by its place. Rings are ranked by the ETH their
   flagged sales moved, and a new analysis can change the ranks, but a ring with the same wallets keeps its
-  anchor, so a link to it still opens it.
+  anchor, so a link to it still opens it. When an analysis merges or splits rings, a link to an anchor that no longer
+  names one shows the ring or rings that wallet is in now, linked, or says it is in none.
 - **A ring is wallets the evidence ties together, not one person.** Two people can be in one ring because their
   loops cross a wallet, and one person's wallets can sit in two rings that nothing on chain joins.
 - **A ring can be large.** Loops chain through shared wallets, so a busy collection can hold one ring of
@@ -131,27 +134,27 @@ justifies it. A collection can override any of them through its config route.
 
 ## Why the headline leaves Money loops back out
 
-The console's headline is the range from Round trips (SCC A) to Linked wallets (SCC AC). Money loops back still
-runs and keeps its card, but it is not counted. A placebo test showed it does not separate wash trading from
+The console's headline is the range from Round trips to Linked wallets. Money loops back still
+runs and keeps its tab, but it is not counted. A placebo test showed it does not separate wash trading from
 chance on real data.
 
 **The test.** On Terraforms and dotdotdot, the token side was relabelled at random within bins of 100 wallets of
 similar activity, so buyers and sellers became unrelated while the money graph stayed exactly as read. The
-relabelling is one-to-one, so SCC A is unchanged. A method that measures wash trading should flag less after
+relabelling is one-to-one, so Round trips is unchanged. A method that measures wash trading should flag less after
 the relabelling.
 
-| Collection | AU real | AU placebo (3 seeds) | AC real | AC placebo (3 seeds) | A |
+| Collection | Round trips | Linked wallets, real | Linked wallets, placebo (3 seeds) | Money loops back, real | Money loops back, placebo (3 seeds) |
 |---|---|---|---|---|---|
-| Terraforms | 71.7% | 74.1 / 75.0 / 74.5% | 47.1% | 36.8 / 37.2 / 36.9% | 32.9% |
-| dotdotdot | 59.5% | 58.2 / 58.6 / 58.6% | 23.2% | 18.6 / 18.3 / 17.9% | 14.0% |
+| Terraforms | 32.9% | 47.1% | 36.8 / 37.2 / 36.9% | 71.7% | 74.1 / 75.0 / 74.5% |
+| dotdotdot | 14.0% | 23.2% | 18.6 / 18.3 / 17.9% | 59.5% | 58.2 / 58.6 / 58.6% |
 
-- **AU flags as much with unrelated buyers as with the real ones.** Directed reach 30 wallets deep through any
+- **Money loops back flags as much with unrelated buyers as with the real ones.** Directed reach 30 wallets deep through any
   wallet that is not a hub reaches most of the graph: 6,168 of Terraforms' 11,177 traders' searches hit
   `visitCap`. Its share then follows the parameters, not the data. On Terraforms it moves from 35.6% at
   `hubDegree` 5 to 87.8% at 200.
-- **AC passes the test, partly.** It adds 14.2 points over A on Terraforms, and the placebo adds 4.1, so about
-  29% of what it adds is chance. On dotdotdot it adds 9.2 points and the placebo 4.3, about 47%. That is the
-  README's "between a third and a half".
+- **Linked wallets passes the test, partly.** It adds 14.2 points over Round trips on Terraforms, and the placebo adds 4.1, so about
+  29% of what it adds is chance. On dotdotdot it adds 9.2 points and the placebo 4.3, about 47%: between a third
+  and a half of what it adds is chance.
 - **A caveat.** Relabelling within a bin can map one wash wallet onto another, which overstates the placebo
   slightly. That does not rescue a method whose real share sits below its placebo.
 
@@ -170,7 +173,7 @@ prices, so a few washed sales dominate the sum, and a collection with any wash t
 
 ## What it cannot see
 
-- **Money is followed one way.** The worker follows money out of each trader, `follow.hops` deep, only through
+- **Money is followed one way.** The worker follows money out of each trader, as many wallets out as the setting "Follow money (wallets out)" says, only through
   wallets that paid at most 25 others (`FOLLOW_FANOUT`). Following is what finds #113's way back, but an exchange
   or a busy trader is not followed, so a path back through one stays unseen.
 - **Reads are a snapshot unless read again is on.** A wallet's money and Other tokens are read once, so a later
@@ -204,10 +207,10 @@ that paid or was paid by both. It is narrower than a full read, and says so:
 
 ## The work it builds on
 
-- Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM: SCC detection on each token's transfer graph, flagged by cycle count: the basis of SCC A.
-- Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543): SCC detection over sales as well as transfers.
-- hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune: a buyer and seller first funded by the same wallet, which SCC AC generalises.
-- Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001): SCC detection over the user transaction graph, here applied to money between NFT traders.
+- Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM: loop detection on each token's transfer graph, flagged by cycle count: the basis of Round trips.
+- Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543): loop detection over sales as well as transfers.
+- hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune: a buyer and seller first funded by the same wallet, which Linked wallets generalises.
+- Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001): loop detection over the user transaction graph, here applied to money between NFT traders.
 - Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451): wash trades as cycles in a directed graph; its volume matching does not carry over, as NFTs are not fungible.
 
 The standards and sources washtrace reads: [ERC-721](https://eips.ethereum.org/EIPS/eip-721),

@@ -1,12 +1,14 @@
 import { cleanup, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LoopEdge, OwnFlag } from '@washtrace/detect';
+import { EvidenceLine } from '@/components/coverage';
+import type { Flow, LoopEdge, OwnFlag, Witness } from '@washtrace/detect';
 import { DEFAULT_RULE } from '@washtrace/detect/lens-rule';
 
 const ADDR = '0x' + 'b'.repeat(40);
 const ran = (m: string) => ({ available: m === 'A' || state.moneyRan });
 // `each`, when set, gives each transfer its own flags in place of `flagged`.
-const state = { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[], moves: null as [string, string][] | null };
+const state = { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10 as number | null, blocks: [5], flagged: [] as string[], each: null as string[][] | null, latestNull: false, sales: [] as number[], runs: [] as ReturnType<typeof lensRun>[], own: [] as OwnFlag[], moves: null as [string, string][] | null, witness: null as Witness | null, flows: [] as Flow[], asked: null as (readonly (readonly [string, string])[]) | null };
 
 /** A lens of yours and its run here: a done run has figures, so it is in `ctx.ran`; a queued one has none yet. */
 function lensRun(id: number, name: string, done = true) {
@@ -21,9 +23,9 @@ vi.mock('@/lib/store', () => ({
     collection: async () => state.missing ? null : ({ id: 1, chainId: 1, address: ADDR, name: 'Coll', startBlock: 0, cursorBlock: state.behind ? 640 : 1000, headBlock: 1000, latest: state.latestNull ? null : { throughBlock: state.throughBlock, totals: Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, ran(m)])) } }),
     token: async () => (state.empty ? [] : state.blocks).map((b, i) => ({
       txHash: '0x' + i, logIndex: 0, blockNumber: b, blockTime: null, tokenId: '7', from: state.moves?.[i]?.[0] ?? '0x1', to: state.moves?.[i]?.[1] ?? '0x2', marketplace: state.sales.includes(i) ? 'Seaport' : null, priceWei: null, currency: null,
-      flags: Object.fromEntries((state.each?.[i] ?? state.flagged).map((m) => [m, { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 }])),
+      flags: Object.fromEntries((state.each?.[i] ?? state.flagged).map((m) => [m, state.witness ?? { kind: 'scc', wallets: ['0x1', '0x2'], cycles: 2 }])),
     })),
-    flowsAmong: async () => [],
+    flowsAmong: async (_chain: number, _id: number, legs: readonly (readonly [string, string])[]) => { state.asked = legs; return state.flows; },
     lensRuns: async () => state.runs,
     passes: async () => [],
     sources: async () => ({}),
@@ -34,13 +36,26 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
-afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [], moves: null }); });
+afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [], moves: null, witness: null, flows: [], asked: null }); });
 
 async function dom(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
   return render(await TokenPage({ params: Promise.resolve({ chain: '1', address: ADDR, tokenId: '7' }), searchParams: Promise.resolve(sp) })).container;
 }
 async function page(): Promise<string> { return (await dom()).textContent ?? ''; }
+/** Every element of `type` in a page's tree, through every prop: the line reads in its own Suspense, so the tree is where it shows. */
+function elementsOf(node: unknown, type: unknown): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    if (n.type === type) out.push(n as { props: Record<string, unknown> });
+    Object.values(n.props as Record<string, unknown>).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
 
 describe('the token page when not everything is judged', () => {
   it('a token with newer transfers and an older Money loops back flag says no analysis covered them, and that the flag is not counted', async () => {
@@ -71,9 +86,14 @@ describe('the token page when not everything is judged', () => {
   it('names a money swatch in the legend only when a money arrow is drawn', async () => {
     Object.assign(state, { flagged: ['A'] });
     const legend = [...(await dom()).querySelectorAll('figcaption > span')].map((s) => s.textContent);
-    expect(legend).toContain('Round trips');
+    expect(legend).toContain('Round trips · the floor');
     expect(legend).toContain('first holder');
-    expect(legend).not.toContain('money');
+    expect(legend).not.toContain('payment a lens used');
+    cleanup();
+    // A direct pair's payment back is drawn, and keyed.
+    Object.assign(state, { flagged: ['AC'], witness: { kind: 'pair', pair: ['0x1', '0x2'], middle: null, flowTx: '0xp' },
+      flows: [{ txHash: '0xp', kind: 'native', from: '0x2', to: '0x1', valueWei: '1000000000000000000', token: '', blockNumber: 6, blockTime: 1 }] });
+    expect([...(await dom()).querySelectorAll('figcaption > span')].map((s) => s.textContent)).toContain('payment a lens used');
   });
 
   it('a token with no analysis does not say no pattern was found', async () => {
@@ -314,6 +334,46 @@ describe('the token page paging and filter', () => {
   });
 });
 
+describe('the token page of a loop Money loops back closed by a path', () => {
+  // #113's shape: 0x1 sold to 0x2, and 0x2 paid 0x1 back through two other wallets.
+  const H1 = '0x' + 'a'.repeat(40), H2 = '0x' + 'c'.repeat(40);
+  const pay = (txHash: string, from: string, to: string): Flow => ({ txHash, kind: 'native', from, to, valueWei: '1000000000000000000', token: '', blockNumber: 6, blockTime: 1 });
+  const loop = (paths?: { wallets: string[]; txs: string[] }[]): Witness => ({ kind: 'scc+flow', wallets: ['0x1', '0x2'], cycles: 1, via: [['0x2', '0x1']], ...(paths ? { paths } : {}) });
+  const setUp = (paths = true) => Object.assign(state, {
+    flagged: ['AU'], witness: loop(paths ? [{ wallets: ['0x2', H1, H2, '0x1'], txs: ['0xp1', '0xp2', '0xp3'] }] : undefined),
+    // Its three steps, and a payment back along one of them that is no step of it.
+    flows: [pay('0xp1', '0x2', H1), pay('0xp2', H1, H2), pay('0xp3', H2, '0x1'), pay('0xp4', H2, H1)],
+  });
+  const lit = (c: HTMLElement) => [...c.querySelectorAll('[data-lit]')].map((e) => e.getAttribute('data-edge')).sort();
+
+  it('asks for the payments along the path, draws its wallets, and says who paid whom back through how many', async () => {
+    setUp();
+    const c = await dom();
+    expect(state.asked).toEqual(expect.arrayContaining([['0x2', '0x1'], ['0x2', H1], [H1, H2], [H2, '0x1']]));
+    expect(state.asked).not.toContainEqual([H2, H1]);
+    for (const h of [H1, H2]) expect(c.querySelector(`[aria-label="Wallet ${h}"]`)).not.toBeNull();
+    expect(c.querySelector('#why')?.textContent).toContain('paid 0x1…0x1 back through 2 other wallets, closing a loop of 2 wallets');
+    // In between, keyed so.
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toContain('in between, funder or payee: joined by money only');
+  });
+
+  it('Show in graph lights the path: its sale and its steps’ payments, not another payment among its wallets', async () => {
+    setUp();
+    // The fourth payment is no step, so the page never draws it: only evidence is drawn.
+    const c = await dom({ loop: 'r0' });
+    expect(lit(c)).toEqual(['p0', 'p1', 'p2', 't0']);
+    expect(c.querySelector('[data-edge="p3"]')).toBeNull();
+  });
+
+  it('keeps today’s drawing and words for a loop saved before paths were: the sale, and no wallet beyond its two', async () => {
+    setUp(false);
+    const c = await dom({ loop: 'r0' });
+    expect(c.querySelector(`[aria-label="Wallet ${H1}"]`)).toBeNull();
+    expect(lit(c)).toEqual(['t0']);
+    expect(c.querySelector('#why')?.textContent).toContain('2 wallets in a loop closed by a payment back');
+  });
+});
+
 describe('the token page with lenses of yours', () => {
   const W = '0x' + '9'.repeat(40), F = '0x' + 'f'.repeat(40);
   const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
@@ -438,5 +498,23 @@ describe('the token page for a watched collection with no transfer of the token'
   it('still answers not found for a collection that is not watched', async () => {
     Object.assign(state, { missing: true });
     await expect(dom()).rejects.toThrow('not found');
+  });
+});
+
+describe('the token page\'s evidence line', () => {
+  it('stands on the wallets that held the token, never a mint, a burn or an escrow, and sits in the token\'s collection', async () => {
+    const BURN = '0x' + '0'.repeat(40);
+    Object.assign(state, { blocks: [5, 6, 7], moves: [[BURN, '0x1'], ['0x1', '0x2'], ['0x2', BURN]] });
+    const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
+    const tree = await TokenPage({ params: Promise.resolve({ chain: '1', address: ADDR, tokenId: '7' }), searchParams: Promise.resolve({}) });
+    expect(elementsOf(tree, EvidenceLine).map((e) => [e.props.chainId, e.props.home, e.props.wallets])).toEqual([[1, ADDR, ['0x1', '0x2']]]);
+  });
+
+  it('leaves out a marketplace contract that held it, as the engine does: only real traders have money to read', async () => {
+    const CONDUIT = '0x1e0049783f008a0085193e00003d00cd54003c71';
+    Object.assign(state, { blocks: [5, 6], moves: [['0x1', CONDUIT], [CONDUIT, '0x2']] });
+    const { default: TokenPage } = await import('@/app/c/[chain]/[address]/t/[tokenId]/page');
+    const tree = await TokenPage({ params: Promise.resolve({ chain: '1', address: ADDR, tokenId: '7' }), searchParams: Promise.resolve({}) });
+    expect(elementsOf(tree, EvidenceLine).map((e) => e.props.wallets)).toEqual([['0x1', '0x2']]);
   });
 });

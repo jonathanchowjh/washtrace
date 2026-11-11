@@ -58,6 +58,82 @@ LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.
 export const FLOW_SELECT = `f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
               extract(epoch FROM f.block_time)::float8 AS bt`;
 
+/**
+ * One payment's rows, by the flows primary key (chain_id, kind, tx_hash, ...):
+ * `kind` has three values, so `= ANY` makes three probes of the key, and the
+ * table needs no index on its hash. $1 the chain, $2 the hash.
+ */
+export const PAYMENT_SQL = `
+SELECT ${FLOW_SELECT} FROM washtrace.flows f
+WHERE f.chain_id = $1 AND f.kind = ANY('{native,internal,token}'::text[]) AND f.tx_hash = $2
+ORDER BY f.kind, f.from_address, f.to_address, f.token, f.value_wei`;
+
+/**
+ * The flows along some legs (Store.flowsAmong): $2 and $3 the legs' payers and
+ * payees, one leg a pair, each a probe of flows_moves_idx (chain_id,
+ * from_address, to_address, …). $1 the chain, $4 the cap, $5 the collection
+ * whose sales' own payments are left out.
+ */
+export const FLOWS_AMONG_SQL = `
+SELECT ${FLOW_SELECT} FROM washtrace.flows f
+JOIN unnest($2::text[], $3::text[]) AS l(payer, payee) ON f.from_address = l.payer AND f.to_address = l.payee
+WHERE f.chain_id = $1
+  AND NOT EXISTS (SELECT 1 FROM washtrace.transfers s WHERE s.collection_id = $5 AND s.tx_hash = f.tx_hash)
+ORDER BY f.block_number LIMIT $4`;
+
+/** The most sales Store.payment names for one witness; one more is read to know there are others. */
+export const PAYMENT_SALES = 3;
+
+/**
+ * The flags of the witnesses that may use a payment, a row per flagged sale
+ * (the first PAYMENT_SALES + 1 of its witness, by block), in collections of
+ * the chain that hold no transfer in the payment's transaction. $1 the chain,
+ * $2 the hash, $3 and $4 the payers and payees of its rows, $5 one collection's
+ * id or null for the chain's.
+ * - A Linked wallets witness is found by its wallets (witnesses_wallets_idx):
+ *   those holding both ends of a row. It may hold them as the seller and the
+ *   buyer, which useOf then refuses.
+ * - A Money loops back witness is any of the scope's: a path's middle wallets
+ *   are in no row of witnesses, so nothing indexes them. Its one flag (any,
+ *   by flags_witness_idx) is kept when its `via` or one `paths` entry holds
+ *   both ends of a row, a superset of the steps useOf then checks exactly.
+ *   Only the witnesses kept read their sales.
+ */
+export const PAYMENT_USED_BY_SQL = `
+WITH hit AS (
+  SELECT w.collection_id, w.id, w.kind, w.ring
+  FROM unnest($3::text[], $4::text[]) AS p(a, b)
+  JOIN washtrace.witnesses w ON w.kind = 'pair' AND w.wallets @> ARRAY[p.a, p.b]
+  JOIN washtrace.collections c ON c.id = w.collection_id AND c.chain_id = $1
+  WHERE $5::int IS NULL OR w.collection_id = $5
+  UNION
+  SELECT w.collection_id, w.id, w.kind, w.ring
+  FROM washtrace.witnesses w
+  JOIN washtrace.collections c ON c.id = w.collection_id AND c.chain_id = $1
+  CROSS JOIN LATERAL (
+    SELECT f.witness FROM washtrace.flags f WHERE f.collection_id = w.collection_id AND f.method = 'AU' AND f.witness_id = w.id LIMIT 1
+  ) one
+  WHERE w.kind = 'scc+flow' AND ($5::int IS NULL OR w.collection_id = $5)
+    AND EXISTS (
+      SELECT 1 FROM unnest($3::text[], $4::text[]) AS p(a, b)
+      WHERE one.witness->'via' @> jsonb_build_array(jsonb_build_array(p.a, p.b))
+         OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(one.witness->'paths', '[]'::jsonb)) x WHERE x->'wallets' @> jsonb_build_array(p.a, p.b))
+    )
+)
+SELECT h.collection_id, h.id AS witness_id, h.ring, c.address, c.name, s.tx_hash, s.log_index, s.token_id::text AS token_id, s.witness
+FROM hit h
+JOIN washtrace.collections c ON c.id = h.collection_id
+CROSS JOIN LATERAL (
+  SELECT f.tx_hash, f.log_index, f.witness, t.token_id, t.block_number
+  FROM washtrace.flags f
+  JOIN washtrace.transfers t ON t.collection_id = f.collection_id AND t.tx_hash = f.tx_hash AND t.log_index = f.log_index
+  WHERE f.collection_id = h.collection_id AND f.method = CASE h.kind WHEN 'pair' THEN 'AC' ELSE 'AU' END AND f.witness_id = h.id
+  ORDER BY t.block_number, f.tx_hash, f.log_index
+  LIMIT ${PAYMENT_SALES + 1}
+) s
+WHERE NOT EXISTS (SELECT 1 FROM washtrace.transfers x WHERE x.collection_id = h.collection_id AND x.tx_hash = $2)
+ORDER BY h.collection_id, h.id, s.block_number, s.tx_hash, s.log_index`;
+
 export function toFlow(r: any): Flow {
   return {
     txHash: r.tx_hash, kind: r.kind, from: r.from_address, to: r.to_address, valueWei: String(r.value_wei),
@@ -70,6 +146,7 @@ export function toRing(r: Record<string, unknown>): RingLine {
     anchor: r.ring as string, rank: r.rank as number, wallets: r.wallets as number, sample: r.sample as string[],
     sales: r.sales as number, floorSales: r.floor_sales as number, tokens: r.tokens as number, volumeWei: String(r.volume),
     firstAt: r.first_at as number | null, lastAt: r.last_at as number | null, tokenSample: r.token_sample as string[],
+    pattern: { loops: r.loops as number, pairs: r.pairs as number, middles: r.middles as number, shapes: r.shapes as RingLine['pattern']['shapes'] },
   };
 }
 

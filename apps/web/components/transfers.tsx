@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
+import { ZERO, type FlaggedTransfer, type Flow, type LensFlag, type Witness } from '@washtrace/detect';
 import { venueName, type LensKey } from '@washtrace/detect/trades';
 import { SHOWN, eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, carry, type Context } from '@/lib/links';
@@ -45,15 +45,22 @@ export function TokenLink({ base, tokenId, name, from, method, hash = '', title,
 /**
  * Why one method flagged one transfer, in a sentence; its wallets link under `within`, as Wallet's do.
  * `plain` is the sentence with no link in it (short addresses as text, no tx link), for a row that is itself one.
+ * Its links carry `ctx`, as a card's payment rows do.
  */
-export function because(w: Witness, chainId: number, within?: string, plain = false): React.ReactNode {
+export function because(w: Witness, chainId: number, within?: string, plain = false, ctx: Context = {}): React.ReactNode {
+  const at = (address: string) => (plain ? short(address) : <Wallet chainId={chainId} address={address} within={within} ctx={ctx} />);
   if (w.kind === 'scc') return `${w.wallets.length} wallets pass it round in ${plural(w.cycles, 'cycle')}`;
   if (w.kind === 'scc+flow') {
-    return `${w.wallets.length} wallets in a loop closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
+    // One way back with its path recorded says who paid whom, and through how many; several, or a loop saved before paths were, as before.
+    const [from, to] = w.via.length === 1 ? w.via[0]! : [];
+    const path = w.paths?.find((p) => p.wallets[0] === from && p.wallets[p.wallets.length - 1] === to);
+    if (from === undefined || to === undefined || path === undefined) return `${w.wallets.length} wallets in a loop closed by ${w.via.length === 1 ? 'a payment back' : `${w.via.length} money paths`}`;
+    const through = path.wallets.length - 2;
+    return <>{at(from)} paid {at(to)} back {through === 0 ? 'directly' : `through ${plural(through, 'other wallet')}`}, closing a loop of {plural(w.wallets.length, 'wallet')}</>;
   }
   const [a, b] = w.pair;
-  const tx = plain ? null : explorerTx(chainId, w.flowTx);
-  const at = (address: string) => (plain ? short(address) : <Wallet chainId={chainId} address={address} within={within} />);
+  // Inside a collection the payment opens its own view; elsewhere only the explorer shows it.
+  const tx = plain || within ? null : explorerTx(chainId, w.flowTx);
   // The pair is the seller and the buyer, in that order; the shape says who paid whom. A pair stored without one says only that they share money.
   const m = w.middle === null ? null : at(w.middle);
   const said = w.shape === undefined ? (m === null ? <>{at(a)} and {at(b)} paid each other directly</> : <>{at(a)} and {at(b)} share money with {m}</>)
@@ -64,7 +71,8 @@ export function because(w: Witness, chainId: number, within?: string, plain = fa
     : w.shape === 'direct-back' ? <>{at(b)} paid {at(a)} directly</>
     : w.shape === 'direct-forward' ? <>{at(a)} paid {at(b)} directly</>
     : <>{at(a)} and {at(b)} paid each other directly</>;
-  return <>{said}{tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}</>;
+  const pay = plain || !within ? null : <>{' '}(<Link href={carry(txHref(chainId, w.flowTx, within), ctx)} prefetch={false} className="underline">payment</Link>)</>;
+  return <>{said}{pay}{tx === null ? null : <>{' '}(<Ext href={tx}>tx</Ext>)</>}</>;
 }
 
 /**
@@ -169,7 +177,7 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className={cn('basis-full text-xs sm:px-3 sm:py-2', first === undefined && 'max-sm:hidden')}>{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
+                <td className={cn('basis-full text-xs sm:px-3 sm:py-2', first === undefined && 'max-sm:hidden')}>{first ? because(first, chainId, within, false, ctx) : <span className="text-muted-foreground">—</span>}</td>
               </tr>
             );
           })}
@@ -190,4 +198,74 @@ function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) 
   const body = <><TierMark tone={info.tone} />{info.name}</>;
   return base === undefined ? <span className="chip whitespace-nowrap">{body}</span>
     : <Link href={lensTabHref(base, m, { evidence: true })} prefetch={false} title={`Open the evidence for ${info.name}`} className="chip whitespace-nowrap hover:bg-muted">{body}</Link>;
+}
+
+/** The unit a payment is in: wrapped ETH is WETH, the rest ETH. */
+export const unitOf = (f: Pick<Flow, 'kind'>): string => (f.kind === 'token' ? 'WETH' : 'ETH');
+
+/** How each payment between two wallets moved, in words. */
+export const FLOW_KIND: Readonly<Record<Flow['kind'], string>> = { native: 'direct', internal: 'inside a contract call', token: 'wrapped ETH' };
+
+/**
+ * Payments as a table, the one home of a payment's row: when, how and how
+ * much. With `self`, one wallet's payments with another: which way each went
+ * for it, and the payment's own transaction, which opens its view under
+ * `within`'s tabs, else on the explorer. Without it, the payments of one
+ * transaction: who paid whom, the wallets linked under `within`.
+ * With `card`, a lens card's short list instead: a row a payment, who paid
+ * whom with the role of each in `card.roles`, how much, when, and a link to
+ * the payment's own view. The payment `card.named` is marked, the one the
+ * lens names. In the order given, which is no order of the money's path.
+ */
+export function Payments({ chainId, flows, self, within, ctx = {}, card }: { chainId: number; flows: readonly Flow[]; self?: string; within?: string; ctx?: Context; card?: { roles: ReadonlyMap<string, string>; named?: string } }) {
+  if (card !== undefined) {
+    const who = (address: string) => <><Wallet chainId={chainId} address={address} within={within} ctx={ctx} />{card.roles.has(address) ? ` (${card.roles.get(address)})` : ''}</>;
+    return (
+      <ul className="grid gap-1 text-xs">
+        {flows.map((f) => (
+          <li key={`${f.txHash}:${f.kind}:${f.from}:${f.to}:${f.token}:${f.valueWei}`} data-payment className="min-w-0 border-l-2 border-dashed border-flow pl-2">
+            {who(f.from)} → {who(f.to)} · {eth(f.valueWei, unitOf(f))} · <Time ms={f.blockTime * 1000} /> ·{' '}
+            <Link href={carry(txHref(chainId, f.txHash, within), ctx)} prefetch={false} title={f.txHash} className="underline">payment {short(f.txHash)}</Link>
+            {f.txHash === card.named ? <span className="text-muted-foreground"> · the one the lens names</span> : null}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <table className="w-full min-w-[30rem] text-left text-sm">
+        <thead className="text-xs text-muted-foreground">
+          <tr className="border-b">
+            <th className="px-3 py-2 font-medium">When</th>
+            {self === undefined ? <><th className="px-3 py-2 font-medium">From</th><th className="px-3 py-2 font-medium">To</th></> : <th className="px-3 py-2 font-medium">Which way</th>}
+            <th className="px-3 py-2 font-medium">How</th>
+            <th className="px-3 py-2 text-right font-medium">Amount</th>
+            {self === undefined ? null : <th className="px-3 py-2 font-medium">Transaction</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {flows.map((f) => {
+            const explorer = explorerTx(chainId, f.txHash);
+            return (
+              <tr key={`${f.txHash}:${f.kind}:${f.from}:${f.to}:${f.token}:${f.valueWei}`} className="border-b last:border-b-0">
+                <td className="px-3 py-1.5 whitespace-nowrap text-xs tabular-nums"><Time ms={f.blockTime * 1000} /></td>
+                {self === undefined
+                  ? <><td className="px-3 py-1.5"><Wallet chainId={chainId} address={f.from} within={within} ctx={ctx} /></td><td className="px-3 py-1.5"><Wallet chainId={chainId} address={f.to} within={within} ctx={ctx} /></td></>
+                  : <td className="px-3 py-1.5">{f.from === self ? 'it sent' : 'it received'}</td>}
+                <td className="px-3 py-1.5 text-muted-foreground">{FLOW_KIND[f.kind]}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{eth(f.valueWei, unitOf(f))}</td>
+                {self === undefined ? null : (
+                  <td className="px-3 py-1.5 text-xs">
+                    {within ? <Link href={carry(txHref(chainId, f.txHash, within), ctx)} prefetch={false} title={f.txHash} className="font-mono underline">{short(f.txHash)}</Link>
+                      : explorer === null ? <span className="font-mono">{short(f.txHash)}</span> : <Ext href={explorer} title={f.txHash}>tx</Ext>}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }

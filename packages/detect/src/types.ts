@@ -90,13 +90,30 @@ export type PairShape = 'funder' | 'payee' | 'back' | 'forward' | 'direct-back' 
 export const PAIR_SHAPES: readonly PairShape[] = ['funder', 'payee', 'back', 'forward', 'direct-back', 'direct-forward', 'both'];
 
 /**
+ * A chain of payments from one wallet to another, possibly out of block
+ * order: each wallet on it, both ends included, and `txs[i]` the payment from
+ * `wallets[i]` to `wallets[i + 1]` (of several, the smallest hash).
+ */
+export type MoneyPath = { wallets: string[]; txs: string[] };
+
+/**
  * Why one transfer was flagged by one method: enough to draw it. A pair's
  * `shape` is absent on one an analysis stored before shapes were recorded.
+ * A loop's `paths`, at most 4, are for its first `via` edges: each matches
+ * its edge by its ends, not by index. They are absent on one stored before
+ * paths were recorded.
  */
 export type Witness =
   | { kind: 'scc'; wallets: string[]; cycles: number }
-  | { kind: 'scc+flow'; wallets: string[]; cycles: number; via: [string, string][] }
+  | { kind: 'scc+flow'; wallets: string[]; cycles: number; via: [string, string][]; paths?: MoneyPath[] }
   | { kind: 'pair'; pair: [string, string]; middle: string | null; flowTx: string; shape?: PairShape };
+
+/**
+ * How a lens used one payment (payments.ts useOf): Linked wallets, with
+ * `named` when it is the payment the witness names; or Money loops back, on
+ * the money back from `back[0]` to `back[1]`. Not a time order of anything.
+ */
+export type PaymentUse = { method: 'AC'; named: boolean } | { method: 'AU'; back: [string, string] };
 
 export interface Flag {
   txHash: string;

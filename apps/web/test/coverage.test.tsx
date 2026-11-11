@@ -1,10 +1,10 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TRAIL_NOTES, type CollectionRow, type StoredEntry } from '@washtrace/detect';
+import { TRAIL_NOTES, type CollectionRow, type StoredEntry, type WalletRead } from '@washtrace/detect';
 import { ReadingPill, ReadingSummary } from '@/components/coverage';
 import { Pipeline, PipelineErrors, PipelineTable } from '@/components/pipeline';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, localTime, short } from '@/lib/format';
-import { TRAIL_LOADING, coverage, progress, trust } from '@/lib/coverage';
+import { TRAIL_LOADING, coverage, evidenceWords, progress, trust } from '@/lib/coverage';
 import { APART_WHY } from '@/lib/metrics';
 import { pipeline, STATE_WORDS } from '@/lib/pipeline';
 import { LensTabs } from '@/components/lens-tabs';
@@ -1036,5 +1036,52 @@ describe('the time chart', () => {
     expect(el.querySelector('polyline.stroke-ceiling')).not.toBeNull();
     expect(el.querySelector('polyline.stroke-muted-foreground')?.getAttribute('stroke-dasharray')).toBe('5 3');
     expect(el.querySelector('rect.fill-muted-foreground')).not.toBeNull();
+  });
+});
+
+describe('how complete a verdict\'s evidence is', () => {
+  const [A, B, C] = ['0x' + 'a'.repeat(40), '0x' + 'b'.repeat(40), '0x' + 'c'.repeat(40)];
+  const read = (more: Partial<WalletRead> = {}): WalletRead => ({ status: 'done', truncated: false, fetchedAt: 1_700_000_000_000, transfers: 3, error: null, ...more });
+  const words = (wallets: string[], reads: [string, WalletRead][], more: { funded?: boolean; funding?: boolean; moneyRan?: boolean; viaPartners?: boolean; untraded?: boolean; first?: boolean } = {}) =>
+    evidenceWords({ wallets, reads: new Map(reads), funded: true, funding: true, moneyRan: true, ...more });
+
+  it('counts the wallets read: both, or all of more', () => {
+    expect(words([A, B], [[A, read()], [B, read()]])).toEqual({ head: 'Money read for both wallets', at: null, tail: [] });
+    expect(words([A, B, C], [[A, read()], [B, read()], [C, read()]])?.head).toBe('Money read for all 3 wallets');
+  });
+
+  it('says a single wallet in its own words, with when it was read left to the Time', () => {
+    expect(words([A], [[A, read()]])).toEqual({ head: 'Its money was read', at: 1_700_000_000_000, tail: [] });
+    expect(words([A], [[A, read({ fetchedAt: null })]])).toEqual({ head: 'Its money was read from stored data', at: null, tail: [] });
+  });
+
+  it('is "so far" while a key can read the rest, and "at least" when nothing will', () => {
+    const some: [string, WalletRead][] = [[A, read()], [C, read({ status: 'pending' })]];
+    expect(words([A, B, C], some)?.head).toBe('Money read for 1 of 3 wallets, so Linked wallets and Money loops back are so far: reading the rest can change this');
+    expect(words([A, B, C], some, { funded: false, funding: false })?.head).toBe('Money read for 1 of 3 wallets; at least, since no funding source is set, so money is not fully read');
+    expect(words([A, B, C], some, { funding: false })?.head).toBe('Money read for 1 of 3 wallets; at least, since money past the stored trail is not read without an Etherscan key');
+  });
+
+  it('a wallet with no row is unread, and a single one says so', () => {
+    expect(words([A], [])?.head).toBe('Its money is not read yet, so Linked wallets and Money loops back are so far: reading it can change this');
+    expect(words([A], [], { untraded: true })?.head).toBe('Its money is not read: no transfer of it is read in a watched collection');
+    expect(words([A], [], { viaPartners: true })?.head).toBe('The payments below were read from the wallets it paid or was paid by; its own history is not read');
+  });
+
+  it('says a failed read and a truncated one', () => {
+    expect(words([A], [[A, read({ status: 'failed', error: 'rate limited' })]])?.head).toBe(`Reading ${short(A)}'s money failed: rate limited. Retried hourly`);
+    expect(words([A, B], [[A, read()], [B, read({ status: 'failed', error: null })]])?.tail).toEqual([`Reading ${short(B)}'s money failed: unknown error. Retried hourly`]);
+    expect(words([A, B], [[A, read({ truncated: true })], [B, read()]])?.tail).toEqual([`${short(A)} has more history than Etherscan pages through`]);
+    expect(words([A, B], [[A, read({ truncated: true })], [B, read({ truncated: true })]])?.tail).toEqual(['2 wallets have more history than Etherscan pages through']);
+  });
+
+  it('counts a ring past the list\'s cut over the listed traders, both numbers of them, and says they are its first', () => {
+    expect(words([A, B, C], [[A, read()]], { first: true })?.head).toBe('Money read for 1 of the ring\'s first 3 wallets, so Linked wallets and Money loops back are so far: reading the rest can change this');
+    expect(words([A, B], [[A, read()], [B, read()]], { first: true })?.head).toBe('Money read for all of the ring\'s first 2 wallets');
+  });
+
+  it('says the money lenses did not run, and says nothing of no wallets', () => {
+    expect(words([A, B], [[A, read()], [B, read()]], { moneyRan: false })?.head).toBe('Linked wallets and Money loops back not run');
+    expect(words([], [])).toBeNull();
   });
 });

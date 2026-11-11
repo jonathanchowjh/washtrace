@@ -71,15 +71,22 @@ Notes:
   under `method`, each `{rows, total}`. A lens that did not run lists none. `lenses` holds each lens of yours
   with its `run` on this collection (`run` is null when it has none). A row's `shapes` counts its linked pairs
   by `shape` (see the verdict keys); a pair saved before migration #38 counts in none, and a lens of yours has every count 0.
+- A token's `flows` are the payments a lens used as its evidence (at most 500, earliest first), and its `middles` the
+  wallets that joined two of its holders by money without holding it: Linked wallets' middles, and the wallets on
+  Money loops back's `paths` but their ends. A loop saved before paths were recorded adds none.
 - Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
-  sample, sales, floorSales, tokens, tokenSample, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
+  sample, sales, floorSales, tokens, tokenSample, volumeWei, firstAt, lastAt, pattern}`: `anchor` is its smallest wallet and its name in
   the path, `sample` its first three wallets by address, `tokenSample` its first three tokens by number (`tokens` counts them all), `sales` its counted flagged sales and `floorSales` those
-  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one in between (joined by money only),
-  at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
+  Round trips flags. Its `pattern` is `{loops, pairs, middles, shapes}`, what its witnesses are: `loops` of Round trips, `pairs` of Linked wallets (one per pair
+  witness, so a pair on a loop's sale counts too and `pairs` is not a count of sales), `middles` the pairs through a middle wallet, and `shapes` the pairs by `shape` as a row's `shapes` counts them (a pair saved before migration #38 counts in none). A ring's `wallets` are `{address, traded, sold, bought, volumeWei}`, `traded` false for one in between
+  (joined by money only), those that traded first and the most ETH first, at most 500 (`walletsCut` true past them):
+  `sold` and `bought` are the wallet's sides of the ring's counted flagged sales and `volumeWei` what those sales were
+  priced at, counted as the ring's `sales` and `volumeWei` are (0 for one in between). Its `tokens` are
+  `{tokenId, sales, volumeWei, floor}`, the most ETH first, `floor` true when Round trips flags any of the token's trades in the ring.
 - `.../card` is the console's hover card: a few counts and a `tier`. A wallet's `trades` and `flagged` are in
   this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or
   Linked wallets flags, and its `ring` is the highest-ranked ring of its flagged trades (null for none). `tier` is
-  `cycle` when Round trips flags any counted trade of the wallet (as it trades, in this collection) or of the token, `ceiling` when only
+  `cycle` (the floor) when Round trips flags any counted trade of the wallet (as it trades, in this collection) or of the token, `ceiling` when only
   Linked wallets does, and null for neither. A wallet that never traded in the collection but is a middle wallet of a counted pair is `ceiling`. `judged` is false before the first analysis.
 - Stored-data fields on a collection in `GET /api/collections`: `restoreNote` and `analysisError` say why its
   stored data did not load or its latest analysis failed, with when each is tried again (`restoreRetryAt`,
@@ -103,13 +110,13 @@ ring's anchor: the trades Round trips or Linked wallets flags through one of its
 | none | One page of 20: `total`, `unjudged` (trades newer than the latest analysis), `page`, `pages`, `ran` (the lenses that ran), `through` (for each lens of yours in `ran`, the block its run read), `rows`. Rows carry lens codes. |
 | `csv` | Every trade the filters hold, streamed as `text/csv` and named `<address>-trades.csv`. Read one row at a time, so a cancelled download closes its cursor. |
 
-Limits on the CSV download:
+Limits on the CSV download (the values are in [operating.md](operating.md#limits)):
 
-| Limit | Value | What happens |
-|---|---|---|
-| Open downloads (`MAX_STREAMS`) | 3 | A fourth gets 429, `Too many downloads at once; try again in a minute.` |
-| Reader stops pulling (`DOWNLOAD_STALL_MS`) | 65 seconds | The download is closed and its body errors. |
-| Open too long (`STREAM_MAX_MS`) | 15 minutes | The body ends with the error `The download ran too long and was stopped.` (`DOWNLOAD_TOO_LONG`). |
+| Limit | What happens |
+|---|---|
+| Too many open downloads (`MAX_STREAMS`) | The next gets 429, `Too many downloads at once; try again in a minute.` |
+| Reader stops pulling (`DOWNLOAD_STALL_MS`) | The download is closed and its body errors. |
+| Open too long (`STREAM_MAX_MS`) | The body ends with the error `The download ran too long and was stopped.` (`DOWNLOAD_TOO_LONG`). |
 
 A body that errors after its headers were sent reaches the client as a cut-off stream, not a status code: a
 client that needs the whole file checks that the transfer ended cleanly. The columns are `date`, `token`,
@@ -125,10 +132,11 @@ leading `'`.
 | `GET /api/transfers/{chain}/{tx}` | | 200, 404 | `chainId`, `tx`, `transfers`, and the verdict keys |
 | `GET /api/search` | `q`; `kind` (`collections`, `tokens`, `wallets` or `trades`) with `page`; `scope` (`<chain>:<address>`) | 200 | `collections`, `tokens`, `wallets`, `trades`, `more`, and with a scope `connected` |
 
-- `scope` narrows a search to one watched collection: its tokens, and the wallets that traded in it. A full
+- `scope` narrows a search to one watched collection: its tokens, the wallets that traded in it, and the wallets
+  that link one of its rings (funders, payees and in-between wallets), which may never have traded in it. A full
   address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
   collection narrows nothing. In a scoped search each wallet hit carries `here`, whether it traded in that
-  collection: false only for one found by its full address. A scoped wallet hit also carries `tier` (`cycle`, `ceiling` or null, as on the card); an unscoped
+  collection: false for one found by its full address, and for a ring's middle wallet (a funder, payee or in-between wallet) that never traded there; search finds those by the start of their address too, scoped or not. A scoped wallet hit also carries `tier` (`cycle`, `ceiling` or null, as on the card); an unscoped
   search carries none, and a hit on another chain null. A wallet not `here` is null too, unless it is a middle wallet of a
   counted pair there: then `ceiling`, as on the card. The results page also names a wallet's ring, which the API
   does not answer: ranking rings reads every ring, so the type-ahead never asks for it.
@@ -163,7 +171,12 @@ leading `'`.
 | `notRun` | The lenses that did not run in some transfer's analysis. A lens that did not run is never in `methods`. |
 
 A transfer's `flags` hold each built-in's witness by its key. A loop is `{kind, wallets, cycles}`, `kind` `scc`, or
-`scc+flow` with `via` the money edges (`[from, to]`) that close it. A linked pair is `{kind: "pair", pair, middle, flowTx, shape}`:
+`scc+flow` with `via` the money edges (`[from, to]`) that close it and `paths`, at most four, for the first of them.
+A path is `{wallets, txs}`: a chain of payments from its edge's `from` to its `to`, possibly out of block order, with
+`wallets` each wallet on it, both ends included, and `txs[i]` the payment from `wallets[i]` to `wallets[i + 1]` (of
+several, the smallest hash). Match a path to its `via` edge by its ends, `wallets[0]` and the last, not by index.
+`paths` is absent on a loop an analysis saved before paths were recorded, until the collection is analyzed again.
+A linked pair is `{kind: "pair", pair, middle, flowTx, shape}`:
 `pair` is the seller and buyer, `middle` the wallet between them (null when they paid each other directly), and
 `shape` which way the money went. Through a middle it is `funder` (it paid both), `payee` (both paid it), `back`
 (the buyer paid it and it paid the seller) or `forward` (the seller paid it and it paid the buyer); of several that
@@ -190,8 +203,8 @@ The keys are `rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow
   masked the same way), `locked`, `pinned` and `invalid`. A secret answers as `••••` and at most its last 4
   characters (an RPC URL also keeps its scheme and host); a client can replace or clear a secret and never read
   it.
-- `follow.reread` is a whole number of days from 0 to 365 (label `Read traders again (days)`); 0, the default,
-  is off.
+- `follow.reread` is a whole number of days (label `Read traders again (days)`); its range and default are in
+  [operating.md](operating.md#settings).
 - `POST /api/settings` answers 409 for a non-null `etherscan.url` while the Etherscan key comes from `.env`.
   Clearing a key is always allowed. A saved value beats the environment's.
 - A Test is run by the worker, not the API. `chainId` must be one with an RPC setting. Poll
@@ -260,6 +273,8 @@ still queued goes first in the next pass. The console's Check this transaction b
 
 ### Status
 
+What to do when something is wrong is in [operating.md](operating.md#watching-it-run).
+
 | Route | Status | Top-level keys |
 |---|---|---|
 | `GET /api/status` | 200 | `jobs`, `collections`, `funding`, `config`, `notices` |
@@ -275,14 +290,16 @@ still queued goes first in the next pass. The console's Check this transaction b
   running), and `priority`: whether its wallets are checked for money before the other
   collections'.
 - `/api/health` is `{ok: true}` when the store answers and `{ok: false}` with 503 when it does not. It needs no
-  login, for the container's health check.
+  login, for the container's health check. The worker's own `/health` is on its port, which Compose does not
+  publish ([operating.md](operating.md#deploying)).
 
 **Notices.** A notice is `{severity, text}`, its severity `needs-you`, `working` or `info`. A `needs-you` one
 also says what to do (`doThis`, maybe with an `href`); the others may carry `action: {label, href}`. Working
 and info notices are there while all is well, so a monitor alerts on
 `notices.some(n => n.severity === 'needs-you')`. An empty `needs-you` list does not mean the worker is
 reading: a missing RPC or Etherscan key is an `info` notice, a limit to lift and not a failure, so a monitor
-that wants to know reading is moving looks at the other notices and at `stages` too.
+that wants to know reading is moving looks at the other notices and at `stages` too. What each
+notice asks for is in [operating.md](operating.md#watching-it-run).
 
 **Funding backlog**, one entry per chain in `/api/worker`:
 

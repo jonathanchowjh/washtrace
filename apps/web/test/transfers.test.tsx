@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
-import { Transfers, because } from '@/components/transfers';
+import { Payments, Transfers, because } from '@/components/transfers';
 import type { PairShape, Witness } from '@washtrace/detect';
 
 const ADDR = '0x' + 'b'.repeat(40);
@@ -141,5 +141,87 @@ describe('why a linked pair was flagged, by its shape', () => {
   it('keeps today\'s words for a pair stored without a shape', () => {
     expect(said(undefined, M)).toContain(`${s} and ${b} share money with ${m}`);
     expect(said(undefined, null)).toContain(`${s} and ${b} paid each other directly`);
+  });
+});
+
+describe('why Money loops back flagged a loop', () => {
+  // #113 [demo]: the buyer 0xfadd… paid the seller 0xdfe1… back through three hops.
+  const buyer = '0xfadd' + '0'.repeat(32) + '79c5', seller = '0xdfe1' + '0'.repeat(32) + '1f10';
+  const hops = ['0x' + 'a'.repeat(40), '0x' + 'c'.repeat(40), '0x' + 'd'.repeat(40)];
+  const loop = (more: Partial<Extract<Witness, { kind: 'scc+flow' }>> = {}): Witness =>
+    ({ kind: 'scc+flow', wallets: [buyer, seller], cycles: 1, via: [[buyer, seller]], ...more });
+  const said = (w: Witness, within?: string) => render(<>{because(w, 1, within)}</>).container;
+
+  it('says who paid whom back, and through how many other wallets, from its recorded path', () => {
+    const w = loop({ paths: [{ wallets: [buyer, ...hops, seller], txs: ['0x1', '0x2', '0x3', '0x4'] }] });
+    expect(said(w).textContent).toBe('0xfadd…79c5 paid 0xdfe1…1f10 back through 3 other wallets, closing a loop of 2 wallets');
+    cleanup();
+    // Its two wallets link, under the collection's tabs.
+    expect(links(said(w, BASE))).toEqual([['0xfadd…79c5', `${BASE}/w/${buyer}`], ['0xdfe1…1f10', `${BASE}/w/${seller}`]]);
+    cleanup();
+    expect(said(loop({ paths: [{ wallets: [buyer, seller], txs: ['0x1'] }] })).textContent).toBe('0xfadd…79c5 paid 0xdfe1…1f10 back directly, closing a loop of 2 wallets');
+  });
+
+  it('keeps today’s words for a loop saved before paths were, for several ways back, and for a path that is not its way back', () => {
+    expect(said(loop()).textContent).toBe('2 wallets in a loop closed by a payment back');
+    cleanup();
+    const two = loop({ via: [[buyer, seller], [seller, buyer]], paths: [{ wallets: [buyer, seller], txs: ['0x1'] }] });
+    expect(said(two).textContent).toBe('2 wallets in a loop closed by 2 money paths');
+    cleanup();
+    expect(said(loop({ paths: [{ wallets: [seller, buyer], txs: ['0x1'] }] })).textContent).toBe('2 wallets in a loop closed by a payment back');
+  });
+});
+
+describe('the payment a linked pair names', () => {
+  const FLOW_TX = '0x' + 'f'.repeat(64);
+  const w: Witness = { kind: 'pair', pair: [S, B], middle: null, flowTx: FLOW_TX, shape: 'both' };
+
+  it('opens its view under the collection’s tabs when there are tabs, else the explorer, and neither in a row that is itself a link', () => {
+    const paid = (el: Element) => [...el.querySelectorAll('a')].filter((a) => /^(payment|tx)/.test(a.textContent ?? '')).map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(paid(render(<>{because(w, 1, BASE)}</>).container)).toEqual([['payment', `${BASE}/tx/${FLOW_TX}`]]);
+    cleanup();
+    expect(paid(render(<>{because(w, 1)}</>).container)).toEqual([['tx ↗', `https://etherscan.io/tx/${FLOW_TX}`]]);
+    cleanup();
+    expect(paid(render(<>{because(w, 1, BASE, true)}</>).container)).toEqual([]);
+  });
+
+  it('keeps the page’s lens and list on its payment link and its wallets, as a card’s payment rows do', () => {
+    const ctx = { method: 'AC', from: 'rings' };
+    const el = render(<>{because(w, 1, BASE, false, ctx)}</>).container;
+    const hrefs = [...el.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain(`${BASE}/tx/${FLOW_TX}?method=AC&from=rings`);
+    expect(hrefs).toContain(`${BASE}/w/${S}?method=AC&from=rings`);
+  });
+});
+
+describe('Payments', () => {
+  const T = '0x' + 'a'.repeat(64);
+  const flow = { txHash: T, kind: 'native' as const, from: S, to: B, valueWei: '1500000000000000000', token: '', blockNumber: 7, blockTime: 1_700_000_000 };
+
+  it('for one wallet: which way each went, and its transaction opens its view under the tabs, else the explorer', () => {
+    // Past the time, which reads in the reader's zone.
+    const rows = (el: Element) => [...el.querySelectorAll('tbody tr')].map((r) => [...r.querySelectorAll('td')].slice(1).map((td) => td.textContent));
+    const under = render(<Payments chainId={1} flows={[flow]} self={S} within={BASE} ctx={{ method: 'AC' }} />).container;
+    expect(rows(under)).toEqual([['it sent', 'direct', '1.5 ETH', '0xaaaa…aaaa']]);
+    expect(links(under).filter(([, h]) => h?.includes('/tx/'))).toEqual([['0xaaaa…aaaa', `${BASE}/tx/${T}?method=AC`]]);
+    cleanup();
+    const away = render(<Payments chainId={1} flows={[{ ...flow, from: B, to: S, kind: 'token' }]} self={S} />).container;
+    expect(rows(away)).toEqual([['it received', 'wrapped ETH', '1.5 WETH', 'tx ↗']]);
+    expect(links(away)).toEqual([['tx ↗', `https://etherscan.io/tx/${T}`]]);
+  });
+
+  it('on a card: a row a payment with each wallet’s role, the amount, and a link to its view carrying the lens; the named one marked', () => {
+    const el = render(<Payments chainId={1} flows={[flow, { ...flow, txHash: '0x' + 'b'.repeat(64), kind: 'token' as const }]} within={BASE} ctx={{ method: 'AC' }} card={{ roles: new Map([[S, 'seller']]), named: T }} />).container;
+    const rows = [...el.querySelectorAll('li')].map((li) => li.textContent);
+    expect(rows[0]).toMatch(/^0x1111…1111 \(seller\) → 0x2222…2222 · 1\.5 ETH · .* · payment 0xaaaa…aaaa · the one the lens names$/);
+    expect(rows[1]).toContain('1.5 WETH');
+    expect(rows[1]).not.toContain('the one the lens names');
+    expect(links(el).filter(([, h]) => h?.includes('/tx/'))[0]).toEqual(['payment 0xaaaa…aaaa', `${BASE}/tx/${T}?method=AC`]);
+  });
+
+  it('for one transaction: who paid whom, with no column for the transaction it is', () => {
+    const el = render(<Payments chainId={1} flows={[flow]} within={BASE} />).container;
+    expect([...el.querySelectorAll('th')].map((th) => th.textContent)).toEqual(['When', 'From', 'To', 'How', 'Amount']);
+    expect(links(el).map(([, h]) => h)).toEqual([`${BASE}/w/${S}`, `${BASE}/w/${B}`]);
   });
 });

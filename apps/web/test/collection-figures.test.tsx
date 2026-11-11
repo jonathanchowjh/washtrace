@@ -43,7 +43,7 @@ vi.mock('@/lib/store', () => ({
     importedMoney: async () => false,
     lensTokens: async () => ({ rows: [], total: 0 }),
     lensWallets: async () => ({ rows: [], total: 0 }),
-    rings: async () => ({ rows: [{ anchor: ADDR, rank: 1, wallets: 2, sample: [], sales: 3, floorSales: 1, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: ['5'] }], total: state.rings }),
+    rings: async () => ({ rows: [{ anchor: ADDR, rank: 1, wallets: 2, sample: [], sales: 3, floorSales: 1, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: ['5'], pattern: { loops: 1, pairs: 0, middles: 0, shapes: {} } }], total: state.rings }),
   }),
   storedEntry: async () => null,
 }));

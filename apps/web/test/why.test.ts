@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Flow, LoopEdge, PairShape, TokenLine, Transfer, WalletLine, Witness } from '@washtrace/detect';
 import { ownBecause } from '@/components/transfers';
-import { middleWords, notFlaggedLines, partnersOf, railTxs, tokenWhy, walletRoles, walletWhy, type WhyPart } from '@/lib/why';
+import { middleWords, notFlaggedLines, partnersOf, railTxs, ringPattern, ringStory, tokenStory, tokenWhy, walletRoles, walletWhy, type RingEvidence, type WhyPart } from '@/lib/why';
 
 // What the store reads: every shape has a count, zero for the shapes a row has none of.
 const shapes = (some: Partial<Record<PairShape, number>> = {}): Record<PairShape, number> =>
@@ -72,25 +72,33 @@ const transfer = (from: string, to: string, block: number, sale = true, tokenId 
 const flow = (from: string, to: string, block: number) => ({ txHash: `0xf${block}`, kind: 'native', from, to, valueWei: '1', token: '', blockNumber: block, blockTime: 0 }) as Flow;
 
 describe('the wallets on a Connected to rail', () => {
-  it('says each one\'s role here: seller and buyer, then funder, payee and in between, leaving out the mint and the page\'s own', () => {
+  it('says each one\'s role here: seller and buyer, then in between, leaving out the mint and the page\'s own, and naming no one for money alone', () => {
     const roles = walletRoles(
       [transfer(ZERO, w('a'), 1, false), transfer(w('a'), w('b'), 2), transfer(w('b'), w('a'), 3)],
-      [flow(w('f'), w('a'), 2), flow(w('b'), w('p'), 3)], [w('m')], w('z'),
+      [w('m')], w('z'),
     );
     expect(roles).toEqual([
       { address: w('a'), role: 'got it · seller · buyer' }, { address: w('b'), role: 'buyer · seller' },
-      { address: w('m'), role: 'in between' }, { address: w('f'), role: 'funder' }, { address: w('p'), role: 'payee' },
+      { address: w('m'), role: 'in between' },
     ]);
   });
 
-  it('gives a pair\'s middle the one role its shape says, whichever page lists it, with or without the money', () => {
+  it('names the wallets on a Money loops back path in between: money passed through them, they funded or were paid by no one side', () => {
+    const loop: Witness = { kind: 'scc+flow', wallets: [w('a'), w('b')], cycles: 1, via: [[w('b'), w('a')]], paths: [{ wallets: [w('b'), w('h'), w('i'), w('a')], txs: ['0x1', '0x2', '0x3'] }] };
+    const sold = Object.assign(transfer(w('a'), w('b'), 2), { flags: { AU: loop } });
+    // The token page passes the path's wallets beyond its holders as middles (drawingInputs).
+    expect(walletRoles([sold], [w('h'), w('i')])).toEqual([
+      { address: w('a'), role: 'seller' }, { address: w('b'), role: 'buyer' }, { address: w('h'), role: 'in between' }, { address: w('i'), role: 'in between' },
+    ]);
+  });
+
+  it('gives a pair\'s middle the one role its shape says, whichever page lists it', () => {
     const on = (shape: PairShape | undefined) => [transfer(w('a'), w('b'), 2, true, '114', pair(shape, w('m')))];
-    const moneyIn = [flow(w('m'), w('a'), 1), flow(w('m'), w('b'), 2)];
     const roleOf = (r: { address: string; role: string }[]) => r.find((x) => x.address === w('m'))?.role;
     for (const [shape, role] of [['funder', 'funder'], ['payee', 'payee'], ['back', 'in between'], ['forward', 'in between'], [undefined, 'in between']] as const) {
-      // The token page (transfers, flows, middles), the trade page (transfers) and the ring page (drawn transfers, flows, middles) agree.
-      expect(roleOf(walletRoles(on(shape), moneyIn, [w('m')]))).toBe(role);
-      expect(roleOf(walletRoles(on(shape), [], []))).toBe(role);
+      // The token page (transfers, middles), the trade page (transfers) and the ring page (drawn transfers, middles) agree.
+      expect(roleOf(walletRoles(on(shape), [w('m')]))).toBe(role);
+      expect(roleOf(walletRoles(on(shape), []))).toBe(role);
       // A wallet's page, whose transfers carry the pair, agrees with the partner's money.
       expect(roleOf(partnersOf(on(shape), [{ address: w('m'), sent: 0, received: 1 }], w('a')))).toBe(role);
     }
@@ -102,7 +110,7 @@ describe('the wallets on a Connected to rail', () => {
     const shown = [transfer(me, w('c'), 7)];
     const partners = [{ address: w('m'), sent: 0, received: 1 }, { address: w('n'), sent: 1, received: 0 }];
     const pairs = [{ middle: w('m'), shape: 'back' as const }, { middle: w('n'), shape: 'funder' as const }, { middle: w('q'), shape: null }];
-    const on = (shape: PairShape) => walletRoles([transfer(w('a'), w('b'), 2, true, '114', pair(shape, w('m')))], [], [], me).find((x) => x.address === w('m'))?.role;
+    const on = (shape: PairShape) => walletRoles([transfer(w('a'), w('b'), 2, true, '114', pair(shape, w('m')))], [], me).find((x) => x.address === w('m'))?.role;
     const roles = partnersOf(shown, partners, me, pairs);
     // The token page says "in between" for a back-shaped middle: so does this page, not "funder".
     expect(roles.find((x) => x.address === w('m'))?.role).toBe(on('back'));
@@ -168,5 +176,147 @@ describe('why a token was not flagged', () => {
     expect(partial.join(' ')).not.toContain('Money loops back: ');
     expect(partial[partial.length - 1]).toContain('Money loops back');
     expect(partial[partial.length - 1]).toContain('did not run');
+  });
+});
+
+describe('a ring\'s story (ringStory)', () => {
+  const LINE = { wallets: 3, sales: 1, pattern: { loops: 0, pairs: 0, middles: 0, shapes: shapes() } };
+  const M = '0x' + 'c'.repeat(40), N = '0x' + 'd'.repeat(40);
+  const direct = (s: PairShape | null | undefined) => s === 'direct-back' || s === 'direct-forward' || s === 'both';
+  // One sale of `token` in block 10, its pair's evidence payments in blocks `paid`.
+  const pair = (shape: PairShape | null | undefined, paid: number[], o: { token?: string; middle?: string | null } = {}): RingEvidence =>
+    ({ kind: 'pair', token: o.token ?? '114', shape, middle: o.middle === undefined ? (direct(shape) ? null : M) : o.middle, sale: 10, paid });
+  const loop = (token: string, wallets = 2, cycles = 2): RingEvidence => ({ kind: 'loop', token, wallets, cycles });
+  const one = (e: RingEvidence) => ringStory(LINE, [e]);
+
+  it('says one pair by its shape, naming the token', () => {
+    expect(one(pair('funder', [8, 9]))).toBe('One wallet paid both the seller and the buyer of #114, before the sale.');
+    expect(one(pair('payee', [11, 12]))).toBe('The seller and the buyer of #114 both paid one wallet, after the sale.');
+    expect(one(pair('back', [11, 12]))).toBe("The buyer's money went back to the seller of #114 through one wallet, after the sale.");
+    expect(one(pair('forward', [8]))).toBe("The seller's money went to the buyer of #114 through one wallet, before the sale.");
+    expect(one(pair('direct-back', [12]))).toBe('The buyer of #114 paid the seller back directly, after the sale.');
+    expect(one(pair('direct-back', [8, 12]))).toBe('The buyer of #114 also paid the seller directly, outside the sale.');
+    expect(one(pair('direct-forward', [8]))).toBe('The seller of #114 also paid the buyer directly, before the sale.');
+    expect(one(pair('both', [8, 12]))).toBe('The seller and the buyer of #114 paid each other directly, outside the sale.');
+    // With a time word, the time says it was no part of the sale; "outside the sale" only stands in for one.
+    expect(one(pair('direct-back', [8]))).toBe('The buyer of #114 also paid the seller directly, before the sale.');
+    expect(one(pair('both', [12]))).toBe('The seller and the buyer of #114 paid each other directly, after the sale.');
+    expect(one(pair('direct-forward', [10]))).toBe('The seller of #114 also paid the buyer directly, outside the sale.');
+  });
+
+  it('says before or after only when every payment is in a block strictly before or after the sale\'s', () => {
+    // A payment in the sale's own block has no order against it: washtrace reads no place for a payment in its block.
+    expect(one(pair('funder', [10]))).toBe('One wallet paid both the seller and the buyer of #114.');
+    expect(one(pair('funder', [9, 10]))).toBe('One wallet paid both the seller and the buyer of #114.');
+    expect(one(pair('payee', [10, 11]))).toBe('The seller and the buyer of #114 both paid one wallet.');
+    // Some before, some after: neither.
+    expect(one(pair('back', [9, 11]))).toBe("The buyer's money went back to the seller of #114 through one wallet.");
+    expect(one(pair('direct-back', [10]))).toBe('The buyer of #114 also paid the seller directly, outside the sale.');
+    // No payment read: nothing to order.
+    expect(one(pair('funder', []))).toBe('One wallet paid both the seller and the buyer of #114.');
+  });
+
+  it('says an old witness with no shape as it always did, never blank or undefined', () => {
+    // Today's wording, with no time word: research §4 gives an old witness what it always said.
+    expect(one(pair(null, [8]))).toBe('The seller and the buyer of #114 are joined by money through one wallet.');
+    expect(one(pair(null, [12], { middle: null }))).toBe('The seller and the buyer of #114 are joined by money.');
+    expect(one(pair(undefined, [10]))).toBe('The seller and the buyer of #114 are joined by money through one wallet.');
+    expect(one(pair(null, [], { middle: null }))).toBe('The seller and the buyer of #114 are joined by money.');
+  });
+
+  it('says a loop by its token, its wallets and its cycles', () => {
+    expect(ringStory(LINE, [loop('101')])).toBe('#101 went round 2 wallets and back to one that sold it, 2 cycles.');
+    expect(ringStory(LINE, [loop('102', 3, 1)])).toBe('#102 went round 3 wallets and back to one that sold it.');
+    expect(ringStory(LINE, [loop('101'), loop('102', 3)])).toBe('#101 and #102 went round among these wallets.');
+  });
+
+  it('says several pairs of one shape once: one wallet only when every pair has the same middle', () => {
+    const same = ['114', '115', '117'].map((token) => pair('funder', [8], { token }));
+    expect(ringStory(LINE, same)).toBe('One wallet paid both the sellers and the buyers of #114, #115 and #117, each before its sale.');
+    expect(ringStory(LINE, [pair('payee', [11], { token: '114' }), pair('payee', [10], { token: '115' })])).toBe('The sellers and the buyers of #114 and #115 all paid one wallet.');
+    const apart = [pair('funder', [8], { token: '114' }), pair('funder', [8], { token: '115', middle: N }), pair('funder', [12], { token: '117' })];
+    expect(ringStory(LINE, apart)).toBe('In each of 3 sales of #114, #115 and #117, a third wallet paid both the seller and the buyer.');
+    // Four sales of one token name it once; past three tokens the rest are counted.
+    expect(ringStory(LINE, Array.from({ length: 4 }, () => pair('direct-back', [12])))).toBe('In each of 4 sales of #114, the buyer paid the seller back directly, after the sale.');
+    expect(ringStory(LINE, ['1', '2', '3', '4', '5'].map((token) => pair('back', [11], { token, middle: token === '1' ? N : M }))))
+      .toBe("In each of 5 sales of #1, #2, #3 and 2 more, the buyer's money went back to the seller through a third wallet, after the sale.");
+  });
+
+  it('counts mixed shapes by their tails, and puts loops first', () => {
+    expect(ringStory(LINE, [pair('funder', [8]), pair('funder', [8], { token: '115' }), pair('direct-back', [12], { token: '116' })]))
+      .toBe('3 of its sales are linked pairs: 2 both funded by a third, 1 paid back directly.');
+    // An old pair counts as it does in the lists: through a middle wallet.
+    expect(ringStory(LINE, [pair('funder', [8]), pair(null, [8], { token: '115' })])).toBe('2 of its sales are linked pairs: 1 both funded by a third, 1 through a middle wallet.');
+    expect(ringStory(LINE, [pair('funder', [8], { token: '103' }), loop('101'), pair('funder', [8], { token: '104' }), loop('102', 3)]))
+      .toBe('#101 and #102 went round among these wallets; 2 of its sales are linked pairs, both funded by a third.');
+    expect(ringStory(LINE, [loop('101'), pair('payee', [12], { token: '103' }), pair('back', [12], { token: '104' })]))
+      .toBe('#101 went round 2 wallets and back to one that sold it, 2 cycles; 2 of its sales are linked pairs, 1 both paid a third, 1 paid back through a third.');
+    expect(ringStory(LINE, [loop('101'), pair(null, [8], { token: '103', middle: null })])).toBe('#101 went round 2 wallets and back to one that sold it, 2 cycles; 1 of its sales is a linked pair.');
+  });
+
+  it('never tells old pairs through a middle and old direct ones as one shape', () => {
+    const mixed = [pair(null, [8]), pair(null, [8], { token: '115', middle: null })];
+    expect(ringStory(LINE, mixed)).toBe('2 of its sales are linked pairs: 1 through a middle wallet.');
+    expect(ringStory(LINE, [loop('101'), ...mixed])).toBe('#101 went round 2 wallets and back to one that sold it, 2 cycles; 2 of its sales are linked pairs, 1 through a middle wallet.');
+    // Old pairs all through a middle, or all direct, are still one.
+    expect(ringStory(LINE, [pair(null, [], { middle: null }), pair(null, [], { token: '115', middle: null })])).toBe('In each of 2 sales of #114 and #115, the seller and the buyer are joined by money.');
+  });
+
+  it('says a ring not drawn by its counts alone, with no time word', () => {
+    const at = (wallets: number, sales: number, loops: number, pairs: number, middles: number, some: Partial<Record<PairShape, number>> = {}) =>
+      ({ wallets, sales, pattern: { loops, pairs, middles, shapes: shapes(some) } });
+    expect(ringStory(at(48, 42, 12, 30, 30, { funder: 30 }), null)).toBe('12 loops and 30 linked pairs among 48 wallets, 30 both funded by a third.');
+    expect(ringStory(at(30, 1, 1, 0, 0), null)).toBe('1 loop among 30 wallets.');
+    expect(ringStory(at(30, 30, 0, 30, 30, { funder: 20, back: 10 }), null)).toBe('30 linked pairs among 30 wallets, 20 both funded by a third, 10 paid back through a third.');
+    // A pair on a loop's sale is a pair still: the pairs are counted as stored, never taken from the sales left over.
+    expect(ringStory(at(30, 12, 12, 12, 12, { payee: 12 }), null)).toBe('12 loops and 12 linked pairs among 30 wallets, 12 both paid a third.');
+    expect(ringStory(at(30, 0, 0, 0, 0), null)).toBe('None of its flagged trades is a counted sale.');
+    // A drawing with no counted evidence says its counts too.
+    expect(ringStory(at(3, 0, 0, 0, 0), [])).toBe('None of its flagged trades is a counted sale.');
+  });
+});
+
+describe('a ring\'s pattern in a few words (ringPattern)', () => {
+  const at = (wallets: number, loops: number, pairs: number, middles: number, some: Partial<Record<PairShape, number>> = {}) =>
+    ringPattern({ loops, pairs, middles, shapes: shapes(some) }, wallets);
+  it('names one shape bare, loops by their wallets, and anything mixed by its counts', () => {
+    expect(at(3, 0, 2, 2, { funder: 2 })).toBe('Both funded by a third');
+    expect(at(2, 0, 1, 0, { 'direct-back': 1 })).toBe('Paid back directly');
+    expect(at(3, 4, 0, 0)).toBe('Round trips among 3 wallets');
+    expect(at(3, 2, 3, 3, { funder: 3 })).toBe('2 loops and 3 linked pairs');
+    expect(at(5, 0, 3, 3, { funder: 2, payee: 1 })).toBe('3 linked pairs');
+    expect(at(5, 1, 1, 1, { funder: 1 })).toBe('1 loop and 1 linked pair');
+  });
+  it('says a ring saved before shapes as it always did', () => {
+    expect(at(3, 0, 2, 2)).toBe('Through a middle wallet');
+    expect(at(2, 0, 2, 0)).toBe('Joined by money');
+    expect(at(3, 0, 2, 1)).toBe('2 linked pairs');
+  });
+  it('says nothing for a ring with neither', () => {
+    expect(at(3, 0, 0, 0)).toBe('');
+  });
+});
+
+describe('a token\'s own story in a ring (tokenStory)', () => {
+  const M = '0x' + 'c'.repeat(40);
+  const pair = (shape: PairShape | null, paid: number[], middle: string | null = M): RingEvidence => ({ kind: 'pair', token: '114', shape, middle, sale: 10, paid });
+  const loop = (cycles = 2): RingEvidence => ({ kind: 'loop', token: '114', wallets: 2, cycles });
+  it('says one pair without naming the token or the wallet, with its time only when proved', () => {
+    expect(tokenStory([pair('funder', [8, 9])])).toBe('One wallet paid both the seller and the buyer, before the sale.');
+    expect(tokenStory([pair('payee', [11])])).toBe('The seller and the buyer both paid one wallet, after the sale.');
+    expect(tokenStory([pair('direct-back', [8, 12], null)])).toBe('The buyer also paid the seller directly, outside the sale.');
+    expect(tokenStory([pair(null, [8])])).toBe('The seller and the buyer are joined by money through one wallet.');
+  });
+  it('says a loop by its wallets and cycles', () => {
+    expect(tokenStory([loop()])).toBe('Went round 2 wallets and back to one that sold it, 2 cycles.');
+    expect(tokenStory([loop(1), loop(3)])).toBe('Went round in 2 loops.');
+  });
+  it('says several pairs once, and a loop with its pairs', () => {
+    expect(tokenStory([pair('funder', [8]), pair('funder', [8])])).toBe('In each of 2 sales, one wallet paid both the seller and the buyer, before the sale.');
+    expect(tokenStory([pair('funder', [8]), pair('direct-back', [12], null)])).toBe('2 sales are linked pairs: 1 both funded by a third, 1 paid back directly.');
+    expect(tokenStory([loop(), pair('funder', [8])])).toBe('Went round 2 wallets and back to one that sold it, 2 cycles. One wallet paid both the seller and the buyer, before the sale.');
+  });
+  it('says nothing without evidence', () => {
+    expect(tokenStory([])).toBe('');
   });
 });

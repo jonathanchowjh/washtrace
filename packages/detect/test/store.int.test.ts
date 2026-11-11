@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, Store, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, Store, TooManyStreams, WALK_CAP, type Parsed, type TokenCounts } from '../src/store.js';
 import { SECRET_KEYS } from '../src/env.js';
 import { TOKEN_COUNT_MS } from '../src/worker.js';
 import type { ListOpts, TokenSort, WalletSort } from '../src/trade-sql.js';
@@ -18,6 +18,7 @@ import { HttpRequestError } from 'viem';
 import { LAB, LAB_MIXED, MONEY, USDC, WETH, at, chain, flow, input, transfer, w, type Fact } from './fixtures.js';
 import { ZERO } from '../src/graph.js';
 import { MOVE_KIND } from '../src/moves.js';
+import { FLOWS_AMONG_SQL, PAYMENT_SQL } from '../src/store-rows.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -383,6 +384,67 @@ describe('migration #31: a collection\'s own hop limit, and its reach', () => {
     } finally {
       await drop(C, w('33c1'));
       await drop(C, w('33c2'));
+    }
+  });
+
+  it('flowsAmong leaves out a payment inside any sale of the collection, as the analysis does, whichever token it was of', async () => {
+    const C = 3120;
+    const [p, q] = [w('3fa1'), w('3fa2')];
+    const { id } = await store.addCollection(C, w('3fc1'), null, 10);
+    try {
+      // Token 2 sold by p to q in tx 0xsale, with its price paid q to p in that same transaction (a WETH bid).
+      await store.ingest(id, C, [transfer('2', p, q, { txHash: '0xsale', blockNumber: 20 })], 50, [p, q]);
+      await store.saveMoney(C, q, [flow(q, p, { txHash: '0xsale', blockNumber: 20 }), flow(q, p, { txHash: '0xreal', blockNumber: 21 })], false);
+      expect((await store.flowsAmong(C, id, [[q, p]])).map((f) => f.txHash)).toEqual(['0xreal']);
+      // Another collection's sale does not hide it.
+      const other = (await store.addCollection(C, w('3fc2'), null, 10)).id;
+      expect((await store.flowsAmong(C, other, [[q, p]])).map((f) => f.txHash)).toEqual(['0xsale', '0xreal']);
+    } finally {
+      await drop(C, w('3fc1'));
+      await drop(C, w('3fc2'));
+    }
+  });
+
+  it('flowsAmong reads only the legs it is asked for, each once, so other payments among the same wallets never take the cap', async () => {
+    const C = 3121;
+    const [p, q, r] = [w('3fd1'), w('3fd2'), w('3fd3')];
+    const { id } = await store.addCollection(C, w('3fd9'), null, 10);
+    try {
+      // Busy wallets: q pays p five times before the one payment p→r that a lens used.
+      // Built here, not by the shared flow(), whose counter later tests' hashes depend on.
+      const pay = (from: string, to: string, txHash: string, blockNumber: number): Flow => ({ txHash, kind: 'native', from, to, valueWei: '1000', token: '', blockNumber, blockTime: blockNumber });
+      const busy = Array.from({ length: 5 }, (_, i) => pay(q, p, `0xbusy${i}`, 10 + i));
+      await store.saveMoney(C, q, busy, false);
+      await store.saveMoney(C, p, [pay(p, r, '0xleg', 30)], false);
+      // The cap of 2 would be spent on q→p reading every pair of {p, q, r}; by its leg, p→r comes back.
+      expect((await store.flowsAmong(C, id, [[p, r]], 2)).map((f) => f.txHash)).toEqual(['0xleg']);
+      // A leg asked twice, or the way back, reads it once; a wallet to itself reads nothing.
+      expect((await store.flowsAmong(C, id, [[p, r], [p, r], [r, p], [p, p]])).map((f) => f.txHash)).toEqual(['0xleg']);
+      expect(await store.flowsAmong(C, id, [])).toEqual([]);
+    } finally {
+      await drop(C, w('3fd9'));
+    }
+  });
+
+  it('flowsAmong reads each leg by flows_moves_idx, not a scan of the table', async () => {
+    const pg = await store.pool.connect();
+    try {
+      await pg.query('BEGIN');
+      // A busy chain: enough payments, among enough wallets, that the planner costs a probe per leg against reading the chain; rolled back.
+      await pg.query(
+        `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
+         SELECT 1, '0xamong' || g, 'native', '0x' || lpad(to_hex(g % 2000), 40, '0'), '0x' || lpad(to_hex(g), 40, '0'), 1, '', g, now() FROM generate_series(1, 20000) g`,
+      );
+      await pg.query('ANALYZE washtrace.flows');
+      const hex = (n: number) => '0x' + n.toString(16).padStart(40, '0');
+      const plan = (await pg.query(`EXPLAIN ${FLOWS_AMONG_SQL}`, [1, [hex(7), hex(9)], [hex(2007), hex(4009)], 500, 1])).rows.map((r) => r['QUERY PLAN']).join('\n');
+      expect(plan, plan).toMatch(/flows_moves_idx/);
+      // Each leg probes the index by its payer and payee, not only by the chain.
+      expect(plan, plan).toMatch(/Index Cond: [^\n]*from_address = l\.payer[^\n]*to_address = l\.payee/);
+      expect(plan, plan).not.toMatch(/Seq Scan on flows/);
+    } finally {
+      await pg.query('ROLLBACK');
+      pg.release();
     }
   });
 
@@ -2690,11 +2752,18 @@ describe('Store', () => {
     const { rows, total } = await store.rings(c.id, RAN, 10, 0);
     expect(total).toBe(1);
     expect(rows).toEqual([expect.objectContaining({ anchor, rank: 1, wallets: 2, sales: 3, floorSales: 3, tokens: 1, tokenSample: ['1'] })]);
+    // Its pattern is what its witnesses are, one loop here; the pair it also holds is Linked wallets' and counted too.
+    expect(rows[0]!.pattern).toEqual({ loops: expect.any(Number), pairs: expect.any(Number), middles: 0, shapes: expect.objectContaining({ funder: 0 }) });
+    expect(rows[0]!.pattern.loops).toBe(1);
     expect((await store.pool.query('SELECT rings FROM washtrace.analyses WHERE collection_id = $1', [c.id])).rows[0].rings).toBe(1);
     const view = (await store.ring(c.id, anchor, RAN))!;
     const token = await store.token(c.id, '1');
-    expect(view.wallets).toEqual([a, b].sort().map((address) => ({ address, traded: true })));
-    expect(view.tokens).toEqual([expect.objectContaining({ tokenId: '1', sales: 3 })]);
+    // Each member's side of its counted sales, as the line counts them: a sold #1 to b twice and bought it back once.
+    expect(view.wallets).toEqual([
+      { address: a, traded: true, sold: 2, bought: 1, volumeWei: '3000000000000000000' },
+      { address: b, traded: true, sold: 1, bought: 2, volumeWei: '3000000000000000000' },
+    ]);
+    expect(view.tokens).toEqual([expect.objectContaining({ tokenId: '1', sales: 3, floor: true })]);
     expect(await store.ring(c.id, '0xnone', RAN)).toBeNull();
     expect(await store.ringsOf(c.id, { wallet: b })).toEqual([anchor]);
     expect(await store.ringsOf(c.id, { tokenId: '1' })).toEqual([anchor]);
@@ -2718,10 +2787,52 @@ describe('Store', () => {
       const done = analyze(input(sales));
       await store.saveAnalysis(id, stale!.version, { ...done, flags }, 1, 1_000_000, new Set(['']));
       const line = (await store.rings(id, RAN, 10, 0)).rows[0]!;
-      expect(line).toMatchObject({ tokens: 4, tokenSample: ['2', '9', '10'] });
+      expect(line).toMatchObject({ tokens: 4, tokenSample: ['2', '9', '10'], pattern: { loops: 0, pairs: 1, middles: 0, shapes: { funder: 0, payee: 0, back: 0, forward: 0, 'direct-back': 0, 'direct-forward': 0, both: 0 } } });
+      // Its members' sides, the most ETH first, and no token on a loop: Linked wallets alone flags them.
+      const view = (await store.ring(id, line.anchor, RAN))!;
+      expect(view.wallets).toEqual([{ address: p, traded: true, sold: 4, bought: 0, volumeWei: '4000' }, { address: q, traded: true, sold: 0, bought: 4, volumeWei: '4000' }]);
+      expect(view.tokens.map((t) => t.floor)).toEqual([false, false, false, false]);
     } finally {
       await drop(1, coll);
     }
+  });
+
+  it('counts a ring\'s pattern: its loops, its pairs, those through a middle, and each pair\'s shape', async () => {
+    const coll = w('71c');
+    const { id } = await store.addCollection(1, coll, 'Pattern', 1);
+    try {
+      const p = w('71a'), q = w('71b'), m = w('71d');
+      const sales = ['1', '2', '3'].map((t) => transfer(t, p, q, { marketplace: 'blur', priceWei: '1000', currency: '' }));
+      await store.ingest(id, 1, sales, 100, [p, q]);
+      const funder = { kind: 'pair' as const, pair: [p, q] as [string, string], middle: m, flowTx: '0xf', shape: 'funder' as const };
+      const direct = { kind: 'pair' as const, pair: [p, q] as [string, string], middle: null, flowTx: '0xg', shape: 'direct-back' as const };
+      // Saved before shapes were: through a middle, and no shape.
+      const old = { kind: 'pair' as const, pair: [p, q] as [string, string], middle: m, flowTx: '0xh' };
+      const flags = [funder, direct, old].map((witness, i) => ({ txHash: sales[i]!.txHash, logIndex: sales[i]!.logIndex, method: 'AC' as const, witness }));
+      const [stale] = (await store.stale()).filter((s) => s.id === id);
+      await store.saveAnalysis(id, stale!.version, { ...analyze(input(sales)), flags }, 1, 1_000_000, new Set(['']));
+      const line = (await store.rings(id, RAN, 10, 0)).rows[0]!;
+      expect(line.pattern).toEqual({ loops: 0, pairs: 3, middles: 2, shapes: { funder: 1, payee: 0, back: 0, forward: 0, 'direct-back': 1, 'direct-forward': 0, both: 0 } });
+      expect((await store.ring(id, line.anchor, RAN))!.line.pattern).toEqual(line.pattern);
+    } finally {
+      await drop(1, coll);
+    }
+  });
+
+  it('wallets reads the money state of many wallets in one query, and leaves out one with no row', async () => {
+    const C = 3301;
+    const [done, pending, failed, never] = [w('d01'), w('d02'), w('d03'), w('d04')];
+    await store.addWallets(C, [done, pending, failed]);
+    await store.saveMoney(C, done, [], true);
+    await store.moneyFailed(C, failed, 'rate limited');
+    const got = await store.wallets(C, [done, pending, failed, never]);
+    expect([...got.keys()].sort()).toEqual([done, pending, failed].sort());
+    expect(got.get(done)).toMatchObject({ status: 'done', truncated: true, error: null });
+    expect(got.get(done)!.fetchedAt).toBeGreaterThan(0);
+    expect(got.get(pending)).toMatchObject({ status: 'pending', fetchedAt: null });
+    expect(got.get(failed)).toMatchObject({ status: 'failed', error: 'rate limited' });
+    expect(await store.wallets(C + 1, [done])).toEqual(new Map());
+    expect(await store.wallets(C, [])).toEqual(new Map());
   });
 
   it('gives a wallet its tier by its own counted flagged trades, and a scoped search hit carries it', async () => {
@@ -2782,6 +2893,70 @@ describe('Store', () => {
     }
   });
 
+  it('finds the wallets that link a ring, traded or not, by prefix and by full address, scoped and unscoped', async () => {
+    const coll = w('73d'), other = w('74d');
+    const { id } = await store.addCollection(1, coll, 'Funders', 1);
+    const second = (await store.addCollection(1, other, 'Others', 1)).id;
+    try {
+      const p = w('73a'), q = w('73b'), m = '0x73c1' + '0'.repeat(36), t = w('73e'), funder = '0x8318' + '0'.repeat(36);
+      const sale = transfer('1', p, q, { marketplace: 'blur', priceWei: '1000', currency: '' });
+      const again = transfer('1', q, p, { marketplace: 'blur', priceWei: '1000', currency: '' });
+      const mine = transfer('2', m, t, { marketplace: 'blur', priceWei: '1000', currency: '' });
+      const all = [sale, again, mine];
+      await store.ingest(id, 1, all, 100, [p, q, m, t]);
+      const [stale] = (await store.stale()).filter((s) => s.id === id);
+      const pair = (middle: string) => ({ kind: 'pair' as const, pair: [p, q] as [string, string], middle, flowTx: '0xf' });
+      // The funder never traded and has no wallets row; m is a middle that also traded here.
+      const flags = [
+        { txHash: sale.txHash, logIndex: sale.logIndex, method: 'AC' as const, witness: pair(funder) },
+        { txHash: again.txHash, logIndex: again.logIndex, method: 'AC' as const, witness: pair(m) },
+      ];
+      await store.saveAnalysis(id, stale!.version, { ...analyze(input(all)), flags }, 1, 1_000_000, new Set(['']));
+      expect((await store.wallets(1, [funder])).size).toBe(0);
+      const scope = { id, chainId: 1 };
+      const find = async (p: Parsed, opts = {}) => (await store.search(p, opts)).wallets;
+      const prefix = funder.slice(0, 6);
+      const funderAsks: Parsed[] = [{ kind: 'prefix', prefix }, { kind: 'address', address: funder }];
+      for (const ask of funderAsks) {
+        expect(await find(ask, { scope })).toEqual([{ chainId: 1, address: funder, transfers: 0, here: false, tier: 'ceiling' }]);
+        expect(await find(ask)).toEqual([{ chainId: 1, address: funder, transfers: 0 }]);
+        // Another collection of the chain does not hold it as a middle.
+        expect(await find(ask, { scope: { id: second, chainId: 1 } })).toEqual(ask.kind === 'address' ? [{ chainId: 1, address: funder, transfers: 0, here: false, tier: null }] : []);
+        // A scope on another chain gives it no tier.
+        expect((await find(ask, { scope: { id, chainId: 10 } })).map((h) => h.tier)).not.toContain('ceiling');
+      }
+      // A middle that also traded is one hit, here.
+      const mAsks: Parsed[] = [{ kind: 'prefix', prefix: m.slice(0, 6) }, { kind: 'address', address: m }];
+      for (const ask of mAsks) {
+        expect((await find(ask, { scope })).map((h) => [h.address, h.here])).toEqual([[m, true]]);
+        expect((await find(ask)).map((h) => h.address)).toEqual([m]);
+      }
+
+      const pg = await store.pool.connect();
+      try {
+        await pg.query('BEGIN');
+        // Enough witnesses that the planner costs the index; rolled back, so nothing reaches later tests.
+        await pg.query(
+          `INSERT INTO washtrace.witnesses (collection_id, id, kind, wallets, middle)
+           SELECT $1, 1000 + g, 'pair', ARRAY[]::text[], '0x' || md5(g::text) FROM generate_series(1, 20000) g`,
+          [id],
+        );
+        await pg.query('ANALYZE washtrace.witnesses');
+        const plan = (await pg.query(
+          `EXPLAIN SELECT middle FROM washtrace.witnesses WHERE collection_id = ${id} AND middle LIKE $1 || '%'`, ['0x8318'],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        // A plain or a bitmap index scan, its condition on the line under it.
+        expect(plan, plan).toMatch(/witnesses_middle_idx.*\n\s*Index Cond: \(\(middle ~>=~ /);
+      } finally {
+        await pg.query('ROLLBACK');
+        pg.release();
+      }
+    } finally {
+      await drop(1, coll);
+      await drop(1, other);
+    }
+  });
+
   it('records a linked pair\'s shape, counts the lists by it, and names the pairs a wallet is the middle of', async () => {
     const coll = w('70e');
     const { id } = await store.addCollection(1, coll, 'Shapes', 1);
@@ -2810,6 +2985,27 @@ describe('Store', () => {
       // The seller and buyer are in the pairs, not their middle.
       expect(await store.middleOf(id, p)).toEqual({ rows: [], tokens: 0 });
       expect(await store.middleOf(id, w('nobody'))).toEqual({ rows: [], tokens: 0 });
+    } finally {
+      await drop(1, coll);
+    }
+  });
+
+  it('keeps a Money loops back loop\'s paths in its flags, and the loop\'s wallets as its holders alone', async () => {
+    const coll = w('7a0');
+    const { id } = await store.addCollection(1, coll, 'Paths', 1);
+    try {
+      const seller = w('77a'), buyer = w('77b'), hop = w('77c');
+      const sale = transfer('1', seller, buyer, { marketplace: 'blur', priceWei: '1000', currency: '' });
+      await store.ingest(id, 1, [sale], 100, [seller, buyer]);
+      const [stale] = (await store.stale()).filter((s) => s.id === id);
+      const steps = [flow(buyer, hop), flow(hop, seller)];
+      await store.saveAnalysis(id, stale!.version, analyze(input([sale], steps)), 1, 1_000_000, new Set(['']));
+      expect((await store.token(id, '1'))[0]!.flags.AU).toEqual({
+        kind: 'scc+flow', wallets: expect.arrayContaining([seller, buyer]), cycles: 1, via: [[buyer, seller]],
+        paths: [{ wallets: [buyer, hop, seller], txs: steps.map((f) => f.txHash) }],
+      });
+      const { rows } = await store.pool.query(`SELECT wallets FROM washtrace.witnesses WHERE collection_id = $1 AND kind = 'scc+flow'`, [id]);
+      expect(rows.map((r) => r.wallets)).toEqual([expect.not.arrayContaining([hop])]);
     } finally {
       await drop(1, coll);
     }
@@ -7655,7 +7851,12 @@ describe('rings worked out from an analysis saved before them', () => {
 
   it('lists a middle as a wallet of its ring that only moved the money, and counts a trade two witnesses flag once', async () => {
     const view = (await store.ring(id, S, RAN))!;
-    expect(view.wallets).toEqual([{ address: S, traded: true }, { address: B, traded: true }, { address: M, traded: false }]);
+    // A middle sold and bought nothing; S and B each sold one sale of 1 ETH to the other.
+    expect(view.wallets).toEqual([
+      { address: S, traded: true, sold: 1, bought: 1, volumeWei: '2000000000000000000' },
+      { address: B, traded: true, sold: 1, bought: 1, volumeWei: '2000000000000000000' },
+      { address: M, traded: false, sold: 0, bought: 0, volumeWei: '0' },
+    ]);
     expect(view.line).toMatchObject({ wallets: 3, sales: 2, floorSales: 2, volumeWei: '2000000000000000000' });
     expect((await store.rings(id, RAN, 10, 0)).total).toBe(1);
     expect(await store.ringsOf(id, { wallet: X })).toEqual([]);
@@ -7665,5 +7866,86 @@ describe('rings worked out from an analysis saved before them', () => {
     expect((await store.tradeCount(id, { ...NO_FILTER, ring: S }, RAN)).total).toBe(2);
     // Sale 3 is flagged, but only by Money loops back, which makes no ring.
     expect((await store.tradeCount(id, { ...NO_FILTER, ring: X }, RAN)).total).toBe(0);
+  });
+});
+
+// Last in the file: a fixture's counter moves with every transfer or flow built, and a test above reads block numbers it gave.
+describe('Store.payment', () => {
+  it('payment reads one payment from the flows key, and the witnesses that use it: every leg of a Linked wallets pair, and each step of a Money loops back path', async () => {
+    const C = 3130;
+    const [s, bu, m, u, v, h, x1] = [w('3ba1'), w('3ba2'), w('3ba3'), w('3ba4'), w('3ba5'), w('3ba6'), w('3ba7')];
+    const { id } = await store.addCollection(C, w('3bc1'), 'Paid Apes', 10);
+    const pair = { kind: 'pair' as const, pair: [s, bu] as [string, string], middle: m, flowTx: '0xpay1', shape: 'funder' as const };
+    try {
+      // Five sales flagged by the one pair; one flagged by a loop whose path runs through h, a wallet no witness row holds.
+      const sales = Array.from({ length: 5 }, (_, i) => transfer(String(i + 1), s, bu, { txHash: `0xpsale${i}`, blockNumber: 20 + i }));
+      const looped = transfer('9', u, v, { txHash: '0xpsaleU', blockNumber: 30 });
+      // Another loop, with a path of its own: its witness holds none of the payments below.
+      const [u2, v2, h2] = [w('3ba8'), w('3ba9'), w('3baa')];
+      const other = transfer('10', u2, v2, { txHash: '0xpsaleV', blockNumber: 31 });
+      const loop2 = { kind: 'scc+flow' as const, wallets: [u2, v2], cycles: 1, via: [[v2, u2]] as [string, string][], paths: [{ wallets: [v2, h2, u2], txs: ['0xhop9', '0xhop10'] }] };
+      const loop = { kind: 'scc+flow' as const, wallets: [u, v], cycles: 1, via: [[v, u]] as [string, string][], paths: [{ wallets: [v, h, u], txs: ['0xhop1', '0xhop2'] }] };
+      await store.ingest(id, C, [...sales, looped, other], 100, [s, bu, u, v, u2, v2]);
+      const [stale] = (await store.stale()).filter((r) => r.id === id);
+      const flags = [
+        ...sales.map((t) => ({ txHash: t.txHash, logIndex: t.logIndex, method: 'AC' as const, witness: pair })),
+        { txHash: looped.txHash, logIndex: looped.logIndex, method: 'AU' as const, witness: loop },
+        { txHash: other.txHash, logIndex: other.logIndex, method: 'AU' as const, witness: loop2 },
+      ];
+      await store.saveAnalysis(id, stale!.version, { ...analyze(input([...sales, looped, other])), flags }, 1, 1_000_000, new Set(['']));
+      await store.saveMoney(C, m, [
+        flow(m, s, { txHash: '0xpay1' }), flow(m, bu, { txHash: '0xpay2' }), flow(s, x1, { txHash: '0xpay3' }), flow(m, s, { txHash: '0xpayzero', valueWei: '0' }),
+        // Two hops of v's path back, each with a hash other than the one the witness keeps; the first paid twice, in two transactions.
+        flow(v, h, { txHash: '0xhop1' }), flow(v, h, { txHash: '0xhop1b' }), flow(h, u, { txHash: '0xhop2' }),
+        // A payment inside one of the collection's sales is no evidence.
+        flow(m, s, { txHash: '0xpsale0' }),
+      ], false);
+      const used = async (hash: string, chainId = C, only: number | null = null) => {
+        const flows = await store.payment(chainId, hash);
+        return flows === null ? undefined : (await store.paymentUsedBy(chainId, flows, only)).map((o) => [o.use, o.collection.address, o.sales.length, o.more]);
+      };
+      const apes = w('3bc1');
+      // Both legs of the pair are used, and the one the witness names says so.
+      expect(await used('0xpay1')).toEqual([[{ method: 'AC', named: true }, apes, 3, true]]);
+      expect(await used('0xpay2')).toEqual([[{ method: 'AC', named: false }, apes, 3, true]]);
+      // The first three of its sales, in the order of the chain.
+      const read = (await store.payment(C, '0xpay1'))!;
+      expect(read).toMatchObject([{ txHash: '0xpay1', from: m, to: s, valueWei: '1000' }]);
+      expect((await store.paymentUsedBy(C, read, null))[0]).toMatchObject({ witness: pair, collection: { id, name: 'Paid Apes' }, sales: [{ txHash: '0xpsale0', tokenId: '1' }, { txHash: '0xpsale1', tokenId: '2' }, { txHash: '0xpsale2', tokenId: '3' }] });
+      // Every payment of a path's step, whichever hash the witness keeps.
+      expect(await used('0xhop1')).toEqual([[{ method: 'AU', back: [v, u] }, apes, 1, false]]);
+      expect(await used('0xhop1b')).toEqual([[{ method: 'AU', back: [v, u] }, apes, 1, false]]);
+      expect(await used('0xhop2')).toEqual([[{ method: 'AU', back: [v, u] }, apes, 1, false]]);
+      // Scoped to a collection: its own uses only.
+      expect(await used('0xhop1', C, id)).toHaveLength(1);
+      expect(await used('0xhop1', C, id + 1000)).toEqual([]);
+      expect(await used('0xpay1', C, id + 1000)).toEqual([]);
+      // Stored, and used by nothing: money among no pair; a zero value; a payment inside a sale.
+      expect(await used('0xpay3')).toEqual([]);
+      expect(await used('0xpayzero')).toEqual([]);
+      expect(await used('0xpsale0')).toEqual([]);
+      // Not stored, or on another chain.
+      expect(await used('0xnever')).toBeUndefined();
+      expect(await used('0xpay1', C + 1)).toBeUndefined();
+    } finally {
+      await drop(C, w('3bc1'));
+    }
+  });
+
+  it('payment finds a payment by the flows primary key, not a scan of the table', async () => {
+    await store.migrate();
+    const pg = await store.pool.connect();
+    try {
+      await pg.query('BEGIN');
+      // Whether the key can serve the read, not whether these stats make it cheapest, as for transfers_tx_idx above.
+      await pg.query('SET LOCAL enable_seqscan = off');
+      const plan = (await pg.query(`EXPLAIN ${PAYMENT_SQL}`, [1, '0xabc'])).rows.map((r) => r['QUERY PLAN']).join('\n');
+      expect(plan, plan).toMatch(/flows_pkey/);
+      expect(plan, plan).toMatch(/Index Cond: .*chain_id = 1.*kind = ANY.*tx_hash = '0xabc'/s);
+      expect(plan, plan).not.toMatch(/flows_(from|to)_idx|Seq Scan/);
+    } finally {
+      await pg.query('ROLLBACK');
+      pg.release();
+    }
   });
 });

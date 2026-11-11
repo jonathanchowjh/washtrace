@@ -670,4 +670,10 @@ END $$`,
 -- Nullable with no default, so adding it rewrites no row.
 ALTER TABLE washtrace.witnesses ADD COLUMN IF NOT EXISTS shape text;
 `,
+  `
+-- A ring's members that never traded are its pairs' middles: search finds them by the start of
+-- their address. text_pattern_ops serves equality too. Partial: loops and direct pairs have none.
+-- Not CONCURRENTLY: each analysis rewrites witnesses anyway, and the index is small.
+CREATE INDEX IF NOT EXISTS witnesses_middle_idx ON washtrace.witnesses (middle text_pattern_ops) WHERE middle IS NOT NULL;
+`,
 ];

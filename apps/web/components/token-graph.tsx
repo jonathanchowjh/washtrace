@@ -5,9 +5,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { LensKey } from '@washtrace/detect/trades';
 import type { Drawing, DrawnEdge, DrawnLoop } from '@/lib/layout';
-import { LENSES, andList, short } from '@/lib/format';
+import { LABELLED_MAX, LABEL_SEP, LENSES, andList, short } from '@/lib/format';
 import { carry, txHref, walletHref, type Context } from '@/lib/links';
 import { cn } from '@/lib/utils';
+import { MIN_DRAWN, VERDICT, WalletMark } from './kit';
 
 // Literal class names: Tailwind generates only the classes it can read in the source. A lens of yours is drawn in the flow hue, as its tab is.
 const STROKE = { cycle: 'stroke-cycle', ceiling: 'stroke-ceiling', apart: 'stroke-muted-foreground', clean: 'stroke-clean', own: 'stroke-flow' } as const;
@@ -15,6 +16,8 @@ const FILL = { cycle: 'fill-cycle', ceiling: 'fill-ceiling', apart: 'fill-muted-
 
 /** The least a phone draws the graph at, of its own size: its 10 px labels stay 8 px or more. */
 const MIN_SCALE = 0.8;
+/** The most a graph is drawn at, of its own size, given a `min`: its 10 px labels stay 16 px or less. */
+const MAX_SCALE = 1.6;
 // A label's own outline in the card's colour, drawn under its fill, so a number on an arrow reads clear of the line.
 const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:round]';
 
@@ -26,8 +29,10 @@ const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:rou
  * token's number (on an arrow only a lens of yours drew) links to that token
  * under `base`, the collection's page ('' links none).
  *
- * Solid arrows are transfers, by verdict; dashed arrows are money. `rowHrefs`
- * links an arrow's number to its row of a table on the same page. `pick` is
+ * Solid arrows are transfers, by verdict; dashed arrows are the payments a
+ * lens used, each labelled with its amount where that fits beside it (else
+ * in its title). GraphLegend keys what is drawn. `rowHrefs` links an arrow's
+ * number to its row of a table on the same page. `pick` is
  * for TokenLoops: its wallets are then buttons, lit on a first press and
  * opened on a second, which it handles on the element around this one.
  * `label` names the picture, as a page with several says which loop each lights.
@@ -36,34 +41,31 @@ const HALO = 'stroke-card stroke-[3px] [paint-order:stroke] [stroke-linejoin:rou
  *
  * Wider than its box, as a big graph is on a phone, it opens scrolled to the
  * part that matters: the marked arrow, else what is lit, else its middle.
+ * `min` is the width it is drawn at least where its box has room (MIN_DRAWN),
+ * never past MAX_SCALE of its own size; without it, never past its own size.
  */
-export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {}, pick = false, label = 'Transfer graph of this token', mark }: {
+export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {}, edgeHrefs = {}, pick = false, label = 'Transfer graph of this token', mark, min }: {
   drawing: Drawing; chainId: number; lit: { edges: string[]; nodes: string[] }; base: string;
   /** What its links to wallets and trades carry on: the lens the page was opened under. */
   ctx?: Context;
   /** The link to each row, by its 1-based number. */
   rowHrefs?: Record<number, string>;
+  /** What an arrow opens, by its key, where a page links each to its own lens; else its trade or payment under `ctx`. */
+  edgeHrefs?: Record<string, string>;
   pick?: boolean;
   label?: string;
   mark?: string;
+  min?: number;
 }) {
   // Its own arrowheads: a page can draw several (the trade page one a transfer), and ids must not repeat on a page. Only an id's letters and digits, so it reads the same inside url(#…).
   const marker = `${useId().replace(/[^a-zA-Z0-9]/g, '')}-arrow`;
   const { view, nodes, edges } = drawing;
   const litEdges = new Set(lit.edges), litNodes = new Set(lit.nodes);
   const any = litEdges.size > 0 || litNodes.size > 0;
-  const labels = nodes.length <= 24;
-  // The legend names only the arrows drawn, so a swatch never stands for something absent. The first holder is always shown: every token has one.
-  const drawn = new Set(edges.filter((e) => e.kind === 'asset').map((e) => e.tone));
-  // Your lenses' hue stands for two arrows: a trade the built-ins left clean on a loop of yours (`yours`), and another token's on one.
-  const yours = [...new Set(edges.flatMap((e) => e.yours ?? []))];
-  const others = edges.some((e) => e.kind === 'asset' && e.tone === 'own' && e.yours === undefined);
-  const money = edges.some((e) => e.kind === 'money');
-  const custody = [...new Set(nodes.flatMap((n) => n.custody ?? []))];
+  const labels = nodes.length <= LABELLED_MAX;
   const marked = new Set(mark === undefined ? [] : edges.filter((e) => e.ids.includes(mark)).map((e) => e.key));
-  // A number means the same in every graph (layout's Numbered); the legend says how to read it. A drawing of several tokens marks each number with its token.
-  const numbered = labels && edges.some((e) => e.row !== null && !e.label.startsWith('×'));
-  const several = edges.some((e) => e.row !== null && e.label.startsWith('#'));
+  // Drawn larger than its own size only up to MAX_SCALE, and only when a page asks.
+  const widest = min === undefined ? view.w : Math.min(Math.max(view.w, min), view.w * MAX_SCALE);
   const box = useRef<HTMLDivElement>(null);
   const focus = Math.round(focusOf(drawing, marked, litNodes));
   useEffect(() => {
@@ -73,12 +75,13 @@ export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {
     el.scrollLeft = Math.max(0, (focus - view.x) * scale - el.clientWidth / 2);
   }, [focus, view.x, view.w]);
   const labelHref = (e: DrawnEdge) => (e.row !== null ? rowHrefs[e.row] : e.token === undefined || base === '' ? undefined : `${base}/t/${e.token}`);
+  const opens = (e: DrawnEdge, tx: string) => edgeHrefs[e.key] ?? carry(txHref(chainId, tx, base), ctx);
   return (
     <figure className="rounded-lg border bg-card p-3">
-      {/* The box round what is drawn, never wider on screen than it is drawn: a two-wallet loop is a short strip, not a square of empty card. */}
+      {/* The box round what is drawn, never wider on screen than `widest`: a two-wallet loop is a strip, not a square of empty card. */}
       {/* On a phone it is never drawn below MIN_SCALE, so its labels stay readable, and scrolls sideways in its own box instead; from sm it fits the column as before. */}
       <div ref={box} className="overflow-x-auto">
-        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(view.w)}px`, '--figure-min': `${Math.round(view.w * MIN_SCALE)}px` } as CSSProperties}
+        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} style={{ maxWidth: `${Math.round(widest)}px`, '--figure-min': `${Math.round(view.w * MIN_SCALE)}px` } as CSSProperties}
           className="mx-auto block h-auto w-full max-sm:min-w-(--figure-min)" role="group" aria-label={label}>
           <defs>
             {(['cycle', 'ceiling', 'apart', 'clean', 'flow'] as const).map((k) => (
@@ -89,7 +92,7 @@ export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {
           </defs>
           {edges.map((e) => {
             const on = litEdges.has(e.key), mine = marked.has(e.key);
-            const href = labelHref(e), name = mine ? `${e.title} · this trade` : e.title;
+            const name = mine ? `${e.title} · this trade` : e.title;
             return (
               <g key={e.key} data-edge={e.key} data-lit={on ? '' : undefined} data-mark={mine ? '' : undefined} className={cn(any && !on && !mine && 'opacity-25')}>
                 <title>{name}</title>
@@ -104,26 +107,43 @@ export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {
                 />
                 {/* A 2px line is a poor target, so a wider invisible copy of it takes the click. Out of the tab order, as the clickable path before it was: the table's rows are the keyboard's way to a trade. A bundle opens its first. */}
                 {e.tx === null ? null : (
-                  <a href={carry(txHref(chainId, e.tx, base), ctx)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${name}`}>
+                  <a href={opens(e, e.tx)} data-tx={e.tx} tabIndex={-1} aria-label={`${e.kind === 'money' ? (e.key.startsWith('m') ? 'Open the first payment' : 'Open the payment') : e.key.startsWith('b') ? 'Open the first trade' : 'Open the trade'}: ${name}`}>
                     <path d={e.d} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" className="cursor-pointer" />
                   </a>
                 )}
-                {labels && e.label ? (
-                  <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn(HALO, 'font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : mine ? 'fill-foreground font-semibold' : 'fill-muted-foreground')}>
-                    {href === undefined ? e.label : <a href={href}>{e.label}</a>}
-                  </text>
-                ) : null}
               </g>
             );
           })}
+          {/* Every label after every line, so its halo sits over any arc near it; layout sets each nearest its own arc (clearLabels). */}
+          {/* Its number in bold, then what it paid, as "2 · 9 ETH" (LABEL_SEP, which layout also counts to set it clear). */}
+          {labels ? edges.map((e) => {
+            // An amount no spot beside its own arc fits is left to the title (layout's amountHidden): a label read by another line would name its amount.
+            const paid = e.amountHidden ? '' : e.amount;
+            if (!e.label && !paid) return null;
+            const on = litEdges.has(e.key), mine = marked.has(e.key);
+            // A number whose amount is hidden, on a page with no table to link it to (a trade's), opens its trade, which says the amount.
+            const href = labelHref(e) ?? (e.amountHidden && e.tx !== null ? opens(e, e.tx) : undefined);
+            const number = <tspan className={cn('font-semibold', e.kind === 'asset' && 'fill-foreground')}>{e.label}</tspan>;
+            return (
+              <g key={e.key} data-label={e.key} className={cn(any && !on && !mine && 'opacity-25')}>
+                {/* Named as its arrow is, so hovering a label still says whose it is. */}
+                <title>{mine ? `${e.title} · this trade` : e.title}</title>
+                <text x={e.lx} y={e.ly} dy="0.35em" textAnchor="middle" className={cn(HALO, 'font-mono text-[10px]', e.kind === 'money' ? 'fill-flow' : mine ? 'fill-foreground' : 'fill-muted-foreground')}>
+                  {e.label === '' ? null : href === undefined ? number : <a href={href} aria-label={e.amount === '' ? `Arrow ${e.label}` : `Arrow ${e.label}: ${e.amount}`}>{number}</a>}
+                  {e.label && paid ? LABEL_SEP : null}
+                  {paid === '' ? null : <tspan className={cn(mine && 'font-semibold')}>{paid}</tspan>}
+                </text>
+              </g>
+            );
+          }) : null}
           {nodes.map((n) => {
             const cls = cn('cursor-pointer outline-focus focus-visible:outline-2', any && !litNodes.has(n.id) && 'opacity-25');
             const body = (
               <>
                 <title>{n.id}</title>
-                {/* A custody wallet is a dashed square, named for what it is: it holds a token without owning it. */}
+                {/* A custody wallet is a dashed square, named for what it is: it holds a token without owning it. A middle is the dashed wallet of money alone. */}
                 {n.custody === null
-                  ? <circle cx={n.x} cy={n.y} r={n.middle ? 6 : 9} className={cn(n.middle ? 'fill-card stroke-flow' : 'fill-card stroke-foreground', n.first && 'stroke-[2.5]')} strokeWidth={1.5} />
+                  ? <WalletMark x={n.x} y={n.y} r={n.middle ? 7 : 9} traded={!n.middle} className={n.first ? 'stroke-[2.5]' : undefined} />
                   : <rect x={n.x - 8} y={n.y - 8} width={16} height={16} rx={2} strokeDasharray="3 2" strokeWidth={1.5} className="fill-card stroke-muted-foreground" />}
                 {labels ? (
                   <text x={n.lx} y={n.ly} dy="0.35em" textAnchor={n.anchor} className={cn(HALO, 'fill-body font-mono text-[10px]')}>{n.custody ?? short(n.id)}</text>
@@ -136,21 +156,58 @@ export function LoopFigure({ drawing, chainId, lit, base, ctx = {}, rowHrefs = {
           })}
         </svg>
       </div>
-      <figcaption className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {drawn.has('cycle') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-cycle" />{LENSES.A.name}</span> : null}
-        {drawn.has('ceiling') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-ceiling" />{LENSES.AC.name}</span> : null}
-        {drawn.has('apart') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-muted-foreground" />{LENSES.AU.name} only, not counted</span> : null}
-        {drawn.has('clean') ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-clean" />not flagged</span> : null}
-        {yours.length > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-flow" />not flagged by a built-in lens, on a loop of {andList(yours)}</span> : null}
-        {others ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-flow" />another token, on a loop of a lens of yours</span> : null}
-        {money ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />money</span> : null}
-        {marked.size > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-2 w-4 rounded-full bg-foreground/20" />this trade</span> : null}
-        <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span>
-        {custody.length > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 border border-dashed border-muted-foreground" />custody ({andList(custody)}): holds the token, does not own it</span> : null}
-        {numbered ? <span>{several ? '#token·n: that token’s transfer n, counted from its first' : 'numbered from the token’s first transfer'}</span> : null}
-        {labels ? null : <span>{nodes.length} wallets: hover a node for its address</span>}
-      </figcaption>
+      <GraphLegend drawing={drawing} marked={marked.size > 0} />
     </figure>
+  );
+}
+
+/** A legend's swatch for a wallet: the graph's own mark, small. */
+const Mark = ({ traded }: { traded: boolean }) => <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 shrink-0"><WalletMark x={8} y={8} r={6} traded={traded} /></svg>;
+
+/**
+ * Every graph's key, under its picture and left-aligned, in one fixed order:
+ * the arrows by verdict (floor, ceiling, not counted, not flagged), then your
+ * lenses', then payments and the marked trade; then the wallets, the first
+ * holder, those in between, custody; then how the arrows are numbered. It
+ * names only what is drawn, so a swatch never stands for something absent.
+ * `marked` says the drawing marks the trade its page is about.
+ */
+export function GraphLegend({ drawing, marked = false }: { drawing: Drawing; marked?: boolean }) {
+  const { nodes, edges, numbering } = drawing;
+  const labels = nodes.length <= LABELLED_MAX;
+  const drawn = new Set(edges.filter((e) => e.kind === 'asset').map((e) => e.tone));
+  // Your lenses' hue stands for two arrows: a trade the built-ins left clean on a loop of yours (`yours`), and another token's on one.
+  const yours = [...new Set(edges.flatMap((e) => e.yours ?? []))];
+  const others = edges.some((e) => e.kind === 'asset' && e.tone === 'own' && e.yours === undefined);
+  const money = edges.some((e) => e.kind === 'money');
+  // A wallet money alone joins is told apart from one that traded; with none drawn, a circle needs no key. A lens of yours also sets inside
+  // the far end of another token's transfer on its loop, which money does not join: with one drawn, the key says what is true of both.
+  const between = nodes.some((n) => n.middle && n.custody === null), ownDrawn = edges.some((e) => e.tone === 'own');
+  const first = nodes.some((n) => n.first);
+  const custody = [...new Set(nodes.flatMap((n) => n.custody ?? []))];
+  // A number means the same in every graph of its Numbering; the legend says how to read it. Another token's "#9" and a bundle's "×7" are no such number.
+  const numbered = labels && edges.some((e) => e.token === undefined && e.label !== '' && !e.label.startsWith('×'));
+  const several = edges.some((e) => e.row !== null && e.label.startsWith('#'));
+  const line = (swatch: string) => <i aria-hidden className={cn('h-0.5 w-4', swatch)} />;
+  return (
+    <figcaption className="mt-2 flex flex-wrap justify-start gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      {drawn.has('cycle') ? <span className="flex items-center gap-1.5">{line('bg-cycle')}{VERDICT.cycle}</span> : null}
+      {drawn.has('ceiling') ? <span className="flex items-center gap-1.5">{line('bg-ceiling')}{VERDICT.ceiling}</span> : null}
+      {drawn.has('apart') ? <span className="flex items-center gap-1.5">{line('bg-muted-foreground')}{LENSES.AU.name} only, not counted</span> : null}
+      {drawn.has('clean') ? <span className="flex items-center gap-1.5">{line('bg-clean')}not flagged</span> : null}
+      {yours.length > 0 ? <span className="flex items-center gap-1.5">{line('bg-flow')}not flagged by a built-in lens, on a loop of {andList(yours)}</span> : null}
+      {others ? <span className="flex items-center gap-1.5">{line('bg-flow')}another token, on a loop of a lens of yours</span> : null}
+      {money ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />payment a lens used</span> : null}
+      {marked ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-2 w-4 rounded-full bg-foreground/20" />this trade</span> : null}
+      {between ? <span className="flex items-center gap-1.5"><Mark traded />wallet</span> : null}
+      {first ? <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span> : null}
+      {between ? <span className="flex items-center gap-1.5"><Mark traded={false} />{ownDrawn ? 'never held this token: joined by money, or on a loop of a lens of yours' : 'in between, funder or payee: joined by money only'}</span> : null}
+      {custody.length > 0 ? <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 border border-dashed border-muted-foreground" />custody ({andList(custody)}): holds the token, does not own it</span> : null}
+      {!numbered ? null : numbering === 'time'
+        ? <span>numbered in block order, sales and payments together; in one block, its transfers first</span>
+        : <span>{several ? '#token·n: that token’s transfer n, counted from its first' : 'numbered from the token’s first transfer'}</span>}
+      {labels ? null : <span>{nodes.length} wallets: hover a node for its address</span>}
+    </figcaption>
   );
 }
 
@@ -235,7 +292,7 @@ export function TokenLoops({ drawing, chainId, base = '', ctx = {}, items, initi
         {graphHead}
         {/* The figure's presses, delegated here: its wallets and arrows carry what was pressed as data. */}
         <div onClickCapture={onClick} onKeyDown={onKeyDown}>
-          <LoopFigure drawing={drawing} chainId={chainId} base={base} ctx={ctx} rowHrefs={rowHrefs} lit={{ edges: [...litEdges], nodes: [...litNodes] }} pick />
+          <LoopFigure drawing={drawing} chainId={chainId} base={base} ctx={ctx} rowHrefs={rowHrefs} lit={{ edges: [...litEdges], nodes: [...litNodes] }} pick min={MIN_DRAWN} />
         </div>
       </section>
       <section id="why" className="mt-10 scroll-mt-6">
@@ -263,6 +320,72 @@ export function TokenLoops({ drawing, chainId, base = '', ctx = {}, items, initi
             })}
           </ul>
         )}
+      </section>
+    </div>
+  );
+}
+
+/** One step of a ring's story, as its trail lists it. */
+export type TrailRow = {
+  /** Its own key; `edge` is the arrow that draws it, which a bundle's steps share, and `nodes` that arrow's two wallets. */
+  key: string; edge: string; nodes: [string, string];
+  /** Rendered on the server, and plain: it is the row's button, which holds no link. */
+  body: ReactNode;
+  /** What "tx ›" opens, and its name: the sale or payment, under the lens of the evidence it is. */
+  href: string; open: string;
+};
+
+/**
+ * A ring's picture beside what happened in it, in order. They share one piece
+ * of state, what is lit, so they live in one component, as TokenLoops does:
+ * hovering or focusing a row lights its arrow and its two wallets, and
+ * pressing it keeps that lit (a phone has no hover), which aria-pressed says.
+ * The mouse and the keyboard each hold their own row: the one hovered shows
+ * first, then the one focused by the keyboard, then the one pressed.
+ * Each row's trailing "tx ›" opens its sale or payment; the row itself is a
+ * button, never a link, so a press never leaves the page.
+ *
+ * The list is the authoritative record: every row says its number and its
+ * amount ("3 · 9 ETH", LABEL_SEP), as the arrow's label does where that fits
+ * beside it, and a crowded drawing leaves some amounts to their titles.
+ */
+export function RingTrail({ drawing, chainId, base, rows, rowHrefs, edgeHrefs, label, more }: {
+  drawing: Drawing; chainId: number; base: string;
+  rows: readonly TrailRow[];
+  /** The figure's numbers' links, by row, and its arrows', by key: each its own lens's (LoopFigure). */
+  rowHrefs: Record<number, string>; edgeHrefs: Record<string, string>;
+  label: string;
+  /** Said under the rows: the rest, on Trades. */
+  more?: ReactNode;
+}) {
+  const [pinned, setPinned] = useState<string | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  // A mouse press focuses the row it presses; that focus lights nothing, or a click that un-pins it would leave it lit until blur. The hover lights it meanwhile.
+  const pressing = useRef(false);
+  const on = rows.find((r) => r.key === (hover ?? focused ?? pinned));
+  const lit = on === undefined ? { edges: [], nodes: [] } : { edges: [on.edge], nodes: [...on.nodes] };
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <LoopFigure drawing={drawing} chainId={chainId} base={base} lit={lit} label={label} rowHrefs={rowHrefs} edgeHrefs={edgeHrefs} min={MIN_DRAWN} />
+      <section aria-label="In order" className="min-w-0 rounded-lg border bg-card p-3">
+        <h3 className="px-1 text-sm font-medium">In order</h3>
+        <ol className="mt-1 divide-y">
+          {rows.map((r) => (
+            <li key={r.key} className="flex items-stretch gap-2">
+              <button
+                type="button" aria-pressed={pinned === r.key} onClick={() => { pressing.current = false; setPinned((cur) => (cur === r.key ? null : r.key)); }}
+                onMouseEnter={() => setHover(r.key)} onMouseLeave={() => setHover(null)} onMouseDown={() => { pressing.current = true; }}
+                onFocus={() => { if (!pressing.current) setFocused(r.key); pressing.current = false; }} onBlur={() => setFocused(null)}
+                className={cn('min-h-11 min-w-0 flex-1 rounded px-1 py-1.5 text-left text-sm hover:bg-muted/60', pinned === r.key && 'bg-muted')}
+              >
+                {r.body}
+              </button>
+              <Link href={r.href} prefetch={false} aria-label={r.open} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">tx ›</Link>
+            </li>
+          ))}
+        </ol>
+        {more}
       </section>
     </div>
   );

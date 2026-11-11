@@ -4,7 +4,7 @@ import type { RingLine } from '@washtrace/detect';
 import { HoverCard, KEEP_MS, OPEN_MS, cardLines, forgetCards, type Card } from '@/components/hover-card';
 
 const W = '0x' + 'a'.repeat(40);
-const ring: RingLine = { anchor: W, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: [] };
+const ring: RingLine = { anchor: W, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null, tokenSample: [], pattern: { loops: 0, pairs: 1, middles: 1, shapes: { funder: 1, payee: 0, back: 0, forward: 0, 'direct-back': 0, 'direct-forward': 0, both: 0 } } };
 const wallet: Card = { kind: 'wallet', judged: true, address: W, trades: 4, flagged: 2, rings: 2, ring, tier: 'cycle' };
 const fetchMock = vi.fn();
 beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal('fetch', fetchMock); fetchMock.mockReset(); forgetCards(); });

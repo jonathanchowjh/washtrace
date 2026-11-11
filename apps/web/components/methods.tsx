@@ -230,7 +230,7 @@ export function HowWeLook({ open = false }: { open?: boolean }) {
           </div>
         ))}
         <p className="text-xs text-muted-foreground md:col-span-3">
-          Solid arrows are the token changing hands; dashed arrows are money. A collection's answer is a range: {LENSES.A.name}' share up to {LENSES.AC.name}'.
+          Solid arrows are the token changing hands; dashed arrows are the payments a lens used. A collection's answer is a range: {LENSES.A.name}' share up to {LENSES.AC.name}'.
           The two money lenses need to know who paid whom, which the worker reads wallet by wallet, so until every wallet is checked their shares are not final.
         </p>
       </div>

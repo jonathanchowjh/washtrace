@@ -100,6 +100,24 @@ export function TierMark({ tone, className, label = false }: { tone: keyof typeo
   return label && tone !== 'own' ? <>{mark}<span className="sr-only">{VERDICT[tone]}: </span></> : mark;
 }
 
+/** The width, in px, a page's main graph is drawn at least, where its box has room: a two-wallet strip is not a thumbnail in a wide card. Here, not in the graph's client module, so a server page reads 520. */
+export const MIN_DRAWN = 520;
+
+/**
+ * One wallet as the graphs draw it, in an svg: the wallet symbol, solid in the
+ * text colour for one that traded, dashed in the money hue for one money
+ * alone joins (in between, a funder, a payee). `className` adds to the ring's
+ * classes, as a token's first holder draws it heavier.
+ */
+export function WalletMark({ x, y, r, traded, className }: { x: number; y: number; r: number; traded: boolean; className?: string }) {
+  return (
+    <>
+      <circle cx={x} cy={y} r={r} strokeWidth={1.5} className={cn(traded ? 'fill-card stroke-foreground' : 'fill-card stroke-flow', className)} {...(traded ? {} : { strokeDasharray: '3 2' })} />
+      <circle cx={x} cy={y} r={r * 0.3} className={traded ? 'fill-foreground' : 'fill-flow'} />
+    </>
+  );
+}
+
 /** Wallets placed on a ring, first at the top, for a loop of `n`; two sit side by side. */
 function spots(n: number): [number, number][] {
   if (n === 2) return [[10, 16], [46, 16]];

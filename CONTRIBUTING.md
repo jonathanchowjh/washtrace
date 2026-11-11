@@ -19,13 +19,16 @@ npm install                                  # also turns on the pre-commit hook
 npm run db:up                                # Postgres 17 on localhost:55433
 export WASHTRACE_STORE_URL='postgres://postgres:secret@localhost:55433/washtrace'
 export WASHTRACE_RPC_1='https://…'           # optional: any Ethereum JSON-RPC
-export WASHTRACE_ETHERSCAN_KEY='…'           # optional: turns SCC AU and AC on
+export WASHTRACE_ETHERSCAN_KEY='…'           # optional: turns Linked wallets and Money loops back on
 npm run dev                                  # the api and console: http://localhost:3000
 npm run worker                               # the worker, in a second terminal
 ```
 
 `npm run db:up` prints the store URL it started. `npm run db:down` removes the
 container and `npm run db:psql` opens psql in it.
+
+Check your setup: `npm test`. It runs the unit tests with no Docker and no
+build, and every test should pass. `npm run test:int` needs Docker.
 
 For a chain with a scripted market and no keys, run the Docker demo (see the
 README). Its seeder, `scripts/demo/seed.mjs`, works against any anvil, so
@@ -100,21 +103,35 @@ npm run --workspace @washtrace/detect build && node scripts/nft70m/survey.mjs
 
 The extract's default `--shards 10` downloads all 6.6 GB. If the download stalls at 0 bytes, `HF_HUB_DISABLE_XET=1` works around it.
 
-It runs Round trips (SCC A) over the public NFT-70M dataset's Ethereum ERC-721 sales on OpenSea (identical repeated sales are kept once, since the dataset records some twice and a repeat reads as a round trip) and gives a share of sales flagged for every collection (anonymised IDs, so none can be named), plus how long `analyze()` takes on real collection sizes. Each share is an OpenSea-only figure: it is a share of OpenSea's sales, not of all sales. Sales on Blur, LooksRare and X2Y2 are missing, and the engine bridges each gap from the last buyer to the next seller, so a missing sale can hide a round trip or make one: a share can be off in either direction. Volume counts ETH and WETH sales only; a sale in another currency counts in sales but not in volume. With no money flows in the data, Money loops back and Linked wallets cannot run.
-The dataset is CC BY-NC 4.0 (credit `MLNTeam-Unical/NFT-70M_transactions`): keep it and every output in `$NFT70M_DIR` (default `~/washtrace-data/nft70m`), never in the repo. Never match its rows to real transactions or collections; it was anonymised on purpose.
+It runs Round trips over the public NFT-70M dataset's Ethereum
+ERC-721 sales on OpenSea (identical repeated sales are kept once, since the dataset
+records some twice and a repeat reads as a round trip) and gives a share of sales
+flagged for every collection (anonymised IDs, so none can be named), plus how long
+`analyze()` takes on real collection sizes. Each share is an OpenSea-only figure: it
+is a share of OpenSea's sales, not of all sales. Sales on Blur, LooksRare and X2Y2
+are missing, and the engine bridges each gap from the last buyer to the next seller,
+so a missing sale can hide a round trip or make one: a share can be off in either
+direction. Volume counts ETH and WETH sales only; a sale in another currency counts
+in sales but not in volume. With no payments in the data, Money loops back and
+Linked wallets cannot run.
+
+The dataset is CC BY-NC 4.0 (credit `MLNTeam-Unical/NFT-70M_transactions`): keep it
+and every output in `$NFT70M_DIR` (default `~/washtrace-data/nft70m`), never in the
+repo. Never match its rows to real transactions or collections; it was anonymised
+on purpose.
 
 ## The shape of the repo
 
 ```
 packages/detect/          Everything that knows chains, money and graphs. No React, no HTTP.
-  src/                    32 files, by concern:
+  src/                    33 files, by concern:
     Types and the pure engine
       types.ts            Transfer, Flow, Method, Witness, Analysis
       graph.ts            The asset transfer graph of one token (AddressGraph); Tarjan; cycle counting
-      methods.ts          SCC A, AU and AC over a collection: analyze() and its RULES
+      methods.ts          Round trips, Linked wallets and Money loops back over a collection: analyze() and its RULES
       marketplaces.ts     Venue addresses, custodians, wrapped native tokens; Seaport pricing
       wallets.ts          Wallets: addresses by number, held as bytes
-      payments.ts         Payments: the money graph's payments as typed arrays
+      payments.ts         Payments: the money graph's payments as typed arrays; the evidence rule
       moves.ts            Moves: the money edges between numbered wallets, in blocks
       rings.ts            Rings: the wallets a counted lens's witnesses join, by union-find
     Lenses
@@ -189,94 +206,85 @@ and `node:*`.
 ## How a transfer becomes a verdict
 
 Two processes share one Postgres. The worker's `Worker` runs three timers
-(`EVERY` in `worker.ts`): ingest and analyze every minute, fund every 5
-seconds. Lens work runs in analyze's passes. Each pass takes its job's advisory lock without waiting, so replicas
-share the work, and a pass that is due while the last is still running is
-skipped.
+(`EVERY` in `worker.ts`). Each pass takes its job's advisory lock without
+waiting, so replicas share the work, and a pass that is due while the last is
+still running is skipped. The console and the API read the store; neither calls
+a chain. The user-level view of the jobs is in
+[doc/operating.md](doc/operating.md#the-workers-jobs).
 
-1. **Stored data** (`StoredSync`, driven first by `Worker.ingest`). Before any
-   chain is read, ingest asks the Hub for its manifest (`askHub`), loads a
-   collection's stored transfers (`restore`), imports a money trail (`trails`)
-   and starts background downloads of files not yet on disk (`downloads`). A
-   collection whose load or download is still to come is not read from the
-   chain meanwhile. `Store.restore` and a trail import never mark a wallet to be
-   read again.
-2. **Ingest** (`Worker.ingest`). For each collection on a chain with an RPC,
-   `readSpans` reads the ERC-721 `Transfer` logs from the cursor to the
-   finalized head (`Chain.transfers`, spans that halve on a provider's refusal
-   and grow back), and each span goes to `Store.ingest` in one transaction:
-   the transfers (`insertTransfers`), the cursor, and the traders queued as
-   wallets (`queueWallets`, in address order). The worker passes
-   `followReread` as `Store.ingest`'s `rereadDays`. When it is above 0, the
-   same transaction sets `stale_at` on the traders in the span whose money (or
-   other-token) read is `done`, not `truncated`, has a `fetched_at` (or
-   `read_at`) older than that many days, and is not already marked, in
-   address order. At 0 nothing is marked.
-3. **Fund** (`Worker.fund`). Per chain, in this order: `seedReach` walks a
-   collection's reach one step at a time (`reach.ts`, within `SEED_MS`),
-   queueing the wallets its traders' money went to, out to the collection's hop
-   limit; the token pass
-   (`readTokens`, below) for collections that pressed Start reading; then the
-   money pass. The money pass asks `Store.moneyLanes` for up to 20 wallets per
-   collection (plus a lane of followed wallets), and `interleave` checks them
-   in turn. Within a lane the order is: pending, then wallets marked to be read
-   again once `stale_at` has passed, then failed ones an hour after they failed;
-   within each group, shallowest depth first, then the busiest. For
-   each wallet `Store.rereadFrom` gives a start block when the wallet is
-   marked (`read_block + 1 - REREAD_OVERLAP_BLOCKS`, floored at 0, so a day of
-   blocks the last read may have missed is read again; 0 if it never had rows),
-   and null for a full read;
-   `Etherscan.flows` pages from there and returns `through`, the highest block
-   it paged; `Store.saveMoney` writes the flows, clears `stale_at`, keeps the
-   wallet `done`, queues the wallets it paid one hop further out (not past
-   `FOLLOW_FANOUT`, judged on every flow stored for a re-read), and bumps the
-   version of every collection the wallet or a counterparty traded in. A re-read
-   that stores no new flow bumps no version. One that stores a new flow, and
-   reads any flow out of the wallet, also clears `stepped` on the wallet's reach
-   rows so the walk steps from it again. A read that fails calls
-   `Store.moneyFailed`: a first read becomes `failed` and waits an hour; a
-   marked wallet keeps its status, `fetched_at` and `read_block`, and is served
-   again an hour later. An Etherscan key or quota refusal ends the pass.
-   `readTokens` does the same for other tokens with `Store.tokenLanes` (never
-   read first, then marked, then failed an hour on), `Etherscan.tokenFlows`,
-   `Store.saveTokens` and `Store.tokensFailed`, and writes no collection's
-   version. After every chain's money pass, `Store.countNext` and
-   `Store.countTokens` count how far reading has got, for the console.
-4. **Analyze** (`Worker.turn`, one job per pass under the analysis lock).
-   `turn` finds out what is waiting (a preview from `Store.nextPreview`, a lens
-   run from `Store.nextLensRun`, a collection due an analysis from
-   `dueAnalysis`) and the pure function `pickWork` returns `'preview'`,
-   `'analysis'`, `'run'` or `'nothing'`: a preview goes first, but not twice in
-   a row while an analysis is due; a lens run gives way to a due analysis until
-   it has waited `LENS_WAIT_MS` (10 minutes); then an analysis; then any run.
-   Before choosing, `turn` calls `Store.fillRings`, which gives one analysis
-   saved before rings existed its rings from its stored witnesses; a
-   collection whose fill fails is skipped (`ringsFailed`) until its `retryMs`
-   wait is over, then tried again. Each job runs in a worker thread so the main thread keeps
-   ingesting and answering `/health`:
-   - **Analysis** (`analyzeOne`): `analyzeInThread` starts
-     `analysis-thread.ts`, which opens its own connection, reads the input
-     (`Store.analysisInput`) and runs `analyze()`. The result is saved with
-     `Store.saveAnalysis` against the collection `version` read before it ran,
-     so a write that lands mid-analysis leaves the collection due again.
-     The same save joins the witnesses Round trips and Linked wallets point
-     at into rings (`anchorsOf` in `rings.ts`, a union-find over shared
-     wallets) and tags each witness with its ring's anchor.
-   - **Lens run or preview** (`lensRun`, `preview`): `runLensInThread` or
-     `runPreviewInThread` start `lens-thread.ts`, which reads its own input
-     (`Store.lensInput`) and runs `runLens`; a preview judges a sample of
-     `PREVIEW_SAMPLE` (2,000) sales.
-   Both thread starters take the pass's `AbortSignal`. If the worker loses the
-   connection holding its lock, the thread is ended and the run is queued
-   again, not counted as a failure. A thread running past an hour
-   (`ANALYZE_TIMEOUT_MS`, `LENS_TIMEOUT_MS`) is ended too.
-5. **Spot checks** (`Worker.spots`, in the fund pass: first, then between wallets, looking every `SPOT_PROBE_MS`, within `SPOT_SHARE_MS` of the pass). `POST /api/spots` queues a
-   row (`Store.requestSpot`, shared while one is in flight by a unique index); `nextSpot` takes it, and
-   `SpotCheck.run` reads the receipt (`Chain.receipt`), each token's history (`Chain.tokenTransfers`, its own span),
-   the sellers' and buyers' money (`Store.moneyReadOn` reads on from any finished money read; the rest are read
-   and saved), and the possible middles' money in memory only. It then runs `analyze()` per collection, or
-   `runLens` on the transaction's trades, and `saveSpot` stores the `SpotResult`.
-6. **The console and the API** read the store. Neither calls a chain.
+| Pass | Timer | Lock | Entry | Reads | Writes |
+|---|---|---|---|---|---|
+| Stored data | ingest's | `ingest`; its download holds `download`, a trail import `trail` | `Worker.ingest` calls `StoredSync.askHub`, `restore`, `trails`, `downloads` | the Hub's manifest (hourly), files in `WASHTRACE_STORED_DIR` | `Store.restore`; a trail's flows and wallets; notes and progress on `collections`; files on disk |
+| Ingest | 60 s | `ingest` | `Worker.ingest`, `readSpans` | chain RPC: head, deployment block, `Transfer` logs, contract name | `Store.ingest`: transfers, cursor, queued traders (and `stale_at` when re-reading) |
+| Fund | 5 s | `fund` | `Worker.fund` | Etherscan: wallets' payments (`Etherscan.flows`) and tokens (`tokenFlows`) | `saveMoney`, `moneyFailed`, `saveTokens`, `seedReach`, `countNext`, `countTokens` |
+| Analyze | 60 s; the lens row rides on it | `analyze` | `Worker.run('analyze')`, `turn`, then `analyzeOne`, `lensRun` or `preview` | the store, in a worker thread: `analysisInput`, `lensInput` | `saveAnalysis` (with the rings), `fillRings`, `saveLensRun`, `savePreview` |
+| Spot checks | none: inside fund's pass, first, then every `SPOT_PROBE_MS` within `SPOT_SHARE_MS` | `fund` | `Worker.spots`, `SpotCheck.run` | chain RPC: the receipt and each token's history; Etherscan: the sellers' and buyers' money, `Store.moneyReadOn` first | `saveSpot`, `spotFailed`, the money it reads |
+| Tests | none: a `LISTEN` for a request | `checks` | `Checks.runChecks` | the settings, then the RPC or Etherscan under test | `Store.finishCheck` |
+
+`Worker.start` starts only ingest, fund and analyze; lens work is no timer.
+`run` takes the job's advisory lock without waiting (`Store.locked`), so a
+second replica skips. A pass's budget is `BUDGET_MS`.
+
+### Stored data
+
+- The order is ask, load, trail, downloads. A collection with a load or
+  download still to come is not read from the chain meanwhile.
+- `Store.restore` and a trail import never mark a wallet to be read again.
+- Downloads and their cases are in [doc/stored-data.md](doc/stored-data.md).
+
+### Ingest
+
+- `readSpans` reads the ERC-721 `Transfer` logs from the cursor to the finalized
+  head (`Chain.transfers`), in spans that halve on a provider's refusal and grow
+  back.
+- Each span goes to `Store.ingest` in one transaction: the transfers
+  (`insertTransfers`), the cursor, and the traders queued as wallets
+  (`queueWallets`, in address order).
+- A chain with no RPC and no stored data gets the "No RPC" error.
+- Collections at the head go first, then each backfill in its own slice
+  (`ingestTurns`).
+
+### Fund
+
+- Per chain, in order: `seedReach` walks a collection's reach one step at a time
+  (`reach.ts`, within `SEED_MS`), queueing the wallets its traders' money went to;
+  the token pass (`readTokens`, within `TOKENS_MS`) for collections that pressed
+  Start reading; then the money pass.
+- The money pass asks `Store.moneyLanes` for up to 20 wallets per collection, and
+  `interleave` checks them in turn: pending, then marked to be read again, then
+  failed ones an hour after they failed; shallowest depth first, then the busiest.
+- `Store.saveMoney` writes the flows, queues the wallets paid one hop further out
+  (not past `FOLLOW_FANOUT`), and bumps the version of every collection the wallet
+  traded in.
+- An Etherscan key or quota refusal ends the pass. After the money pass,
+  `countNext` and `countTokens` count how far reading has got, for the console.
+
+### Analyze
+
+- `turn` finds what waits, and the pure `pickWork` returns `'preview'`,
+  `'analysis'`, `'run'` or `'nothing'`: a preview goes first but not twice in a row
+  while an analysis is due; a lens run gives way to a due analysis until it has
+  waited `LENS_WAIT_MS`.
+- Before choosing, `turn` calls `Store.fillRings`, which gives one analysis saved
+  before rings existed its rings from its stored witnesses.
+- Each job runs in a worker thread (`analysis-thread.ts`, `lens-thread.ts`), so the
+  main thread keeps ingesting and answering `/health`. A preview judges
+  `PREVIEW_SAMPLE` (2,000) sales.
+- The analysis is saved against the collection `version` read before it ran, so a
+  write that lands mid-analysis leaves the collection due again. The same save
+  joins the witnesses Round trips and Linked wallets point at into rings
+  (`anchorsOf` in `rings.ts`, a union-find over shared wallets).
+- A thread over an hour is ended. A lost lock requeues the run without counting a
+  failure.
+
+### Spot checks
+
+- `POST /api/spots` queues a row (`Store.requestSpot`, shared while one is in
+  flight by a unique index); `nextSpot` takes it.
+- `SpotCheck.run` reads the receipt, each token's history, the sellers' and
+  buyers' money, and the possible middles' money in memory only.
+- It then runs `analyze()` per collection, or `runLens` on the transaction's
+  trades, and `saveSpot` stores the `SpotResult`.
 
 ## Design record
 
@@ -298,6 +306,14 @@ skipped.
   graph, at a fraction of the cost.
 - **SCC AC** follows the paper's Figure 8: any undirected money path of length
   one or two between a transfer's two wallets.
+- **The evidence rule** has one home, `payments.ts`. `isEvidencePayment` says
+  which payments may be evidence (not a sale's own payment, not a self-payment,
+  not zero, not a mint or burn), and `evidencePayments` says which a witness
+  uses. The engine builds its money graph by it, and every page draws or lists
+  payments by it, so a diagram never shows a payment no lens used.
+- **Money loops back records its path.** `flags.AU.paths` holds, for the first
+  few of a loop's `via` edges, the chain of payments that closes it. A path
+  can be out of block order, so a page names no time order for it.
 
 ### The thresholds are data
 
@@ -308,28 +324,45 @@ override is stored as only the keys it sets.
 
 ### `null` means "we could not look"
 
-A method that needs funding and has none reports `available: false`, never 0%.
-A price that cannot be read is `null`, never 0. A transaction washtrace has not
-read is 404 from the API, never `washTrade: false`. One that is read but that no
-analysis has covered yet (`judged: false`) answers `washTrade: null`. `washTrade`
-counts Round trips and Linked wallets only; `methods` lists every lens that ran
-and flagged it, Money loops back included.
+The reason is that a clean answer must mean the evidence was read. A lens that
+needs money and has none reports `available: false`, never 0%; a price that
+cannot be read is `null`, never 0; a transaction washtrace has not read is 404,
+never `washTrade: false`. What each key means is the verdict keys in
+[doc/api.md](doc/api.md).
 
 ### Two services, one store
 
 The worker is its own process ([apps/worker](apps/worker)), and the api never
 calls a chain. They share nothing but Postgres, so a slow backfill cannot slow
-a page, and either can be restarted, scaled or redeployed alone. Each pass
-takes its job's advisory lock without waiting, so N workers do one worker's
-work. A pass that is due while the last one is still running is skipped, not
-queued.
+a page, and either can be restarted, scaled or redeployed alone. The passes'
+locks and timers are in the table above.
 
 ### Following money
 
-`Store.saveMoney` queues the wallets a trader sent money to, one hop further
-out, up to `WASHTRACE_FOLLOW_HOPS`. It never follows a wallet that paid more than
-`FOLLOW_FANOUT` (25) others, nor a known contract. Traders are read before
-followed wallets, so following never delays a collection's own funding.
+Traders are read before followed wallets, so following money out never delays
+a collection's own funding. The limits are in
+[doc/operating.md](doc/operating.md#limits).
+
+### Reading traders again
+
+`follow.reread` is passed as `Store.ingest`'s `rereadDays`. When it is above 0,
+the same transaction sets `stale_at` on the traders in the span whose read is
+`done`, not `truncated`, has a `fetched_at` (or `read_at`) older than that many
+days, and is not already marked, in address order. At 0 nothing is marked.
+
+For a marked wallet `Store.rereadFrom` gives a start block:
+`read_block + 1 - REREAD_OVERLAP_BLOCKS` (7,200, about a day on Ethereum),
+floored at 0, or 0 if it never had rows. A wallet never read has none and is
+read in full. `Etherscan.flows` pages from there and returns `through`, the
+highest block it paged, and `Store.saveMoney` clears `stale_at` and keeps the
+wallet `done`.
+
+A re-read that stores no new flow bumps no version. One that stores a new flow,
+and reads any flow out of the wallet, also clears `stepped` on the wallet's reach
+rows so the walk steps from it again. A read that fails calls `Store.moneyFailed`:
+a marked wallet keeps its status, `fetched_at` and `read_block`, and is served
+again an hour later. `readTokens` does the same for other tokens with
+`Store.tokenLanes`.
 
 ## Conventions
 

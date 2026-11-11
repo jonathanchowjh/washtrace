@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyze, tokenCycles } from '../src/methods.js';
+import { MoneyGraph, RULES, analyze, tokenCycles } from '../src/methods.js';
 import { ZERO } from '../src/graph.js';
 import { CUSTODIANS, contractsFor } from '../src/marketplaces.js';
 import { LAB, LAB_MIXED, MONEY, chain, flow, input, transfer, w } from './fixtures.js';
@@ -65,6 +65,102 @@ describe('Figure 8', () => {
     const flows = hops.slice(1).map((to, i) => flow(hops[i]!, to));
     expect(analyze(input(sale(), flows, { rules: { reachDepth: 2 } })).totals.AU.flagged).toBe(0);
     expect(analyze(input(sale(), flows, { rules: { reachDepth: 3 } })).totals.AU.flagged).toBe(1);
+  });
+});
+
+/** Money loops back records the way the money came back: each path's wallets, and the payment of each step. */
+describe('Money loops back\'s paths', () => {
+  const loopOf = (r: Analysis) => r.flags.find((f) => f.method === 'AU')?.witness;
+
+  it('the demo\'s #113: the buyer paid the seller back through three wallets', () => {
+    const [seller, buyer] = [w('chain-seller'), w('chain-buyer')];
+    const way = [buyer, w('chain-hop-1'), w('chain-hop-2'), w('chain-hop-3'), seller];
+    const flows = way.slice(1).map((to, i) => flow(way[i]!, to));
+    expect(loopOf(analyze(input(chain('113', seller, buyer), flows)))).toEqual({
+      kind: 'scc+flow', wallets: expect.arrayContaining([seller, buyer]), cycles: 1, via: [[buyer, seller]],
+      paths: [{ wallets: way, txs: flows.map((f) => f.txHash) }],
+    });
+  });
+
+  it('a payment straight back is a path of one step, named by its smallest hash that way round', () => {
+    const flows = [flow(a, b, { txHash: '0x0' }), flow(b, a, { txHash: '0x9' }), flow(b, a, { txHash: '0x5' })];
+    const loop = loopOf(analyze(input(chain('1', a, b), flows)));
+    if (loop?.kind !== 'scc+flow') throw new Error('expected a loop closed by money');
+    expect(loop.paths).toHaveLength(2);
+    expect(loop.paths).toContainEqual({ wallets: [b, a], txs: ['0x5'] });
+    expect(loop.paths).toContainEqual({ wallets: [a, b], txs: ['0x0'] });
+  });
+
+  it('keeps the first four of a loop\'s money edges', () => {
+    const holders = [w('h0'), w('h1'), w('h2'), w('h3'), w('h4'), w('h5')];
+    // Each holder paid the one before it back, so each reaches every one before it.
+    const flows = holders.slice(1).map((from, i) => flow(from, holders[i]!));
+    const loop = loopOf(analyze(input(chain('1', ...holders), flows)));
+    if (loop?.kind !== 'scc+flow') throw new Error('expected a loop closed by money');
+    expect(loop.via.length).toBeGreaterThan(4);
+    expect(loop.paths).toHaveLength(4);
+    expect(loop.paths!.map((p) => [p.wallets[0], p.wallets.at(-1)])).toEqual(loop.via.slice(0, 4));
+    for (const p of loop.paths!) expect(p.txs).toHaveLength(p.wallets.length - 1);
+  });
+
+  it('the same paths whatever order the payments came in: of two ways, the one through the smaller address', () => {
+    const y = w('y');
+    const flows = [flow(b, y), flow(y, a), flow(b, x), flow(x, a)];
+    const pathsOf = (fs: typeof flows) => {
+      const loop = loopOf(analyze(input(chain('1', a, b), fs)));
+      return loop?.kind === 'scc+flow' ? loop.paths : undefined;
+    };
+    expect(pathsOf(flows)).toEqual([{ wallets: [b, x, a], txs: [flows[2]!.txHash, flows[3]!.txHash] }]);
+    expect(pathsOf([...flows].reverse())).toEqual(pathsOf(flows));
+  });
+
+  it('no paths when no money closes the loop', () => {
+    const loop = loopOf(analyze(input(chain('1', a, b, a, b), [flow(a, x)])));
+    expect(loop?.kind).toBe('scc');
+    expect(loop).not.toHaveProperty('paths');
+  });
+
+  it('never goes through a hub, though the way round is longer', () => {
+    // The hub's address is the smaller, so a search that crossed hubs would meet it first.
+    const [hub, p, q] = [w('g'), w('p'), w('q')];
+    const way = [flow(b, p), flow(p, q), flow(q, a)];
+    // The search goes a level of the smaller side at a time: other payees of b make it turn back from a and meet
+    // the hub there, other payers of a make it go on from b and meet the hub that way.
+    const others = [[flow(b, w('d1')), flow(b, w('d2'))], [flow(w('e1'), a), flow(w('e2'), a), flow(w('e3'), a)]];
+    for (const more of others) {
+      const flows = [flow(b, hub), flow(hub, a), ...way, ...more];
+      const loop = loopOf(analyze(input(chain('1', a, b), flows, { contracts: new Set([hub]) })));
+      if (loop?.kind !== 'scc+flow') throw new Error('expected a loop closed by money');
+      expect(loop.paths).toEqual([{ wallets: [b, p, q, a], txs: way.map((f) => f.txHash) }]);
+    }
+  });
+
+  it('follows money exactly as far as reach does: reachDepth steps, and no more', () => {
+    const way = [b, w('p'), w('q'), a];
+    const flows = way.slice(1).map((to, i) => flow(way[i]!, to));
+    const graph = (reachDepth: number) => {
+      const i = input(chain('1', a, b), flows);
+      return new MoneyGraph(i, new Set([a, b]), { ...RULES, reachDepth });
+    };
+    expect(graph(3).path(b, a)).toEqual({ wallets: way, txs: flows.map((f) => f.txHash) });
+    expect(graph(2).path(b, a)).toBeNull();
+    // As analyze records it: three steps is a loop with its path, and with reachDepth 2 no loop at all.
+    const loopAt = (reachDepth: number) => loopOf(analyze(input(chain('1', a, b), flows, { rules: { reachDepth } })));
+    expect(loopAt(3)).toMatchObject({ kind: 'scc+flow', paths: [{ wallets: way }] });
+    expect(loopAt(2)).toBeUndefined();
+  });
+
+  it('searches a pair once per analysis, however many tokens it washed', () => {
+    const graph = new MoneyGraph(input(chain('1', a, b), [flow(b, x), flow(x, a)]), new Set([a, b]), RULES);
+    const search = graph.search.bind(graph);
+    let searched = 0;
+    graph.search = (from, to) => { searched += 1; return search(from, to); };
+    const first = graph.path(b, a);
+    expect(first).toMatchObject({ wallets: [b, x, a] });
+    expect(graph.path(b, a)).toBe(first);
+    expect(graph.path(a, b)).toBeNull();
+    expect(graph.path(a, b)).toBeNull();
+    expect(searched).toBe(2);
   });
 });
 

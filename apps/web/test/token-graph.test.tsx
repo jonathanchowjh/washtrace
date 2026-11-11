@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
 import { layout } from '@/lib/layout';
-import { LensGraph, LoopFigure, TokenLoops } from '@/components/token-graph';
+import { LensGraph, LoopFigure, RingTrail, TokenLoops } from '@/components/token-graph';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
@@ -113,14 +113,33 @@ describe('the token graph', () => {
     expect(litKeys()).toEqual([]);
   });
 
-  it('keeps a money arrow’s title and opens nothing for it', () => {
-    const flow = { txHash: '0xf', kind: 'native' as const, from: A, to: C, valueWei: '1', token: '', blockNumber: 1, blockTime: 1 };
+  it('says a payment’s amount on its arrow and in its title, and opens the payment it draws, under the collection’s tabs', () => {
+    const flow = { txHash: '0xf', kind: 'native' as const, from: A, to: C, valueWei: '1000000000000000000', token: '', blockNumber: 1, blockTime: 1 };
     const withMoney = layout(transfers, [flow], []);
-    render(<TokenLoops drawing={withMoney} chainId={1} items={[]} initial={null} rowHrefs={rowHrefs} />);
+    render(<TokenLoops drawing={withMoney} chainId={1} base="/c/1/0xcoll" items={[]} initial={null} rowHrefs={rowHrefs} />);
+    const g = document.querySelector('[data-edge="p0"]')!;
+    expect(g.querySelector('title')?.textContent).toBe('1 ETH paid');
+    expect(document.querySelector('[data-label="p0"] text')?.textContent).toBe('1 ETH');
+    expect(g.querySelector('a')?.getAttribute('aria-label')).toBe('Open the payment: 1 ETH paid');
+    fireEvent.click(g.querySelector('a path')!);
+    expect(push).toHaveBeenCalledWith('/c/1/0xcoll/tx/0xf');
+  });
+
+  it('names a bundle of payments by its first, as a bundle of trades is', () => {
+    const flow = (txHash: string) => ({ txHash, kind: 'native' as const, from: A, to: C, valueWei: '1000000000000000000', token: '', blockNumber: 1, blockTime: 1 });
+    render(<TokenLoops drawing={layout(transfers, Array.from({ length: 7 }, (_, i) => flow(`0xf${i}`)), [])} chainId={1} base="/c/1/0xcoll" items={[]} initial={null} rowHrefs={rowHrefs} />);
     const g = document.querySelector(`[data-edge="m${A}>${C}"]`)!;
-    expect(g.querySelector('title')?.textContent).toBe('1 money flow');
-    fireEvent.click(g.querySelector('path')!);
-    expect(push).not.toHaveBeenCalled();
+    expect(g.querySelector('a')?.getAttribute('aria-label')).toBe('Open the first payment: 7 payments this way, 7 ETH in all');
+    expect(document.querySelector(`[data-label="m${A}>${C}"] text`)?.textContent).toBe('×7 · 7 ETH');
+  });
+
+  it('draws a sale’s number and price as one label, the number still opening its row', () => {
+    const priced = transfers.map((x, i) => (i === 1 ? { ...x, marketplace: 'blur', priceWei: '9000000000000000000', currency: '' } : x));
+    render(<TokenLoops drawing={layout(priced, [], [])} chainId={1} items={[]} initial={null} rowHrefs={rowHrefs} />);
+    const text = document.querySelector('[data-label="t1"] text')!;
+    expect(text.textContent).toBe('2 · 9 ETH');
+    expect(text.querySelector('a')?.textContent).toBe('2');
+    expect(text.querySelector('a')?.getAttribute('href')).toBe(rowHrefs[2]);
   });
 });
 
@@ -228,6 +247,146 @@ describe('the numbers on the arrows', () => {
   });
 });
 
+describe('the legend', () => {
+  const legend = () => [...document.querySelectorAll('figcaption > span')].map((s) => s.textContent);
+  const M = '0x9', BLEND = '0x29469395eaf6f95920e59f858042f0e28d98a20b';
+  const pair = { kind: 'pair' as const, pair: [B, C] as [string, string], middle: M, flowTx: '0xf', shape: 'funder' as const };
+  const pay = { txHash: '0xf', kind: 'native' as const, from: M, to: B, valueWei: '1000000000000000000', token: '', blockNumber: 1, blockTime: 1 };
+  // Every kind of thing drawn, given in the reverse of the legend's order.
+  const all = [t('0x0000000000000000000000000000000000000000', A, '0xs0'), t(A, BLEND, '0xs1'), t(BLEND, A, '0xs2'), t(A, C, '0xs3', { AU: { kind: 'scc+flow', wallets: [A, C], cycles: 1, via: [] } }),
+    t(B, C, '0xs4', { AC: pair }), t(A, B, '0xs5', { A: scc([A, B]) })];
+
+  it('keys what is drawn in one fixed order, under the picture and left-aligned', () => {
+    const c = render(<LoopFigure drawing={layout(all, [pay], [M])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+    expect(legend()).toEqual([
+      'Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back only, not counted', 'not flagged',
+      'payment a lens used', 'wallet', 'first holder', 'in between, funder or payee: joined by money only',
+      'custody (Blur Blend): holds the token, does not own it', 'numbered from the token’s first transfer',
+    ]);
+    expect(c.querySelector('figure > figcaption')!.className).toContain('justify-start');
+  });
+
+  it('names only what is drawn: no payment, no wallet key without a wallet in between to tell apart', () => {
+    render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'first holder', 'numbered from the token’s first transfer']);
+  });
+
+  it('says a drawing numbered by time counts sales and payments together by block, and has no first holder', () => {
+    const drawn = layout([{ ...t(B, C, '0xs4', { AC: pair }), blockNumber: 5 }], [pay], [M], [], {}, { numbering: 'time' });
+    render(<LoopFigure drawing={drawn} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toEqual(['Linked wallets · the ceiling', 'payment a lens used', 'wallet', 'in between, funder or payee: joined by money only',
+      'numbered in block order, sales and payments together; in one block, its transfers first']);
+    // The numbers themselves: the payment at block 1 is 1, the sale 2.
+    expect([...document.querySelectorAll('svg text tspan.font-semibold')].map((x) => x.textContent)).toEqual(['2', '1']);
+  });
+
+  it('keys the wallets inside truly when a lens of yours drew one: not every one is joined by money', () => {
+    // Row 2's loop of a lens of yours goes back through another token's transfer to Y, which no payment joins.
+    const Y = '0x8';
+    const own = { lensId: 7, collectionId: 1, txHash: '0xs1', logIndex: 0, wallets: [A, B, Y], path: [
+      { from: A, to: B, kind: 'nft-token' as const, tx: '0xs1', time: null, amountWei: null, tokenId: '1', token: null },
+      { from: B, to: Y, kind: 'nft-collection' as const, tx: '0xc9', time: null, amountWei: null, tokenId: '9', token: null },
+      { from: Y, to: A, kind: 'eth' as const, tx: '0xe1', time: null, amountWei: '1', tokenId: null, token: null },
+    ] };
+    render(<LoopFigure drawing={layout(transfers, [], [], [own])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toContain('never held this token: joined by money, or on a loop of a lens of yours');
+    expect(legend()).not.toContain('in between, funder or payee: joined by money only');
+    cleanup();
+    // With none of yours drawn, the wallets inside are the built-ins' middles alone.
+    render(<LoopFigure drawing={layout(all, [pay], [M])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toContain('in between, funder or payee: joined by money only');
+    expect(legend()).not.toContain('never held this token: joined by money, or on a loop of a lens of yours');
+  });
+
+  it('draws every label after every line, so no arc is drawn over one', () => {
+    const c = render(<LoopFigure drawing={layout(all, [pay], [M])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+    const order = [...c.querySelectorAll('svg > g[data-edge], svg > g[data-label]')].map((g) => (g.hasAttribute('data-edge') ? 'line' : 'label'));
+    expect(order.indexOf('label')).toBeGreaterThan(order.lastIndexOf('line'));
+    expect(c.querySelector('[data-edge] text')).toBeNull();
+  });
+
+  it('draws a wallet in between as the dashed wallet of money alone, and a holder solid', () => {
+    const c = render(<LoopFigure drawing={layout(all, [pay], [M])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+    const ring = (id: string) => c.querySelector(`a[aria-label="Wallet ${id}"] circle`)!;
+    expect(ring(M).getAttribute('stroke-dasharray')).toBe('3 2');
+    expect(ring(M).getAttribute('class')).toContain('stroke-flow');
+    expect(ring(B).getAttribute('stroke-dasharray')).toBeNull();
+  });
+});
+
+describe('a label on a crowded fan', () => {
+  const sale = (i: number, from: string, to: string, flags: FlaggedTransfer['flags'] = { A: scc([A, B]) }): FlaggedTransfer =>
+    ({ ...t(from, to, `0xs${i}`, flags), blockNumber: 10 + i, marketplace: 'blur', priceWei: '12345000000000000000', currency: '' });
+  const pay = (i: number, from: string, to: string, valueWei: string) => ({ txHash: `0xf${i}`, kind: 'native' as const, from, to, valueWei, token: '', blockNumber: 50 + i, blockTime: 0 });
+
+  it('is drawn after every line, the one that runs under it included, and names its arrow on hover', () => {
+    // Layout keeps every label of its fixtures clear, so the one an arc runs under is set by hand: t1's label sits on t0's straight line.
+    const base = layout([sale(1, A, B), sale(2, B, A)], [], []);
+    const [t0, t1] = [base.edges.find((e) => e.key === 't0')!, base.edges.find((e) => e.key === 't1')!];
+    const [x0, y0, , , x1, y1] = (t0.d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g) ?? []).map(Number);
+    const drawn = { ...base, edges: [{ ...t0, d: `M ${x0} ${y0} Q ${(x0! + x1!) / 2} ${(y0! + y1!) / 2} ${x1} ${y1}` }, { ...t1, lx: (x0! + x1!) / 2, ly: (y0! + y1!) / 2 }] };
+    // Struck, as the fixture must be: a point of t0's path, sampled along it, lies inside t1's label's glyph box.
+    const v = drawn.edges[0]!.d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g)!.map(Number), label = drawn.edges[1]!;
+    const hw = (`${label.label} · ${label.amount}`.length * 6) / 2;
+    const onPath = Array.from({ length: 101 }, (_, i) => {
+      const s = i / 100, u = 1 - s;
+      return [u * u * v[0]! + 2 * u * s * v[2]! + s * s * v[4]!, u * u * v[1]! + 2 * u * s * v[3]! + s * s * v[5]!] as const;
+    });
+    expect(onPath.some(([x, y]) => Math.abs(x - label.lx) < hw && Math.abs(y - label.ly) < 5)).toBe(true);
+    const c = render(<LoopFigure drawing={drawn} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+    const all = [...c.querySelectorAll('svg > g[data-edge], svg > g[data-label]')];
+    const at = (sel: string) => all.indexOf(c.querySelector(sel)!);
+    expect(at('[data-label="t1"]')).toBeGreaterThan(at('[data-edge="t0"]'));
+    for (const e of drawn.edges) expect(at(`[data-label="${e.key}"]`), e.key).toBeGreaterThan(Math.max(...drawn.edges.map((o) => at(`[data-edge="${o.key}"]`))));
+    expect(c.querySelector('[data-label="t1"] title')?.textContent).toBe(c.querySelector('[data-edge="t1"] title')?.textContent);
+  });
+
+  it('draws only the number of a label whose amount fits beside no arc of its own, and its title says the amount', () => {
+    const drawn = layout([1, 2, 3, 4].map((i) => sale(i, i % 2 ? A : B, i % 2 ? B : A)), [pay(1, B, A, '10500000000000000000'), pay(2, A, B, '1000000000000000000')], []);
+    const e = drawn.edges.find((x) => x.amountHidden)!;
+    const c = render(<LoopFigure drawing={drawn} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+    expect(c.querySelector(`[data-label="${e.key}"] text`)?.textContent).toBe(e.label);
+    expect(c.querySelector(`[data-label="${e.key}"] title`)?.textContent).toMatch(/ · 12\.345 ETH$/);
+  });
+
+  it('on a trade page, with no table to link to, opens the trade from a number whose amount is hidden, and every number names its amount', () => {
+    const drawn = layout([1, 2, 3, 4].map((i) => sale(i, i % 2 ? A : B, i % 2 ? B : A)), [pay(1, B, A, '10500000000000000000'), pay(2, A, B, '1000000000000000000')], []);
+    const e = drawn.edges.find((x) => x.amountHidden)!;
+    const caught = [{ key: 'A' as const, name: 'Round trips', loop: drawn.loops[0]! }];
+    render(<LensGraph drawing={drawn} chainId={1} base="/c/1/0xc" ctx={{ method: 'A' }} tokenHref="/c/1/0xc/t/1" caught={caught} />);
+    const link = document.querySelector(`[data-label="${e.key}"] a`)!;
+    expect(link.getAttribute('href')).toBe(`/c/1/0xc/tx/${e.tx}?method=A`);
+    expect(link.getAttribute('aria-label')).toBe(`Arrow ${e.label}: 12.345 ETH`);
+    cleanup();
+    // On the token page a number opens its row, and says its amount too.
+    render(<TokenLoops drawing={drawn} chainId={1} items={[]} initial={null} rowHrefs={{ 1: '#t1', 2: '#t2', 3: '#t3', 4: '#t4' }} />);
+    const row = document.querySelector('[data-label="t0"] a')!;
+    expect(row.getAttribute('href')).toBe('#t1');
+    expect(row.getAttribute('aria-label')).toBe('Arrow 1: 12.345 ETH');
+  });
+});
+
+describe('a page’s main graph', () => {
+  it('is drawn at least `min` wide where its box has room, never past 1.6 of its own size', () => {
+    const svg = () => document.querySelector<SVGSVGElement>('figure svg')!;
+    // A loop of three is drawn 520 wide, under 1.6 of its size.
+    expect(d.view.w).toBeLessThan(520);
+    render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} min={520} />);
+    expect(svg().style.maxWidth).toBe('520px');
+    cleanup();
+    // A two-wallet strip stops at 1.6 of its size, so its 10 px labels read at 16 px or less.
+    const strip = layout([t(A, B, '0xs1'), t(B, A, '0xs2')], [], []);
+    expect(strip.view.w * 1.6).toBeLessThan(520);
+    render(<LoopFigure drawing={strip} chainId={1} base="" lit={{ edges: [], nodes: [] }} min={520} />);
+    expect(svg().style.maxWidth).toBe(`${Math.round(strip.view.w * 1.6)}px`);
+    cleanup();
+    // The token page asks it of its graph; the phone's floor is still its own size's.
+    show();
+    expect(svg().style.maxWidth).toBe('520px');
+    expect(svg().style.getPropertyValue('--figure-min')).toBe(`${Math.round(d.view.w * 0.8)}px`);
+  });
+});
+
 describe('a trade page’s graph', () => {
   const caught = [{ key: 'A' as const, name: 'Round trips', loop: d.loops[0]! }];
 
@@ -294,5 +453,90 @@ describe('a graph wider than its box', () => {
       const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
       expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.max(0, Math.round(d.view.x + d.view.w / 2) - d.view.x - 150));
     } finally { restore(); }
+  });
+});
+
+describe('a ring’s trail', () => {
+  // A sold to B, then B back to A: numbered by time, each a row of the trail.
+  const ring = layout([t(A, B, '0xr1', { A: scc([A, B]) }), { ...t(B, A, '0xr2', { A: scc([A, B]) }), blockNumber: 2 }], [], [], [], {}, { numbering: 'time' });
+  const rows = ring.steps!.map((s) => ({ key: `s${s.n}`, edge: s.edge, nodes: [A, B] as [string, string], body: <span>step {s.n}</span>, href: `/tx/1/${s.n}`, open: `Open ${s.n}` }));
+  const trail = () => render(<RingTrail drawing={ring} chainId={1} base="" rows={rows} rowHrefs={{}} edgeHrefs={{ t0: '/c/1/0xc/tx/0xr1?method=A' }} label="A ring" />).container;
+  const lit = (c: Element) => [...c.querySelectorAll('g[data-lit]')].map((g) => g.getAttribute('data-edge'));
+  const buttons = (c: Element) => c.querySelectorAll('section[aria-label="In order"] button');
+
+  it('lights a row’s arrow while it is hovered or focused, and pins it on a press, which aria-pressed says', () => {
+    const c = trail();
+    const [first, second] = [buttons(c)[0]!, buttons(c)[1]!];
+    expect(lit(c)).toEqual([]);
+    fireEvent.mouseEnter(second);
+    expect(lit(c)).toEqual(['t1']);
+    fireEvent.mouseLeave(second);
+    expect(lit(c)).toEqual([]);
+    fireEvent.focus(second);
+    expect(lit(c)).toEqual(['t1']);
+    fireEvent.blur(second);
+    expect(lit(c)).toEqual([]);
+    expect(second.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(second);
+    expect(second.getAttribute('aria-pressed')).toBe('true');
+    expect(lit(c)).toEqual(['t1']);
+    // The other row's arrow dims; its two wallets stay lit.
+    expect(c.querySelector('g[data-edge=t0]')!.getAttribute('class')).toContain('opacity-25');
+    expect(c.querySelector(`a[aria-label="Wallet ${A}"]`)!.getAttribute('class')).not.toContain('opacity-25');
+    // Hovering another row shows it while the pin waits; leaving it brings the pin back.
+    fireEvent.mouseEnter(first);
+    expect(lit(c)).toEqual(['t0']);
+    fireEvent.mouseLeave(first);
+    expect(lit(c)).toEqual(['t1']);
+    fireEvent.click(second);
+    expect(second.getAttribute('aria-pressed')).toBe('false');
+    expect(lit(c)).toEqual([]);
+  });
+
+  it('keeps a keyboard-focused row lit while the mouse passes over another and leaves', () => {
+    const c = trail();
+    const [first, second] = [buttons(c)[0]!, buttons(c)[1]!];
+    fireEvent.focus(second);
+    fireEvent.mouseEnter(first);
+    expect(lit(c)).toEqual(['t0']);
+    fireEvent.mouseLeave(first);
+    expect(lit(c)).toEqual(['t1']);
+    fireEvent.blur(second);
+    expect(lit(c)).toEqual([]);
+  });
+
+  it('a mouse press that un-pins a row leaves it unlit once the mouse leaves, though the press focused it', () => {
+    const c = trail();
+    const second = buttons(c)[1]!;
+    // As a browser orders a click: the press, the focus it gives, then the click.
+    const press = () => { fireEvent.mouseEnter(second); fireEvent.mouseDown(second); fireEvent.focus(second); fireEvent.mouseUp(second); fireEvent.click(second); };
+    press();
+    expect(second.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.mouseLeave(second);
+    expect(lit(c)).toEqual(['t1']);
+    fireEvent.mouseDown(second); fireEvent.mouseUp(second); fireEvent.click(second);
+    fireEvent.mouseLeave(second);
+    expect(second.getAttribute('aria-pressed')).toBe('false');
+    expect(lit(c)).toEqual([]);
+    // A keyboard's focus after it still lights the row.
+    fireEvent.blur(second);
+    fireEvent.focus(second);
+    expect(lit(c)).toEqual(['t1']);
+  });
+
+  it('gives its trailing link a finger’s target, 44 px at least each way', () => {
+    const link = trail().querySelector('section[aria-label="In order"] li a')!;
+    expect(link.className).toContain('min-w-11');
+    expect(link.className).toContain('min-h-11');
+  });
+
+  it('opens each row’s sale by its trailing link, never the row, and an arrow by the link its page gave it', () => {
+    const c = trail();
+    const li = c.querySelectorAll('section[aria-label="In order"] li')[0]!;
+    expect([...li.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href'), a.getAttribute('aria-label')])).toEqual([['tx ›', '/tx/1/1', 'Open 1']]);
+    expect(li.querySelector('button a')).toBeNull();
+    expect(c.querySelector('g[data-edge=t0] a')!.getAttribute('href')).toBe('/c/1/0xc/tx/0xr1?method=A');
+    // One the page gave no link opens its trade, as every graph's does.
+    expect(c.querySelector('g[data-edge=t1] a')!.getAttribute('href')).toBe('/tx/1/0xr2');
   });
 });

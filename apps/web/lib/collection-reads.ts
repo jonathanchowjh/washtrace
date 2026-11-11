@@ -12,6 +12,17 @@ import { store } from './store';
  */
 export const collectionOf = cache((chainId: number, address: string) => store().collection(chainId, address));
 
+/** The rows of a stored payment, read once per request: a transaction's page and its tab title both ask. Null when none is stored. */
+export const paymentOf = cache((chainId: number, tx: string) => store().payment(chainId, tx));
+
+/** A transaction's transfers, read once per request: the verdict, the page and a tab title all ask. */
+export const transactionOf = cache((chainId: number, tx: string) => store().transaction(chainId, tx));
+
+/** Whether a transaction moves a token of the collection at `address`: the one test of whether its page there is a sale's. */
+export function movesIn(transfers: readonly { collection?: { address: string } | null }[], address: string): boolean {
+  return transfers.some((t) => t.collection?.address === address);
+}
+
 /** The collection a page's path names, through the same cached read: null for a bad chain, a bad address or a collection not watched. */
 export async function collectionAt(p: { chain: string; address: string }) {
   const chainId = chainOf(p.chain);

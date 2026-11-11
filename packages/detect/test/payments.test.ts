@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/methods.js';
-import { Payments } from '../src/payments.js';
+import { Payments, evidenceLegs, evidencePayments, useOf } from '../src/payments.js';
 import { ZERO } from '../src/graph.js';
 import { chain, flow, input, w } from './fixtures.js';
 
@@ -131,5 +131,113 @@ describe('an analysis over Payments', () => {
     expect(empty).toEqual(analyze(input(ts, [flow(a, a), flow(ZERO, c)])));
     expect(empty.truncatedSearches).toBe(0);
     expect([empty.totals.A.flagged, empty.totals.AU.flagged, empty.totals.AC.flagged]).toEqual([3, 3, 3]);
+  });
+});
+
+describe('evidencePayments', () => {
+  const pair = (seller: string, buyer: string, middle: string | null) => ({ AC: { kind: 'pair' as const, pair: [seller, buyer] as [string, string], middle, flowTx: '0x1', shape: 'funder' as const } });
+  const sale = (more: object = {}) => ({ ...chain('1', a, b)[1]!, flags: pair(a, b, c), ...more });
+
+  it('keeps a funder\'s two legs', () => {
+    const legs = [flow(c, a), flow(c, b)];
+    expect(evidencePayments([...legs, flow(a, x)], [sale()])).toEqual(legs);
+  });
+
+  it('drops the price leg of a WETH-bid sale, which pays seller from buyer in the sale\'s own transaction', () => {
+    const t = sale({ flags: pair(a, b, null) });
+    const price = flow(b, a, { txHash: t.txHash });
+    const real = flow(b, a);
+    expect(evidencePayments([price, real], [t])).toEqual([real]);
+  });
+
+  it('keeps zero values and self-payments out, as the engine does', () => {
+    expect(evidencePayments([flow(c, a, { valueWei: '0' }), flow(c, c)], [sale()])).toEqual([]);
+  });
+
+  it('keeps a pair with no stored shape legs too', () => {
+    const old = { ...chain('1', a, b)[1]!, flags: { AC: { kind: 'pair' as const, pair: [a, b] as [string, string], middle: c, flowTx: '0x1' } } };
+    const legs = [flow(c, a), flow(b, c)];
+    expect(evidencePayments(legs, [old])).toEqual(legs);
+  });
+
+  it('keeps the payment back that closes a Money loops back loop, and not another among its wallets', () => {
+    const loop = { ...chain('1', a, b)[1]!, flags: { AU: { kind: 'scc+flow' as const, wallets: [a, b], cycles: 1, via: [[b, a]] as [string, string][] } } };
+    const back = flow(b, a), other = flow(a, b);
+    expect(evidencePayments([other, back], [loop])).toEqual([back]);
+    expect(evidencePayments([flow(b, a, { valueWei: '0' })], [loop])).toEqual([]);
+  });
+
+  it('keeps each step of a Money loops back path, and no other payment among its wallets', () => {
+    const sale = chain('1', a, b)[1]!;
+    const loop = { ...sale, flags: { AU: { kind: 'scc+flow' as const, wallets: [a, b], cycles: 1, via: [[b, a]] as [string, string][],
+      paths: [{ wallets: [b, x, a], txs: ['0x1', '0x2'] }] } } };
+    const steps = [flow(b, x), flow(x, a)];
+    expect(evidencePayments([flow(a, x), ...steps, flow(x, b), flow(x, a, { txHash: sale.txHash }), flow(x, a, { valueWei: '0' })], [loop])).toEqual(steps);
+  });
+
+  it('keeps a direct payment back for every money edge, past the four with paths', () => {
+    const [h0, h1, h2, h3, h4, h5] = [w('h0'), w('h1'), w('h2'), w('h3'), w('h4'), w('h5')];
+    const via: [string, string][] = [[h1, h0], [h2, h1], [h3, h2], [h4, h3], [h5, h4]];
+    const loop = { ...chain('1', h0, h1)[1]!, flags: { AU: { kind: 'scc+flow' as const, wallets: [h0, h1, h2, h3, h4, h5], cycles: 1, via,
+      paths: via.slice(0, 4).map(([from, to]) => ({ wallets: [from, to], txs: ['0x1'] })) } } };
+    const backs = via.map(([from, to]) => flow(from, to));
+    expect(evidencePayments(backs, [loop])).toEqual(backs);
+  });
+
+  it('draws no money for a ring of loops alone', () => {
+    const loop = { ...chain('1', a, b)[1]!, flags: { A: { kind: 'scc' as const, wallets: [a, b], cycles: 2 } } };
+    expect(evidencePayments([flow(a, b), flow(b, a), flow(c, a)], [loop])).toEqual([]);
+  });
+});
+
+describe('evidenceLegs', () => {
+  it('names each leg a lens may use once, the way evidencePayments keeps them: a pair either way, a loop’s way back and its path’s steps one way', () => {
+    const [s1, s2] = chain('1', a, b).slice(1, 3);
+    const pair = { ...s1!, flags: { AC: { kind: 'pair' as const, pair: [a, b] as [string, string], middle: c, flowTx: '0x1' } } };
+    const loop = { ...s2!, flags: {
+      A: { kind: 'scc' as const, wallets: [a, b], cycles: 2 },
+      AU: { kind: 'scc+flow' as const, wallets: [a, b], cycles: 1, via: [[b, a]] as [string, string][], paths: [{ wallets: [b, x, a], txs: ['0x2', '0x3'] }] },
+    } };
+    const legs = evidenceLegs([pair, loop, pair]);
+    expect(legs.map(([f, t]) => `${f}>${t}`).sort()).toEqual([`${a}>${c}`, `${c}>${a}`, `${b}>${c}`, `${c}>${b}`, `${b}>${a}`, `${b}>${x}`, `${x}>${a}`].sort());
+    // Every payment along them that may be evidence is kept, and none off them.
+    const along = legs.map(([f, t]) => flow(f, t));
+    expect(evidencePayments([...along, flow(a, b), flow(x, b)], [pair, loop])).toEqual(along);
+    // Round trips names none.
+    expect(evidenceLegs([{ ...s1!, flags: { A: { kind: 'scc' as const, wallets: [a, b], cycles: 2 } } }])).toEqual([]);
+  });
+});
+
+describe('useOf', () => {
+  const pair = (middle: string | null, flowTx = '0x1') => ({ kind: 'pair' as const, pair: [a, b] as [string, string], middle, flowTx, shape: 'funder' as const });
+  const loop = (more: object = {}) => ({ kind: 'scc+flow' as const, wallets: [a, b], cycles: 1, via: [[b, a]] as [string, string][], ...more });
+
+  it('says Linked wallets uses every leg of its pair, and which one it names', () => {
+    expect(useOf(pair(c), flow(c, a, { txHash: '0x1' }))).toEqual({ method: 'AC', named: true });
+    expect(useOf(pair(c), flow(c, b, { txHash: '0x2' }))).toEqual({ method: 'AC', named: false });
+    expect(useOf(pair(c), flow(b, c, { txHash: '0x2' }))).toEqual({ method: 'AC', named: false });
+    expect(useOf(pair(null), flow(a, b, { txHash: '0x1' }))).toEqual({ method: 'AC', named: true });
+  });
+
+  it('uses a pair through a middle for its legs only, not the payment between its seller and buyer', () => {
+    expect(useOf(pair(c), flow(a, b))).toBeNull();
+    expect(useOf(pair(c), flow(a, x))).toBeNull();
+  });
+
+  it('says Money loops back uses a payment back, and names the money back it is on', () => {
+    expect(useOf(loop(), flow(b, a))).toEqual({ method: 'AU', back: [b, a] });
+    expect(useOf(loop(), flow(a, b))).toBeNull();
+  });
+
+  it('says Money loops back uses each payment between two wallets of a step, whatever its hash, and names the ends of the path', () => {
+    const paths = [{ wallets: [b, x, a], txs: ['0x1', '0x2'] }];
+    expect(useOf(loop({ paths }), flow(b, x, { txHash: '0x9' }))).toEqual({ method: 'AU', back: [b, a] });
+    expect(useOf(loop({ paths }), flow(x, a, { txHash: '0x8' }))).toEqual({ method: 'AU', back: [b, a] });
+    expect(useOf(loop({ paths }), flow(x, b))).toBeNull();
+  });
+
+  it('says a loop saved before paths were recorded uses its direct payments back only, and a loop of Round trips none', () => {
+    expect(useOf(loop(), flow(b, x))).toBeNull();
+    expect(useOf({ kind: 'scc', wallets: [a, b], cycles: 2 }, flow(b, a))).toBeNull();
   });
 });

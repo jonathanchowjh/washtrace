@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
-import { isValidElement } from 'react';
+import { Suspense, cloneElement, isValidElement, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopEdge, Method, OwnFlag } from '@washtrace/detect';
+import { short } from '@/lib/format';
+import { EvidenceLine } from '@/components/coverage';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
 
 /** Two watched collections; the transaction moves token 7 of the first and token 8 of the second. */
@@ -37,8 +39,16 @@ const state = {
   ran: { 1: ['A', 'AU', 'AC'], 2: ['A', 'AU', 'AC'] } as Record<number, string[]>,
   through: { 1: 10, 2: 10 } as Record<number, number>,
   truncatedSearches: 0,
+  /** Whether the collections have no analysis yet. */
+  noAnalysis: false,
+  /** Whether the read of a payment's uses never answers. */
+  pending: false,
   lenses: [] as ReturnType<typeof lens>[],
   own: [] as OwnFlag[],
+  /** The store's read of the payment with this page's hash: null when none is stored. */
+  payment: null as { flows: unknown[]; usedBy: { collection: { id?: number } }[] } | null,
+  /** The collections, by id, whose latest analysis was saved before witnesses were (its `loops` null). */
+  preWitnesses: [] as number[],
 };
 
 function runOf(l: ReturnType<typeof lens>, collectionId: number) {
@@ -52,16 +62,24 @@ function runOf(l: ReturnType<typeof lens>, collectionId: number) {
   };
 }
 
+function collectionRow(address: string) {
+  const id = ID[address];
+  if (id === undefined) return null;
+  const totals = Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { transfers: 1, flagged: 0, sales: 1, flaggedSales: 0, volumeWei: '0', flaggedVolumeWei: '0', wallets: 0, tokens: 0, available: state.ran[id]!.includes(m) }]));
+  const pre = state.preWitnesses.includes(id) ? { loops: null } : {};
+  return { id, chainId: 1, address, name: address === A1 ? 'First' : 'Second', latest: state.noAnalysis ? null : { id: 1, ranAt: 1_700_000_000_000, throughBlock: state.through[id], truncatedSearches: state.truncatedSearches, totals, ...pre } };
+}
+
 const flows = vi.fn(async () => [] as unknown[]);
+const usedBy = vi.fn();
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async (_chain: number, address: string) => {
-      const id = ID[address];
-      if (id === undefined) return null;
-      const totals = Object.fromEntries(['A', 'AU', 'AC'].map((m) => [m, { transfers: 1, flagged: 0, sales: 1, flaggedSales: 0, volumeWei: '0', flaggedVolumeWei: '0', wallets: 0, tokens: 0, available: state.ran[id]!.includes(m) }]));
-      return { id, chainId: 1, address, name: address === A1 ? 'First' : 'Second', latest: { id: 1, throughBlock: state.through[id], truncatedSearches: state.truncatedSearches, totals } };
-    },
+    collection: async (_chain: number, address: string) => collectionRow(address),
+    collections: async () => Object.keys(ID).map(collectionRow),
     transaction: async () => state.tx,
+    payment: async () => state.payment?.flows ?? null,
+    paymentUsedBy: async (...args: [number, unknown[], number | null]) => { usedBy(...args); if (state.pending) await new Promise(() => {}); return (state.payment?.usedBy ?? []).filter((u) => args[2] === null || u.collection.id === args[2]); },
+    ringLines: async (_id: number, anchors: string[]) => anchors.map((anchor) => ({ anchor, rank: 3, floorSales: 0 })),
     lenses: async () => state.lenses.map((l) => ({ id: l.id, key: `L${l.id}` as const, name: l.name, rule: l.rule, version: l.version, createdAt: 0, updatedAt: 0 })),
     token: async (id: number, tokenId: string) => state.tokens[`${id === 1 ? A1 : A2}/${tokenId}`] ?? [],
     flowsAmong: flows,
@@ -84,8 +102,29 @@ vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found
 afterEach(() => {
   cleanup();
   flows.mockClear();
-  Object.assign(state, { tx: [], tokens: {}, ran: { 1: ['A', 'AU', 'AC'], 2: ['A', 'AU', 'AC'] }, through: { 1: 10, 2: 10 }, truncatedSearches: 0, lenses: [], own: [] });
+  usedBy.mockClear();
+  Object.assign(state, { tx: [], tokens: {}, ran: { 1: ['A', 'AU', 'AC'], 2: ['A', 'AU', 'AC'] }, through: { 1: 10, 2: 10 }, truncatedSearches: 0, noAnalysis: false, pending: false, lenses: [], own: [], payment: null, preWitnesses: [] });
 });
+
+/**
+ * The tree as the test renderer can draw it, which cannot draw a server component inside Suspense: the payment view's
+ * two streamed parts (PaymentUses, GlobalUses) are either read, and replaced by what they return, or, with `read`
+ * false, left pending, as the browser first gets the page: their Suspense is replaced by its fallback.
+ */
+async function settled(node: unknown, read = true): Promise<ReactNode> {
+  const { PaymentUses, GlobalUses } = await import('@/app/c/[chain]/[address]/tx/[hash]/payment');
+  const go = async (n: unknown): Promise<ReactNode> => {
+    if (Array.isArray(n)) return Promise.all(n.map(go));
+    if (!isValidElement(n)) return n as ReactNode;
+    const props = n.props as { children?: unknown; fallback?: ReactNode };
+    const only = isValidElement(props.children) ? props.children.type : null;
+    if (n.type === Suspense && (only === PaymentUses || only === GlobalUses)) {
+      return read ? go(await (only as (p: unknown) => Promise<unknown>)((props.children as { props: unknown }).props)) : props.fallback;
+    }
+    return props.children === undefined ? n : cloneElement(n, undefined, await go(props.children));
+  };
+  return go(node);
+}
 
 async function txPage(): Promise<HTMLElement> {
   const { default: P } = await import('@/app/tx/[chain]/[hash]/page');
@@ -663,6 +702,108 @@ describe('a transfer a lens does not judge says so, never that it was not caught
   });
 });
 
+describe('the trade page: the payments behind each lens card', () => {
+  const M = '0x' + '7'.repeat(40);
+  const PAY = (n: number) => '0x' + n.toString(16).padStart(2, '0').repeat(32);
+  const pay = (n: number, from: string, to: string, more: object = {}) => ({ txHash: PAY(n), kind: 'native', from, to, valueWei: '1000000000000000000', token: '', blockNumber: n, blockTime: 1_700_000_000 + n, ...more });
+  const pair = { kind: 'pair', pair: [S, B], middle: M, flowTx: PAY(2), shape: 'funder' };
+  const loop = { kind: 'scc+flow', wallets: [S, B], cycles: 1, via: [[B, S]], paths: [{ wallets: [B, W, S], txs: [PAY(5), PAY(6)] }] };
+  /** Token 7, its one sale caught by `flags`, whose drawing holds `paid`. */
+  async function caught(flags: Record<string, unknown>, paid: object[]) {
+    const row = Object.assign(transfer(A1, '7', TX, 5, 5), { flags });
+    state.tokens[`${A1}/7`] = [row];
+    state.tx = [row];
+    flows.mockImplementation(async () => paid);
+    const c = await txPage();
+    flows.mockImplementation(async () => []);
+    return cards(c, 'How each lens reads First #7');
+  }
+  const rows = (li: HTMLElement) => [...li.querySelectorAll('[data-payment]')];
+
+  it('Linked wallets lists its legs with the named one marked, and links each to the payment view carrying the lens', async () => {
+    // A pair no lens uses, and a zero value on a real leg, are not evidence.
+    const card = await caught({ AC: pair }, [pay(1, M, S), pay(2, M, B), pay(3, S, W), pay(4, S, M, { valueWei: '0' })]);
+    const li = card.get('Linked wallets')!;
+    expect(rows(li).map((r) => r.querySelector('a[href*="/tx/"]')?.textContent)).toEqual([`payment ${short(PAY(1))}`, `payment ${short(PAY(2))}`]);
+    expect(rows(li)[0]!.textContent).toContain('(funder) → ');
+    expect(rows(li)[0]!.textContent).toContain('(seller)');
+    expect(rows(li)[0]!.textContent).not.toContain('the one the lens names');
+    expect(rows(li)[1]!.textContent).toContain('the one the lens names');
+    expect(rows(li)[1]!.querySelector('a[href*="/tx/"]')!.getAttribute('href')).toBe(`/c/1/${A1}/tx/${PAY(2)}?method=AC`);
+    expect(li.querySelector('h3')!.textContent).toBe('The payments it used');
+    // The lens section already moves up below lg; within it the cards keep the lens order.
+    expect(li.className).not.toContain('order-first');
+    // jsdom applies no media query, so the order classes carry the phone layout: the lens section is ordered before the rail and the table, in one flex column.
+    const orderOf = (el: Element | null) => [...(el?.closest('[class*="max-lg:order-"]')?.classList ?? [])].find((c) => c.startsWith('max-lg:order-'));
+    const lens = li.closest('section')!;
+    const moved = [...document.querySelectorAll('section')].find((x) => x.querySelector('h2')?.textContent === 'What it moved')!;
+    expect(orderOf(lens)).toBe('max-lg:order-1');
+    expect(orderOf(moved)).toBe('max-lg:order-2');
+    expect(lens.closest('[class*="max-lg:order-"]')!.parentElement).toBe(moved.closest('[class*="max-lg:order-"]')!.parentElement);
+    expect(lens.closest('[class*="max-lg:order-"]')!.parentElement!.className).toContain('max-lg:flex-col');
+    expect(card.get('Round trips')!.querySelector('[data-payment]')).toBeNull();
+    expect(card.get('Money loops back')!.querySelector('[data-payment]')).toBeNull();
+  });
+
+  it('Money loops back lists its direct payment back and its path steps, never numbered or as a step’s payment', async () => {
+    const card = await caught({ AU: loop }, [pay(1, B, S), pay(5, B, W), pay(6, W, S), pay(7, S, B)]);
+    const li = card.get('Money loops back')!;
+    expect(rows(li)).toHaveLength(3);
+    expect(li.textContent).not.toMatch(/\b1\. |the payment of|the one the lens names/);
+    // Each row carries its own card's lens, whatever lens the page was opened with.
+    expect(rows(li).map((r) => r.querySelector('a[href*="/tx/"]')!.getAttribute('href'))).toEqual([PAY(1), PAY(5), PAY(6)].map((h) => `/c/1/${A1}/tx/${h}?method=AU`));
+    expect(li.className).not.toContain('order-first');
+    expect(card.get('Linked wallets')!.querySelector('[data-payment]')).toBeNull();
+  });
+
+  it('lists at most four, then how many more with a link to the wallet page’s between section', async () => {
+    const card = await caught({ AC: pair }, [1, 2, 3, 4, 5, 6].map((n) => pay(n, M, S)));
+    const li = card.get('Linked wallets')!;
+    expect(rows(li)).toHaveLength(4);
+    expect(li.textContent).toContain('and 2 more.');
+    const more = [...li.querySelectorAll('a')].find((a) => a.textContent?.startsWith('Payments between'))!;
+    expect(more.getAttribute('href')).toBe(`/c/1/${A1}/w/${M}?with=${S}&method=AC#between`);
+    expect(more.getAttribute('href')).not.toContain('from=');
+  });
+
+  it('"and n more" counts only the pair it opens, and says how many are not listed', async () => {
+    const card = await caught({ AC: pair }, [1, 2, 3, 4].map((n) => pay(n, M, S)).concat([pay(5, M, B), pay(6, S, M), pay(7, B, M)]));
+    const li = card.get('Linked wallets')!;
+    expect(rows(li)).toHaveLength(4);
+    expect(li.textContent).toContain('and 3 more.');
+    const more = [...li.querySelectorAll('a')].find((a) => a.textContent?.includes('of them are between'))!;
+    expect(more.textContent).toBe(`2 of them are between ${short(M)} and ${short(B)} →`);
+    expect(more.getAttribute('href')).toBe(`/c/1/${A1}/w/${M}?with=${B}&method=AC#between`);
+    expect(li.textContent).toContain('and 1 more not listed here.');
+  });
+
+  it('Money loops back with none of its payments drawn says they are not drawn here, and names no place for them', async () => {
+    const card = await caught({ AU: loop }, []);
+    const li = card.get('Money loops back')!;
+    expect(li.textContent).toContain('Its payments are not drawn here.');
+    expect(li.textContent).not.toContain('Who did it move money with');
+  });
+
+  it('a payment both lenses use is listed in both cards; an old loop with no paths lists its via legs only; a pair with no shape lists its legs', async () => {
+    const old = { kind: 'scc+flow', wallets: [S, B], cycles: 1, via: [[M, S]] };
+    const unshaped = { kind: 'pair', pair: [S, B], middle: M, flowTx: PAY(1) };
+    const card = await caught({ AC: unshaped, AU: old }, [pay(1, M, S), pay(2, B, W)]);
+    for (const name of ['Linked wallets', 'Money loops back']) {
+      expect(rows(card.get(name)!).map((r) => r.querySelector('a[href*="/tx/"]')!.textContent)).toEqual([`payment ${short(PAY(1))}`]);
+    }
+    expect(rows(card.get('Linked wallets')!)[0]!.textContent).toContain('(in between) → ');
+  });
+
+  it('a payment row never wears gold or magenta, and a caught card with none read says where they are', async () => {
+    const full = await caught({ AC: pair }, [pay(1, M, S)]);
+    expect(rows(full.get('Linked wallets')!)[0]!.outerHTML).not.toMatch(/ceiling|fault|gold|magenta/);
+    cleanup();
+    const none = await caught({ AC: pair }, []);
+    expect(none.get('Linked wallets')!.textContent).toContain('They are not drawn here.');
+    expect(none.get('Linked wallets')!.textContent).toContain('Who did it move money with');
+  });
+});
+
 describe('the trade page: a spot check', () => {
   it('an unread transaction offers the check; a judged one does not', async () => {
     const unread = await txPage();
@@ -715,14 +856,22 @@ describe('the trade page outside a collection\'s tabs', () => {
     expect(link?.getAttribute('href')).toBe(`/c/1/${A1}/tx/${TX}`);
   });
 
-  it('names on Connected to a wallet that only paid one of its holders, as the token page does', async () => {
+  it('ends its answer with the evidence line over its seller and buyer, as of its latest block; across several collections it has none', async () => {
+    roundTrip();
+    const one = elementsOf(await tree(), EvidenceLine);
+    expect(one.map((e) => [e.props.chainId, e.props.home, e.props.wallets, e.props.block])).toEqual([[1, A1, [S, B], 5]]);
+    state.tx = [transfer(A1, '7', TX, 5, 5), transfer(A2, '8', TX, 9, 5)];
+    expect(elementsOf(await tree(), EvidenceLine)).toEqual([]);
+  });
+
+  it('names no one on Connected to for a payment no lens used', async () => {
     roundTrip();
     const F = '0x' + '3'.repeat(40);
     flows.mockResolvedValueOnce([{ txHash: '0xf1', kind: 'native', from: F, to: S, valueWei: '1', token: '', blockNumber: 2, blockTime: null }]);
     const t = await tree();
     const { ConnectedRail } = await import('@/components/connected-rail');
     expect(elementsOf(t, ConnectedRail).map((e) => e.props.wallets))
-      .toEqual([[{ address: S, role: 'seller' }, { address: B, role: 'buyer' }, { address: F, role: 'funder' }]]);
+      .toEqual([[{ address: S, role: 'seller' }, { address: B, role: 'buyer' }]]);
   });
 
   it('in several collections: no one collection\'s panels, and each collection a link', async () => {
@@ -775,5 +924,176 @@ describe('a transaction under a collection\'s tabs', () => {
     await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
     state.tx = [];
     await expect(under(A1)).rejects.toThrow(`redirect:/tx/1/${TX}`);
+  });
+});
+
+describe('a payment a lens cites', () => {
+  const M = '0x' + '7'.repeat(40);
+  const flow = (more: object = {}) => ({ txHash: TX, kind: 'native', from: M, to: S, valueWei: '1000000000000000000', token: '', blockNumber: 12, blockTime: 1_700_000_000, ...more });
+  const pair = { kind: 'pair', pair: [S, B], middle: M, flowTx: TX, shape: 'funder' };
+  const loop = { kind: 'scc+flow', wallets: [S, B], cycles: 1, via: [[M, S]], paths: [{ wallets: [M, W, S], txs: [TX, '0x2'] }] };
+  const used = (use: object, witness: object, more: object = {}, address = A1) => ({
+    collection: { id: ID[address], address, name: address === A1 ? 'First' : 'Second' }, use, witness, ring: null, more: false,
+    sales: [{ txHash: '0x' + 'a'.repeat(64), logIndex: 0, tokenId: '114' }], ...more,
+  });
+  const under = async (address = A1) => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    return render(await settled(await P({ params: Promise.resolve({ chain: '1', address, hash: TX }), searchParams: Promise.resolve({ method: 'AC' }) }))).container;
+  };
+  /** The global page, its streamed part read. */
+  const global = async () => {
+    const { default: P } = await import('@/app/tx/[chain]/[hash]/page');
+    return render(await settled(await P({ params: Promise.resolve({ chain: '1', hash: TX }) }))).container;
+  };
+  /** The same page as the browser first gets it: the streamed part still pending. */
+  const first = async (address = A1) => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    return render(await settled(await P({ params: Promise.resolve({ chain: '1', address, hash: TX }) }), false)).container;
+  };
+  const hrefs = (c: HTMLElement) => [...c.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+
+  it('opens a view of itself under the collection’s tabs, and says which lenses use it, in the console’s order, Money loops back not counted', async () => {
+    state.payment = {
+      flows: [flow()],
+      usedBy: [used({ method: 'AU', back: [M, S] }, loop), used({ method: 'AC', named: true }, pair, { ring: 'r0', more: true })],
+    };
+    const c = await under();
+    expect(c.querySelector('h1')?.textContent).toBe(short(TX));
+    expect(c.textContent).toContain('1 ETH from 0x7777…7777 to 0x1111…1111');
+    expect(c.textContent).not.toContain('has not read it');
+    expect(c.querySelector('#spot-check')).toBeNull();
+    const lines = [...c.querySelectorAll('section li')].map((li) => li.textContent);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^Used by Linked wallets to flag the sales of #114 and others, in .*Ring 3: .*both funded by .*It is the one the lens names\.$/);
+    expect(lines[1]).toMatch(/^Used by Money loops back \(not counted\) to flag the sale of #114: It is a payment back from 0x7777…7777 to 0x1111…1111\.$/);
+    // Every link stays under the collection's tabs and keeps the lens it came with; no word of time order is said.
+    expect(hrefs(c)).toContain(`/c/1/${A1}/methods?method=AC#evidence`);
+    expect(hrefs(c)).toContain(`/c/1/${A1}/tx/0x${'a'.repeat(64)}?method=AC`);
+    expect(hrefs(c)).toContain(`/c/1/${A1}/w/${M}?method=AC`);
+    expect(hrefs(c)).toContain(`/c/1/${A1}/r/r0?method=AC`);
+    expect(hrefs(c).filter((h) => h?.startsWith('/tx/'))).toEqual([]);
+    expect(c.textContent).not.toMatch(/\b(before|after|first|then)\b/i);
+  });
+
+  it('says a Money loops back payment on a path is on the money back, never that it is the payment of a step', async () => {
+    state.payment = { flows: [flow({ from: M, to: W })], usedBy: [used({ method: 'AU', back: [M, S] }, loop)] };
+    const c = await under();
+    expect(c.querySelector('section li')?.textContent).toMatch(/It is on a money path back from 0x7777…7777 to 0x1111…1111\.$/);
+  });
+
+  it('shows several transfers as a table, and a payment no lens uses as money none cites', async () => {
+    state.payment = { flows: [flow(), flow({ kind: 'internal', valueWei: '5' })], usedBy: [] };
+    const c = await under();
+    expect(c.querySelector('p.text-lg')?.textContent).toBe('A payment of 2 transfers between 2 wallets');
+    expect(c.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(c.textContent).toContain('Round trips, Linked wallets and Money loops back don’t use this payment in First’s latest analysis (');
+    expect(c.textContent).not.toContain('No lens');
+    expect(c.textContent).not.toContain('has not read it');
+  });
+
+  it('says an analysis saved before witnesses cannot tell which lenses use it, never that none does', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.preWitnesses = [1];
+    const c = await under();
+    expect(c.textContent).toContain('The latest analysis predates this view; the next analysis will say which lenses use it.');
+    expect(c.textContent).not.toContain('don’t use this payment');
+  });
+
+  it('names only this collection’s lenses on the page under its tabs', async () => {
+    state.payment = { flows: [flow()], usedBy: [used({ method: 'AC', named: false }, pair, {}, A2)] };
+    const c = await under();
+    expect(c.textContent).toContain('Round trips, Linked wallets and Money loops back don’t use this payment in First’s latest analysis');
+  });
+
+  it('says a collection with no analysis has not been analyzed, never that its latest analysis misses the payment', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.noAnalysis = true;
+    const c = await under();
+    expect(c.textContent).toContain('First has not been analyzed yet.');
+    expect(c.textContent).not.toContain('latest analysis');
+  });
+
+  it('is a sale’s page, never the payment view, when the hash moves a token of this collection, even with another collection’s in the same transaction', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.tx = [transfer(A1, '5', TX, 0, 5), transfer(A2, '6', TX, 1, 5)];
+    await expect(under()).rejects.toThrow(`redirect:/tx/1/${TX}`);
+    state.tx = [transfer(A1, '5', TX, 0, 5)];
+    expect((await under()).textContent).not.toContain('Payment on');
+    // A sale page reads no payment's uses, and its tab title reads only the probe.
+    expect(usedBy).not.toHaveBeenCalled();
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    expect((await generateMetadata({ params: Promise.resolve({ chain: '1', address: A1, hash: TX }) })).alternates?.canonical).toBe(`/tx/1/${TX}`);
+    expect(usedBy).not.toHaveBeenCalled();
+  });
+
+  it('names the other collection whose sale the hash is, and links its page', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.tx = [transfer(A2, '6', TX, 1, 5)];
+    const c = await under();
+    expect(c.textContent).toContain('Payment on');
+    const open = [...c.querySelectorAll('a')].find((a) => a.textContent?.startsWith('Open in'));
+    expect([open?.textContent, open?.getAttribute('href')]).toEqual(['Open in Second →', `/c/1/${A2}/tx/${TX}`]);
+  });
+
+  it('shows the payment at once, the lenses that use it still being looked for', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.pending = true;
+    try {
+      const { default: Global } = await import('@/app/tx/[chain]/[hash]/page');
+      const pages = [() => first(), async () => render(await settled(await Global({ params: Promise.resolve({ chain: '1', hash: TX }) }), false)).container];
+      for (const open of pages) {
+        const c = await open();
+        expect(c.textContent).toContain('0x7777…7777');
+        expect(c.textContent).toContain('1 ETH');
+        expect(c.textContent).toContain('Looking for the lenses that use it…');
+        expect(c.textContent).not.toContain('latest analysis');
+        cleanup();
+      }
+    } finally { state.pending = false; }
+  });
+
+  it('is sent to its own page only when no payment is stored with its hash', async () => {
+    state.payment = null;
+    await expect(under()).rejects.toThrow(`redirect:/tx/1/${TX}`);
+  });
+
+  it('is its own canonical page, where a sale’s is the transaction’s', async () => {
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/tx/[hash]/page');
+    const meta = () => generateMetadata({ params: Promise.resolve({ chain: '1', address: A1, hash: TX }) });
+    state.payment = { flows: [flow()], usedBy: [] };
+    expect((await meta()).alternates?.canonical).toBe(`/c/1/${A1}/tx/${TX}`);
+    state.tx = [transfer(A1, '5', TX, 0, 5)];
+    expect((await meta()).alternates?.canonical).toBe(`/tx/1/${TX}`);
+    state.payment = null;
+    state.tx = [];
+    expect((await meta()).alternates?.canonical).toBe(`/tx/1/${TX}`);
+  });
+
+  it('reads as a payment washtrace read as money on the global page: the collections that use it, and no spot check', async () => {
+    state.payment = { flows: [flow()], usedBy: [used({ method: 'AC', named: true }, pair), used({ method: 'AU', back: [M, S] }, loop, {}, A2)] };
+    const c = await global();
+    expect(c.querySelector('p.text-lg')?.textContent).toBe('A payment washtrace read as money');
+    expect(c.textContent).toContain('It is not a token transfer.');
+    expect(c.textContent).toContain('2 watched collections have a lens that uses it: First and Second.');
+    expect(c.textContent).not.toContain('has not read it');
+    expect(c.querySelector('#spot-check')).toBeNull();
+    const open = [...c.querySelectorAll('nav[aria-label="Its collections"] a')].map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(open).toEqual([['First', `/c/1/${A1}/tx/${TX}`], ['Second', `/c/1/${A2}/tx/${TX}`]]);
+  });
+
+  it('says on the global page which collections’ latest analysis predates the view, never that no watched lens uses it', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    state.preWitnesses = [2];
+    const c = await global();
+    expect(c.textContent).toContain('The latest analysis of Second predates this view; the next analysis will say which lenses use it.');
+    expect(c.textContent).not.toContain('don’t use this payment');
+  });
+
+  it('says on the global page that no watched lens uses a payment nobody cites', async () => {
+    state.payment = { flows: [flow()], usedBy: [] };
+    const c = await global();
+    expect(c.textContent).toContain('Round trips, Linked wallets and Money loops back don’t use this payment in any watched collection’s latest analysis.');
+    expect(c.textContent).not.toContain('No lens');
+    expect(c.querySelector('#spot-check')).toBeNull();
   });
 });

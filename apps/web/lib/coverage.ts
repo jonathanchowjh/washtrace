@@ -1,5 +1,6 @@
-import { BEHIND_BLOCKS, NOT_DONE, type CollectionRow, type Method, type PassRow } from '@washtrace/detect';
-import { LENSES, SHOWN, floorPct, lensList, localTime, pct, plural, num } from './format';
+import { BEHIND_BLOCKS, NOT_DONE, type CollectionRow, type Method, type PassRow, type WalletRead } from '@washtrace/detect';
+import { LENSES, MONEY_LENSES, SHOWN, floorPct, lensList, localTime, pct, plural, num, short } from './format';
+import { builtinCauses, shareQualifier } from './lens-state';
 
 /**
  * A collection's reading progress, said the way the console shows it: how far
@@ -263,4 +264,44 @@ export function trust(c: CollectionRow, cov: Coverage): Trust | null {
   if (cov.notFinal.length > 0) return say('Shares may move', `${checked} of wallets that traded it checked for money so far, so ${lensList(cov.notFinal)} are not final: checking the rest can move them either way.`);
   if (!cov.money) return say(null, `Every transfer is read. Money links were not checked, so only ${LENSES.A.name} ran.`);
   return say(null, 'Every transfer to the finalized head is read, and every trading wallet checked for money once: a payment made after a wallet\'s check is not seen.');
+}
+
+/**
+ * How much of the money a verdict stands on was read, in words: `head`, then
+ * `at` (when a single wallet's money was read, left to the caller's Time), then
+ * the `tail` notes. Local to the item's own `wallets` (a wallet with no row is
+ * unread): "so far" while a key can read the rest, "at least" when nothing
+ * will (shareQualifier of the money cause), whatever the collection's other
+ * wallets are doing. Null for no wallets. `viaPartners`: a lone wallet whose
+ * payments were read from the wallets it paid, not its own history.
+ * `untraded`: a lone wallet no read transfer names, which is never queued.
+ * `first`: `wallets` are only a ring's first, past its list's cut (its traders among them, as the list puts
+ * them first), so both counts are of those: the ring's own count holds its in-betweens too.
+ */
+export function evidenceWords(o: { wallets: readonly string[]; reads: ReadonlyMap<string, WalletRead>; funded: boolean; funding: boolean; moneyRan: boolean; viaPartners?: boolean; untraded?: boolean; first?: boolean }): { head: string; at: number | null; tail: string[] } | null {
+  const n = o.wallets.length;
+  if (n === 0) return null;
+  if (!o.moneyRan) return { head: `${MONEY_LENSES} not run`, at: null, tail: [] };
+  const rows = o.wallets.flatMap((a) => { const r = o.reads.get(a); return r === undefined ? [] : [{ a, r }]; });
+  const done = rows.filter((x) => x.r.status === 'done');
+  const failed = rows.find((x) => x.r.status === 'failed');
+  const failure = failed === undefined ? null : `Reading ${short(failed.a)}'s money failed: ${failed.r.error ?? 'unknown error'}. Retried hourly`;
+  const cut = done.filter((x) => x.r.truncated);
+  const tail = [
+    ...(n > 1 && failure !== null ? [failure] : []),
+    ...(cut.length === 0 ? [] : [cut.length === 1 ? `${short(cut[0]!.a)} has more history than Etherscan pages through` : `${cut.length} wallets have more history than Etherscan pages through`]),
+  ];
+  if (done.length === n) {
+    if (o.first) return { head: `Money read for all of the ring's first ${n} wallets`, at: null, tail };
+    if (n > 1) return { head: n === 2 ? 'Money read for both wallets' : `Money read for all ${n} wallets`, at: null, tail };
+    const at = done[0]!.r.fetchedAt;
+    return { head: at === null ? 'Its money was read from stored data' : 'Its money was read', at, tail };
+  }
+  if (n === 1 && failure !== null) return { head: failure, at: null, tail };
+  if (n === 1 && o.viaPartners && rows.length === 0) return { head: 'The payments below were read from the wallets it paid or was paid by; its own history is not read', at: null, tail };
+  if (n === 1 && o.untraded && rows.length === 0) return { head: 'Its money is not read: no transfer of it is read in a watched collection', at: null, tail };
+  const causes = builtinCauses('AC', ['AC'], o.funded, o.funding);
+  const rest = n === 1 ? 'it' : 'the rest';
+  const why = shareQualifier(causes) === 'at least' ? `; at least, since ${causes.find((c) => c.bound)!.text}` : `, so ${MONEY_LENSES} are so far: reading ${rest} can change this`;
+  return { head: `${n === 1 ? 'Its money is not read yet' : o.first ? `Money read for ${done.length} of the ring's first ${n} wallets` : `Money read for ${done.length} of ${n} wallets`}${why}`, at: null, tail };
 }

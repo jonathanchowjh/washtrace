@@ -1,7 +1,7 @@
 # Upgrading
 
 For operators. The schema is defined in one file, [migrations.ts](../packages/detect/src/migrations.ts):
-38 migrations, forward-only, numbered from 1, each safe to run again.
+39 migrations, forward-only, numbered from 1, each safe to run again.
 
 ## How a migration runs
 
@@ -66,6 +66,7 @@ migration creates is built empty, so it costs nothing and is not listed as a wai
 | 36 | Rings: adds `witnesses.ring` and `analyses.rings`. Analyses saved before it have `rings` NULL; the worker works their rings out from the stored witnesses, one collection a turn, and analyses nothing again. | `witnesses_ring_idx` on `witnesses`, plain and partial (`WHERE ring IS NOT NULL`), so it holds no rows on upgrade, though it still scans the table. |
 | 37 | Speeds up the lens lists: a partial index holding only the counted trades' keys, so the counted-trades join is answered from the index alone. | `trade_facts_counted_idx` on `trade_facts`, `CONCURRENTLY`: writes to `trade_facts` carry on while it builds, and an invalid one a stopped build left is dropped first. |
 | 38 | A linked pair's shape: adds `witnesses.shape`, nullable with no default, so no row is rewritten. A witness saved before it keeps `shape` NULL and reads as before; a collection's pairs get their shapes at its next analysis. Nothing is analyzed again for it. | |
+| 39 | Search finds a ring's wallets that never traded: its pairs' middles (funders, payees, in-between wallets). A partial index on `witnesses.middle`, so the start of an address runs on an index. No data changes. | `witnesses_middle_idx` on `witnesses`, plain and partial (`WHERE middle IS NOT NULL`), so it is small, though it scans the table once. |
 
 A wallet due a read again keeps `status = 'done'` and gets `stale_at` set, so every reader of a done wallet still
 counts it. With `follow.reread` at 0, the default, nothing is marked and #34 changes no behaviour.
@@ -80,6 +81,8 @@ counts it. With `follow.reread` at 0, the default, nothing is marked and #34 cha
 - **Errors stored with a URL are cleared** by #13, and console settings that `.env` shadowed are deleted by #18.
 - **A linked pair has no shape until its collection's next analysis** after #38. Until then its witness carries
   no `shape`, the lists count it in no shape, and the console words it as before.
+- **A Money loops back loop has no `paths` until its collection's next analysis.** No migration adds them: they
+  sit in the flag's witness, which is jsonb. Until then the loop draws and reads as before.
 
 ## Before a big upgrade
 

@@ -1,11 +1,11 @@
 export * from './types.js';
 export { parkedOf, ZERO } from './graph.js';
 export { analyze, tokenCycles, RULES, type Rules } from './methods.js';
-export { Payments } from './payments.js';
+export { Payments, evidenceLegs, evidencePayments, isEvidencePayment, useOf } from './payments.js';
 export { type LensFlag, type LoopEdge } from './lens.js';
-export { CUSTODIANS, TOKENS, WRAPPED, contractsFor, moneyFor } from './marketplaces.js';
+export { CUSTODIANS, TOKENS, WRAPPED, contractsFor, moneyFor, traders } from './marketplaces.js';
 export { FOLLOW_FANOUT } from './lens-rule.js';
-export { Store, MAX_STREAMS, STREAM_MAX_MS, DOWNLOAD_STALL_MS, DOWNLOAD_TOO_LONG, BUILT_IN_NAMES, type MoneyRead, type TokenCounts, type Lens, type LensRun, type Preview, type PreviewResult, type OwnFlag, type CollectionRow, type CollectionProfile, type Configure, type AnalysisRow, type PassRow, type Bucket, type RingLine, type TimelinePoint, type Parsed, type SearchKind, type SearchHits, type Tier, type MiddleRow } from './store.js';
+export { Store, MAX_STREAMS, STREAM_MAX_MS, DOWNLOAD_STALL_MS, DOWNLOAD_TOO_LONG, BUILT_IN_NAMES, type MoneyRead, type PaymentUsedBy, type TokenCounts, type Lens, type LensRun, type Preview, type PreviewResult, type OwnFlag, type CollectionRow, type CollectionProfile, type Configure, type AnalysisRow, type PassRow, type Bucket, type RingLine, type TimelinePoint, type Parsed, type SearchKind, type SearchHits, type Tier, type MiddleRow, type WalletRead } from './store.js';
 export type { FlaggedTransfer, FlowDir, PartnerSort, TokenLine, TokenSort, TradeGroup, TradeRow, WalletFilter, WalletLine, WalletSort } from './trade-sql.js';
 export { MIGRATIONS } from './migrations.js';
 export { lensRefusal, type SpotResult } from './spot.js';

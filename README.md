@@ -28,9 +28,9 @@ marketplaces and three corrections are new.
 | See it work | [Quick start](#quick-start), then [the console](#the-console) |
 | Know what a word on screen means | [The glossary](doc/glossary.md) |
 | Know whether to trust a flag | [The methods](doc/methods.md): each on a demo token, the placebo test, what a read cannot see |
-| Find a page or write your own lens | [The console](doc/console.md) |
+| Read a page, or write your own lens | [The console](doc/console.md) |
 | Ask for verdicts from code | [Asking for a verdict](#asking-for-a-verdict), then [the API](doc/api.md) |
-| Run it on a real chain | [Operating](doc/operating.md): settings, deploying, the worker, limits; [upgrading](doc/upgrading.md) |
+| Run it on a real chain | [Operating](doc/operating.md): settings, deploying, the worker, what to do when something is wrong, limits; [upgrading](doc/upgrading.md) |
 | Use the data | [The dataset](#the-dataset), then [stored data](doc/stored-data.md) |
 | Work on the code | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
@@ -48,9 +48,11 @@ docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
 Open http://localhost:8080 and choose **Demo Apes**. Its verdicts arrive about
 seven minutes after the seeder finishes: the worker reads the transfers within a
 minute, but analyses of one collection are spaced five minutes apart, and the
-first ran before any transfer was read. Each token below is one scenario, in the
-console's order: the floor, the ceiling, then the lens not counted.
+first ran before any transfer was read. Each row below is one token; the columns
+are in the console's order: floor, ceiling, not counted.
 [doc/methods.md](doc/methods.md) walks through why each verdict is what it is.
+The letters in the headers are the paper's codes for the lenses; they appear
+only in URLs, the API and the CSV.
 
 | Token | What happens | Round trips (A) | Linked wallets (AC) | Money loops back (AU) |
 |---|---|---|---|---|
@@ -64,6 +66,22 @@ console's order: the floor, the ceiling, then the lens not counted.
 | #1–#40 | Honest sales, every buyer funded by one exchange | – | – | – |
 | #120 | Two loans through Blur Blend, then a sale | – | – | – |
 | #130 | Sold once and bought back once | – | – | – |
+
+**When it is done,** the Worker page says "Nothing has failed." and the Demo
+Apes overview shows its range, from the floor to the ceiling, under a strip of
+the reading's steps, each ticked or marked "not needed".
+
+**To start over,** remove the demo's containers and both volumes:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
+```
+
+`-v` also removes the downloaded stored data, which a real run downloads again.
+The demo and a real run share one database, so a real run after the demo would
+find the demo collection. If you set `COMPOSE_PROJECT_NAME` or `-p`, pass the
+same. To keep the downloads, run `docker compose down`, then
+`docker volume rm <project>_db`.
 
 **Against a real chain**, give it an RPC endpoint and an Etherscan key, then
 watch a collection from the console or `POST /api/collections`:
@@ -90,30 +108,9 @@ machine only; every setting, and how to put it on a public host, is in
 ## The console
 
 A collection's page leads with **the answer**: the share of its sales that looks
-washed, as the range from Round trips (the floor) to Linked wallets (the
-ceiling). Under it, **how sure** each end is, with Money loops back set apart as
-not counted; a strip of **every sale in order**, each coloured by the strongest
-lens that caught it; the tokens and wallets most flagged ETH went through; and
-what looks suspicious but is not counted. Every figure opens the trades it
-counts.
-
-- **Tabs.** Overview, Methods, Rings, Tokens, Wallets and Trades. A lens chosen on one tab
-  is kept on the others.
-- **Methods** shows what the overview stands on: a tab per lens, each lens's share
-  over time, the six stages of the reading, and your own lenses.
-- **Rings** are the wallets the counted evidence joins, the most ETH first; a
-  ring's page draws its loops and lists who traded and who only moved money.
-- **A token, wallet, trade or ring** says what it is the same way: a verdict chip
-  naming the lens behind it, the strip with its own sales outlined, and a
-  **Connected to** panel of the wallets here, each with its role. Opened from a
-  list, it steps to the item before and after (K and J).
-- **Your own lens** sets which payments may carry the money back to the seller,
-  through how many wallets, in what time window. Preview tries it on 2,000 sales
-  before you save; **Lab** sets your lenses side by side and runs them on more
-  collections.
-- **Check this transaction** judges one transaction nothing watched has read.
-
-Every page is in [doc/console.md](doc/console.md), and every word it uses in
+washed, as a range from Round trips (the floor) to Linked wallets (the ceiling).
+Every page, from a ring to a single payment, is in
+[doc/console.md](doc/console.md), and every word it uses is in
 [the glossary](doc/glossary.md).
 
 ## Asking for a verdict
@@ -150,38 +147,9 @@ curl http://localhost:8080/api/transfers/31337/0x083d0b4dc33d0b699b212e551c5195e
 
 A transaction washtrace has not read is 404, never `washTrade: false`.
 
-**Not watched yet?** Ask for a spot check. It reads only that transaction: its
-receipt, its tokens' histories, and the money of the wallets in it.
-
-```sh
-curl -X POST http://localhost:8080/api/spots -H 'content-type: application/json' \
-  -d '{"chainId": 31337, "tx": "0x083d0b4dc33d0b699b212e551c5195e31efbef22b285456be6c2181f97b05470"}'
-```
-
-The demo watches Demo Apes and has judged this sale, so the answer is 200 at once,
-from the store, with `status: 'done'` and the result:
-
-```jsonc
-{
-  "status": "done",
-  "result": {
-    "washTrade": true,
-    "methods": ["AC"],
-    "notRun": [],            // lenses that could not run
-    "atLeast": false,        // true: some wallets could not be judged, so this is not clean
-    "finalized": true,
-    "source": "watched",     // "spot" when a spot check read it
-    "transfers": [{ "tokenId": "114", "collection": "0x…", "flags": { "AC": { "kind": "pair", "middle": "0x8318…67d8" } } }]
-  }
-}
-```
-
-A collection that is not watched gets `{"id":1,"status":"queued","reused":false}`
-(202) instead. Poll `GET /api/spots/1` until its `status` is `done`; the same
-`result` is there, with `"source": "spot"`. Add `"lens": "L7"` to
-judge with a lens of yours. How a spot check is narrower than a full read is in
-[doc/methods.md](doc/methods.md#a-spot-check); every route is in
-[doc/api.md](doc/api.md).
+**Not watched yet?** `POST /api/spots` judges one transaction without watching
+its collection: [doc/api.md](doc/api.md#spot-checks). What it can and cannot say
+is in [doc/methods.md](doc/methods.md#a-spot-check).
 
 ## How it works
 
@@ -201,18 +169,13 @@ for every wallet that traded and follows that money out, and **analyzes** with
 the three methods and your lenses whenever the data changed. The api and console
 only read Postgres, so a slow read never slows a page.
 
-| Lens | Flags a transfer when | Needs who paid whom |
-|---|---|---|
-| **Round trips** (SCC A) · the floor | It lies in a loop of the token's own transfers with at least two cycles: wallets passing the token back and forth. | No |
-| **Linked wallets** (SCC AC) · the ceiling | Round trips flags it, or its two wallets are joined by money within two hops: one paid the other, or both share a funder, a payee or a middle. | Yes |
-| **Money loops back** (SCC AU) · not counted | Its loop is closed by money running back to the seller, up to 30 wallets deep. | Yes |
-
-**The headline is the range from Round trips to Linked wallets.** Money loops
-back still runs, but in a placebo test, with buyers relabelled at random, it
-flagged as many sales as with the real buyers (Terraforms 71.7% against 74–75%).
-Linked wallets clears the test, though between a third and a half of what it adds
-over Round trips is chance. A lens that needs who paid whom and has none says
-**not run**, never 0%. The test, the thresholds and what a read cannot see are in
+Three lenses judge each trade: Round trips (the floor), Linked wallets (the
+ceiling) and Money loops back (not counted). The headline is the range from the
+floor to the ceiling ([glossary](doc/glossary.md#the-lenses),
+[methods](doc/methods.md)). Money loops back still runs, but a placebo test
+showed it does not separate wash trading from chance, so it is left out of the
+headline. A lens that needs who paid whom and has none says **not run**, never
+0%. The test, the thresholds and what a read cannot see are in
 [doc/methods.md](doc/methods.md).
 
 ## The paper
@@ -231,7 +194,7 @@ touch the token. The paper adds the graph of money between wallets.
 | Chains | Ethereum | Any EVM chain |
 | Marketplaces | Seaport 1.4 and 1.5 | Seaport 1.1 to 1.6, Blur, LooksRare v2, X2Y2 |
 | Money | ETH | ETH, internal transfers, WETH, Blur Pool, and Other tokens if read |
-| Whose money | Traders' | Traders', then followed out (`follow.hops`) |
+| Whose money | Traders' | Traders', then followed out (wallets out) |
 
 Three corrections, each with a test and set out in
 [doc/methods.md](doc/methods.md#what-is-never-counted): a sale's own payment

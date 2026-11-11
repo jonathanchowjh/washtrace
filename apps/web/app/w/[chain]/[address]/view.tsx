@@ -1,24 +1,24 @@
 import Link from 'next/link';
-import type { Flow, FlowDir, PartnerSort } from '@washtrace/detect';
+import type { FlowDir, PartnerSort } from '@washtrace/detect';
 import { findOf } from '@washtrace/detect/trades';
 import { ConnectedRail, OpenUnder, ParentLine, type Home } from '@/components/connected-rail';
 import { middleWords, partnersOf } from '@/lib/why';
 import { VerdictChip } from '@/components/kit';
 import { WhereItSits } from '@/components/sales-strip';
-import { Answer, Elsewhere, Empty, Ext, Head, Section, SortHead } from '@/components/ui';
+import { Answer, Elsewhere, Empty, Head, Section, SortHead } from '@/components/ui';
 import { MatchLine } from '@/components/lens-lists';
 import { Pager } from '@/components/pager';
-import { TokenLink, Transfers, Wallet } from '@/components/transfers';
+import { Payments, TokenLink, Transfers, Wallet } from '@/components/transfers';
 import { chainName } from '@/lib/chains';
-import { MONEY_LENSES, eth, lensList, plural, short, num } from '@/lib/format';
-import { carry, explorerTx, walletHref, walletLinks } from '@/lib/links';
+import { MONEY_LENSES, lensList, plural, short, num } from '@/lib/format';
+import { carry, walletHref, walletLinks } from '@/lib/links';
 import { HEADLINE } from '@washtrace/detect';
 import { FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { hrefOf, walletOpts, type WalletOpts } from '@/lib/params';
 import { contextOf } from '@/lib/step';
 import { COUNTERPARTIES, FLOWS, TRADES, walletView } from '@/lib/views';
-import { Time } from '@/components/zone';
+import { EvidenceLine } from '@/components/coverage';
 import { Fragment, Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { StepLine } from '@/components/step-line';
@@ -30,9 +30,6 @@ const PARTNER_COLUMNS: readonly { sort: PartnerSort; label: string; right: boole
   { sort: 'sent', label: 'Payments sent to it', right: true },
   { sort: 'received', label: 'Payments received from it', right: true },
 ];
-
-/** How each payment between two wallets moved, in words. */
-const FLOW_KIND: Readonly<Record<Flow['kind'], string>> = { native: 'direct', internal: 'inside a contract call', token: 'wrapped ETH' };
 
 /** A flagged wallet's card: the page verdict's tone when it is a flagged one, else the ceiling's. */
 function flaggedTone(page: Tone | null): Tone {
@@ -55,7 +52,7 @@ export async function WalletView({ chainId, address, sp, within }: {
   if (within !== undefined) delete filter.collection;
   const asked: WalletOpts = { ...parsed, filter };
   const view = await walletView(chainId, address, asked, within?.collection);
-  const { funding, collections, counterparties, middles, partnerMiddles, middleIn, transfers, counts, pages, between, by, washTrade } = view;
+  const { collections, counterparties, middles, partnerMiddles, middleIn, transfers, counts, pages, between, by, washTrade } = view;
   // The page as shown: every page clamped to the last there is.
   const o: WalletOpts = { ...asked, trades: pages.trades.page, partners: pages.partners.page, flows: pages.flows.page };
   const scope = within?.base;
@@ -94,13 +91,6 @@ export async function WalletView({ chainId, address, sp, within }: {
   const apartNote = apart === 0 || tone === 'apart' ? null
     : `${apart}${hits.length > 0 ? ' more' : ''} ${apart === 1 ? 'is' : 'are'} ${FLAGGED_ONLY_AU}`;
 
-  // A wallet with no row is one no read transfer named; said in the same words as its empty list below, so the two agree.
-  const money = funding === null && counts.trades === 0 && counterparties.length > 0 ? 'The payments below were read from the wallets it paid or was paid by; its own history is not read.'
-    : funding === null ? `Its money is not read${counts.trades === 0 ? ': no transfer of it is read in a watched collection' : ' yet'}.`
-    : funding.status === 'pending' ? `Its money is not read yet: queued behind busier wallets (it is in ${plural(funding.transfers, 'transfer')}). Until it is, ${MONEY_LENSES} cannot see its links.`
-    : funding.status === 'failed' ? `Reading its money failed: ${funding.error ?? 'unknown error'}. Retried hourly; until then ${MONEY_LENSES} cannot see its links.`
-    : <>Its money was read {funding.fetchedAt === null ? 'from stored data' : <Time ms={funding.fetchedAt} />}{funding.truncated ? '. It has more history than Etherscan pages through, so it is never treated as the shared funder between two others' : ''}.</>;
-
   const first = (pages.trades.page - 1) * TRADES + 1;
   // The title counts flagged trades this page or filter does not hold, so then the verdict covers more than these.
   const covers = (them: string) => (elsewhere === null ? `; the verdict above covers ${them}.` : '.');
@@ -135,27 +125,30 @@ export async function WalletView({ chainId, address, sp, within }: {
         <Elsewhere links={walletLinks(chainId, address)} />
       </Head>
 
-      <Answer tone={tone} title={title}>
-        {elsewhere === null ? null : <p>{elsewhere} <Link href={carry(`${base}?flagged=1`, ctx)} className="font-medium hover:underline">Show the flagged ones</Link></p>}
-        {transfers.length > 0 && washTrade === null ? <p>{NOT_JUDGED}</p> : null}
-        {hits.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by.filter((m) => HEADLINE.includes(m)))}.</p> : null}
-        {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
-        <p className="text-muted-foreground">{money}</p>
-        {/* As the token page says it: what the flag means for this wallet, in a line of its own. */}
-        {hits.length > 0 ? (
-          <p className="mt-2 text-muted-foreground">
-            <b className="font-medium text-foreground">What this means:</b>{' '}
-            {by.includes('A')
-              ? 'Tokens it traded came back to a wallet that sold them. Open a token below to see the loop.'
-              : `${lensList(by.filter((m) => HEADLINE.includes(m)))} found this: it and a wallet it traded with are linked by money. The payments are under Who did it move money with, below.`}
-          </p>
-        ) : null}
-      </Answer>
+      {/* The answer, the strip and the rail are cards of their own, apart from each other. */}
+      <div className="space-y-4">
+        <Answer tone={tone} title={title}>
+          {elsewhere === null ? null : <p>{elsewhere} <Link href={carry(`${base}?flagged=1`, ctx)} className="font-medium hover:underline">Show the flagged ones</Link></p>}
+          {transfers.length > 0 && washTrade === null ? <p>{NOT_JUDGED}</p> : null}
+          {hits.length > 0 ? <p>Across {plural(tokens, 'token')}, flagged by {lensList(by.filter((m) => HEADLINE.includes(m)))}.</p> : null}
+          {apartNote === null ? null : <p className="text-muted-foreground">{apartNote}</p>}
+          {/* As the token page says it: what the flag means for this wallet, in a line of its own. */}
+          {hits.length > 0 ? (
+            <p className="mt-2 text-muted-foreground">
+              <b className="font-medium text-foreground">What this means:</b>{' '}
+              {by.includes('A')
+                ? 'Tokens it traded came back to a wallet that sold them. Open a token below to see the loop.'
+                : `${lensList(by.filter((m) => HEADLINE.includes(m)))} found this: it and a wallet it traded with are linked by money. The payments are under Who did it move money with, below.`}
+            </p>
+          ) : null}
+          <Suspense fallback={null}><EvidenceLine chainId={chainId} wallets={[address]} home={home} viaPartners={counts.trades === 0 && counterparties.length > 0} untraded={counts.trades === 0} className="mt-2" /></Suspense>
+        </Answer>
 
-      {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
-      {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} transfers={counts.trades} /></Suspense>}
-      {/* A wallet with no transfer here is part of nothing here: the rail would name the collection and its share as if it were. */}
-      {home === undefined || counts.trades === 0 ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} ctx={away} wallets={partnersOf(transfers, counterparties, address, partnerMiddles)} /></Suspense>}
+        {/* Its one collection's panels, here or under its tabs: across several there is no one strip or rail. */}
+        {home === undefined ? null : <Suspense fallback={null}><WhereItSits chainId={chainId} address={home} of={{ wallet: address }} transfers={counts.trades} /></Suspense>}
+        {/* A wallet with no transfer here is part of nothing here: the rail would name the collection and its share as if it were. */}
+        {home === undefined || counts.trades === 0 ? null : <Suspense fallback={null}><ConnectedRail chainId={chainId} address={home} ctx={away} wallets={partnersOf(transfers, counterparties, address, partnerMiddles)} /></Suspense>}
+      </div>
 
       <Section title="Which of its transfers?" lead={<>{transfers.length > 0 ? `${shown} ` : ''}{TINT_LEAD} Open the token to see the pattern.</>}>
         {counts.trades === 0 ? null : (
@@ -259,33 +252,7 @@ export async function WalletView({ chainId, address, sp, within }: {
           </div>
           {between.flowsTotal === 0 ? <Empty>No payments {o.dir === 'sent' ? 'from it to' : o.dir === 'received' ? 'to it from' : 'either way with'} this wallet were read.</Empty> : (
             <>
-              <div className="overflow-x-auto rounded-lg border bg-card">
-                <table className="w-full min-w-[30rem] text-left text-sm">
-                  <thead className="text-xs text-muted-foreground">
-                    <tr className="border-b">
-                      <th className="px-3 py-2 font-medium">When</th>
-                      <th className="px-3 py-2 font-medium">Which way</th>
-                      <th className="px-3 py-2 font-medium">How</th>
-                      <th className="px-3 py-2 text-right font-medium">Amount</th>
-                      <th className="px-3 py-2 font-medium">Transaction</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {between.flows.map((f) => {
-                      const tx = explorerTx(chainId, f.txHash);
-                      return (
-                      <tr key={`${f.txHash}:${f.kind}:${f.from}:${f.token}:${f.valueWei}`} className="border-b last:border-b-0">
-                        <td className="px-3 py-1.5 whitespace-nowrap text-xs tabular-nums"><Time ms={f.blockTime * 1000} /></td>
-                        <td className="px-3 py-1.5">{f.from === address ? 'it sent' : 'it received'}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">{FLOW_KIND[f.kind]}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{eth(f.valueWei, f.kind === 'token' ? 'WETH' : 'ETH')}</td>
-                        <td className="px-3 py-1.5 text-xs">{tx === null ? <span className="font-mono">{short(f.txHash)}</span> : <Ext href={tx} title={f.txHash}>tx</Ext>}</td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <Payments chainId={chainId} flows={between.flows} self={address} within={scope} ctx={away} />
               <Pager total={between.flowsTotal} page={pages.flows.page} size={FLOWS} href={(n) => `${href({ flows: n })}#between`} label="payments" pageParam="flows" />
             </>
           )}

@@ -19,9 +19,10 @@ import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { contextOf } from '@/lib/step';
 import { tradesHref } from '@/lib/trades-url';
-import { HEADLINE } from '@washtrace/detect';
+import { HEADLINE, traders } from '@washtrace/detect';
 import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, inShownOrder, toneOf } from '@/lib/metrics';
 import { coverage, progress, unread } from '@/lib/coverage';
+import { EvidenceLine } from '@/components/coverage';
 import { readerZone } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
@@ -86,6 +87,8 @@ export default async function TokenPage({ params, searchParams }: Props) {
   const ownLine = ownByRow.size === 0 ? '' : ` Your lenses also catch ${ownByRow.size} of its trades: ${andList(ownNames)}.`;
   const { title, tone } = answer(view, by.includes('A') ? 'Its trades go round in circles' : 'Its buyers and sellers are linked by money', ownByRow.size > 0);
   const why = reasons(transfers);
+  // The wallets its verdict stands on: everyone who held it that the engine queues for money (traders): no mint, burn, marketplace or other contract.
+  const holders = [...new Set(traders(chainId, transfers))];
 
   // A row's number is its place in the whole chain order. The filter keeps some of them, the page shows a hundred of those.
   const show = SHOWS.find((s) => s === sp.show) ?? 'all';
@@ -139,48 +142,52 @@ export default async function TokenPage({ params, searchParams }: Props) {
         <Elsewhere links={tokenLinks(chainId, address, tokenId)} />
       </Head>
 
-      <Answer tone={tone} title={title}>
-        {washTrade === null ? (
-          <>
-            {NOT_JUDGED}
-            {/* Not judged means no counted lens flags any of it (verdict), so only an apart flag is left to say. */}
-            {apart > 0 ? ` ${apart} of ${transfers.length} transfers are ${FLAGGED_ONLY_AU}` : ''}
-            {notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}
-          </>
-        ) : apartOnly ? (
-          <>{apart} of {transfers.length} transfers flagged, by {lensList(by)}: {APART_WHY}.</>
-        ) : by.length === 0 ? (
-          <>None of its {transfers.length} transfers is flagged by {ownByRow.size > 0 ? 'the built-in lenses' : notRun.length > 0 ? 'the lenses that ran' : 'any lens'}{ownByRow.size > 0 && notRun.length > 0 ? ' that ran' : ''}.{notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}</>
-        ) : (
-          <>
-            {flagged} of {transfers.length} transfers flagged, by {lensList(lenses)}.{' '}
-            They count toward <Link href={lensTabHref(base, lenses[0]!)} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
-          </>
-        )}
-        {ownLine}
-        {by.length > 0 && !apartOnly ? (
-          <p className="mt-2 text-muted-foreground">
-            <b className="font-medium text-foreground">What this means:</b>{' '}
-            {by.includes('A')
-              ? 'Its trades return to a wallet that sold it. The loop is drawn below.'
-              : `${lensList(lenses)} found this: a buyer and a seller of the token are linked by money. The money paths are the dashed arrows below.`}
-          </p>
-        ) : null}
-      </Answer>
+      {/* The answer, the strip and the rail are cards of their own, apart from each other. */}
+      <div className="space-y-4">
+        <Answer tone={tone} title={title}>
+          {washTrade === null ? (
+            <>
+              {NOT_JUDGED}
+              {/* Not judged means no counted lens flags any of it (verdict), so only an apart flag is left to say. */}
+              {apart > 0 ? ` ${apart} of ${transfers.length} transfers are ${FLAGGED_ONLY_AU}` : ''}
+              {notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}
+            </>
+          ) : apartOnly ? (
+            <>{apart} of {transfers.length} transfers flagged, by {lensList(by)}: {APART_WHY}.</>
+          ) : by.length === 0 ? (
+            <>None of its {transfers.length} transfers is flagged by {ownByRow.size > 0 ? 'the built-in lenses' : notRun.length > 0 ? 'the lenses that ran' : 'any lens'}{ownByRow.size > 0 && notRun.length > 0 ? ' that ran' : ''}.{notRun.length > 0 ? ` ${notRunAll(notRun)}` : ''}</>
+          ) : (
+            <>
+              {flagged} of {transfers.length} transfers flagged, by {lensList(lenses)}.{' '}
+              They count toward <Link href={lensTabHref(base, lenses[0]!)} className="underline hover:text-foreground">{name}&rsquo;s share</Link> under each of those lenses.{apartNote}
+            </>
+          )}
+          {ownLine}
+          {by.length > 0 && !apartOnly ? (
+            <p className="mt-2 text-muted-foreground">
+              <b className="font-medium text-foreground">What this means:</b>{' '}
+              {by.includes('A')
+                ? 'Its trades return to a wallet that sold it. The loop is drawn below.'
+                : `${lensList(lenses)} found this: a buyer and a seller of the token are linked by money. The money paths are the dashed arrows below.`}
+            </p>
+          ) : null}
+          <Suspense fallback={null}><EvidenceLine chainId={chainId} wallets={holders} home={address} className="mt-2" /></Suspense>
+        </Answer>
 
-      <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense>
-      <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
-      <ConnectedRail chainId={chainId} address={address} ctx={away} wallets={walletRoles(transfers, flows, middles)} txs={railTxs([], flows)} /></Suspense>
+        <Suspense fallback={null}><WhereItSits chainId={chainId} address={address} of={{ token: tokenId }} /></Suspense>
+        <Suspense fallback={null}>{/* Its sales are the Every transfer table's; the rail names only the payments, which no table here lists. */}
+        <ConnectedRail chainId={chainId} address={address} ctx={away} wallets={walletRoles(transfers, middles)} txs={railTxs([], flows)} /></Suspense>
+      </div>
 
       <TokenLoops
         drawing={drawing} chainId={chainId} base={base} ctx={away} rowHrefs={rowHrefs} initial={initial}
-        graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are money between the same wallets." />}
+        graphHead={<SectionHead title="What it looks like" lead="Each circle is a wallet: click one to light its arrows, and again to open it. Solid arrows are the token changing hands, numbered as in the table below, and click to open the trade; dashed arrows are the payments a lens used." />}
         whyHead={<SectionHead title={apartOnly && own.length === 0 ? `Why ${LENSES.AU.name} flags it` : judgedAll && drawing.loops.length === 0 ? 'Why it was not flagged' : 'Why it was flagged'} lead={drawing.loops.length === 0 ? undefined : `One line per pattern found, with the transfers it covers and the lenses that agree on it${own.length === 0 ? '' : ', then one per loop a lens of yours found'}. Show in graph lights the pattern.`} />}
         empty={judgedAll ? <ul className="space-y-1.5 text-sm text-muted-foreground">{notFlaggedLines(view.near, notRun).map((line) => <li key={line}>{line}</li>)}</ul> : <Empty>{NOT_JUDGED}</Empty>}
         items={[
           ...why.map((r, i) => ({
             key: drawing.loops[i]!.key,
-            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId, base)}</span></span>,
+            body: <span className="flex items-start gap-3"><EvidenceGlyph witness={r.witness} className="mt-0.5" /><span>{because(r.witness, chainId, base, false, away)}</span></span>,
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>

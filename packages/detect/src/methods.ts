@@ -1,6 +1,6 @@
 import { AddressGraph, chainOrder, compare, tokenGraph, type Hop } from './graph.js';
 import type { Payments } from './payments.js';
-import type { Analysis, Flag, Method, MethodTotals, PairShape, Transfer, Witness } from './types.js';
+import type { Analysis, Flag, Method, MethodTotals, MoneyPath, PairShape, Transfer, Witness } from './types.js';
 
 /**
  * The numbers the methods turn on. Each is data, with the sentence that
@@ -32,6 +32,13 @@ export const RULES = {
 } as const;
 
 export type Rules = { readonly [K in keyof typeof RULES]: number };
+
+/**
+ * A Money loops back loop records a chain of payments for this many of its
+ * money edges, its first. The witness is repeated on every flag of its
+ * loop, so each path it carries is stored once per flagged trade.
+ */
+const PATHS_MAX = 4;
 
 export interface Input {
   transfers: readonly Transfer[];
@@ -94,7 +101,17 @@ export function analyze(input: Input): Analysis {
     for (const h of graph.hops) { holders.add(h.from); holders.add(h.to); }
     const via: [string, string][] = [];
     for (const u of holders) for (const v of money.reach(u)) if (v !== u && holders.has(v)) via.push([u, v]);
-    for (const [ref, w] of sccFlags(graph.hops, via, rules.minCycles)) if (!flagged.AU.has(ref)) flagged.AU.set(ref, w);
+    const closed = new Set<Extract<Witness, { kind: 'scc+flow' }>>();
+    for (const [ref, w] of sccFlags(graph.hops, via, rules.minCycles)) {
+      if (flagged.AU.has(ref)) continue;
+      flagged.AU.set(ref, w);
+      if (w.kind === 'scc+flow') closed.add(w);
+    }
+    // Searched again only for the loops it flagged: a path per reached pair would be kept for every wallet reach found.
+    for (const loop of closed) {
+      const paths = loop.via.slice(0, PATHS_MAX).flatMap(([u, v]) => money.path(u, v) ?? []);
+      if (paths.length > 0) loop.paths = paths;
+    }
 
     for (const h of real) {
       if (h.from === h.to || flagged.AC.has(h.ref!)) continue;
@@ -191,7 +208,7 @@ function sccFlags(hops: readonly Hop[], via: readonly [string, string][], minCyc
  * maps of maps keyed by address, Terraforms' graph took 1.1 GB on top of its
  * flows, and the analysis ran out of heap.
  */
-class MoneyGraph {
+export class MoneyGraph {
   /** By number: each wallet's address. */
   private readonly names: string[];
   /** The Payments number of a wallet → its number here. */
@@ -204,6 +221,8 @@ class MoneyGraph {
   /** Directed, by number: the wallets each sent money to, ascending, so by address. */
   private readonly outStart: Int32Array;
   private readonly out: Int32Array;
+  /** Beside `out`: the payment with the smallest hash of those this wallet sent to that one. */
+  private readonly outTx: Int32Array;
   /** By number: 1 for a hub, and 1 for one of the collection's wallets. */
   private readonly hub: Uint8Array;
   private readonly member: Uint8Array;
@@ -215,7 +234,11 @@ class MoneyGraph {
    */
   private readonly seen: Int32Array;
   private searches = 0;
+  /** Payers by payee, and the marks of a path search: made at the first path. */
+  private back: ReturnType<typeof paidBy> | null = null;
   private readonly reached = new Map<string, Set<string>>();
+  /** path's answers by `from|to`: one holder pair can wash a thousand tokens, each its own loop. */
+  private readonly ways = new Map<string, MoneyPath | null>();
   private readonly payments: Payments;
   truncatedSearches = 0;
 
@@ -240,6 +263,7 @@ class MoneyGraph {
     const nearTx = new Int32Array(run.length);
     const outStart = new Int32Array(n + 1);
     const out = new Int32Array(run.length / 2);
+    const outTx = new Int32Array(run.length / 2);
     let m = 0;
     let o = 0;
     for (let v = 0; v < n; v++) {
@@ -248,15 +272,16 @@ class MoneyGraph {
       for (let i = start[v]!, end = start[v + 1]!; i < end;) {
         const y = rank[ends[run[i]! ^ 1]!]!;
         let p = run[i]! >> 1;
-        let paid = (run[i]! & 1) === 0;
+        // The smallest this wallet paid, or -1.
+        let sent = (run[i]! & 1) === 0 ? p : -1;
         for (i++; i < end && rank[ends[run[i]! ^ 1]!] === y; i++) {
           const q = run[i]! >> 1;
           if (payments.tx(q) < payments.tx(p)) p = q;
-          if ((run[i]! & 1) === 0) paid = true;
+          if ((run[i]! & 1) === 0 && (sent < 0 || payments.tx(q) < payments.tx(sent))) sent = q;
         }
         near[m] = y;
         nearTx[m++] = p;
-        if (paid) out[o++] = y;
+        if (sent >= 0) { out[o] = y; outTx[o++] = sent; }
       }
     }
     nearStart[n] = m;
@@ -267,6 +292,7 @@ class MoneyGraph {
     this.nearTx = nearTx.slice(0, m);
     this.outStart = outStart;
     this.out = out.slice(0, o);
+    this.outTx = outTx.slice(0, o);
 
     this.member = Uint8Array.from(names, (a) => (wallets.has(a) ? 1 : 0));
     this.hub = new Uint8Array(n);
@@ -342,19 +368,24 @@ class MoneyGraph {
     return 'payee';
   }
 
-  /** Whether `v` sent money to `y`: a search of `v`'s payees, which are ascending. */
+  /** Whether `v` sent money to `y`. */
   private paid(v: number, y: number): boolean {
+    return this.payee(v, y) >= 0;
+  }
+
+  /** Where `y` is among the wallets `v` sent money to, or -1: a search of them, since they are ascending. */
+  private payee(v: number, y: number): number {
     const { out } = this;
     let lo = this.outStart[v]!;
     let hi = this.outStart[v + 1]! - 1;
     while (lo <= hi) {
       const mid = (lo + hi) >>> 1;
       const at = out[mid]!;
-      if (at === y) return true;
+      if (at === y) return mid;
       if (at < y) lo = mid + 1;
       else hi = mid - 1;
     }
-    return false;
+    return -1;
   }
 
   /**
@@ -392,6 +423,102 @@ class MoneyGraph {
     }
     return found;
   }
+
+  /**
+   * A chain of payments from `from` to `to` by the rules reach follows
+   * (money sent, through wallets that are not hubs, within `reachDepth`
+   * hops, with no check of block order), with the payment of each step;
+   * null when there is none. Searched from both ends at once, a level of
+   * the smaller side at a time: one end alone met most of a big component
+   * before it got there, and the same search again for each of a loop's
+   * money edges made Money loops back's flagged loops cost about as much as
+   * their reach. Every list is in address order, so the chain found never
+   * depends on the payments' order. Memoised, and asked only for a flagged
+   * loop's first money edges.
+   */
+  path(from: string, to: string): MoneyPath | null {
+    const key = `${from}|${to}`;
+    let way = this.ways.get(key);
+    if (way === undefined) this.ways.set(key, (way = this.search(from, to)));
+    return way;
+  }
+
+  /** path's search, every time it is asked. */
+  search(from: string, to: string): MoneyPath | null {
+    const start = this.id(from);
+    const goal = this.id(to);
+    if (start < 0 || goal < 0 || start === goal || this.hub[start]) return null;
+    const back = (this.back ??= paidBy(this.out, this.outStart));
+    const search = ++this.searches;
+    const { seen, out, outStart, hub } = this;
+    seen[start] = search;
+    back.seen[goal] = search;
+    let ahead = [start];
+    let behind = [goal];
+    let visited = 2;
+    for (let steps = 0; steps < this.rules.reachDepth && ahead.length > 0 && behind.length > 0; steps++) {
+      const next: number[] = [];
+      if (ahead.length <= behind.length) {
+        for (const v of ahead) {
+          for (let i = outStart[v]!, end = outStart[v + 1]!; i < end; i++) {
+            const w = out[i]!;
+            if (seen[w] === search) continue;
+            seen[w] = search;
+            back.cameFrom[w] = v;
+            // Only the goal and wallets that may be between are on the goal's side.
+            if (back.seen[w] === search) return this.way(start, w, goal);
+            if (++visited > this.rules.visitCap) return null;
+            if (!hub[w]) next.push(w);
+          }
+        }
+        ahead = next;
+      } else {
+        for (const v of behind) {
+          for (let i = back.start[v]!, end = back.start[v + 1]!; i < end; i++) {
+            const x = back.payer[i]!;
+            if (back.seen[x] === search || (hub[x] && x !== start)) continue;
+            back.seen[x] = search;
+            back.goesTo[x] = v;
+            if (seen[x] === search) return this.way(start, x, goal);
+            if (++visited > this.rules.visitCap) return null;
+            next.push(x);
+          }
+        }
+        behind = next;
+      }
+    }
+    return null;
+  }
+
+  /** The way path found, joined at `at`: back to `start` by cameFrom, on to `goal` by goesTo. */
+  private way(start: number, at: number, goal: number): MoneyPath {
+    const { cameFrom, goesTo } = this.back!;
+    const way = [at];
+    for (let v = at; v !== start;) way.push((v = cameFrom[v]!));
+    way.reverse();
+    for (let v = at; v !== goal;) way.push((v = goesTo[v]!));
+    return {
+      wallets: way.map((v) => this.names[v]!),
+      txs: way.slice(1).map((v, k) => this.payments.tx(this.outTx[this.payee(way[k]!, v)]!)),
+    };
+  }
+}
+
+/**
+ * What path searches back along: each wallet's payers, ascending, as a run
+ * of `payer` from `start[v]` (the same payments as `out`, turned round), and
+ * the marks of a search. Made at a collection's first path, so an analysis
+ * that flags no loop closed by money never builds it.
+ */
+function paidBy(out: Int32Array, outStart: Int32Array): { start: Int32Array; payer: Int32Array; seen: Int32Array; cameFrom: Int32Array; goesTo: Int32Array } {
+  const n = outStart.length - 1;
+  const start = new Int32Array(n + 1);
+  for (let i = 0; i < out.length; i++) start[out[i]! + 1]! += 1;
+  for (let v = 0; v < n; v++) start[v + 1]! += start[v]!;
+  const fill = start.slice(0, n);
+  const payer = new Int32Array(out.length);
+  for (let v = 0; v < n; v++) for (let i = outStart[v]!; i < outStart[v + 1]!; i++) payer[fill[out[i]!]!++] = v;
+  return { start, payer, seen: new Int32Array(n), cameFrom: new Int32Array(n), goesTo: new Int32Array(n) };
 }
 
 /** Wallets numbered in address order: their addresses so, and each Payments number's new number. */

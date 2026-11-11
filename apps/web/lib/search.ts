@@ -150,8 +150,11 @@ export function hitRow(hits: SearchHits, kind: SearchKind, i: number, scope: Sco
     const h = hits.wallets[i]!;
     // A full address is found wherever it traded: one that never traded in the scope opens on its own page, unless it stands there as a middle (its tier), whose role its page under the tabs leads with.
     const within = scope !== null && scope.chainId === h.chainId && (h.here !== false || h.tier) ? `/c/${scope.chainId}/${scope.address}` : null;
+    // A ring's middle may never have traded: say what it is, not "in 0 transfers".
+    const where = within !== null && h.here === false && h.tier ? 'in between sellers and buyers here, no trades'
+      : h.transfers === 0 ? 'no trades in watched collections' : `in ${plural(h.transfers, 'transfer')} of watched collections`;
     return {
-      href: walletHref(h.chainId, h.address, within), title: short(h.address), hex: true, detail: `Wallet on ${chainName(h.chainId)} · in ${plural(h.transfers, 'transfer')} of watched collections`,
+      href: walletHref(h.chainId, h.address, within), title: short(h.address), hex: true, detail: `Wallet on ${chainName(h.chainId)} · ${where}`,
       ...(h.tier ? { tier: h.tier } : {}),
     };
   }

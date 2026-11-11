@@ -268,7 +268,7 @@ export const LIST_ORDER = {
 } as const;
 
 /** Each PairShape's count as one json column `shapes`, each shape's from `of(shape)`. */
-const shapesOf = (of: (shape: PairShape) => string) => `jsonb_build_object(${PAIR_SHAPES.map((x) => `'${x}', ${of(x)}`).join(', ')}) AS shapes`;
+export const shapesOf = (of: (shape: PairShape) => string) => `jsonb_build_object(${PAIR_SHAPES.map((x) => `'${x}', ${of(x)}`).join(', ')}) AS shapes`;
 
 /**
  * A lens list row `c`'s loops: the witnesses in its `ids`, counted by kind and
