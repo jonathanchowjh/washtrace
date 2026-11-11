@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { moneyFor, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
+import { METHODS, moneyFor, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletLine, type WalletSort } from '@washtrace/detect';
 import { NO_FILTER, isOwnKey, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from '@washtrace/detect/trades';
 import { Empty, Head } from '@/components/ui';
 import { LensList } from '@/components/lens-lists';
@@ -90,8 +90,9 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   // A sort on a lens that did not run has nothing to sort by: it falls back to the default order, and says nothing.
   const unrunSort = asked.sort.startsWith('lens-') && !ran.includes(asked.sort.slice(5) as LensKey);
   const query: TradeQuery = unrunSort ? { ...asked, sort: NO_FILTER.sort, dir: NO_FILTER.dir } : asked;
-  // On Trades the Tokens and Wallets tabs keep the first lens the list is filtered to.
-  const method: LensKey = kind === 'trades' ? (SHOWN.find((m) => query.caught.includes(m)) ?? query.caught[0] ?? lensKeyOf(one('method'), own)) : lensKeyOf(one('method'), own);
+  // On Trades the Tokens and Wallets tabs keep the first lens the list is filtered to: first in METHODS' order, as
+  // CollectionNav's lensOf picks the tabs' lens from the same filter, so the two never name different lenses.
+  const method: LensKey = kind === 'trades' ? (METHODS.find((m) => query.caught.includes(m)) ?? query.caught[0] ?? lensKeyOf(one('method'), own)) : lensKeyOf(one('method'), own);
   const list = kind === 'trades' ? 'tokens' : kind;
   // On Trades, sort, q and page are the Trades list's own, so the lists' are their defaults.
   const lv = listView(list, kind === 'trades' ? {} : { page: one('page'), sort: one('sort'), find: one('q') });
