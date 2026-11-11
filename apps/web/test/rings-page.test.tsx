@@ -181,10 +181,14 @@ describe('the ring’s picture', () => {
     expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 only moved the money']);
   });
 
-  it('gives a kind with no wallet no legend line', async () => {
+  it('gives a kind with no wallet no legend line, and the kind that is every wallet no second count', async () => {
     const { RingFigure } = await import('@/components/rings');
     const c = render(<RingFigure wallets={ws(3, 0)} total={3} />).container;
-    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['3 traded']);
+    // The middle already says 3 wallets.
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['traded']);
+    cleanup();
+    const m = render(<RingFigure wallets={ws(0, 2)} total={2} />).container;
+    expect([...m.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['only moved the money']);
   });
 
   it('past a dozen, keeps each kind’s share of the dots, never dropping one, and says how many are drawn', async () => {

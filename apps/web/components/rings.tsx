@@ -135,9 +135,10 @@ export function RingFigure({ wallets, total }: { wallets: readonly { address: st
       </svg>
       {/* The picture's label says these counts already; the legend is for the eye. */}
       <figcaption aria-hidden className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-        {/* A kind with none drawn has no line: "0 only moved the money" says nothing the picture does not. */}
-        {traders.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, true)}</svg>{num(traders.length)} traded</span>}
-        {movers.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, false)}</svg>{num(movers.length)} only moved the money</span>}
+        {/* A kind with none drawn has no line: "0 only moved the money" says nothing the picture does not. A kind that is every wallet
+            keys its mark with no count: "2 traded" under "2 wallets" would say the number twice. */}
+        {traders.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, true)}</svg>{movers.length === 0 ? 'traded' : `${num(traders.length)} traded`}</span>}
+        {movers.length === 0 ? null : <span className="flex items-center gap-1.5"><svg viewBox="0 0 16 16" className="size-3.5 shrink-0">{walletMark(8, 8, 6, false)}</svg>{traders.length === 0 ? 'only moved the money' : `${num(movers.length)} only moved the money`}</span>}
         {total > shown.length ? <span>{num(shown.length)} of {num(total)} drawn</span> : null}
       </figcaption>
     </figure>
