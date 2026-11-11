@@ -54,6 +54,9 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
   const yours = [...new Set(edges.flatMap((e) => e.yours ?? []))];
   const others = edges.some((e) => e.kind === 'asset' && e.tone === 'own' && e.yours === undefined);
   const money = edges.some((e) => e.kind === 'money');
+  // A number means the same in every graph (layout's Numbered); the legend says how to read it. A drawing of several tokens marks each number with its token.
+  const numbered = labels && edges.some((e) => e.row !== null && !e.label.startsWith('×'));
+  const several = edges.some((e) => e.row !== null && e.label.startsWith('#'));
   const box = useRef<HTMLDivElement>(null);
   const focus = Math.round(focusOf(drawing, litNodes));
   useEffect(() => {
@@ -130,6 +133,7 @@ export function LoopFigure({ drawing, chainId, lit, base, rowHrefs = {}, pick = 
         {others ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0.5 w-4 bg-flow" />another token, on a loop of a lens of yours</span> : null}
         {money ? <span className="flex items-center gap-1.5"><i aria-hidden className="h-0 w-4 border-t-[1.5px] border-dashed border-flow" />money</span> : null}
         <span className="flex items-center gap-1.5"><i aria-hidden className="size-2 rounded-full border-2 border-foreground" />first holder</span>
+        {numbered ? <span>{several ? '#token·n: that token’s transfer n, counted from its first' : 'numbered from the token’s first transfer'}</span> : null}
         {labels ? null : <span>{nodes.length} wallets: hover a node for its address</span>}
       </figcaption>
     </figure>

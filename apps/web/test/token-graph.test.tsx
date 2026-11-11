@@ -208,6 +208,26 @@ describe('the graph on a phone', () => {
   });
 });
 
+describe('the numbers on the arrows', () => {
+  const legend = () => [...document.querySelectorAll('figcaption span')].map((s) => s.textContent);
+
+  it('say their rule in the legend: one token’s place from its first transfer, several tokens’ each under its token', () => {
+    render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toContain('numbered from the token’s first transfer');
+    cleanup();
+    const several = layout([{ ...t(A, B, '0xs1'), n: 2 }, { ...t(B, A, '0xs2'), tokenId: '9', n: 4 }], [], []);
+    render(<LoopFigure drawing={several} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect([...document.querySelectorAll('svg text')].map((x) => x.textContent)).toContain('#9·4');
+    expect(legend()).toContain('#token·n: that token’s transfer n, counted from its first');
+  });
+
+  it('are not explained when none is drawn: a bundle carries a count', () => {
+    const ping = Array.from({ length: 14 }, (_, i) => t(i % 2 === 0 ? A : B, i % 2 === 0 ? B : A, `0xp${i}`));
+    render(<LoopFigure drawing={layout(ping, [], [])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend().some((x) => x?.includes('numbered'))).toBe(false);
+  });
+});
+
 describe('a graph wider than its box', () => {
   // jsdom lays nothing out: give the box a phone's width, the drawing twice that, and the svg its drawn width.
   const wide = (svgWidth: number) => {

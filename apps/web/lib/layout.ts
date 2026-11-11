@@ -1,6 +1,6 @@
 import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
 import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
-import { LENSES, andList, weiToEth, type Lenses } from './format';
+import { LENSES, andList, tokenLabel, weiToEth, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
 
 /** Two witnesses that would read as the same sentence share a key. */
@@ -58,6 +58,15 @@ interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; 
 export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[] }
 /** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. A lens of yours's loop is one reason, of its one lens. */
 export interface DrawnLoop { key: string; methods: LensKey[]; edges: string[]; nodes: string[] }
+/**
+ * A transfer as layout() takes it. `n` is its place in its token's history, 1
+ * the first, a mint included: what its arrow is numbered, so a sale has one
+ * number in every graph that draws it and in its token's table. Left out, it
+ * is the transfer's place in the list given, which is that history when the
+ * list is one token's every transfer, as on a token or trade page.
+ */
+export type Numbered = FlaggedTransfer & { n?: number };
+
 /** `view`: the part of the `size` square the drawing covers, its labels included, so a small graph is not drawn in a mostly empty square. */
 export interface Drawing { size: number; view: { x: number; y: number; w: number; h: number }; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
@@ -122,7 +131,7 @@ function ownTitle(e: LoopEdge): string {
  * held the token (a money middle, a funder, the far end of another token's
  * transfer) joins the middles inside the ring.
  */
-export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Flow[], middles: readonly string[], own: readonly OwnFlag[] = [], names: Lenses = {}, size = 560): Drawing {
+export function layout(transfers: readonly Numbered[], flows: readonly Flow[], middles: readonly string[], own: readonly OwnFlag[] = [], names: Lenses = {}, size = 560): Drawing {
   const holders: string[] = [];
   for (const t of transfers) for (const a of [t.from, t.to]) if (a !== ZERO && !holders.includes(a)) holders.push(a);
   const inner = middles.filter((m) => !holders.includes(m));
@@ -177,6 +186,14 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   const bundles = new Map<string, { first: number; rows: number[]; tone: Tone }>();
   const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
 
+  // Each arrow's number (Numbered). A drawing of several tokens, as a ring's, puts each number under its token: two tokens both have a sale 2.
+  const several = new Set(transfers.map((t) => t.tokenId)).size > 1;
+  const numberOf = (i: number) => {
+    const t = transfers[i]!, n = String(t.n ?? i + 1);
+    return several ? `#${tokenLabel(t.tokenId, 8)}·${n}` : n;
+  };
+  /** The number as a title says it: "#2", or "#114·2" already marked. */
+  const named = (i: number) => (several ? numberOf(i) : `#${numberOf(i)}`);
 
   const edges: DrawnEdge[] = [];
   /** Which arrow draws each transfer (by index), so a reason can name its arrows. */
@@ -195,8 +212,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const k = nextIn(t.from, t.to);
     const tone = toneOf(t);
     edges.push({
-      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: String(i + 1),
-      title: `#${i + 1} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
+      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: numberOf(i),
+      title: `${named(i)} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
     edgeOf.set(i, `t${i}`);
@@ -210,7 +227,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const k = from < to ? 1 : 2;
     edges.push({
       key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`,
-      title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${flaggedNote(b.tone)}`,
+      title: `${b.rows.length} transfers this way, ${named(b.rows[0]! - 1)} to ${named(b.rows[b.rows.length - 1]! - 1)}${flaggedNote(b.tone)}`,
       ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }

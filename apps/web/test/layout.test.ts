@@ -254,6 +254,35 @@ describe('layout', () => {
     expect(d.edges.map((e) => e.tx).sort()).toEqual(['0xp0', '0xp1']);
   });
 
+  describe('an arrow’s number', () => {
+    const ts = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b), txHash: '0xs1' }, { ...t(b, a), txHash: '0xs2', logIndex: 3 }];
+
+    it('is the transfer’s place in its token’s history, the mint 1, as the token’s table numbers it', () => {
+      const asset = layout(ts, [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => [e.label, e.title])).toEqual([['2', '#2 transfer'], ['3', '#3 transfer']]);
+    });
+
+    it('keeps that place when the list is not the whole history, as a ring’s is', () => {
+      // The ring draws only its wallets' transfers: no mint, so the list's own order would start at 1.
+      const asset = layout([{ ...ts[1]!, n: 2 }, { ...ts[2]!, n: 3 }], [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => e.label)).toEqual(['2', '3']);
+      // The row stays the list's, which a page's links are keyed by.
+      expect(asset.map((e) => e.row)).toEqual([1, 2]);
+    });
+
+    it('names its token in a drawing of several, where two tokens each have a transfer 2', () => {
+      const several = [{ ...t(a, b), n: 2 }, { ...t(b, a), tokenId: '114', n: 2 }];
+      const asset = layout(several, [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => [e.label, e.title])).toEqual([['#1·2', '#1·2 transfer'], ['#114·2', '#114·2 transfer']]);
+    });
+
+    it('is said for a bundle’s first and last', () => {
+      const ping = Array.from({ length: 14 }, (_, i) => ({ ...(i % 2 === 0 ? t(a, b) : t(b, a)), txHash: `0xp${i}` }));
+      const bundle = layout([t(ZERO, a), ...ping], [], []).edges.find((e) => e.from === a)!;
+      expect(bundle.title).toBe('7 transfers this way, #2 to #14');
+    });
+  });
+
   describe('a lens of yours', () => {
     const y = '0x' + 'e'.repeat(40);
     const edge = (kind: LoopEdge['kind'], from: string, to: string, more: Partial<LoopEdge> = {}): LoopEdge =>
