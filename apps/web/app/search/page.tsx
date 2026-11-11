@@ -30,7 +30,7 @@ const SECTIONS: Record<SearchKind, { title: string; all: string }> = {
   trades: { title: 'Which trades are in that transaction?', all: 'trades' },
 };
 
-const HINT = 'Type a collection name, a token number (#1234), a wallet address or its start, or a transaction hash.';
+const HINT = 'Type a collection name, a token number (#1234), a wallet address or a transaction hash, or the start of either.';
 
 /**
  * Where /go lands when a search does not name one thing: every kind of hit
@@ -66,6 +66,8 @@ export default async function SearchPage({ searchParams }: Props) {
     return <>{head}<Problem title={STORE_DOWN}>It could not look up “{q}”.</Problem></>;
   }
   const kinds = kindsFor(parsed).filter((k) => hits[k].length > 0);
+  // The start of a hash can match several transactions; a whole one is one.
+  const title = (k: SearchKind) => (k === 'trades' && parsed.kind === 'prefix' ? 'Which transactions start that way?' : SECTIONS[k].title);
 
   if (kinds.length === 0) {
     if (only && page > 1) {
@@ -101,7 +103,7 @@ export default async function SearchPage({ searchParams }: Props) {
     <>
       {head}
       {kinds.map((k) => (
-        <Section key={k} title={`${SECTIONS[k].title} (${hits.more[k] ? `${SEARCH_LIMIT}+` : hits[k].length})`}>
+        <Section key={k} title={`${title(k)} (${hits.more[k] ? `${SEARCH_LIMIT}+` : hits[k].length})`}>
           <ul className="divide-y rounded-lg border bg-card">
             {hits[k].map((_, i) => <Row key={i} hits={hits} kind={k} i={i} scope={scope} />)}
           </ul>

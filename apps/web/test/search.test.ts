@@ -27,8 +27,8 @@ describe('parseSearch', () => {
 
 describe('tooShort', () => {
   it('says how much more a start of an address or a bare token number needs, as parseSearch reads them', () => {
-    expect(tooShort('0x18')).toBe('Too short to search wallets: type at least 4 characters after 0x.');
-    expect(tooShort(' 0X1 ')).toBe('Too short to search wallets: type at least 4 characters after 0x.');
+    expect(tooShort('0x18')).toBe('Too short to search wallets and transactions: type at least 4 characters after 0x.');
+    expect(tooShort(' 0X1 ')).toBe('Too short to search wallets and transactions: type at least 4 characters after 0x.');
     expect(tooShort('10')).toBe('Too short for a token number: type 3 digits, or #10.');
     // Each is just past what parseSearch reads as a prefix or a token.
     expect(parseSearch('0x18').kind).toBe('text');

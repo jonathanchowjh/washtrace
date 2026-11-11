@@ -4244,6 +4244,59 @@ describe('Store.search', () => {
     }
   });
 
+  it('finds trades by the start of their hash, in every collection, on transfers_tx_idx', async () => {
+    await store.migrate();
+    const one = (await store.addCollection(1, c1, 'Searchable Apes', 1)).id;
+    const two = (await store.addCollection(10, c2, 'Searchable Cats', 1)).id;
+    const h = (start: string, fill: string) => start + fill.repeat(66 - start.length);
+    // Each pair sits either side of a prefix's end: 9 is followed by a, f by g.
+    const [a, b, c, d, e, f, g] = [h('0x1ee2', 'a'), h('0x1ee2', 'b'), h('0x1ee3', 'a'), h('0x1ee9', 'a'), h('0x1eea', 'a'), h('0x1eef', 'a'), h('0x1ef0', 'a')];
+    await store.ingest(one, 1, [
+      transfer('1', alice, bob, { txHash: a }), transfer('2', alice, bob, { txHash: b }), transfer('3', bob, alice, { txHash: b, logIndex: 1 }),
+      transfer('4', alice, bob, { txHash: d }), transfer('5', alice, bob, { txHash: e }), transfer('6', alice, bob, { txHash: f }),
+    ], 100, [alice, bob]);
+    await store.ingest(two, 10, [transfer('7', carol, alice, { txHash: c }), transfer('8', carol, alice, { txHash: g })], 100, [carol, alice]);
+    const found = async (prefix: string, opts = {}) => (await store.search({ kind: 'prefix', prefix }, opts)).trades.map((r) => [r.txHash, r.tokenId]);
+    try {
+      expect(await found('0x1ee2')).toEqual([[a, '1'], [b, '2'], [b, '3']]);
+      expect(await found('0x1ee9')).toEqual([[d, '4']]);
+      expect(await found('0x1eef')).toEqual([[f, '6']]);
+      expect(await found('0x1ee')).toEqual([[a, '1'], [b, '2'], [b, '3'], [c, '7'], [d, '4'], [e, '5'], [f, '6']]);
+      expect(await found('0x1eef' + 'a'.repeat(30))).toEqual([[f, '6']]);
+      expect(await found('0x1ee4')).toEqual([]);
+      // The scope narrows wallets only: a hash's start, like the whole of one, is found wherever it is.
+      expect(await found('0x1ee3', { scope: { id: one, chainId: 1 } })).toEqual([[c, '7']]);
+      const cut = await store.search({ kind: 'prefix', prefix: '0x1ee' }, { limit: 2, offset: 1 });
+      expect([cut.trades.map((r) => r.tokenId), cut.more.trades]).toEqual([['2', '3'], true]);
+
+      const pg = await store.pool.connect();
+      try {
+        await pg.query('BEGIN');
+        // Enough transfers that the planner costs an index scan, not a seq scan over a handful; rolled back.
+        await pg.query(
+          `INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, token_id, from_address, to_address)
+           SELECT $1, '0x' || md5(g::text) || md5((g + 1)::text), 0, g, g, $2, $3 FROM generate_series(1, 20000) g`,
+          [one, alice, bob],
+        );
+        await pg.query('ANALYZE washtrace.transfers');
+        // Store.search's own read of a prefix's trades.
+        const plan = (await pg.query(
+          `EXPLAIN SELECT c.chain_id, t.tx_hash FROM washtrace.transfers t JOIN washtrace.collections c ON c.id = t.collection_id
+           WHERE t.tx_hash >= $1 AND t.tx_hash < $2 AND t.tx_hash LIKE $1 || '%' ORDER BY t.tx_hash, c.id, t.log_index LIMIT 21`,
+          ['0x1ee2', '0x1ee3'],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/transfers_tx_idx/);
+      } finally {
+        await pg.query('ROLLBACK');
+        pg.release();
+      }
+    } finally {
+      await drop(1, c1);
+      await drop(10, c2);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[alice, bob, carol]]);
+    }
+  });
+
   it('pages a kind: one more than the limit says there is more, an offset moves on, and `only` leaves the other kinds alone', async () => {
     await store.migrate();
     const addrs: string[] = [];

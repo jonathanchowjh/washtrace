@@ -53,6 +53,14 @@ describe('the search page', () => {
     expect([...c.querySelectorAll('h2')].map((h) => h.textContent).join('|')).toMatch(/\(1\)/);
   });
 
+  it('lists the transactions the start of a hash matches, after the wallets, under a heading that says so', async () => {
+    state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 2 }], trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'Meebits', tokenId: '14022' }] };
+    const c = await dom({ q: '0xcccc' });
+    expect(state.calls).toEqual([[{ kind: 'prefix', prefix: '0xcccc' }, { offset: 0, only: undefined }]]);
+    expect([...c.querySelectorAll('h2')].map((h) => h.textContent)).toEqual(['Which wallets match? (1)', 'Which transactions start that way? (1)']);
+    expect(c.querySelector(`a[href="/c/1/${ADDR}/tx/${TX}"]`)).not.toBeNull();
+  });
+
   it('a kind with more says so and links to its own list', async () => {
     state.hits = { ...none, wallets: [{ chainId: 1, address: ADDR, transfers: 2 }], more: { ...more, wallets: true } };
     const c = await dom({ q: '0xaaaa' });
@@ -84,7 +92,7 @@ describe('the search page', () => {
   it('says a query too short to be read as a token or the start of an address is too short', async () => {
     expect((await dom({ q: '10' })).textContent).toContain('Nothing watched is named “10”. Too short for a token number: type 3 digits, or #10.');
     cleanup();
-    expect((await dom({ q: '0x18' })).textContent).toContain('Nothing watched is named “0x18”. Too short to search wallets: type at least 4 characters after 0x.');
+    expect((await dom({ q: '0x18' })).textContent).toContain('Nothing watched is named “0x18”. Too short to search wallets and transactions: type at least 4 characters after 0x.');
   });
 
   it('adds an explorer link for an address or a hash that matches nothing', async () => {
@@ -97,7 +105,7 @@ describe('the search page', () => {
 
   it('shows the hint for empty or too-short text, and asks the store nothing', async () => {
     for (const q of ['', 'x', '#']) {
-      expect((await dom({ q })).textContent).toContain('Type a collection name, a token number (#1234), a wallet address or its start, or a transaction hash.');
+      expect((await dom({ q })).textContent).toContain('Type a collection name, a token number (#1234), a wallet address or a transaction hash, or the start of either.');
       cleanup();
     }
     expect((await dom({})).textContent).toContain('Type a collection name');

@@ -134,7 +134,7 @@ describe('the search box type-ahead', () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     render(<Sidebar watched={[]} />);
     await type('0x18');
-    expect(screen.getByText('Too short to search wallets: type at least 4 characters after 0x.')).toBeTruthy();
+    expect(screen.getByText('Too short to search wallets and transactions: type at least 4 characters after 0x.')).toBeTruthy();
     await type('10');
     expect(screen.getByText('Too short for a token number: type 3 digits, or #10.')).toBeTruthy();
     expect(screen.queryByText(/No match/)).toBeNull();

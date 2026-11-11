@@ -93,7 +93,7 @@ export function parseSearch(raw: string): Parsed {
  */
 export function tooShort(raw: string): string | null {
   const typed = raw.trim();
-  if (new RegExp(`^0x[0-9a-f]{0,${PREFIX_HEX - 1}}$`, 'i').test(typed)) return `Too short to search wallets: type at least ${PREFIX_HEX} characters after 0x.`;
+  if (new RegExp(`^0x[0-9a-f]{0,${PREFIX_HEX - 1}}$`, 'i').test(typed)) return `Too short to search wallets and transactions: type at least ${PREFIX_HEX} characters after 0x.`;
   if (new RegExp(`^\\d{1,${TOKEN_DIGITS - 1}}$`).test(typed)) return `Too short for a token number: type ${TOKEN_DIGITS} digits, or #${typed}.`;
   return null;
 }

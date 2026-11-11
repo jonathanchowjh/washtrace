@@ -3219,7 +3219,9 @@ export class Store {
    * `scope` narrows it to one collection: its tokens, and
    * the wallets that traded in it. A full address or a transaction hash names
    * one thing wherever it is, so the scope leaves those alone, as it does
-   * collections, which a reader may be looking for from inside another.
+   * collections, which a reader may be looking for from inside another, and
+   * trades: a prefix finds wallets by the start of their address and
+   * transactions by the start of their hash.
    */
   async search(p: Parsed, opts: { limit?: number; offset?: number; only?: SearchKind; scope?: { id: number; chainId: number } } = {}): Promise<SearchHits> {
     const limit = opts.limit ?? 20;
@@ -3242,6 +3244,13 @@ export class Store {
        ORDER BY transfers DESC, chain_id, address LIMIT $2 OFFSET $3`,
       [arg, ...page],
     )).rows.map((r) => ({ chainId: r.chain_id, address: r.address, transfers: r.transfers, ...(here === undefined ? {} : { here: r.here }) })), 'wallets');
+    // Unscoped, as tradeHref in the console needs: it opens a hit under its collection only when every transfer of its transaction is found.
+    // `arg` is $1 and the page $2 and $3, as in the kinds above; `rest` follows from $4.
+    const trades = async (where: string, order: string, arg: string, ...rest: string[]) => cut((await this.pool.query(
+      `SELECT c.chain_id, t.tx_hash, c.address, c.name, t.token_id::text AS token_id ${TRANSFERS}
+       WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`,
+      [arg, ...page, ...rest],
+    )).rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades');
 
     // The kinds' queries are independent, and the sidebar asks as a person types: they run at once, not one after another.
     const asks: Promise<void>[] = [];
@@ -3280,13 +3289,18 @@ export class Store {
               UNION SELECT to_address FROM washtrace.transfers WHERE collection_id = ${Number(s.id)} AND to_address LIKE $1 || '%')`;
         asks.push(wallets(where, p.prefix, s === undefined ? undefined : 'true').then((h) => { hits.wallets = h; }));
       }
+      if (want('trades')) {
+        // The start of a hash as a range on transfers_tx_idx: the collation is not C, so a LIKE alone reads every
+        // transfer. Lowercase hex sorts in its own order under any collation, so the range is the strings that
+        // start with the prefix: up to it with its last character one higher ('9' is followed by 'a').
+        // The LIKE keeps a collation that sorted otherwise from adding a stray row.
+        const last = p.prefix.at(-1)!;
+        const end = p.prefix.slice(0, -1) + (last === '9' ? 'a' : String.fromCharCode(last.charCodeAt(0) + 1));
+        asks.push(trades(`t.tx_hash >= $1 AND t.tx_hash < $4 AND t.tx_hash LIKE $1 || '%'`, 't.tx_hash, c.id, t.log_index', p.prefix, end).then((h) => { hits.trades = h; }));
+      }
     }
     if (p.kind === 'tx' && want('trades')) {
-      asks.push(this.pool.query(
-        `SELECT c.chain_id, t.tx_hash, c.address, c.name, t.token_id::text AS token_id ${TRANSFERS}
-         WHERE t.tx_hash = $1 ORDER BY c.id, t.log_index LIMIT $2 OFFSET $3`,
-        [p.tx, ...page],
-      ).then(({ rows }) => { hits.trades = cut(rows.map((r) => ({ chainId: r.chain_id, txHash: r.tx_hash, address: r.address, name: r.name, tokenId: r.token_id })), 'trades'); }));
+      asks.push(trades('t.tx_hash = $1', 'c.id, t.log_index', p.tx).then((h) => { hits.trades = h; }));
     }
     await Promise.all(asks);
     return hits;

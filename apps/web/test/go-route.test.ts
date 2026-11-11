@@ -53,6 +53,11 @@ describe('/go', () => {
     expect(await go(TX)).toBe(`/tx/1/${TX}`);
   });
 
+  it('opens the one transaction the start of a hash finds', async () => {
+    state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }, { chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '2' }] };
+    expect(await go('0xcccc')).toBe(`/c/1/${ADDR}/tx/${TX}`);
+  });
+
   it('with a chain given, a hash goes straight to that chain’s transaction', async () => {
     expect(await go(TX, '8453')).toBe(`/tx/8453/${TX}`);
   });
