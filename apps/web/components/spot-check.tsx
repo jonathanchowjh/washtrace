@@ -4,11 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { SpotResult, Witness } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
+import { LENSES, SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
 import { send } from '@/lib/send';
 
 const POLL_MS = 1000;
-const BUILT_IN: Record<string, string> = { A: 'Round trips', AU: 'Money loops back', AC: 'Linked wallets' };
 
 type Flag = SpotResult['transfers'][number]['flags'][string];
 
@@ -81,7 +80,7 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
     setId(said.body.id ?? null);
   }
 
-  const nameOf = (key: string) => BUILT_IN[key] ?? lenses.find((l) => l.key === key)?.name ?? key;
+  const nameOf = (key: string) => (Object.hasOwn(LENSES, key) ? LENSES[key as keyof typeof LENSES].name : lenses.find((l) => l.key === key)?.name ?? key);
   const running = busy || lost || status === 'queued' || status === 'running';
   const flagged = result?.transfers.filter((t) => Object.keys(t.flags).some((k) => result.methods.includes(k))) ?? [];
   const failed = status === 'failed' || (error !== null && id !== null);
@@ -96,7 +95,7 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
         <label className="text-sm" htmlFor="spot-lens">Judge with</label>
         <select id="spot-lens" className="field text-sm" value={lens}
           onChange={(e) => { setLens(e.target.value); setResult(null); setError(null); setStatus(null); }} disabled={running}>
-          <option value="">Built-in methods</option>
+          <option value="">Built-in lenses</option>
           {lenses.map((l) => (
             <option key={l.key} value={l.key} disabled={l.refusal !== null} title={l.refusal ?? undefined}>
               {l.refusal === null ? l.name : `${l.name} (${l.refusal})`}

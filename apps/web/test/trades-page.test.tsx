@@ -358,6 +358,8 @@ describe('the trades page', () => {
     const { q } = parseView(sent, 'UTC', new Set());
     expect([q.fromMs, q.toMs]).toEqual([Date.parse(from), Date.parse(to)]);
     expect(q.venues).toEqual(['blur']);
+    // A kept bound reads day first, as the date chip and every <Time> do.
+    expect(el.textContent).toContain('Kept at 1 Mar 2023, 05:00');
   });
 
   it('a kept hour bound disables its day field and says how to change it', async () => {

@@ -294,12 +294,12 @@ export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
 /**
  * The sentence for built-ins that have not run, one or several, in the words
  * every page says it in: NOT_RUN_LATEST once the collection has an analysis
- * (`analysed`), and before any, that they have not run at all, as a lens of
+ * (`analyzed`), and before any, that they have not run at all, as a lens of
  * yours with no run says.
  */
-export function notRunAll(methods: readonly (keyof typeof LENSES)[], analysed = true): string {
-  if (methods.length === 1) return analysed ? `${LENSES[methods[0]!].name} ${NOT_RUN_LATEST}` : notRunHere(LENSES[methods[0]!].name);
-  return `${lensList(methods)} ${analysed ? 'did not run in the latest analysis, so they flag nothing.' : 'have not run on this collection, so they flag nothing yet.'}`;
+export function notRunAll(methods: readonly (keyof typeof LENSES)[], analyzed = true): string {
+  if (methods.length === 1) return analyzed ? `${LENSES[methods[0]!].name} ${NOT_RUN_LATEST}` : notRunHere(LENSES[methods[0]!].name);
+  return `${lensList(methods)} ${analyzed ? 'did not run in the latest analysis, so they flag nothing.' : 'have not run on this collection, so they flag nothing yet.'}`;
 }
 
 /**

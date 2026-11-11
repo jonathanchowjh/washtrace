@@ -53,6 +53,12 @@ describe('the rings list', () => {
     expect(links(rows[0]!)).toContainEqual([short(M), `${BASE}/w/${M}`]);
   });
 
+  it('says what ties a ring in a sentence that agrees with itself', async () => {
+    const c = await list();
+    expect(c.textContent).toContain('Wallets tied together by what Round trips and Linked wallets flag, the most ETH first.');
+    expect(c.textContent).not.toContain('ties together');
+  });
+
   it('on a phone each ring is a card with the row’s links, its counts named, and the table is hidden there', async () => {
     const c = await list();
     const cards = [...c.querySelectorAll('ul[aria-label=Rings] > li')];

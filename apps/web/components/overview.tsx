@@ -113,7 +113,7 @@ export function HowSure({ totals, base, apart }: { totals: Record<Method, Method
       count: `+${plural(added, 'sale')}`, href: tradesHref(base, { caught: ['AC'], notCaught: ['A'] }) },
     { m: 'AU', tone: 'apart', name: LENSES.AU.name, does: LENSES.AU.tier, share: pctTenth(totals.AU.flaggedSales, sales),
       count: plural(totals.AU.flaggedSales, 'sale'), href: tradesHref(base, { caught: ['AU'] }),
-      note: `${apart === undefined ? '' : `${num(apart)} of them it alone flags · `}fails the placebo test` },
+      note: `${apart === undefined ? '' : `${num(apart)} by it alone · `}fails the placebo test` },
   ];
   return (
     <section aria-label="How sure" className="rounded-lg border bg-card p-4">
@@ -185,6 +185,8 @@ export function TopList({ kind, rows, total, base, chainId }: {
 /**
  * Why the number is not higher: what looks like wash trading and is left
  * out. Only what the data holds is said: sales Money loops back alone flags.
+ * Why that lens is not counted is How sure's line ("fails the placebo test"),
+ * so this says what leaving them out does instead of saying it again.
  */
 export function NotCounted({ apart, base }: { apart: number; base: string }) {
   if (apart === 0) return null;
@@ -195,8 +197,8 @@ export function NotCounted({ apart, base }: { apart: number; base: string }) {
       <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-start gap-3 rounded-md border p-3 hover:bg-muted/60">
         <TierMark tone="apart" className="mt-1" />
         <span className="text-sm">
-          <span className="font-medium text-foreground">{plural(apart, 'sale')} only {LENSES.AU.name} flags: money went back to the seller</span>
-          <span className="block text-muted-foreground">Not counted: only {LENSES.AU.name} sees {apart === 1 ? 'it' : 'them'}, and that method fails the placebo test.</span>
+          <span className="font-medium text-foreground">{plural(apart, 'sale')} flagged only by {LENSES.AU.name}: money went back to the seller</span>
+          <span className="block text-muted-foreground">Neither counted lens flags {apart === 1 ? 'it' : 'them'}, so {apart === 1 ? 'it stays' : 'they stay'} out of the share.</span>
         </span>
       </Link>
     </section>

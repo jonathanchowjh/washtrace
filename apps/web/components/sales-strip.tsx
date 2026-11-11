@@ -51,8 +51,8 @@ const SEGMENT = {
  */
 /**
  * One item's sales on the strip: their keys (`txHash:logIndex`) outline its
- * squares, their times (ms) the columns they fall in. `label` names them
- * ("this token's"), and `href` lists them.
+ * squares, their times (ms) the columns they fall in. `label` says whose
+ * they are ("this token's"), so a noun follows it; `href` lists them.
  */
 export type Mine = { keys: ReadonlySet<string>; times: readonly number[]; label: string; href: string };
 
@@ -77,7 +77,7 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground"><KindIcon kind="transaction" />{mine === undefined ? `All ${plural(total, 'sale')}, in order` : `Where ${mine.label} sales sit among all ${num(total)}`}</h2>
         <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          {mine === undefined ? null : <Link href={mine.href} prefetch={false} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{num(mine.keys.size)} {mine.label}</Link>}
+          {mine === undefined ? null : <Link href={mine.href} prefetch={false} className="flex items-center gap-1.5 font-medium text-foreground hover:underline"><i aria-hidden className={cn('inline-block size-2.5 rounded-[2px] bg-card', OUTLINE)} />{mine.label} {plural(mine.keys.size, 'sale')}</Link>}
           <Link href={tradesHref(base, { caught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} {LENSES.A.name}</Link>
           <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} + {LENSES.AC.name}</Link>
           <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} {LENSES.AU.name} alone</Link>
@@ -89,7 +89,7 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
           {sales.map((r, i) => {
             const k = saleStanding(r.lenses);
             const own = mine?.keys.has(`${r.txHash}:${r.logIndex}`) ?? false;
-            const title = `Sale ${i + 1} of ${total}: ${WORD[k]}${own ? `, ${mine!.label}` : ''}`;
+            const title = `Sale ${i + 1} of ${total}: ${WORD[k]}${own ? `, one of ${mine!.label}` : ''}`;
             return <li key={`${r.txHash}:${r.logIndex}`}><Link href={txHref(chainId, r.txHash, base)} prefetch={false} title={title} aria-label={title} className={cn('block size-3.5 rounded-[2px] hover:opacity-70', SEGMENT[k], own && OUTLINE)} /></li>;
           })}
         </ol>
@@ -99,7 +99,8 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
           {pts.map((p) => {
             const s = standing(p);
             const own = lit.has(p.at);
-            const title = `${plural(p.sales, 'sale')}: ${s.floor} round trip, ${s.ceiling} linked by money, ${s.apart} not counted, ${s.clean} clean${own ? `; ${mine!.label} among them` : ''}`;
+            // The legend's words, so a column never calls a sale clean where the key says not flagged.
+            const title = `${plural(p.sales, 'sale')}: ${s.floor} ${WORD.floor}, ${s.ceiling} + ${LENSES.AC.name}, ${s.apart} ${WORD.apart}, ${s.clean} ${WORD.clean}${own ? `; ${mine!.label} among them` : ''}`;
             return (
               <Link key={p.at} href={tradesHref(base, { fromMs: p.at, toMs: nextStart(p.at, timeline.bucket, zone) })} prefetch={false} title={title} aria-label={title}
                 className={cn('flex min-w-1 flex-1 flex-col-reverse overflow-hidden rounded-t-[2px] hover:opacity-80', own && OUTLINE)} style={{ height: `${(p.sales / tallest) * 100}%` }}>

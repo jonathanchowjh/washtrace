@@ -47,7 +47,7 @@ describe('how sure', () => {
     const rung = (m: string) => c.querySelector(`[data-rung="${m}"]`)!.textContent;
     expect([rung('A'), rung('AC'), rung('AU')].map((t) => t!.split('·')[0]!.trim())).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
     expect(rung('AU')).toContain('30 sales');
-    expect(rung('AU')).toContain('1 of them it alone flags');
+    expect(rung('AU')).toContain('1 by it alone · fails the placebo test');
   });
 
   it('says a lens that did not run did not, with no share', () => {
@@ -73,6 +73,9 @@ describe('every sale, in order', () => {
     const hour = 3_600_000;
     const c = render(<SalesStrip timeline={{ bucket: 'hour', points: [point(0, 4, 1, 2, 1, 1), point(hour, 0, 0, 0, 0, 0), point(2 * hour, 6, 0, 0, 0, 0)] }} base={BASE} zone="UTC" chainId={1} />).container;
     const cols = [...c.querySelectorAll('a[aria-label]')];
+    // A column says its sales in the legend's words: never "clean", never "1 round trip" for several.
+    expect(cols[0]!.getAttribute('title')).not.toMatch(/clean/);
+    expect(cols[0]!.getAttribute('title')).toContain('not flagged');
     expect(cols.map((a) => a.getAttribute('href'))).toEqual([tradesHref(BASE, { fromMs: 0, toMs: hour }), tradesHref(BASE, { fromMs: 2 * hour, toMs: 3 * hour })]);
     expect(c.textContent).toContain('All 10 sales, in order');
     expect(links(c)).toContainEqual(['1 Money loops back alone', tradesHref(BASE, { caught: ['AU'], notCaught: ['A', 'AC'] })]);
@@ -103,9 +106,10 @@ describe('every sale, in order', () => {
     const c = render(<SalesStrip timeline={timeline} base={BASE} zone="UTC" chainId={1} sales={[row(1, ['A']), row(2, ['AC']), row(3, [])]} mine={mine} />).container;
     const squares = [...c.querySelectorAll('ol[aria-label="Each sale, oldest first"] a')];
     expect(squares.map((a) => a.className.includes('ring-2'))).toEqual([false, true, false]);
-    expect(squares[1]!.getAttribute('title')).toBe('Sale 2 of 3: Linked wallets (the ceiling), this token\'s');
+    expect(squares[1]!.getAttribute('title')).toBe('Sale 2 of 3: Linked wallets (the ceiling), one of this token\'s');
     expect(c.textContent).toContain('Where this token\'s sales sit among all 3');
-    expect(links(c)).toContainEqual(['1 this token\'s', tradesHref(BASE, { token: '7' })]);
+    // Whose, then what: "1 this token's" named no noun.
+    expect(links(c)).toContainEqual(['this token\'s 1 sale', tradesHref(BASE, { token: '7' })]);
   });
 
   it('outlines the columns an item\'s sales fall in, when the strip is a column per period', () => {
@@ -138,7 +142,10 @@ describe('looks suspicious, not counted', () => {
     expect(render(<NotCounted apart={0} base={BASE} />).container.innerHTML).toBe('');
     cleanup();
     const c = render(<NotCounted apart={3} base={BASE} />).container;
-    expect(c.textContent).toContain('3 sales only Money loops back flags: money went back to the seller');
+    expect(c.textContent).toContain('3 sales flagged only by Money loops back: money went back to the seller');
+    // Why that lens is not counted is How sure's line: the panel does not say it again.
+    expect(c.textContent).not.toContain('placebo');
+    expect(c.textContent).not.toContain('method');
     expect(c.querySelector('a')?.getAttribute('href')).toBe(tradesHref(BASE, { caught: ['AU'], notCaught: ['A', 'AC'] }));
   });
 });

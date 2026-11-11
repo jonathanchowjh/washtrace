@@ -75,7 +75,7 @@ function Day({ name, label, ms, zone }: { name: string; label: string; ms: numbe
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-muted-foreground">{label}</span>
       <input type="date" name={`${name}_day`} defaultValue={value} disabled={kept} className="field disabled:opacity-50" />
-      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone, 'en-US')}; remove the date chip to change it.</span> : null}
+      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone, 'en-GB')}; remove the date chip to change it.</span> : null}
     </label>
   );
 }
