@@ -153,6 +153,13 @@ describe('the search box under a collection', () => {
     expect((document.querySelector('input[name=scope]') as HTMLInputElement).value).toBe(`1:${ADDR}`);
   });
 
+  it('says a miss is in that collection, and that its chip, not Enter, widens the search', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    under();
+    await type('zzz');
+    expect(screen.getByText('No match in Terraforms. Drop it with ✕ to search everything.')).toBeTruthy();
+  });
+
   it('drops the scope from its chip, so the next search is of everything', async () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     under();
