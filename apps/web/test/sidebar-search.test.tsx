@@ -129,6 +129,16 @@ describe('the search box type-ahead', () => {
     await type('zzz');
     expect(screen.getByText('No match. Press Enter to search everything.')).toBeTruthy();
   });
+
+  it('says a query too short to be read as a token or the start of an address is too short, not a miss', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    render(<Sidebar watched={[]} />);
+    await type('0x18');
+    expect(screen.getByText('Too short to search wallets: type at least 4 characters after 0x.')).toBeTruthy();
+    await type('10');
+    expect(screen.getByText('Too short for a token number: type 3 digits, or #10.')).toBeTruthy();
+    expect(screen.queryByText(/No match/)).toBeNull();
+  });
 });
 
 describe('the search box under a collection', () => {

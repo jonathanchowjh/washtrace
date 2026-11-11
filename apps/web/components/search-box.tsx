@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import type { SearchKind } from '@washtrace/detect';
 import { short, tokenLabel } from '@/lib/format';
 import { typing } from '@/lib/utils';
-import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, type Scope, type SearchReply } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOfPath, scopeParam, tooShort, type Scope, type SearchReply } from '@/lib/search';
 
 /** Hits shown per kind; the fetch brings 20 and the rest are one Enter away. */
 const SHOWN = 5;
@@ -158,7 +158,7 @@ export function SearchBox({ id, className, watched = [], wide }: {
         className="absolute inset-x-0 top-full z-20 mt-1 max-h-96 overflow-y-auto rounded-md border bg-card py-1 text-xs shadow-md"
       >
         {shown && options.length === 0 ? (
-          <li role="presentation" className="px-2 py-1.5 text-muted-foreground">No match. Press Enter to search everything.</li>
+          <li role="presentation" className="px-2 py-1.5 text-muted-foreground">{tooShort(text) ?? 'No match. Press Enter to search everything.'}</li>
         ) : null}
         {shown ? rows.map((r) => {
           if (r.type === 'heading') return <li key={r.key} role="presentation" className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{r.text}</li>;

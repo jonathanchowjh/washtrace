@@ -81,6 +81,12 @@ describe('the search page', () => {
     expect(c.textContent).not.toContain('Look it up');
   });
 
+  it('says a query too short to be read as a token or the start of an address is too short', async () => {
+    expect((await dom({ q: '10' })).textContent).toContain('Nothing watched is named “10”. Too short for a token number: type 3 digits, or #10.');
+    cleanup();
+    expect((await dom({ q: '0x18' })).textContent).toContain('Nothing watched is named “0x18”. Too short to search wallets: type at least 4 characters after 0x.');
+  });
+
   it('adds an explorer link for an address or a hash that matches nothing', async () => {
     const a = (await dom({ q: ADDR })).querySelector('a[href^="https://etherscan.io/address/"]');
     expect(a?.textContent).toBe('Look it up on Etherscan ↗');

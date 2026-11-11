@@ -58,6 +58,11 @@ export type Connected = { wallet: string; rings: { anchor: string; rank: number 
 /** What /api/search answers: the hits and, for a scoped search whose best match is a wallet, what it is connected to there. */
 export type SearchReply = SearchHits & { connected?: Connected };
 
+/** Hex after `0x` before a start of an address is searched: fewer would match most of them. */
+const PREFIX_HEX = 4;
+/** Digits before a bare number is read as a token in every collection; a '#' reads fewer. */
+const TOKEN_DIGITS = 3;
+
 /**
  * Trims, lowercases hex and strips one leading '#'. One or two bare digits are
  * text, so typing "12" never searches every collection's tokens; "#12" does.
@@ -72,12 +77,25 @@ export function parseSearch(raw: string): Parsed {
     const hex = text.toLowerCase();
     if (hex.length === 66) return { kind: 'tx', tx: hex };
     if (hex.length === 42) return { kind: 'address', address: hex };
-    if (hex.length >= 6 && hex.length < 42) return { kind: 'prefix', prefix: hex };
+    if (hex.length >= 2 + PREFIX_HEX && hex.length < 42) return { kind: 'prefix', prefix: hex };
   }
   const tokenId = tokenIdOf(text);
-  if (tokenId !== null && (hashed || text.length >= 3)) return { kind: 'token', tokenId, text };
+  if (tokenId !== null && (hashed || text.length >= TOKEN_DIGITS)) return { kind: 'token', tokenId, text };
   if (text.length < 2) return { kind: 'empty' };
   return { kind: 'text', text: text.slice(0, MAX_TEXT) };
+}
+
+/**
+ * Why a search that found nothing may have missed what was meant: it was too
+ * short for parseSearch to read as the start of an address or as a token
+ * number, so only names were searched. Null when it was read in full, and
+ * "no match" is the whole story.
+ */
+export function tooShort(raw: string): string | null {
+  const typed = raw.trim();
+  if (new RegExp(`^0x[0-9a-f]{0,${PREFIX_HEX - 1}}$`, 'i').test(typed)) return `Too short to search wallets: type at least ${PREFIX_HEX} characters after 0x.`;
+  if (new RegExp(`^\\d{1,${TOKEN_DIGITS - 1}}$`).test(typed)) return `Too short for a token number: type ${TOKEN_DIGITS} digits, or #${typed}.`;
+  return null;
 }
 
 /**

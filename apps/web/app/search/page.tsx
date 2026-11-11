@@ -8,7 +8,7 @@ import { short } from '@/lib/format';
 import { range, rangeEnds } from '@/lib/metrics';
 import { explorerAddress, explorerTx } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
-import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, type Scope } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, tooShort, type Scope } from '@/lib/search';
 import { KindIcon, type Kind } from '@/components/kit';
 import { store } from '@/lib/store';
 import { chainName } from '@/lib/chains';
@@ -71,6 +71,9 @@ export default async function SearchPage({ searchParams }: Props) {
     if (only && page > 1) {
       return <>{head}<Empty>That page is past the last result. <Link className="underline" href={here({ kind: only })}>Back to the first page</Link></Empty></>;
     }
+    // Only names were searched: what was meant may be a token or a wallet, typed too short to be read as one.
+    const short = tooShort(q);
+    if (short !== null) return <>{head}<Empty>Nothing watched is named “{q}”. {short}</Empty></>;
     // Chain 1 is the only chain a pasted hash can be looked up on without knowing its chain.
     const address = addressOf(q);
     const tx = txOf(q);
