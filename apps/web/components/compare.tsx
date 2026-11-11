@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import type { LensKey } from '@washtrace/detect/trades';
+import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { lensInfo, num, type Lenses } from '@/lib/format';
+import { SHOWN } from '@/lib/metrics';
 import { tradesHref } from '@/lib/trades-url';
 
 type Counts = Partial<Record<LensKey, Partial<Record<LensKey, number>>>>;
@@ -18,10 +19,12 @@ const SHADES = ['bg-flow/10', 'bg-flow/20', 'bg-flow/30', 'bg-flow/40', 'bg-flow
  * that did not run, or one of yours whose first run is unfinished or failed);
  * they are never a row of zeros.
  */
-export function Compare({ base, both, not, keys, own, left }: {
+export function Compare({ base, both, not, keys: ran, own, left }: {
   base: string; both: Counts; not: Counts; keys: readonly LensKey[]; own: Lenses;
   left: { key: LensKey; why: string }[];
 }) {
+  // `keys` comes in the API's order (lensContext's `ran`); rows and columns read floor, ceiling, not counted, then yours.
+  const keys = [...SHOWN.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
   const name = (k: LensKey) => lensInfo(k, own)?.name ?? '';
   const n = (m: Counts, r: LensKey, c: LensKey) => m[r]?.[c] ?? 0;
   return (

@@ -20,7 +20,7 @@ import { BURN_LINE, BUILT_IN_BEHIND, LENSES, CAPPED, INTO_CUSTODY_LINE, MINT_LIN
 import { layout, reasons, type Drawing, type DrawnLoop } from '@/lib/layout';
 import { explorerTx, lensTabHref, txHref } from '@/lib/links';
 import { OWN_BEFORE_EDIT, behindOf, runStateWords } from '@/lib/lens-state';
-import { APART, APART_WHY, NOT_JUDGED, SHOWN, TINT_LEAD, answer, judged, ownRan } from '@/lib/metrics';
+import { APART, APART_WHY, NOT_JUDGED, SHOWN, TINT_LEAD, answer, inShownOrder, judged, ownRan } from '@/lib/metrics';
 import { inEscrow, txView, type TokenDrawing, type TxCollection } from '@/lib/views';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
@@ -60,7 +60,8 @@ export async function TxView({ chainId, tx, within, from }: { chainId: number; t
     const b = `/c/${c.chainId}/${c.address}`;
     return { base: b, name: c.name ?? short(c.address), href: homeOf.size === 1 ? txHref(chainId, tx, b) : b };
   });
-  const notRunLine = notRun.length === 0 ? '' : homes.size > 1 ? notRunAcross(notRun, Object.values(collections)) : notRunAll(notRun);
+  // The verdict keeps the API's lens order; the page names lenses floor, ceiling, then the one not counted.
+  const notRunLine = notRun.length === 0 ? '' : homes.size > 1 ? notRunAcross(inShownOrder(notRun), Object.values(collections)) : notRunAll(inShownOrder(notRun));
   // One drawing per token, however many of its transfers the transaction moved.
   const drawings = new Map<TokenDrawing, Drawing>();
   const drawingOf = (g: TokenDrawing): Drawing => {

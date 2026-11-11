@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
+import { ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
 import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
@@ -104,7 +104,8 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
         <tbody className="block sm:table-row-group">
           {transfers.map((t, i) => {
             const tone = toneOf(t);
-            const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
+            // The reason said is the strongest lens's: a counted one's before the one never counted.
+            const first = SHOWN.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
             const tx = explorerTx(chainId, t.txHash);
             const keys: LensKey[] = [...SHOWN.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];

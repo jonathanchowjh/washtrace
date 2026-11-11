@@ -35,6 +35,11 @@ export const APART: readonly Method[] = METHODS.filter((m) => !HEADLINE.includes
  */
 export const SHOWN: readonly Method[] = [...HEADLINE, ...APART];
 
+/** Built-ins in SHOWN's order, for a page that names some of them: a verdict's `by` and `notRun` keep METHODS' order, which the API publishes. */
+export function inShownOrder(ms: readonly Method[]): Method[] {
+  return SHOWN.filter((m) => ms.includes(m));
+}
+
 /** Why they are not counted, said wherever a page names one. */
 export const APART_WHY = 'on real data it flags as many sales as it does with buyers relabelled at random among wallets of similar activity, so it is not counted';
 /** APART_WHY as a sentence, for the tooltip on each "(not counted)". */
@@ -136,11 +141,12 @@ export function lensContext(latest: Pick<AnalysisRow, 'totals'> | null, runs: re
  * judged nothing.
  */
 export function leftOut(latest: Pick<AnalysisRow, 'totals'> | null, runs: readonly { lens: Lens; run: LensRun | null }[], ran: readonly LensKey[], funding: { trail: boolean; funded: boolean; coming: boolean; silent: boolean }): { key: LensKey; why: string }[] {
-  // The same states the lens panel tells apart (BuiltIn, lens-tabs.tsx), so a reason is true for its case: funding set but not yet analysed is not "needs a key".
+  // The same states the lens panel tells apart (BuiltIn, lens-tabs.tsx), so a reason is true for its case: funding set but not yet analyzed is not "needs a key".
   const money = funding.funded ? 'has not run yet: funding is set, and the next analysis runs it.'
     : funding.coming ? `has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it${funding.silent ? ', once the worker reports again' : ''}.`
     : `did not run: ${funding.trail ? 'the stored money trail checked no wallet, and it needs a key' : 'it needs to know who paid whom, and a key'}: add an Etherscan key in Settings.`;
-  const builtIn = METHODS.filter((m) => !ran.includes(m)).map((key) => ({
+  // Listed under Compare, so in the order every page lists lenses, not the API's.
+  const builtIn = SHOWN.filter((m) => !ran.includes(m)).map((key) => ({
     key,
     why: latest === null ? 'has not been read yet: the first analysis is not in.' : key === 'A' ? 'did not run in the latest analysis.' : money,
   }));

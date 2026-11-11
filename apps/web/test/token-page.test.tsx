@@ -62,6 +62,13 @@ describe('the token page when not everything is judged', () => {
     expect(text).toContain('1 more is flagged only by Money loops back, which is not counted.');
   });
 
+  it('names the lenses that agree on a pattern floor, ceiling, then the one not counted', async () => {
+    Object.assign(state, { flagged: ['A', 'AU', 'AC'] });
+    const names = [...(await dom()).querySelectorAll('a[title^="Open the evidence for"]')].map((a) => a.textContent);
+    // The why line's chips come first, then the table row's: both in the same order.
+    expect(names.slice(0, 3)).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
+  });
+
   it('names a money swatch in the legend only when a money arrow is drawn', async () => {
     Object.assign(state, { flagged: ['A'] });
     const legend = [...(await dom()).querySelectorAll('figcaption > span')].map((s) => s.textContent);

@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/sales-strip';
@@ -19,7 +18,7 @@ import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
 import { HEADLINE } from '@washtrace/detect';
-import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
+import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, SHOWN, TINT_LEAD, answer, counted, inShownOrder, toneOf } from '@/lib/metrics';
 import { coverage, progress, unread } from '@/lib/coverage';
 import { readerZone } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
@@ -66,7 +65,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
   if (view === 'not-watched') notFound();
   if ('empty' in view) return noTransfer(view.c, tokenId, `/c/${chainId}/${address}`);
   // tokenView has already dropped the lenses that did not run.
-  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun, own, ownLenses } = view;
+  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, apartOnly, own, ownLenses } = view;
+  // The verdict keeps the API's lens order; the page names lenses floor, ceiling, then the one not counted.
+  const by = inShownOrder(view.by), notRun = inShownOrder(view.notRun);
   const name = collection.name ?? short(address);
   const base = `/c/${chainId}/${address}`;
   // Counted as the wallet page counts: a transfer flagged only by Money loops back is shown grey, and said apart.
@@ -88,12 +89,12 @@ export default async function TokenPage({ params, searchParams }: Props) {
 
   // A row's number is its place in the whole chain order. The filter keeps some of them, the page shows a hundred of those.
   const show = SHOWS.find((s) => s === sp.show) ?? 'all';
-  const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : METHODS.some((m) => t.flags[m]));
+  const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : SHOWN.some((m) => t.flags[m]));
   const kept = transfers.flatMap((t, i) => (keeps(t) ? [i + 1] : []));
   const pageCount = pages(kept.length, PAGE);
   const page = Math.min(pageCount, pageOf(sp.page));
   const shown = kept.slice((page - 1) * PAGE, page * PAGE);
-  const shownFlagged = kept.filter((n) => METHODS.some((m) => transfers[n - 1]!.flags[m])).length;
+  const shownFlagged = kept.filter((n) => SHOWN.some((m) => transfers[n - 1]!.flags[m])).length;
   const here = `${base}/t/${tokenId}`;
   /** A link to a page of a filter. Absolute, because the pager's page box takes its form action from it. */
   const hrefFor = (pg: number, s: Show) => {
@@ -116,7 +117,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   // The table's link to every row the graph numbers, built here because only the server knows which page of the filter holds a row.
   const rowHrefs = Object.fromEntries(drawing.edges.flatMap((e) => (e.row === null ? [] : [[e.row, rowHref(e.row)] as const])));
   // A loop the link names wins over a lens; one that matches nothing lights nothing.
-  const lens: LensKey | undefined = sp.method === undefined ? undefined : METHODS.find((m) => m === sp.method) ?? (isOwnKey(sp.method) ? sp.method : undefined);
+  const lens: LensKey | undefined = sp.method === undefined ? undefined : SHOWN.find((m) => m === sp.method) ?? (isOwnKey(sp.method) ? sp.method : undefined);
   const initial = sp.loop ? { loop: sp.loop } : lens !== undefined ? { method: lens } : null;
   // Row numbers are 1-based, as the graph labels them.
   const rowOf = new Map(transfers.map((t, i) => [`${t.txHash}:${t.logIndex}`, i + 1]));
@@ -180,7 +181,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
+                {inShownOrder(r.methods).map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
               </>
             ),
           })),

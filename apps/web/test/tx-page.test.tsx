@@ -295,7 +295,8 @@ describe('the trade page: one card per lens', () => {
     const c = await txPage();
     const body = c.querySelector('p.text-lg')!.nextElementSibling!.textContent!;
     expect(body).toContain('The lenses on the right flag it.');
-    expect(body).toContain('Money loops back and Linked wallets did not run in the latest analysis of Second, so they flag nothing there.');
+    // Floor, ceiling, then the one not counted, as every page lists lenses; the API keeps A, AU, AC.
+    expect(body).toContain('Linked wallets and Money loops back did not run in the latest analysis of Second, so they flag nothing there.');
     expect(body).not.toMatch(/did not run in the latest analysis, so (it|they) flag/);
   });
 
@@ -314,7 +315,7 @@ describe('the trade page: one card per lens', () => {
     roundTrip();
     state.ran = { 1: ['A'], 2: ['A'] };
     const body = (await txPage()).querySelector('p.text-lg')!.nextElementSibling!.textContent!;
-    expect(body).toContain('Money loops back and Linked wallets did not run in the latest analysis, so they flag nothing.');
+    expect(body).toContain('Linked wallets and Money loops back did not run in the latest analysis, so they flag nothing.');
     expect(body).not.toContain(' of First');
   });
 

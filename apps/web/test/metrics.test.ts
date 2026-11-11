@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CollectionRow, LensRun, Method, MethodTotals, PassRow } from '@washtrace/detect';
 import { TRAIL_LOADING, analyzingOn, coverage, unread, isRunning, progress, tabCounts, analysisWaitText } from '@/lib/coverage';
 import { DEFAULT_RULE, ruleLine } from '@washtrace/detect/lens-rule';
-import { APART_WHY, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
+import { APART_WHY, inShownOrder, judged, judgedBy, chartLenses, lensContext, lensesRan, ownLenses, ownRan, ranFlags, evidenceLead, range, rangeEnds, summary } from '@/lib/metrics';
 import { formatBytes } from '@washtrace/detect/bytes';
 import { localTime } from '@/lib/format';
 
@@ -486,6 +486,14 @@ describe('lensesRan', () => {
   });
   it('is none without an analysis', () => {
     expect(lensesRan(null)).toEqual([]);
+  });
+});
+
+describe('inShownOrder', () => {
+  it('lists built-ins floor, ceiling, then the one not counted, whatever order they come in', () => {
+    expect(inShownOrder(['A', 'AU', 'AC'])).toEqual(['A', 'AC', 'AU']);
+    expect(inShownOrder(['AU', 'AC'])).toEqual(['AC', 'AU']);
+    expect(inShownOrder([])).toEqual([]);
   });
 });
 
