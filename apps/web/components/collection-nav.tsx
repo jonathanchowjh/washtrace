@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { num } from '@/lib/format';
@@ -45,12 +45,44 @@ export function lensOf(sp: URLSearchParams, tab: CollectionTab, lenses: readonly
  * the bar is wider than the screen, and Trades, the last tab, would sit off it.
  * It moves the bar's own scrollLeft, as scrollIntoView could scroll the page
  * down to the bar too. The bar is the tabs' offsetParent, so their offsets are
- * within it.
+ * within it. `pad` is room left beyond the tab, so an edge's fade does not
+ * sit over it, never past either end of the bar.
  */
-export function revealTab(bar: HTMLElement, tab: HTMLElement) {
-  const right = tab.offsetLeft + tab.offsetWidth;
-  if (tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = tab.offsetLeft;
-  else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
+export function revealTab(bar: HTMLElement, tab: HTMLElement, pad = 0) {
+  const left = tab.offsetLeft - pad;
+  const right = tab.offsetLeft + tab.offsetWidth + pad;
+  if (left < bar.scrollLeft) bar.scrollLeft = Math.max(0, left);
+  else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = Math.min(right, bar.scrollWidth) - bar.clientWidth;
+}
+
+/** How wide each edge's fade is, in px (w-8): the lit tab is scrolled clear of it. */
+const FADE = 32;
+
+/**
+ * Whether the bar has tabs past its left or right edge, so that edge fades
+ * while it does: on a phone the bar is wider than the screen, and a tab cut
+ * in half at the edge gave no sign the rest is there. Checked on scroll, and
+ * whenever the bar or a tab changes size (a count streaming in, a rotation).
+ */
+function useOffEdges(bar: RefObject<HTMLElement | null>): { left: boolean; right: boolean } {
+  const [off, setOff] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = bar.current;
+    if (el === null) return;
+    // A pixel of slack: a zoomed page can leave a fraction unscrolled at either end.
+    const check = () => {
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setOff((o) => (o.left === left && o.right === right ? o : { left, right }));
+    };
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    const watch = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(check);
+    watch?.observe(el);
+    for (const a of el.querySelectorAll('a')) watch?.observe(a);
+    return () => { el.removeEventListener('scroll', check); watch?.disconnect(); };
+  }, [bar]);
+  return off;
 }
 
 /** A tab's count, as a small grey pill. */
@@ -119,11 +151,12 @@ export function CollectionNav({ base, name, analysedAt, lenses, opensOn, counts,
   const path = usePathname();
   const current = tabOf(base, path);
   const bar = useRef<HTMLElement>(null);
+  const off = useOffEdges(bar);
   useEffect(() => {
     const nav = bar.current;
     const reveal = () => {
       const lit = nav?.querySelector<HTMLElement>('[aria-current="page"]');
-      if (nav && lit) revealTab(nav, lit);
+      if (nav && lit) revealTab(nav, lit, FADE);
     };
     reveal();
     // The counts stream in after this runs and widen the tabs, moving the lit one: reveal it again whenever a tab changes size.
@@ -152,16 +185,21 @@ export function CollectionNav({ base, name, analysedAt, lenses, opensOn, counts,
         </Link>
         {analysedAt === null ? null : <span>· analysed <Time ms={analysedAt} /></span>}
       </p>
-      <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative mt-2 flex max-w-full gap-1 overflow-x-auto border-b">
-        {TABS.map(({ tab, label, kind }) => (
-          <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
-            className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
-              tab === current ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-            <KindIcon kind={kind} />{label}
-            {countOf(tab)}
-          </Link>
-        ))}
-      </nav>
+      {/* The fades sit over the bar, outside what scrolls, so they stay at its edges; the bar's bottom rule shows under them. */}
+      <div className="relative mt-2">
+        <nav ref={bar} aria-label={`${name}: overview, methods, rings, tokens, wallets and trades`} className="relative flex max-w-full gap-1 overflow-x-auto border-b">
+          {TABS.map(({ tab, label, kind }) => (
+            <Link key={tab} href={hrefOf(tab)} aria-current={tab === current ? 'page' : undefined}
+              className={cn('-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium',
+                tab === current ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              <KindIcon kind={kind} />{label}
+              {countOf(tab)}
+            </Link>
+          ))}
+        </nav>
+        <div aria-hidden data-more="left" hidden={!off.left} className="pointer-events-none absolute top-0 bottom-px left-0 w-8 bg-linear-to-r from-background to-transparent" />
+        <div aria-hidden data-more="right" hidden={!off.right} className="pointer-events-none absolute top-0 right-0 bottom-px w-8 bg-linear-to-l from-background to-transparent" />
+      </div>
     </div>
   );
 }

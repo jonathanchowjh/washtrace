@@ -1,4 +1,4 @@
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CollectionNav, lensOf, revealTab, tabOf } from '@/components/collection-nav';
 import { listHref } from '@/lib/links';
@@ -130,11 +130,12 @@ describe('the collection tab bar', () => {
 });
 
 // jsdom lays nothing out: each tab is given a box 100px wide, side by side in
-// TABS' order, inside a bar 250px wide, so only two and a half tabs show.
+// TABS' order, inside a bar 250px wide, so only two and a half of its 600px show.
 function laidOut() {
   const left = (el: HTMLElement) => (el.tagName === 'A' ? [...el.parentElement!.children].indexOf(el) * 100 : 0);
   const width = (el: HTMLElement) => (el.tagName === 'NAV' ? 250 : 100);
-  const sizes: Record<string, (el: HTMLElement) => number> = { offsetLeft: left, offsetWidth: width, clientWidth: width };
+  const scrollWidth = (el: HTMLElement) => (el.tagName === 'NAV' ? 600 : 100);
+  const sizes: Record<string, (el: HTMLElement) => number> = { offsetLeft: left, offsetWidth: width, clientWidth: width, scrollWidth };
   const own = Object.keys(sizes).map((k) => [k, Object.getOwnPropertyDescriptor(HTMLElement.prototype, k)] as const);
   for (const [k, size] of Object.entries(sizes)) {
     Object.defineProperty(HTMLElement.prototype, k, { configurable: true, get(this: HTMLElement) { return size(this); } });
@@ -155,13 +156,34 @@ describe('the lit tab on a narrow screen', () => {
       const page = () => <CollectionNav base={BASE} name="Coll" analysedAt={null} lenses={LENSES} opensOn="AC" counts={{}} rings={null} />;
       const { container, rerender } = render(page());
       const bar = container.querySelector('nav')!;
-      // Trades sits at 500-600px: the bar scrolls until its right edge shows.
+      // Trades sits at 500-600px: the bar scrolls until its right edge shows, and no further than its end.
       expect(bar.scrollLeft).toBe(350);
       // Off to Overview, at 0-100px: the bar scrolls back to show it.
       at.path = BASE;
       rerender(page());
       expect(bar.querySelector('[aria-current]')!.textContent).toBe('Overview');
       expect(bar.scrollLeft).toBe(0);
+      // Tokens, at 300-400px, is scrolled clear of the right edge's 32px fade.
+      at.path = `${BASE}/tokens`;
+      rerender(page());
+      expect(bar.scrollLeft).toBe(182);
+    } finally {
+      restore();
+    }
+  });
+
+  it('fades each edge while tabs are past it, so a cut tab says the bar scrolls', () => {
+    const restore = laidOut();
+    try {
+      const { el } = nav(BASE);
+      const bar = el.querySelector('nav')!;
+      const fades = () => [...el.querySelectorAll<HTMLElement>('[data-more]')].filter((f) => !f.hidden).map((f) => f.dataset.more);
+      // At the start, more lies to the right only.
+      expect(fades()).toEqual(['right']);
+      act(() => { bar.scrollLeft = 100; bar.dispatchEvent(new Event('scroll')); });
+      expect(fades()).toEqual(['left', 'right']);
+      act(() => { bar.scrollLeft = 350; bar.dispatchEvent(new Event('scroll')); });
+      expect(fades()).toEqual(['left']);
     } finally {
       restore();
     }
