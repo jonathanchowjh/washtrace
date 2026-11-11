@@ -16,10 +16,12 @@ async function go(q: string, chain?: string): Promise<string> {
   const { NextRequest } = await import('next/server');
   const res = await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}${chain === undefined ? '' : `&chain=${chain}`}`));
   expect(res.status).toBe(303);
-  const to = new URL(res.headers.get('location')!);
+  // Relative, so it stays on the host the reader asked on.
+  expect(res.headers.get('location')).toMatch(/^\//);
+  const to = new URL(res.headers.get('location')!, 'http://x');
   return to.pathname + to.search;
 }
-const coll = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA' };
+const coll = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA', totals: null };
 
 describe('/go', () => {
   it('sends a transaction hash to its transaction, under its collection\'s tabs, even when search would find more', async () => {
@@ -49,6 +51,11 @@ describe('/go', () => {
   it('a hash of a transaction with more transfers than one page of hits still opens it', async () => {
     state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }], more: { ...none.more, trades: true } };
     expect(await go(TX)).toBe(`/tx/1/${TX}`);
+  });
+
+  it('opens the one transaction the start of a hash finds', async () => {
+    state.hits = { ...none, trades: [{ chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '1' }, { chainId: 1, txHash: TX, address: ADDR, name: 'A', tokenId: '2' }] };
+    expect(await go('0xcccc')).toBe(`/c/1/${ADDR}/tx/${TX}`);
   });
 
   it('with a chain given, a hash goes straight to that chain’s transaction', async () => {
@@ -113,7 +120,7 @@ describe('/go from inside a collection', () => {
     state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }] };
     const { GET } = await import('@/app/go/route');
     const { NextRequest } = await import('next/server');
-    const at = async (q: string) => new URL((await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}&scope=1:${ADDR}`))).headers.get('location')!);
+    const at = async (q: string) => new URL((await GET(new NextRequest(`http://x/go?q=${encodeURIComponent(q)}&scope=1:${ADDR}`))).headers.get('location')!, 'http://x');
     const to = await at('0xbbbbbb');
     expect(to.pathname).toBe(`/c/1/${ADDR}/w/${W}`);
     expect(state.asked).toEqual({ scope: { id: 1, chainId: 1 } });
@@ -127,7 +134,7 @@ describe('/go from inside a collection', () => {
     state.hits = { ...none, wallets: [{ chainId: 1, address: W, transfers: 3 }] };
     const { GET } = await import('@/app/go/route');
     const { NextRequest } = await import('next/server');
-    const to = new URL((await GET(new NextRequest(`http://x/go?q=0xbbbbbb&scope=1:${ADDR}`))).headers.get('location')!);
+    const to = new URL((await GET(new NextRequest(`http://x/go?q=0xbbbbbb&scope=1:${ADDR}`))).headers.get('location')!, 'http://x');
     expect(to.pathname).toBe(`/w/1/${W}`);
     expect(state.asked).toEqual({});
   });

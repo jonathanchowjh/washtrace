@@ -62,6 +62,13 @@ describe('the token page when not everything is judged', () => {
     expect(text).toContain('1 more is flagged only by Money loops back, which is not counted.');
   });
 
+  it('names the lenses that agree on a pattern floor, ceiling, then the one not counted', async () => {
+    Object.assign(state, { flagged: ['A', 'AU', 'AC'] });
+    const names = [...(await dom()).querySelectorAll('a[title^="Open the evidence for"]')].map((a) => a.textContent);
+    // The why line's chips come first, then the table row's: both in the same order.
+    expect(names.slice(0, 3)).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
+  });
+
   it('names a money swatch in the legend only when a money arrow is drawn', async () => {
     Object.assign(state, { flagged: ['A'] });
     const legend = [...(await dom()).querySelectorAll('figcaption > span')].map((s) => s.textContent);
@@ -365,6 +372,17 @@ describe('the token page for a watched collection with no transfer of the token'
     const text = await page();
     expect(text).toContain("No transfer of #7 is in Coll's history.");
     expect(text).not.toContain('read yet');
+  });
+
+  it('heads as any token page: a Not judged yet chip, an answer with what it means, and a button back', async () => {
+    Object.assign(state, { empty: true });
+    const el = await dom();
+    expect(el.querySelector('header .chip')?.textContent).toBe('Not judged yet');
+    expect(el.querySelector('p.text-lg')?.textContent).toBe('No transfer of this token is read');
+    expect(el.textContent).toContain('What this means: It may not be minted');
+    const back = [...el.querySelectorAll('a')].find((a) => a.textContent === 'Back to Coll')!;
+    expect(back.className).toMatch(/\bbtn\b/);
+    expect(back.className).toMatch(/\bmt-4\b/);
   });
 
   it('still answers not found for a collection that is not watched', async () => {

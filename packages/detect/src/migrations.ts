@@ -645,4 +645,22 @@ ALTER TABLE washtrace.witnesses ADD COLUMN IF NOT EXISTS ring text;
 ALTER TABLE washtrace.analyses ADD COLUMN IF NOT EXISTS rings int;
 CREATE INDEX IF NOT EXISTS witnesses_ring_idx ON washtrace.witnesses (collection_id, ring) WHERE ring IS NOT NULL;
 `,
+  {
+    // A lens list counts each wallet's or token's counted trades by joining
+    // its transfers to trade_facts on the key, AND counted (COUNTED_JOIN). At
+    // a million transfers a page's 50 wallets made some 50,000 of those
+    // lookups, each a heap fetch for one boolean. With only the counted rows'
+    // keys in an index, the planner answers them from the index alone.
+    // Built concurrently, as #28 built flows_moves_idx: writes to trade_facts
+    // go on while it builds; an invalid one a stop left behind is dropped first.
+    outside: [
+      `DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'washtrace' AND c.relname = 'trade_facts_counted_idx' AND NOT i.indisvalid) THEN
+    DROP INDEX washtrace.trade_facts_counted_idx;
+  END IF;
+END $$`,
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS trade_facts_counted_idx ON washtrace.trade_facts (collection_id, tx_hash, log_index) WHERE counted',
+    ],
+  },
 ];

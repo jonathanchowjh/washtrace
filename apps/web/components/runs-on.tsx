@@ -69,16 +69,16 @@ export function RunsOn({ lensId, rule, rows, writable }: { lensId: number; rule:
               <td className="px-3 py-2">
                 <input type="checkbox" aria-label={`Run on ${r.name}`} checked={picked.has(key(r))} disabled={!writable || r.busy} onChange={() => toggle(key(r))} />
               </td>
-              <td className="px-3 py-2"><Link href={r.tab} className="inline-flex items-center gap-1.5 font-medium hover:underline"><KindIcon kind="collection" />{r.name}</Link></td>
+              <td className="px-3 py-2"><Link href={r.tab} prefetch={false} className="inline-flex items-center gap-1.5 font-medium hover:underline"><KindIcon kind="collection" />{r.name}</Link></td>
               <td className="px-3 py-2 text-muted-foreground">
-                {r.share === null ? null : <Link href={r.tab} className="mr-2 font-medium text-foreground tabular-nums hover:underline">{r.share}</Link>}
+                {r.share === null ? null : <Link href={r.tab} prefetch={false} className="mr-2 font-medium text-foreground tabular-nums hover:underline">{r.share}</Link>}
                 {r.state ?? (r.share === null ? null : 'current')}
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">{r.needs ?? '—'}</td>
               <td className="px-3 py-2 text-right text-xs">
                 <span className="inline-flex flex-wrap items-center justify-end gap-3">
                   <RowPreview chainId={r.chainId} address={r.address} rule={rule} writable={writable} />
-                  <Link href={r.edit} className="text-muted-foreground hover:text-foreground hover:underline">Edit here ›</Link>
+                  <Link href={r.edit} prefetch={false} className="text-muted-foreground hover:text-foreground hover:underline">Edit here ›</Link>
                 </span>
               </td>
             </tr>

@@ -7,7 +7,6 @@ import { TRANSFER, tagSales } from './marketplaces.js';
 import type { Transfer } from './types.js';
 
 // Defined in marketplaces.ts, which this file imports and so cannot be imported by; re-exported as the chain's own.
-export { TRANSFER };
 
 const METADATA = parseAbi(['function name() view returns (string)', 'function symbol() view returns (string)']);
 /** The contract's own answer that it has no such string: a revert, no return data, or data that is not a string. */

@@ -46,6 +46,9 @@ describe('the tier mark and the kind symbol', () => {
     expect(cls('cycle')).toContain('bg-cycle');
     expect(cls('money')).toContain('repeating-linear-gradient');
     expect(cls('apart')).toContain('border-dashed');
+    // Not a faint 1 px outline: a heavier ring round a tinted disc, still grey, so a Trades column tells it from "–" at a glance.
+    expect(cls('apart')).toContain('border-[1.5px]');
+    expect(cls('apart')).toContain('bg-muted-foreground/30');
     expect(cls('own')).toContain('rotate-45');
   });
 

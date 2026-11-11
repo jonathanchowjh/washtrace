@@ -101,7 +101,7 @@ export function Suggested({ writable, watched, stored }: { writable: boolean; wa
                 </div>
               </div>
               {watched.includes(key)
-                ? <Link href={`/c/${key}`} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
+                ? <Link href={`/c/${key}`} prefetch={false} className="text-xs font-medium text-foreground hover:underline">Watching →</Link>
                 : <button type="button" disabled={busy !== null || !writable} title={writable ? undefined : LOCAL_ONLY} onClick={() => add(s)} className="btn">{busy === s.address ? 'Adding…' : 'Watch'}</button>}
             </li>
           );
@@ -112,12 +112,15 @@ export function Suggested({ writable, watched, stored }: { writable: boolean; wa
   );
 }
 
-/** Watch any collection by its contract address. `writable` as in Suggested. */
-export function AddCollection({ writable, stored }: { writable: boolean; stored: StoredSize[] | null }) {
+/**
+ * Watch any collection by its contract address. `writable` as in Suggested.
+ * `start` fills the form in, for a not-watched collection's Watch it.
+ */
+export function AddCollection({ writable, stored, start }: { writable: boolean; stored: StoredSize[] | null; start?: { chainId: number; address: string } }) {
   const router = useRouter();
   // What is typed, for the size of its stored data; the form itself is still read from its fields on submit.
-  const [chain, setChain] = useState('1');
-  const [typed, setTyped] = useState('');
+  const [chain, setChain] = useState(String(start?.chainId ?? 1));
+  const [typed, setTyped] = useState(start?.address ?? '');
   const size = stored?.find((e) => keyOf(e.chainId, e.address) === keyOf(Number(chain), typed.trim()));
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
@@ -140,12 +143,12 @@ export function AddCollection({ writable, stored }: { writable: boolean; stored:
   return (
     <form action={submit} className="flex flex-wrap items-end gap-2 text-[13px]">
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Chain
-        <select name="chainId" defaultValue="1" onChange={(e) => setChain(e.target.value)} className="field">
+        <select name="chainId" defaultValue={chain} onChange={(e) => setChain(e.target.value)} className="field">
           {Object.entries(CHAINS).map(([id, c]) => <option key={id} value={id}>{c.name}</option>)}
         </select>
       </label>
       <label className="flex max-w-full flex-col gap-0.5 text-xs text-muted-foreground">Contract
-        <input name="address" required onChange={(e) => setTyped(e.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className="field w-[23rem] max-w-full font-mono text-xs" />
+        <input name="address" required defaultValue={start?.address} onChange={(e) => setTyped(e.target.value)} pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" className="field w-[23rem] max-w-full font-mono text-xs" />
       </label>
       <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">Name
         <input name="name" placeholder="optional" className="field w-36" />
@@ -194,7 +197,7 @@ export function CollectionControls({ writable, chainId, address, paused, priorit
         <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/pause`)} className="btn"
           title={no ? LOCAL_ONLY : 'Stop reading new blocks for this collection; keeps its data'}>Pause</button>
         {compact ? null : <button type="button" disabled={busy || no} onClick={() => run('POST', `${path}/config`, { priority: !priority })} className="btn"
-          title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the others'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
+          title={no ? LOCAL_ONLY : priority ? 'Go back to checking wallets in turn with the other collections' : "Check this collection's wallets for money before the other collections'"}>{priority ? 'Stop prioritizing' : 'Prioritize'}</button>}
         {fail}
       </span>
     );

@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { METHODS, ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
-import type { LensKey } from '@washtrace/detect/trades';
+import { ZERO, type FlaggedTransfer, type LensFlag, type Witness } from '@washtrace/detect';
+import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
 import { eth, lensInfo, num, plural, short, tokenLabel, type Lenses } from '@/lib/format';
 import { cardSrc, explorerTx, lensTabHref, txHref, walletHref, withFrom } from '@/lib/links';
-import { FILL } from './kit';
+import { TierMark } from './kit';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
@@ -13,11 +13,12 @@ import { HoverCard } from '@/components/hover-card';
 /**
  * A wallet, linked to its page: under `within`'s tabs when it is given (a
  * collection's base), so a link from inside a collection stays inside it. The
- * zero address is a mint or a burn, not a wallet.
+ * zero address is a mint or a burn, not a wallet. It sits in rows of many, so
+ * it does not prefetch: each prefetch renders a wallet page.
  */
 export function Wallet({ chainId, address, within, from }: { chainId: number; address: string; within?: string; from?: string }) {
   if (address === ZERO) return <span className="text-muted-foreground">mint/burn</span>;
-  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} title={address} className="font-mono hover:underline">{short(address)}</Link>;
+  const link = <Link href={withFrom(walletHref(chainId, address, within), from)} prefetch={false} title={address} className="font-mono hover:underline">{short(address)}</Link>;
   // Inside a collection there is a card to show: its trades there and its ring.
   return within ? <HoverCard src={cardSrc(within, 'wallet', address)}>{link}</HoverCard> : link;
 }
@@ -60,7 +61,10 @@ export function rowList(rows: readonly number[]): string {
   return run && sorted.length > 2 ? `${sorted[0]}–${sorted[sorted.length - 1]}` : sorted.join(', ');
 }
 
-const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
+/** A marketplace by the name Trades and the overview give it ("OpenSea", not "seaport-1.6"); one no venue lists keeps its own. */
+const marketName = (raw: string) => VENUES[venueOf(raw)]?.name ?? raw;
+
+const ROW_TONE ={ cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', apart: 'bg-muted/60', clean: '' } as const;
 // A chip wears its own lens's tone, whatever the row's: a row both Round trips and Money loops back flag has one of each.
 /**
  * Transfers with each lens's verdict and its reason. `numbered` keeps the
@@ -71,6 +75,12 @@ const ROW_TONE = { cycle: 'bg-cycle-surface/70', money: 'bg-money-surface/70', a
  * `own` gives the lenses of yours that flag a row, by `txHash:logIndex`, chipped
  * after the built-ins' and named from `names`. `within` keeps wallet and
  * trade links under that collection's tabs, as Wallet's.
+ *
+ * Below `sm` the table is too wide for the screen, so each row is laid out as
+ * a card there: the same row, not a second copy as the Trades cards are,
+ * because the graph's numbers link to a row by its id, and an id names one
+ * element. A card leaves out a cell with nothing to say: it has no column to
+ * hold a dash.
  */
 export function Transfers({ chainId, transfers, numbered = false, numbers, collection = false, base, within, own, names = {} }: {
   chainId: number; transfers: readonly FlaggedTransfer[]; numbered?: boolean; numbers?: readonly number[]; collection?: boolean; base?: string; within?: string;
@@ -79,8 +89,8 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
   if (transfers.length === 0) return <Empty>No transfers read yet.</Empty>;
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full min-w-[52rem] text-left text-sm">
-        <thead className="text-xs text-muted-foreground">
+      <table className="block w-full text-left text-sm sm:table sm:min-w-[52rem]">
+        <thead className="hidden text-xs text-muted-foreground sm:table-header-group">
           <tr className="border-b">
             {numbered ? <th className="px-3 py-2 font-medium">#</th> : null}
             <th className="px-3 py-2 font-medium">When</th>
@@ -91,44 +101,47 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
             <th className="px-3 py-2 font-medium">Why</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="block sm:table-row-group">
           {transfers.map((t, i) => {
             const tone = toneOf(t);
-            const first = METHODS.map((m) => t.flags[m]).find((w) => w !== undefined);
+            // The reason said is the strongest lens's: a counted one's before the one never counted.
+            const first = SHOWN.map((m) => t.flags[m]).find((w) => w !== undefined);
             const n = numbers?.[i] ?? i + 1;
             const tx = explorerTx(chainId, t.txHash);
             const keys: LensKey[] = [...SHOWN.filter((m) => t.flags[m]), ...(own?.get(`${t.txHash}:${t.logIndex}`) ?? [])];
             const chipBase = t.collection ? `/c/${t.collection.chainId}/${t.collection.address}` : base;
             return (
-              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined} className={cn('border-b last:border-b-0 align-top target:outline-2 target:outline-focus', ROW_TONE[tone])}>
-                {numbered ? <td data-row-number className="px-3 py-2 tabular-nums text-muted-foreground">{n}</td> : null}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} title="Open this trade">
+              <tr key={`${t.txHash}:${t.logIndex}`} id={numbered ? `t${n}` : undefined}
+                className={cn('flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b px-3 py-2 align-top last:border-b-0 target:outline-2 target:outline-focus sm:table-row sm:p-0', ROW_TONE[tone])}>
+                {/* The card's # is drawn, not written: the cell's text stays the row's number, the graph's label for it. */}
+                {numbered ? <td data-row-number className="tabular-nums text-muted-foreground before:content-['#'] sm:px-3 sm:py-2 sm:before:content-none">{n}</td> : null}
+                <td className="whitespace-nowrap sm:px-3 sm:py-2">
+                  <Link className="text-xs tabular-nums hover:underline" href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade">
                     {t.blockTime === null ? `block ${num(t.blockNumber)}` : <Time ms={t.blockTime * 1000} />}
                   </Link>
                   {tx === null ? null : <Ext href={tx} className="ml-1 text-xs text-muted-foreground" title="Open the transaction on the block explorer">tx</Ext>}
                 </td>
                 {collection && t.collection ? (
-                  <td className="px-3 py-2">
-                    <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`}>
+                  <td className="basis-full font-medium sm:px-3 sm:py-2 sm:font-normal">
+                    <Link className="hover:underline" href={`/c/${t.collection.chainId}/${t.collection.address}/t/${t.tokenId}`} prefetch={false}>
                       {t.collection.name ?? short(t.collection.address)} #{tokenLabel(t.tokenId)}
                     </Link>
                   </td>
                 ) : null}
-                <td className="px-3 py-2 whitespace-nowrap"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
-                <td className="px-3 py-2 whitespace-nowrap">
+                <td className="whitespace-nowrap sm:px-3 sm:py-2"><Wallet chainId={chainId} address={t.from} within={within} /> → <Wallet chainId={chainId} address={t.to} within={within} /></td>
+                <td className="whitespace-nowrap sm:px-3 sm:py-2">
                   {t.marketplace === null ? <span className="text-muted-foreground">transfer</span> : (
-                    <>{t.marketplace}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
+                    <>{marketName(t.marketplace)}<span className="ml-2 text-xs tabular-nums">{t.priceWei === null ? 'unpriced' : <Link href={txHref(chainId, t.txHash, within)} prefetch={false} title="Open this trade" className="hover:underline">{eth(t.priceWei, t.currency === '' ? 'ETH' : 'WETH')}</Link>}</span></>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className={cn('basis-full sm:px-3 sm:py-2', keys.length === 0 && 'max-sm:hidden')}>
                   {keys.length > 0 ? (
                     <span className="flex flex-wrap gap-1">
                       {keys.map((m) => <Chip key={m} m={m} names={names} base={chipBase} />)}
                     </span>
                   ) : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="px-3 py-2 text-xs">{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
+                <td className={cn('basis-full text-xs sm:px-3 sm:py-2', first === undefined && 'max-sm:hidden')}>{first ? because(first, chainId, within) : <span className="text-muted-foreground">—</span>}</td>
               </tr>
             );
           })}
@@ -138,11 +151,15 @@ export function Transfers({ chainId, transfers, numbered = false, numbers, colle
   );
 }
 
-/** A lens's name on a coloured chip in its own tone; a link to that lens's tab where the collection is known. A lens no longer saved has no chip. */
+/**
+ * A lens's name on a chip with its tier's mark, as a lens is tagged on every
+ * other page; a link to that lens's tab where the collection is known. A lens
+ * no longer saved has no chip.
+ */
 function Chip({ m, names, base }: { m: LensKey; names: Lenses; base?: string }) {
   const info = lensInfo(m, names);
   if (info === null) return null;
-  const cls = cn('rounded px-1.5 py-px text-[11px] whitespace-nowrap text-background', FILL[info.tone]);
-  return base === undefined ? <span className={cls}>{info.name}</span>
-    : <Link href={lensTabHref(base, m, { evidence: true })} title={`Open the evidence for ${info.name}`} className={cn(cls, 'hover:underline')}>{info.name}</Link>;
+  const body = <><TierMark tone={info.tone} />{info.name}</>;
+  return base === undefined ? <span className="chip whitespace-nowrap">{body}</span>
+    : <Link href={lensTabHref(base, m, { evidence: true })} prefetch={false} title={`Open the evidence for ${info.name}`} className="chip whitespace-nowrap hover:bg-muted">{body}</Link>;
 }

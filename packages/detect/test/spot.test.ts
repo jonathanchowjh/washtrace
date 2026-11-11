@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toEventSelector, type Log } from 'viem';
+import { TransactionReceiptNotFoundError, toEventSelector, type Log } from 'viem';
 import type pg from 'pg';
 import { SPOT_CHECK_MS, SPOT_RECEIPTS_MAX, SPOT_TRADES_MAX, SpotCheck, counterparties, lensRefusal, middlesOf, receiptTrades } from '../src/spot.js';
 import { Store } from '../src/store.js';
@@ -40,10 +40,12 @@ interface Setup {
   reverted?: boolean;
   /** Money as Etherscan answers it, per wallet; an Error is thrown. */
   money?: Record<string, { flows: Flow[]; truncated?: boolean } | Error>;
-  /** Wallets whose read is already stored: their coverage, and their stored flows. */
-  stored?: Record<string, { from: number | null; truncated?: boolean; flows: Flow[] }>;
-  /** Receipts of other transactions, for the sale-leg check. */
+  /** Wallets whose read is already stored: where it reads on from, and their stored flows. */
+  stored?: Record<string, { from: number; truncated?: boolean; flows: Flow[] }>;
+  /** Receipts of other transactions, for the sale-leg check; one not listed has no logs. */
   legs?: Record<string, Log[]>;
+  /** Other transactions the node has no receipt for. */
+  gone?: string[];
   etherscan?: boolean;
 }
 
@@ -53,7 +55,7 @@ function setup(s: Setup) {
   const db = new Map<string, Flow[]>(Object.entries(s.stored ?? {}).map(([a, r]) => [a, r.flows]));
 
   const store = new Store(null as unknown as pg.Pool);
-  store.moneyCovering = async (_c, wallets) => new Map(wallets.flatMap((a) => {
+  store.moneyReadOn = async (_c, wallets) => new Map(wallets.flatMap((a) => {
     const r = s.stored?.[a];
     return r ? [[a, { from: r.from, truncated: r.truncated ?? false }] as const] : [];
   }));
@@ -67,17 +69,20 @@ function setup(s: Setup) {
 
   const chain = new Chain(1, 'http://x');
   const all = Object.entries(s.history).flatMap(([c, ts]) => ts.map((t) => ({ ...t, collection: c })));
-  chain.receipt = async () => (s.missing ? null : {
-    blockNumber: BLOCK, reverted: s.reverted ?? false,
-    logs: s.logs ?? all.filter((t) => t.txHash === TX).map((t) => nftLog(t)),
-  });
+  // The node itself, so the chain's own receipt reads, and their answer to a hash it lacks, are what is tested.
+  (chain as unknown as { client: { getTransactionReceipt: (a: { hash: string }) => Promise<unknown> } }).client.getTransactionReceipt = async ({ hash }) => {
+    if (hash === TX && !s.missing) {
+      return { transactionHash: TX, blockNumber: BigInt(BLOCK), status: s.reverted ? 'reverted' : 'success', logs: s.logs ?? all.filter((t) => t.txHash === TX).map((t) => nftLog(t)) };
+    }
+    if (hash === TX || s.gone?.includes(hash)) throw new TransactionReceiptNotFoundError({ hash: hash as `0x${string}` });
+    return { transactionHash: hash, blockNumber: 1n, status: 'success', logs: s.legs?.[hash] ?? [] };
+  };
   chain.finalized = async () => 1_000;
   chain.tokenTransfers = async (collection, tokenId, _from, _to, until) => {
     asked.histories.push(`${collection}:${tokenId}`);
     asked.untils.push(until ?? Infinity);
     return (s.history[collection] ?? []).filter((t) => t.tokenId === tokenId).map((t) => ({ ...t }));
   };
-  chain.receipts = async (txs) => new Map(txs.map((t) => [t, s.legs?.[t] ?? []]));
 
   let etherscan: Etherscan | null = null;
   if (s.etherscan !== false) {
@@ -205,14 +210,28 @@ describe('SpotCheck.run', () => {
     expect(r.transfers.map((t) => t.collection).sort()).toEqual([COLL, OTHER].sort());
   });
 
-  it('a stored read that covers the trade is reused; an older one reads on from where it stopped', async () => {
+  it('a stored read reads on from where it stopped, however far it reached, so a payment since is seen', async () => {
+    // Both were read past the trade, with nothing between them; the buyer paid the seller back after.
+    const back = flow(B, S, { blockNumber: 700 });
     const { check, asked } = setup({
       history: plainSale(),
-      stored: { [S]: { from: null, flows: [] }, [B]: { from: 300, flows: [] } },
+      stored: { [S]: { from: 600, flows: [] }, [B]: { from: 650, flows: [] } },
+      money: { [S]: { flows: [back] }, [B]: { flows: [back] } },
+    });
+    const r = await check.run(TX, null);
+    expect(asked.read).toEqual([[S, 600], [B, 650]]);
+    expect(r.methods).toEqual(['AC']);
+    expect(r.washTrade).toBe(true);
+  });
+
+  it('a stored truncated read is a hub as it is, never read on', async () => {
+    const { check, asked } = setup({
+      history: plainSale(),
+      stored: { [S]: { from: 600, truncated: true, flows: [] } },
       money: { [B]: { flows: [] } },
     });
     await check.run(TX, null);
-    expect(asked.read).toEqual([[B, 300]]);
+    expect(asked.read).toEqual([[B, undefined]]);
   });
 
   it('a wallet whose read fails is not added, and Linked wallets is then not run', async () => {
@@ -254,6 +273,14 @@ describe('SpotCheck.run', () => {
     const legs = Array.from({ length: SPOT_RECEIPTS_MAX + 1 }, (_, i) => flow(B, S, { txHash: pad(`1e${i}`), blockNumber: 100 + i }));
     const receipts = Object.fromEntries(legs.map((f, i) => [f.txHash, [nftLog(transfer(String(100 + i), S, B, { txHash: f.txHash, blockNumber: f.blockNumber }))]]));
     const r = await setup({ history: plainSale(), money: { [S]: { flows: legs }, [B]: { flows: legs } }, legs: receipts }).check.run(TX, null);
+    expect(r.methods).toEqual([]);
+    expect(r.atLeast).toBe(true);
+    expect(r.washTrade).toBeNull();
+  });
+
+  it('a payment whose receipt the node does not have is unread, and the answer is at least, not a failed check', async () => {
+    const leg = flow(B, S, { txHash: pad('1e9') });
+    const r = await setup({ history: plainSale(), money: { [S]: { flows: [leg] }, [B]: { flows: [leg] } }, gone: [leg.txHash] }).check.run(TX, null);
     expect(r.methods).toEqual([]);
     expect(r.atLeast).toBe(true);
     expect(r.washTrade).toBeNull();

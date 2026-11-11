@@ -169,7 +169,7 @@ describe('CollectionControls', () => {
 
   it('promises with Prioritize only what it does: checking wallets first', () => {
     render(<CollectionControls writable chainId={1} address="0xabc" paused={false} priority={false} />);
-    expect(screen.getByRole('button', { name: 'Prioritize' }).getAttribute('title')).toBe("Check this collection's wallets for money before the others'");
+    expect(screen.getByRole('button', { name: 'Prioritize' }).getAttribute('title')).toBe("Check this collection's wallets for money before the other collections'");
   });
 
   it('sets priority through config', async () => {

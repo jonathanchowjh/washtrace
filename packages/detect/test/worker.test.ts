@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import pg from 'pg';
-import { BUDGET_MS, COUNT_MS, EVERY, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, pickWork, SEED_MS, TOKENS_MS, Worker, type Work } from '../src/worker.js';
+import { COUNT_TIMEOUT_MS, retryMs } from '../src/store.js';
+import { BUDGET_MS, EVERY, SPOT_PROBE_MS, SPOT_SHARE_MS, TOKEN_COUNT_MS, ingestTurns, interleave, LENS_WAIT_MS, MIN_SLICE_MS, nextAnalysis, pickWork, SEED_MS, TOKENS_MS, Worker, type Work } from '../src/worker.js';
 import { needsRestore, needsTrail, StoredSync, TRAIL_NOTES } from '../src/stored-sync.js';
 import { HttpRequestError } from 'viem';
 import { Chain } from '../src/chain.js';
@@ -12,7 +13,7 @@ import { workerConfig, type WorkerConfig } from '../src/env.js';
 import { ETHERSCAN_V2, Etherscan, WALLET_MS } from '../src/etherscan.js';
 import { DOWNLOAD_NOTES, StoredDataError, readManifest, storedFile, trailPaths, trailSha, writeManifest, type Manifest, type StoredEntry } from '../src/stored.js';
 import { hubUrl, partPath } from '../src/hub.js';
-import { LOCKS, TOKEN_COUNT_MS, type CollectionRow, type StaleRow } from '../src/store.js';
+import { LOCKS, type CollectionRow, type StaleRow } from '../src/store.js';
 import type { LensRequest, PreviewRequest } from '../src/lens-thread.js';
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type AnalysisRequest } from '../src/analysis-thread.js';
 import { runLensInThread, runPreviewInThread } from '../src/lens-thread.js';
@@ -2176,9 +2177,9 @@ describe('Worker.fund following a collection further, and counting its next hop'
     const w = new Worker(store, config, '');
     (w as any).etherscanClient = () => ({ flows: async () => ({ flows: [], truncated: false }) });
     expect(await w.fund()).toBe('4 wallets read, 0 failed');
-    // The checking stops COUNT_MS short of the budget: d starts at 30 seconds in, e would at 40, and the count has the rest.
-    expect(BUDGET_MS - COUNT_MS).toBe(30_000);
-    // At 40 seconds in, 5 are left: less than COUNT_MS, so the count is given those.
+    // The checking stops COUNT_TIMEOUT_MS short of the budget: d starts at 30 seconds in, e would at 40, and the count has the rest.
+    expect(BUDGET_MS - COUNT_TIMEOUT_MS).toBe(30_000);
+    // At 40 seconds in, 5 are left: less than COUNT_TIMEOUT_MS, so the count is given those.
     expect(calls).toEqual(['next 3', 'fund a', 'fund b', 'fund c', 'fund d', 'count 7 3 5000']);
     expect(beats.at(-1)).toEqual(['Counting the next wallets out for Doodles', 7]);
 
@@ -2406,9 +2407,9 @@ describe('Worker.fund reading tokens', () => {
     await w.fund();
     expect(t.now - begun).toBeLessThanOrEqual(BUDGET_MS);
     expect(calls.includes('countNext')).toBe(due);
-    // The last count ends by the one deadline: BUDGET_MS, less COUNT_MS when the estimate is due.
+    // The last count ends by the one deadline: BUDGET_MS, less COUNT_TIMEOUT_MS when the estimate is due.
     const untils = calls.filter((c) => c.startsWith('count ')).map((c) => Number(c.split(' ')[2]));
-    expect(untils.at(-1)).toBe(begun + BUDGET_MS - (due ? COUNT_MS : 0));
+    expect(untils.at(-1)).toBe(begun + BUDGET_MS - (due ? COUNT_TIMEOUT_MS : 0));
   });
 
   it('gives each chain an equal share of the counting time left, so a count that always runs out cannot starve the next chain', async () => {
@@ -3424,6 +3425,29 @@ describe('Worker.lensRun', () => {
     expect(fill.mock.calls.map((c) => c[0])).toEqual([[], [3]]);
   });
 
+  it('tries a collection whose rings failed again after a wait that doubles, so its rings are not left unfilled until a restart', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let now = 2_000_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    // Collection 3 is the only one due, and fails whenever it is not passed over.
+    const fill = vi.fn(async (skip: readonly number[] = []): Promise<boolean> => {
+      if (skip.includes(3)) return false;
+      throw Object.assign(new Error('bad witness'), { collectionId: 3 });
+    });
+    const t = setup({ ...analysisDue, fillRings: fill });
+    await t.pass();
+    now += retryMs(1) - 1;
+    await t.pass();
+    now += 1;
+    await t.pass();
+    // Failed twice: the wait doubled.
+    now += retryMs(1);
+    await t.pass();
+    now += retryMs(2) - retryMs(1);
+    await t.pass();
+    expect(fill.mock.calls.map((c) => c[0])).toEqual([[], [3], [], [3], []]);
+  });
+
   it('gives way to a due analysis while its run has waited under LENS_WAIT_MS, and runs once it has waited that long', async () => {
     const now = 2_000_000_000_000;
     vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -4287,6 +4311,7 @@ describe('Worker: a pass row that cannot be written', () => {
 });
 
 describe('Worker.spots', () => {
+  afterEach(() => vi.restoreAllMocks());
   const RESULT = { washTrade: false, methods: [], notRun: ['AU'], atLeast: false, finalized: true, source: 'spot', transfers: [] };
   const config = (etherscanKey: string | null = 'k') => () => ({
     rpc: new Map([[1, 'http://rpc.example/one']]), etherscanKey, etherscanPerSecond: 4, etherscanUrl: '', followHops: 0, tokensPayees: false, sources: {}, storedRepo: 'u/d',
@@ -4332,12 +4357,29 @@ describe('Worker.spots', () => {
     expect(saved).toEqual([1]);
   });
 
-  it('a spot check asked mid-pass runs before the next wallet', async () => {
+  it('a spot check asked mid-pass runs before the next wallet once SPOT_PROBE_MS has passed', async () => {
+    const real = Date.now.bind(Date);
+    let skew = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => real() + skew);
     const p = pass([], ['a', 'b']);
     const save = (p.w as any).store.saveMoney;
-    (p.w as any).store.saveMoney = async (c: number, wallet: string) => { await save(c, wallet); if (wallet === 'a') p.queue.push(q(2, 't2')); };
+    (p.w as any).store.saveMoney = async (c: number, wallet: string) => {
+      await save(c, wallet);
+      if (wallet === 'a') { p.queue.push(q(2, 't2')); skew += SPOT_PROBE_MS; }
+    };
     await p.w.fund();
     expect(p.order).toEqual(['wallet a', 'spot t2', 'wallet b']);
+  });
+
+  it('between wallets the queue is looked at no more than every SPOT_PROBE_MS', async () => {
+    const p = pass([], ['a', 'b', 'c', 'd']);
+    let looked = 0;
+    const next = (p.w as any).store.nextSpot;
+    (p.w as any).store.nextSpot = async () => { looked += 1; return next(); };
+    await p.w.fund();
+    expect(p.order).toEqual(['wallet a', 'wallet b', 'wallet c', 'wallet d']);
+    // Once at the start of the pass; the wallets took no time.
+    expect(looked).toBe(1);
   });
 
   it('a spot check on a chain with no RPC fails and the next one runs', async () => {
@@ -4353,11 +4395,56 @@ describe('Worker.spots', () => {
     expect(runs).toEqual([{ chainId: 1, tx: 't1', etherscan: null }]);
   });
 
-  it('spot checks stay inside the pass budget', async () => {
+  it('spot checks start only inside their share of the pass', async () => {
     const { w, runs, queue } = pass([q(1, 't1')]);
-    expect(await w.spots(null, Date.now() - 1)).toBe(0);
+    (w as any).spotLeft = 0;
+    expect(await w.spots(null)).toBe(0);
     expect(runs).toEqual([]);
     expect(queue).toHaveLength(1);
+  });
+
+  /** A clock that `took` moves on, and a pass whose spot checks each take `ms` of it. */
+  function slow(p: ReturnType<typeof pass>, ms: number) {
+    const real = Date.now.bind(Date);
+    const clock = { skew: 0 };
+    vi.spyOn(Date, 'now').mockImplementation(() => real() + clock.skew);
+    const make = (p.w as any).spotCheck;
+    (p.w as any).spotCheck = (...args: unknown[]) => {
+      const c = make(...args);
+      return { run: async (tx: string) => { clock.skew += ms; return c.run(tx); } };
+    };
+    return clock;
+  }
+
+  it('a queue of slow spot checks takes its share of the pass, and the pass still reads its wallets', async () => {
+    // One check past the whole budget: the next waits for the next pass, and the wallets are still read.
+    const p = pass([q(1, 't1'), q(2, 't2'), q(3, 't3')], ['a', 'b']);
+    slow(p, BUDGET_MS - 5_000);
+    await p.w.fund();
+    expect(p.order).toEqual(['spot t1', 'wallet a', 'wallet b']);
+    expect(p.queue.map((x) => x.tx)).toEqual(['t2', 't3']);
+  });
+
+  it('checks start while the share lasts, and one started inside it runs to its end', async () => {
+    const p = pass([q(1, 't1'), q(2, 't2'), q(3, 't3')], ['a']);
+    slow(p, SPOT_SHARE_MS / 2 + 1);
+    await p.w.fund();
+    expect(p.order).toEqual(['spot t1', 'spot t2', 'wallet a']);
+    expect(p.queue.map((x) => x.tx)).toEqual(['t3']);
+  });
+
+  it('the pass\'s own work keeps its time when spot checks run past their share, and the pass ends one check\'s remainder late at most', async () => {
+    // Each wallet takes a second; with the checks' 40 seconds past their share, the wallets still get BUDGET_MS - SPOT_SHARE_MS.
+    const wallets = Array.from({ length: 60 }, (_, i) => `w${i}`);
+    const p = pass([q(1, 't1')], wallets);
+    const clock = slow(p, SPOT_SHARE_MS + 40_000);
+    const save = (p.w as any).store.saveMoney;
+    (p.w as any).store.saveMoney = async (c: number, wallet: string) => { clock.skew += 1_000; await save(c, wallet); };
+    const start = Date.now();
+    await p.w.fund();
+    const read = p.order.filter((o) => o.startsWith('wallet')).length;
+    expect(read).toBeGreaterThanOrEqual((BUDGET_MS - SPOT_SHARE_MS) / 1_000 - 2);
+    expect(Date.now() - start).toBeLessThanOrEqual(BUDGET_MS + 40_000 + 2_000);
   });
 
   it('a failing spot check is saved as failed with its message, and the next one runs', async () => {

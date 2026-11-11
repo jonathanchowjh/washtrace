@@ -13,7 +13,7 @@
  * Returns each witness's anchor, by witness id. A witness with no wallets is in
  * no ring.
  */
-export function ringsOf(witnesses: Iterable<{ id: number; wallets: readonly string[] }>): Map<number, string> {
+export function anchorsOf(witnesses: Iterable<{ id: number; wallets: readonly string[] }>): Map<number, string> {
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     let root = x;

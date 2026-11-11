@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS } from '@washtrace/detect';
 import { isOwnKey, type LensKey } from '@washtrace/detect/trades';
 import { ConnectedRail, railTxs, walletRoles } from '@/components/connected-rail';
 import { WhereItSits } from '@/components/sales-strip';
@@ -10,7 +9,7 @@ import { Answer, Elsewhere, Empty, Head, MoreLink, Section, SectionHead, Segment
 import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { TokenLoops } from '@/components/token-graph';
-import { EvidenceGlyph, VerdictChip } from '@/components/kit';
+import { EvidenceGlyph, KindIcon, VerdictChip } from '@/components/kit';
 import { Transfers, because, ownBecause, rowList } from '@/components/transfers';
 import { LENSES, andList, lensInfo, lensList, notRunAll, num, short, tokenLabel } from '@/lib/format';
 import { chainName } from '@/lib/chains';
@@ -19,13 +18,14 @@ import { layout, reasons } from '@/lib/layout';
 import { addressOf, chainOf, pageOf, pages, tokenIdOf } from '@/lib/params';
 import { tradesHref } from '@/lib/trades-url';
 import { HEADLINE } from '@washtrace/detect';
-import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf } from '@/lib/metrics';
+import { APART_WHY, FLAGGED_ONLY_AU, NOT_JUDGED, SHOWN, TINT_LEAD, answer, counted, inShownOrder, toneOf } from '@/lib/metrics';
 import { coverage, progress, unread } from '@/lib/coverage';
 import { readerZone } from '@/lib/api';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store } from '@/lib/store';
 import { tokenView, type EmptyToken } from '@/lib/views';
+import { collectionOf } from '@/lib/collection-reads';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { StepLine } from '@/components/step-line';
@@ -39,9 +39,14 @@ const SHOW_NAME: Record<Show, string> = { all: 'All', flagged: 'Flagged', sales:
 
 type Props = { params: Promise<{ chain: string; address: string; tokenId: string }>; searchParams: Promise<{ page?: string; show?: string; loop?: string; method?: string; from?: string }> };
 
+/** The token, then its collection, as a ring's page and the lists name theirs. */
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { tokenId } = await params;
-  return { title: `#${tokenId}` };
+  const p = await params;
+  const chainId = chainOf(p.chain);
+  const address = addressOf(p.address);
+  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const token = `#${tokenIdOf(p.tokenId) === null ? p.tokenId : tokenLabel(p.tokenId)}`;
+  return { title: c === null ? token : `${token} · ${c.name ?? short(c.address)}` };
 }
 
 /**
@@ -60,7 +65,9 @@ export default async function TokenPage({ params, searchParams }: Props) {
   if (view === 'not-watched') notFound();
   if ('empty' in view) return noTransfer(view.c, tokenId, `/c/${chainId}/${address}`);
   // tokenView has already dropped the lenses that did not run.
-  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, by, apartOnly, notRun, own, ownLenses } = view;
+  const { collection, flows, middles, transfers, washTrade, judged: judgedAll, apartOnly, own, ownLenses } = view;
+  // The verdict keeps the API's lens order; the page names lenses floor, ceiling, then the one not counted.
+  const by = inShownOrder(view.by), notRun = inShownOrder(view.notRun);
   const name = collection.name ?? short(address);
   const base = `/c/${chainId}/${address}`;
   // Counted as the wallet page counts: a transfer flagged only by Money loops back is shown grey, and said apart.
@@ -82,12 +89,12 @@ export default async function TokenPage({ params, searchParams }: Props) {
 
   // A row's number is its place in the whole chain order. The filter keeps some of them, the page shows a hundred of those.
   const show = SHOWS.find((s) => s === sp.show) ?? 'all';
-  const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : METHODS.some((m) => t.flags[m]));
+  const keeps = (t: (typeof transfers)[number]) => show === 'all' || (show === 'sales' ? t.marketplace !== null : SHOWN.some((m) => t.flags[m]));
   const kept = transfers.flatMap((t, i) => (keeps(t) ? [i + 1] : []));
   const pageCount = pages(kept.length, PAGE);
   const page = Math.min(pageCount, pageOf(sp.page));
   const shown = kept.slice((page - 1) * PAGE, page * PAGE);
-  const shownFlagged = kept.filter((n) => METHODS.some((m) => transfers[n - 1]!.flags[m])).length;
+  const shownFlagged = kept.filter((n) => SHOWN.some((m) => transfers[n - 1]!.flags[m])).length;
   const here = `${base}/t/${tokenId}`;
   /** A link to a page of a filter. Absolute, because the pager's page box takes its form action from it. */
   const hrefFor = (pg: number, s: Show) => {
@@ -110,7 +117,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
   // The table's link to every row the graph numbers, built here because only the server knows which page of the filter holds a row.
   const rowHrefs = Object.fromEntries(drawing.edges.flatMap((e) => (e.row === null ? [] : [[e.row, rowHref(e.row)] as const])));
   // A loop the link names wins over a lens; one that matches nothing lights nothing.
-  const lens: LensKey | undefined = sp.method === undefined ? undefined : METHODS.find((m) => m === sp.method) ?? (isOwnKey(sp.method) ? sp.method : undefined);
+  const lens: LensKey | undefined = sp.method === undefined ? undefined : SHOWN.find((m) => m === sp.method) ?? (isOwnKey(sp.method) ? sp.method : undefined);
   const initial = sp.loop ? { loop: sp.loop } : lens !== undefined ? { method: lens } : null;
   // Row numbers are 1-based, as the graph labels them.
   const rowOf = new Map(transfers.map((t, i) => [`${t.txHash}:${t.logIndex}`, i + 1]));
@@ -174,7 +181,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
             meta: (
               <>
                 <span>transfer{r.rows.length === 1 ? '' : 's'} <RowLinks rows={r.rows} rowHref={rowHref} /></span>
-                {r.methods.map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
+                {inShownOrder(r.methods).map((m) => <LensName key={m} m={m} className="text-xs" href={lensTabHref(base, m, { evidence: true })} />)}
               </>
             ),
           })),
@@ -202,7 +209,7 @@ export default async function TokenPage({ params, searchParams }: Props) {
           {/* With more than one page the pager below says which rows these are; the flagged count is all that is left to say here. */}
           <p className="text-sm text-muted-foreground tabular-nums">
             {pageCount > 1 ? null : <>Showing {num(shown[0] === undefined ? 0 : 1)}–{num(shown.length)} of {num(kept.length)} transfers</>}
-            {shownFlagged === 0 ? null : <>{pageCount > 1 ? null : ' · '}{show === 'all' ? <Link href={hrefFor(1, 'flagged')} className="hover:underline">{num(shownFlagged)} flagged</Link> : `${num(shownFlagged)} flagged`}</>}
+            {shownFlagged === 0 ? null : <>{pageCount > 1 ? null : ' · '}{show === 'all' ? <Link href={hrefFor(1, 'flagged')} prefetch={false} className="hover:underline">{num(shownFlagged)} flagged</Link> : `${num(shownFlagged)} flagged`}</>}
           </p>
         </div>
         {kept.length === 0 ? (
@@ -227,11 +234,21 @@ async function noTransfer(c: EmptyToken['c'], tokenId: string, base: string) {
   const config = configFromSources(sources, settings);
   const cov = coverage(c, new Set(config.chains), Date.now(), zone, config.funding, workerSilent(passes, Date.now()) !== null);
   const name = c.name ?? short(c.address);
+  const reading = unread(cov);
+  // Shaped as every token page is, chip and answer, so a token with nothing read never reads as missing or as clean.
   return (
     <>
-      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} />
-      <Empty>{unread(cov) ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}</Empty>
-      <MoreLink href={base}>Back to {name}</MoreLink>
+      <Head kind="token" title={`${name} #${tokenLabel(tokenId)}`} sub={chainName(c.chainId)} part={<VerdictChip tone={null} />} />
+      <Answer tone="clean" title="No transfer of this token is read">
+        {reading ? `No transfer of #${tokenId} is read yet · history ${progress(cov.blocks ?? 0)} read` : `No transfer of #${tokenId} is in ${name}'s history.`}
+        <p className="mt-2 text-muted-foreground">
+          <b className="font-medium text-foreground">What this means:</b>{' '}
+          {reading
+            ? 'Its transfers may be in the part of the history still to read, or it may not be minted. Nothing about it is judged, which is not the same as clean.'
+            : 'It may not be minted, or the number is not one of this collection’s. Nothing about it is judged, which is not the same as clean.'}
+        </p>
+      </Answer>
+      <Link href={base} className="btn mt-4 inline-flex items-center gap-1.5 text-sm"><KindIcon kind="collection" />Back to {name}</Link>
     </>
   );
 }

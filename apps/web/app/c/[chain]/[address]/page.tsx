@@ -40,7 +40,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const chainId = chainOf(p.chain);
   const address = addressOf(p.address);
   const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
-  return { title: c?.name ?? short(p.address) };
+  // No row: the page is the not-watched one, and its tab says so.
+  return { title: c === null ? 'Not watched' : (c.name ?? short(p.address)) };
 }
 
 /**
@@ -99,8 +100,11 @@ export default async function CollectionPage({ params, searchParams }: Props) {
         title={c.name ?? short(address)}
         sub={<>{chainName(chainId)}{c.contract?.symbol ? ` · ${c.contract.symbol}` : ''} · <Ext href={explorerAddress(chainId, address)} className="font-mono">{short(address)}</Ext></>}
       >
-        <Elsewhere links={collectionLinks(chainId, address)} />
-        <Refresh />
+        {/* On a phone this row wraps under the address: room above it, and between the links and the live stamp. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 sm:pt-0">
+          <Elsewhere links={collectionLinks(chainId, address)} />
+          <Refresh />
+        </div>
       </Head>
       <div className="-mt-2 mb-4"><Facts profile={profile} creator={c.contract?.creator ?? null} base={base} chainId={chainId} /></div>
 
@@ -109,28 +113,28 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
       {a === null ? <Empty>{why}</Empty> : (
         <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <section aria-label="The answer" className="rounded-lg border bg-card p-4">
               {sales === null ? <p className="text-sm text-muted-foreground">No sale read yet.</p> : (
                 <>
                   <p className="text-sm font-medium text-foreground">{sales.highShare === 0 ? 'Nothing looks like wash trading' : 'Looks like wash trading'}</p>
                   <p className="mt-1 flex items-baseline gap-2">
                     <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
-                      <RangeFigure range={sales} end={(text, m) => <Link href={tradesHref(base, { caught: [m] })} className="hover:underline">{text}</Link>} />
+                      <RangeFigure range={sales} end={(text, m) => <Link href={tradesHref(base, { caught: [m] })} prefetch={false} className="hover:underline">{text}</Link>} />
                     </span>
                     <span className="text-sm text-muted-foreground">of sales</span>
                   </p>
                   <RangeBar range={sales} className="mt-2" />
                   <div className="mt-1.5"><RangeKey range={sales} /></div>
                   <p className="mt-3 text-sm tabular-nums text-muted-foreground">
-                    <Link href={tradesHref(base, { caught: [sales.low] })} className="hover:underline">{num(a.totals[sales.low].flaggedSales)}</Link>
-                    {sales.low === sales.high ? null : <>–<Link href={tradesHref(base, { caught: [sales.high] })} className="hover:underline">{num(a.totals[sales.high].flaggedSales)}</Link></>}
-                    {' of '}<Link href={tradesHref(base, {})} className="hover:underline">{num(a.totals.A.sales)}</Link> sales
+                    <Link href={tradesHref(base, { caught: [sales.low] })} prefetch={false} className="hover:underline">{num(a.totals[sales.low].flaggedSales)}</Link>
+                    {sales.low === sales.high ? null : <>–<Link href={tradesHref(base, { caught: [sales.high] })} prefetch={false} className="hover:underline">{num(a.totals[sales.high].flaggedSales)}</Link></>}
+                    {' of '}<Link href={tradesHref(base, {})} prefetch={false} className="hover:underline">{num(a.totals.A.sales)}</Link> sales
                     {volume === null ? null : <> · <VolumeDetail volume={volume} totals={a.totals} base={base} /></>}
                   </p>
                 </>
               )}
-              <Link href={tradesHref(base, {})} className="mt-3 block text-sm font-medium text-foreground hover:underline">All {plural(a.totals.A.sales, 'trade')} ›</Link>
+              <Link href={tradesHref(base, {})} className="mt-3 block text-sm font-medium text-foreground hover:underline">All {plural(a.totals.A.sales, 'sale')} ›</Link>
             </section>
             <HowSure totals={a.totals} base={base} apart={timeline === null ? undefined : apart} />
           </div>
@@ -139,8 +143,9 @@ export default async function CollectionPage({ params, searchParams }: Props) {
 
           {rings && rings.total > 0 ? (
             <section aria-label="Who did it">
-              <h2 className="mb-2 flex items-baseline justify-between gap-3 text-sm font-medium text-foreground">
-                <span>Who did it</span>
+              {/* Stacked on a phone, so the caption never squeezes the heading onto two lines. */}
+              <h2 className="mb-2 flex flex-col gap-0.5 text-sm font-medium text-foreground sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+                <span className="whitespace-nowrap">Who did it</span>
                 <span className="text-xs font-normal text-muted-foreground">Top {Math.min(RINGS_TOP, rings.total)} of {plural(rings.total, 'ring')}: wallets the evidence ties together, not one person</span>
               </h2>
               <RingsTable rows={rings.rows} base={base} chainId={chainId} total={rings.total} />

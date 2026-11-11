@@ -4,6 +4,7 @@ import pg from 'pg';
 import { checkRule } from './lens-rule.js';
 import type { AnalysisRow, CollectionRow, Lens, LensRun, LoopEdge, OwnFlag } from './store.js';
 import type { Flow, Transfer } from './types.js';
+import { LATEST } from './trade-sql.js';
 
 /** Postgres's code for a statement it ended to break a deadlock. */
 const DEADLOCK_DETECTED = '40P01';
@@ -49,7 +50,7 @@ SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM 
        a.id AS analysis_id, a.took_ms, a.through_block, a.totals, a.missing_data, a.funded_wallets, a.wallets, a.truncated_searches, a.loops, a.rings,
        extract(epoch FROM a.ran_at)::float8 AS ran
 FROM washtrace.collections c
-LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.id ORDER BY x.ran_at DESC LIMIT 1) a ON true`;
+LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true`;
 
 export function toFlow(r: any): Flow {
   return {
@@ -185,3 +186,9 @@ export async function queueWallets(c: pg.PoolClient, chainId: number, counts: Re
     );
   }
 }
+
+/** The columns a flag of a lens of yours is read with, for toOwnFlag. */
+export const OWN_FLAG = 'SELECT f.lens_id, f.collection_id, f.tx_hash, f.log_index, f.path, f.wallets';
+
+/** Whether a row's stored rule still checks; a list leaves out the rows that don't. */
+export const readable = (r: any): boolean => !('error' in checkRule(r.rule));

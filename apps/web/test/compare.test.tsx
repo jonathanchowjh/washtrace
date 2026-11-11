@@ -51,6 +51,15 @@ describe('Compare', () => {
     expect(cell(c, 'A', 'L7').getAttribute('title')).toBe('Of the 40 sales Round trips caught, Blur 3-hop also caught 25 (63%).');
   });
 
+  it('reads floor, ceiling, then the one not counted, then yours, though `keys` comes in the API\'s order', () => {
+    const all = { ...both, AU: { A: 10, AU: 12, AC: 11, L7: 3 } };
+    const { container: c } = render(<Compare {...props} both={all} keys={['A', 'AU', 'AC', 'L7']} />);
+    const rows = [...c.querySelectorAll('tbody th')].map((th) => th.textContent);
+    const cols = [...c.querySelectorAll('thead th')].slice(1).map((th) => th.textContent);
+    expect(rows).toEqual(['Round trips', 'Linked wallets', 'Money loops back', 'Blur 3-hop']);
+    expect(cols).toEqual(rows.map((r) => `also caught by ${r}`));
+  });
+
   it('names a lens that did not run and says why, with no row of zeros', () => {
     const { container: c } = render(<Compare {...props} left={[{ key: 'AU', why: 'it needs a funding source' }]} />);
     expect(c.textContent).toContain('Money loops back');
@@ -184,21 +193,22 @@ describe('leftOut', () => {
   const why = (funding: Partial<{ trail: boolean; funded: boolean; coming: boolean; silent: boolean }>) =>
     leftOut(latest as never, [], ['A'], { trail: false, funded: false, coming: false, silent: false, ...funding }).map((l) => `${l.key}: ${l.why}`);
   it('says the next analysis runs a money lens when funding is set', () => {
+    // In the order the pages list lenses: the ceiling before the one not counted.
     expect(why({ funded: true })).toEqual([
-      'AU: has not run yet: funding is set, and the next analysis runs it.',
       'AC: has not run yet: funding is set, and the next analysis runs it.',
+      'AU: has not run yet: funding is set, and the next analysis runs it.',
     ]);
   });
   it('says a stored trail is on its way', () => {
-    expect(why({ coming: true })[0]).toBe('AU: has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it.');
+    expect(why({ coming: true })[0]).toBe('AC: has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it.');
   });
   it('adds "once the worker reports again" when the worker is silent, as the tab does', () => {
-    expect(why({ coming: true, silent: true })[0]).toBe('AU: has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it, once the worker reports again.');
+    expect(why({ coming: true, silent: true })[0]).toBe('AC: has not run yet: a stored money trail is on its way, and the first analysis after it loads runs it, once the worker reports again.');
   });
   it('says it needs funding only when there is none', () => {
-    expect(why({})[0]).toBe('AU: did not run: it needs to know who paid whom, and a key: add an Etherscan key in Settings.');
+    expect(why({})[0]).toBe('AC: did not run: it needs to know who paid whom, and a key: add an Etherscan key in Settings.');
   });
   it('names the trail that checked no wallet, in the tab\'s words', () => {
-    expect(why({ trail: true })[0]).toBe('AU: did not run: the stored money trail checked no wallet, and it needs a key: add an Etherscan key in Settings.');
+    expect(why({ trail: true })[0]).toBe('AC: did not run: the stored money trail checked no wallet, and it needs a key: add an Etherscan key in Settings.');
   });
 });

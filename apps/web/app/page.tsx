@@ -18,8 +18,10 @@ import { range } from '@/lib/metrics';
 import { configFromSources } from '@/lib/settings';
 import { workerSilent } from '@/lib/status';
 import { store, storedManifest } from '@/lib/store';
+import { addressOf, chainOf } from '@/lib/params';
 
-export const metadata: Metadata = { title: 'Collections' };
+// The root layout's template is for the pages under it, not this one beside it, so the name is said whole.
+export const metadata: Metadata = { title: { absolute: 'Collections · washtrace' } };
 
 
 /** The four store reads, and whether this request may write, in one go, or why they failed: the page shows the failure as a Problem. */
@@ -114,12 +116,20 @@ function FindAndSort({ view, sort, dir, find, matched, of }: { view: View; sort:
   );
 }
 
+/** `?watch=<chain>:<address>`, from a not-watched collection's Watch it; anything else fills nothing in. */
+function startOf(watch: string | undefined): { chainId: number; address: string } | undefined {
+  const [c, a] = (watch ?? '').split(':');
+  const chainId = chainOf(c ?? '');
+  const address = addressOf(a ?? '');
+  return chainId === null || address === null ? undefined : { chainId, address };
+}
+
 /**
  * Every watched collection with its answer: how much of its trading looks
  * like wash trading, as a range from Round trips to Linked wallets, and how far the
  * reading under that answer has got. The paper's Table 3, kept current.
  */
-export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string; find?: string; sort?: string; dir?: string }> }) {
+export default async function Collections({ searchParams }: { searchParams: Promise<{ tab?: string; find?: string; sort?: string; dir?: string; watch?: string }> }) {
   await connection();
   const q = await searchParams;
   const asked = q.tab;
@@ -165,7 +175,8 @@ export default async function Collections({ searchParams }: { searchParams: Prom
       {/* Said once, for the Watch panel and every row's controls alike: each control only carries it as its title. Pulled close to the panel's button, under the panel's own top margin. */}
       {writable ? null : <p className="mt-6 -mb-4 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
 
-      <WatchPanel startOpen={rows.length === 0}>
+      {/* `watch` is set by a not-watched collection's Watch it: the form opens for it. */}
+      <WatchPanel startOpen={rows.length === 0 || q.watch !== undefined}>
         <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted [&::-webkit-details-marker]:hidden">
           <span aria-hidden className="text-muted-foreground group-open:rotate-45 transition-transform">+</span> Watch a collection
         </summary>
@@ -173,7 +184,7 @@ export default async function Collections({ searchParams }: { searchParams: Prom
           <Suggested writable={writable} watched={rows.map((c) => `${c.chainId}/${c.address}`)} stored={stored} />
           <div>
             <p className="mb-2 text-xs text-muted-foreground">Or any collection, by its contract address.</p>
-            <AddCollection writable={writable} stored={stored} />
+            <AddCollection writable={writable} stored={stored} start={startOf(q.watch)} />
           </div>
         </div>
       </WatchPanel>

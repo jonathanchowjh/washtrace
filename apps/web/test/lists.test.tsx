@@ -183,8 +183,8 @@ describe('the lens lists on the collection page', () => {
   it('beneath each list, all of them on the flagged page, keeping sort and Find', async () => {
     state.wallets = { rows: [wallet(WAL)], total: 37 };
     const el = await collectionPage({ method: 'A', ts: 'share', tq: '14' });
-    expect(named(el, 'All 644 tokens →')).toEqual([`${BASE}/tokens?method=A&sort=share&q=14`]);
-    expect(named(el, 'All 37 wallets →')).toEqual([`${BASE}/wallets?method=A`]);
+    expect(named(el, 'All 644 tokens ›')).toEqual([`${BASE}/tokens?method=A&sort=share&q=14`]);
+    expect(named(el, 'All 37 wallets ›')).toEqual([`${BASE}/wallets?method=A`]);
     // Only the list with a Find is counted again without it.
     expect(state.calls.counts).toEqual([['tokens', 1, 'A', { sort: 'caught', find: null, limit: 0, offset: 0 }, expect.objectContaining({ ran: ['A', 'AU', 'AC'] })]]);
   });
@@ -194,14 +194,16 @@ describe('the lens lists on the collection page', () => {
     state.wallets = { rows: [wallet(WAL)], total: 33 };
     const el = await collectionPage({ method: 'A' });
     expect(list(el, 'tokens').textContent).toContain('1–10 of 600 tokens');
-    expect(named(el, 'All 600 tokens →')).toHaveLength(1);
-    expect(named(el, 'All 33 wallets →')).toHaveLength(1);
+    expect(named(el, 'All 600 tokens ›')).toHaveLength(1);
+    expect(named(el, 'All 33 wallets ›')).toHaveLength(1);
     expect(list(el, 'tokens').textContent).not.toContain('700');
     // With no Find there is nothing more to count.
     expect(state.calls.counts).toHaveLength(0);
     cleanup();
     const flagged = await flaggedPage({ method: 'A', kind: 'tokens' });
-    expect(flagged.textContent).toContain('600 in all.');
+    // Said once, by the pager: the heading no longer repeats it.
+    expect(flagged.textContent).toContain('1–20 of 600 tokens');
+    expect(flagged.textContent).not.toContain('600 in all');
     expect(flagged.textContent).not.toContain('700');
     cleanup();
     expect((await flaggedPage({ method: 'A', kind: 'tokens', q: '14' })).textContent).toContain('600 of 644 tokens match “14”');
@@ -271,20 +273,43 @@ describe('the lens lists on the flagged page', () => {
     await expect(old({ kind: 'wallets' })).rejects.toThrow(`redirect:${BASE}/wallets?method=AC`);
   });
 
-  it('titles its tab with its heading', async () => {
+  it('titles its tab "<Page> · <Collection>", with a lens other than the one it opens on between', async () => {
     const title = async ({ kind, ...sp }: Record<string, string>) => {
       const { generateMetadata } = kind === 'wallets' ? await import('@/app/c/[chain]/[address]/wallets/page') : await import('@/app/c/[chain]/[address]/tokens/page');
       return (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve(sp) })).title;
     };
-    expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens flagged by Round trips');
-    expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets flagged by Linked wallets');
+    expect(await title({ method: 'A', kind: 'tokens' })).toBe('Tokens · Round trips · Coll');
+    expect(await title({ method: 'AC', kind: 'wallets' })).toBe('Wallets · Coll');
+    expect(await title({ kind: 'tokens' })).toBe('Tokens · Coll');
     const { generateMetadata: tradesTitle } = await import('@/app/c/[chain]/[address]/trades/page');
-    expect((await tradesTitle({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title).toBe('Trades in Coll');
+    expect((await tradesTitle({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title).toBe('Trades · Coll');
+    const { generateMetadata: methodsTitle } = await import('@/app/c/[chain]/[address]/methods/page');
+    expect((await methodsTitle({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title).toBe('Methods · Coll');
     // No such collection: each page keeps its own word.
     const missing = { params: Promise.resolve({ chain: '1', address: 'nope' }), searchParams: Promise.resolve({}) };
     expect((await tradesTitle(missing)).title).toBe('Trades');
     const { generateMetadata: tokensTitle } = await import('@/app/c/[chain]/[address]/tokens/page');
     expect((await tokensTitle(missing)).title).toBe('Tokens');
+  });
+
+  it('names its lens twice: in the heading, and on its chip in the switch, which gives every lens\'s tier', async () => {
+    const el = await flaggedPage({ kind: 'wallets' });
+    const head = el.querySelector('header')!;
+    expect(head.querySelector('h1')?.textContent).toBe('Wallets flagged by Linked wallets');
+    expect(head.textContent).not.toContain('the ceiling');
+    const lenses = [...el.querySelectorAll('nav[aria-label=Lens] a')].map((a) => a.textContent);
+    expect(lenses).toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back · not counted']);
+    expect(el.querySelector('nav[aria-label=Lens] a[aria-current=page]')?.textContent).toBe('Linked wallets · the ceiling');
+    expect((el.textContent ?? '').split('Linked wallets · the ceiling').length - 1).toBe(1);
+  });
+
+  it('marks each row with its kind, and spans the page as the tab bar does', async () => {
+    const tokensEl = await flaggedPage({ method: 'A', kind: 'tokens' });
+    expect(linkTo(tokensEl, `${BASE}/t/7`)?.querySelector('svg')).not.toBeNull();
+    expect(list(tokensEl, 'tokens').closest('.max-w-3xl')).toBeNull();
+    cleanup();
+    const walletsEl = await flaggedPage({ method: 'A', kind: 'wallets' });
+    expect(list(walletsEl, 'wallets').querySelector('li svg')).not.toBeNull();
   });
 });
 

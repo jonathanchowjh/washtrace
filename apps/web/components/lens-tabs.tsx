@@ -10,7 +10,7 @@ import { behindOf, builtinCauses, causeSentence, runStateWords, shareCauses, sha
 import { APART, APART_WHY, ownLenses, part, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
-import { LensName, LensPicture } from './methods';
+import { LensName, LensPicture, TierWord } from './methods';
 import { RuleTable } from './rule-table';
 import { Time } from './time';
 import { lensTabHref } from '@/lib/links';
@@ -44,7 +44,7 @@ const NO_TOKENS: TokensFloor = { reason: null, payees: false };
  * the latest analysis's, null before the first, and `latestId` its id, which
  * a run of yours is behind when it is not from it.
  */
-export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyReasons, tokens, coverage, writable, editor = null, children }: {
+export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyReasons, tokens, coverage, writable, editor = null, drafting = false, children }: {
   base: string; chainId: number; address: string; selected: LensKey | 'compare';
   totals: Record<Method, MethodTotals> | null; latestId: number | null;
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
@@ -57,24 +57,34 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   coverage: Funding; writable: boolean;
   /** The lens editor, when `?lens=` asks for one: it takes the panel's place, under the same tab. */
   editor?: ReactNode;
+  /** The editor makes a new lens (+ New lens, or a copy), so + New lens is the tab lit over it, not the lens it started from. */
+  drafting?: boolean;
   /** The chosen lens's stat line and lists; the panel shows them for a built-in, and for a lens of yours once it has figures. On the Compare tab, the comparison. */
   children: ReactNode;
 }) {
   const href = (key: string) => lensTabHref(base, key);
   const own = ownLenses(runs);
   const chosen = runs.find((r) => r.lens.key === selected) ?? null;
-  const tone = chosen || selected === 'compare' ? 'own' : LENSES[selected as Method].tone;
+  const tone = chosen || selected === 'compare' || drafting ? 'own' : LENSES[selected as Method].tone;
+  // While a new lens is drafted, its tab is the lit one: the panel under it is the editor, not the chosen lens.
+  const lit = drafting ? null : selected;
 
   return (
     <div>
       <nav aria-label="Lens" className="flex flex-wrap gap-2">
         {SHOWN.map((m) => {
           const t = totals?.[m];
-          const on = m === selected;
+          const on = m === lit;
           return (
             <Tab key={m} href={href(m)} on={on} tone={LENSES[m].tone} title={`Show what ${LENSES[m].name} flags`}>
-              <LensName m={m} />
-              {t?.available ? <>{' '}<Share t={t} qualifier={shareQualifier(builtinCauses(m, notFinal, coverage.funded, coverage.funding))} /></> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
+              {/* Its standing under the name, as the overview's ladder says it, so a tab never reads as just another lens. */}
+              <span className="flex flex-col">
+                <span className="flex items-baseline gap-2">
+                  <LensName m={m} />
+                  {t?.available ? <>{' '}<Share t={t} qualifier={shareQualifier(builtinCauses(m, notFinal, coverage.funded, coverage.funding))} /></> : totals ? <>{' '}<span className="text-xs text-muted-foreground">{runStateWords(null)!.short}</span></> : null}
+                </span>
+                {' '}<TierWord m={m} className="pl-4" />
+              </span>
             </Tab>
           );
         })}
@@ -82,24 +92,25 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           const t = run?.totals ?? null;
           const word = runStateWords(run, behindOf(run, lens, latestId === null ? null : { id: latestId }))?.short;
           return (
-            <Tab key={lens.key} href={href(lens.key)} on={lens.key === selected} tone="own" title={`Show what ${lens.name} flags`}>
+            <Tab key={lens.key} href={href(lens.key)} on={lens.key === lit} tone="own" title={`Show what ${lens.name} flags`}>
               <LensName m={lens.key} own={own} />
               {t ? <>{' '}<Share t={t} qualifier={shareQualifier(shareCauses(lens.rule, t, notFinal, coverage.funded, coverage.funding, moneyReasons[lens.key] ?? null, tokens[lens.key] ?? NO_TOKENS))} /></> : null}
               {word ? <>{' '}<span className="text-xs text-muted-foreground">{word}</span></> : null}
             </Tab>
           );
         })}
+        {/* A tab like the others, on their line and of their height, so it can be the lit one while its editor is open. */}
         {writable
-          ? <Link href={lensTabHref(base, selected, { lens: 'new' })} scroll={false} title="Write a lens of your own" className="btn self-center text-xs">+ New lens</Link>
-          : <button type="button" disabled title={LOCAL_ONLY} className="btn self-center text-xs">+ New lens</button>}
-        <Tab href={href('compare')} on={selected === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
+          ? <Tab href={lensTabHref(base, selected, { lens: 'new' })} on={drafting} tone="own" title="Write a lens of your own">+ New lens</Tab>
+          : <button type="button" disabled title={LOCAL_ONLY} className={cn(TAB, 'border-t-border bg-muted/50 text-muted-foreground disabled:cursor-not-allowed')}>+ New lens</button>}
+        <Tab href={href('compare')} on={lit === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
       </nav>
       <section
-        data-lens-panel aria-label={selected === 'compare' ? 'Compare lenses' : `${chosen ? chosen.lens.name : LENSES[selected as Method].name} lens`}
+        data-lens-panel aria-label={drafting ? 'New lens' : selected === 'compare' ? 'Compare lenses' : `${chosen ? chosen.lens.name : LENSES[selected as Method].name} lens`}
         className={cn('rounded-lg rounded-tl-none border border-t-[3px] bg-card p-4', ACCENT[tone])}
       >
         {editor ?? (selected === 'compare' ? children : chosen
-          ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analysed={totals !== null}
+          ? <YourLens base={base} chainId={chainId} address={address} lens={chosen.lens} own={own} run={chosen.run} analyzed={totals !== null}
             behind={behindOf(chosen.run, chosen.lens, latestId === null ? null : { id: latestId })} paused={paused} writable={writable} notFinal={notFinal} funded={coverage.funded} funding={coverage.funding} money={moneyReasons[chosen.lens.key] ?? null} tokens={tokens[chosen.lens.key] ?? NO_TOKENS}>{children}</YourLens>
           : <BuiltIn base={base} m={selected as Method} t={totals?.[selected as Method] ?? null} coverage={coverage} writable={writable}>{children}</BuiltIn>)}
       </section>
@@ -107,11 +118,13 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   );
 }
 
+// On a phone the tabs wrap; each grows so a row fills the width, rather than leaving Compare a stub on its own.
+const TAB = 'flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors max-sm:grow';
+
 function Tab({ href, on, tone, title, children }: { href: string; on: boolean; tone: keyof typeof ACCENT; title: string; children: ReactNode }) {
   return (
-    <Link href={href} scroll={false} title={title} aria-current={on ? 'page' : undefined}
-      className={cn('flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors',
-        on ? cn('-mb-px border-b-0 bg-card pb-3', ACCENT[tone]) : 'border-t-border bg-muted/50 hover:bg-card')}>
+    <Link href={href} prefetch={false} scroll={false} title={title} aria-current={on ? 'page' : undefined}
+      className={cn(TAB, on ? cn('-mb-px border-b-0 bg-card pb-3', ACCENT[tone]) : 'border-t-border bg-muted/50 hover:bg-card')}>
       {children}
     </Link>
   );
@@ -177,8 +190,8 @@ function BuiltIn({ base, m, t, coverage, writable, children }: {
   );
 }
 
-function YourLens({ base, chainId, address, lens, own, run, analysed, behind, paused, writable, notFinal, funded, funding, money, tokens, children }: {
-  base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analysed: boolean;
+function YourLens({ base, chainId, address, lens, own, run, analyzed, behind, paused, writable, notFinal, funded, funding, money, tokens, children }: {
+  base: string; chainId: number; address: string; lens: Lens; own: Lenses; run: LensRun | null; analyzed: boolean;
   behind: Behind | null; paused: boolean; writable: boolean; notFinal: readonly Method[]; funded: boolean; funding: boolean; money: MoneyReason | null; tokens: TokensFloor; children: ReactNode;
 }) {
   const t = run?.totals ?? null;
@@ -198,7 +211,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
       </div>
       <p className="mb-3 text-sm text-muted-foreground">{ruleLine(lens.rule)}</p>
       <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <RunLine name={lens.name} run={run} analysed={analysed} behind={behind} paused={paused} />
+        <RunLine name={lens.name} run={run} analyzed={analyzed} behind={behind} paused={paused} />
         {/* No run here, or one that failed (after three in a row it waits to be asked): a queued or running one is on its way, and a done one runs again on its own. */}
         {run === null || run.status === 'failed' ? <RunHere id={lens.id} chainId={chainId} address={address} writable={writable} /> : null}
       </div>
@@ -219,7 +232,7 @@ function YourLens({ base, chainId, address, lens, own, run, analysed, behind, pa
  * run that is current. A paused collection runs no lens, so a run waiting on
  * it says so.
  */
-function RunLine({ name, run, analysed, behind, paused }: { name: string; run: LensRun | null; analysed: boolean; behind: Behind | null; paused: boolean }) {
+function RunLine({ name, run, analyzed, behind, paused }: { name: string; run: LensRun | null; analyzed: boolean; behind: Behind | null; paused: boolean }) {
   const words = runStateWords(run, behind);
   if (words === null) return null;
   const said = `${name} ${words.full}`;
@@ -227,7 +240,7 @@ function RunLine({ name, run, analysed, behind, paused }: { name: string; run: L
   if (run === null) return <p className="text-muted-foreground">{said}</p>;
   switch (run.status) {
     case 'queued':
-      return <p className="text-muted-foreground">{said} {paused ? resumed : run.totals !== null ? null : analysed ? 'The worker runs it next.' : "It waits for this collection's first analysis."}</p>;
+      return <p className="text-muted-foreground">{said} {paused ? resumed : run.totals !== null ? null : analyzed ? 'The worker runs it next.' : "It waits for this collection's first analysis."}</p>;
     case 'running':
       return <p className="text-muted-foreground">{said}{run.progress === null ? '' : ` It is ${floorPct(run.progress, 1)} done.`}</p>;
     case 'failed':

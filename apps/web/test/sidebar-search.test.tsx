@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '@/components/sidebar';
 
 const push = vi.fn();
-const nav = { path: '/' };
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => nav.path }));
+const nav = { path: '/', search: '' };
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: vi.fn() }), usePathname: () => nav.path, useSearchParams: () => new URLSearchParams(nav.search) }));
 
 const ADDR = '0x' + 'a'.repeat(40);
 const more = { collections: false, tokens: false, wallets: false, trades: false };
 const hits = (over: Record<string, unknown>) => ({ collections: [], tokens: [], wallets: [], trades: [], more, ...over });
-const terra = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA' };
+const terra = { chainId: 1, address: ADDR, name: 'Terraforms', symbol: 'TERRA', totals: null };
 
 const fetchMock = vi.fn();
 beforeEach(() => {
@@ -20,7 +20,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   push.mockReset();
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); nav.path = '/'; });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); nav.path = '/'; nav.search = ''; });
 
 const reply = (body: unknown) => ({ ok: true, json: async () => body });
 const box = () => screen.getAllByRole('combobox')[0]!;
@@ -45,8 +45,17 @@ describe('the search box type-ahead', () => {
     await type('ter');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=ter');
-    expect(screen.getAllByRole('option')[0]!.textContent).toContain('Collection on Ethereum · Terraforms');
+    expect(screen.getAllByRole('option')[0]!.textContent).toBe('TerraformsCollection on Ethereum · 0xaaaa…aaaa');
     expect(box().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('leads a hit with what was searched for, in mono for an address, its kind and chain under it', async () => {
+    fetchMock.mockResolvedValue(reply(hits({ wallets: [{ chainId: 1, address: ADDR, transfers: 3 }] })));
+    render(<Sidebar watched={[]} />);
+    await type('0xaaaa');
+    const [lead, detail] = [...screen.getAllByRole('option')[0]!.children];
+    expect([lead!.textContent, lead!.className.includes('font-mono')]).toEqual(['0xaaaa…aaaa', true]);
+    expect(detail!.textContent).toBe('Wallet on Ethereum · in 3 transfers of watched collections');
   });
 
   it('does not fetch for what parseSearch calls empty', async () => {
@@ -129,6 +138,40 @@ describe('the search box type-ahead', () => {
     await type('zzz');
     expect(screen.getByText('No match. Press Enter to search everything.')).toBeTruthy();
   });
+
+  it('says a query too short to be read as a token or the start of an address is too short, not a miss', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    render(<Sidebar watched={[]} />);
+    await type('0x18');
+    expect(screen.getByText('Too short to search wallets and transactions: type at least 4 characters after 0x.')).toBeTruthy();
+    await type('10');
+    expect(screen.getByText('Too short for a token number: type 3 digits, or #10.')).toBeTruthy();
+    expect(screen.queryByText(/No match/)).toBeNull();
+  });
+});
+
+describe('the search box on the results page', () => {
+  it('holds the search the page is for, follows it to the next, and asks nothing until it is used', async () => {
+    fetchMock.mockResolvedValue(reply(hits({ collections: [terra] })));
+    nav.path = '/search';
+    nav.search = 'q=terra&kind=collections';
+    const { rerender } = render(<Sidebar watched={[]} />);
+    expect(screen.getAllByRole('combobox').map((b) => (b as HTMLInputElement).value)).toEqual(['terra', 'terra']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    nav.search = 'q=0x1ee2';
+    rerender(<Sidebar watched={[]} />);
+    expect((box() as HTMLInputElement).value).toBe('0x1ee2');
+    fireEvent.focus(box());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=0x1ee2');
+  });
+
+  it('keeps what was typed on any other page', async () => {
+    nav.search = 'q=terra';
+    render(<Sidebar watched={[]} />);
+    expect((box() as HTMLInputElement).value).toBe('');
+  });
 });
 
 describe('the search box under a collection', () => {
@@ -143,11 +186,18 @@ describe('the search box under a collection', () => {
     expect((document.querySelector('input[name=scope]') as HTMLInputElement).value).toBe(`1:${ADDR}`);
   });
 
+  it('says a miss is in that collection, and that its chip, not Enter, widens the search', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    under();
+    await type('zzz');
+    expect(screen.getByText('No match in Terraforms. Drop it with ✕ to search everything.')).toBeTruthy();
+  });
+
   it('drops the scope from its chip, so the next search is of everything', async () => {
     fetchMock.mockResolvedValue(reply(hits({})));
     under();
     fireEvent.click(screen.getAllByRole('button', { name: /In Terraforms/ })[0]!);
-    expect(box().getAttribute('placeholder')).toBe('Search name, #token, address or tx  /');
+    expect(box().getAttribute('placeholder')).toBe('Name, #token or 0x…  /');
     await type('#7');
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
   });
@@ -158,8 +208,8 @@ describe('the search box under a collection', () => {
     under();
     await type('#777');
     const options = screen.getAllByRole('option');
-    expect(options[0]!.textContent).toContain('Token #777');
-    fireEvent.click(options.find((o) => o.textContent?.startsWith('Wallet'))!);
+    expect(options[0]!.textContent).toContain('Terraforms #777');
+    fireEvent.click(options.find((o) => o.textContent?.includes('Wallet on'))!);
     expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/w/${W}`);
   });
 
@@ -176,6 +226,40 @@ describe('the search box under a collection', () => {
     expect(lines[3]).toContain('Wallet');
     fireEvent.click(screen.getAllByRole('option')[1]!);
     expect(push).toHaveBeenCalledWith(`/c/1/${ADDR}/r/${RING}`);
+  });
+});
+
+describe('the search box on a collection nobody watches', () => {
+  it('searches everything: no scope in the placeholder, on a chip, or in the request', async () => {
+    fetchMock.mockResolvedValue(reply(hits({})));
+    const missing = '0x' + '0'.repeat(39) + '1';
+    nav.path = `/c/1/${missing}`;
+    render(<Sidebar watched={[terra]} />);
+    expect(box().getAttribute('placeholder')).not.toContain('0x0000');
+    expect(screen.queryByRole('button', { name: /^In / })).toBeNull();
+    expect(document.querySelector('input[name=scope]')).toBeNull();
+    await type('#7');
+    expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/search?q=%237');
+  });
+});
+
+describe('the sidebar on a phone', () => {
+  it('reads in order: the name first, then the search box, then the links, wrapping so none is past the edge', () => {
+    render(<Sidebar watched={[terra]} />);
+    const top = document.querySelector('a[href="/"]')!;
+    expect(top.textContent).toBe('washtrace');
+    expect(top.compareDocumentPosition(document.getElementById('q-top')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The phone's row of links wraps rather than scrolling, so Settings and the theme are never hidden off-screen.
+    const row = document.querySelector('aside')!;
+    expect(row.className).toContain('flex-wrap');
+    expect(row.className.split(' ').filter((c) => c.includes('overflow-x'))).toEqual([]);
+    for (const nav of row.querySelectorAll('nav')) expect(nav.className).toContain('flex-wrap');
+    expect(document.querySelector('[data-more]')).toBeNull();
+  });
+
+  it('keeps the placeholder outside a collection short enough for the desktop box', () => {
+    render(<Sidebar watched={[]} />);
+    expect(box().getAttribute('placeholder')!.length).toBeLessThanOrEqual(24);
   });
 });
 

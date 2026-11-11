@@ -1,7 +1,25 @@
 import { ETHERSCAN_V2 } from './etherscan.js';
 import { STORED_REPO } from './hub.js';
 import { MAX_FOLLOW_HOPS } from './lens-rule.js';
-import { SECRET_KEYS, type SettingSource } from './store.js';
+
+/**
+ * The settings that hold a secret: an RPC URL carries its provider's key.
+ * Their values are kept in `settings`, which the worker needs, but only
+ * masked in `setting_sources`, which the API reads, and in anything the API
+ * returns.
+ */
+export const SECRET_KEYS = (key: string): boolean => key.startsWith('rpc.') || key === 'etherscan.key';
+
+/**
+ * Where the worker found one setting. `value` is the value used and `env` what
+ * .env holds (null when it does not set it), each as the console may show it:
+ * a secret masked, `etherscan.url` with its credentials masked, else raw.
+ */
+export interface SettingSource {
+  source: 'env' | 'console';
+  value: string | null;
+  env: string | null;
+}
 
 /**
  * Every environment variable either service reads. In the package, not in

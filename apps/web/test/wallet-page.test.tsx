@@ -1,4 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer, Flow, WalletFilter } from '@washtrace/detect';
 import { TINT_LEAD } from '@/lib/metrics';
@@ -92,7 +93,7 @@ describe('the wallet page', () => {
   it('opens the flagged trades on the flagged count, and the whole list on the total, over all its trades', async () => {
     trades = 500; flaggedTrades = 3;
     const el = await render_();
-    expect(el.textContent).toContain('In 3 flagged trades out of 500');
+    expect(el.textContent).toContain('In 3 flagged transfers out of 500');
     expect(el.textContent).not.toContain('its latest');
     expect(linkTo(el, '3')).toBe(`${here}?flagged=1`);
     expect(linkTo(el, '500')).toBe(here);
@@ -102,16 +103,16 @@ describe('the wallet page', () => {
     // Round trips flags 4; Money loops back 2, not counted; and 3 of the 10 in a collection no analysis covered.
     trades = 500; flaggedTrades = 4; moneyOnlyTrades = 2; unjudgedTrades = 10;
     const el = await render_();
-    const title = Number(/In (\d+) flagged trades out of/.exec(el.textContent ?? '')![1]);
+    const title = Number(/In (\d+) flagged transfers out of/.exec(el.textContent ?? '')![1]);
     expect(linkTo(el, String(title))).toBe(`${here}?flagged=1`);
-    expect(await page({ flagged: '1' })).toContain(`${title} of 500 trades match`);
+    expect(await page({ flagged: '1' })).toContain(`${title} of 500 transfers match`);
   });
 
   it('a wallet whose flagged trades are all past the first page titles as flagged, and says none is on this page', async () => {
     trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
     const text = el.textContent ?? '';
-    expect(text).toContain('In 2 flagged trades out of 150');
+    expect(text).toContain('In 2 flagged transfers out of 150');
     expect(text).not.toContain('Not flagged by any lens');
     expect(text).toContain('None of them is on this page.');
     expect(linkTo(el, 'Show the flagged ones')).toBe(`${here}?flagged=1`);
@@ -122,14 +123,14 @@ describe('the wallet page', () => {
   it('a flagged wallet never sits in a clean card, and the lead claims no cover for trades it does not hold', async () => {
     trades = 150; flaggedFrom = 30; flaggedTrades = 2;
     const el = await render_();
-    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card.className).toContain('bg-money-surface');
-    expect(el.textContent).toContain('Trades 1–20 of 150 are shown.');
+    expect(el.textContent).toContain('Transfers 1–20 of 150 are shown.');
     expect(el.textContent).not.toContain('covers these');
     cleanup();
     // The page that holds them keeps its own verdict's tone, and says the verdict covers them.
     const two = await render_({ trades: '2' });
-    const card2 = [...two.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card2 = [...two.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card2.className).toContain('bg-cycle-surface');
     expect(two.textContent).toContain('the verdict above covers these');
   });
@@ -137,7 +138,7 @@ describe('the wallet page', () => {
   it('a flagged wallet whose filter matches nothing still sits in a flagged card', async () => {
     trades = 50; flaggedTrades = 2;
     const el = await render_({ q: '999' });
-    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged trades'))!.closest('div.rounded-lg')!;
+    const card = [...el.querySelectorAll('p')].find((p) => p.textContent?.startsWith('In 2 flagged transfers'))!.closest('div.rounded-lg')!;
     expect(card.className).toContain('bg-money-surface');
   });
 
@@ -145,16 +146,16 @@ describe('the wallet page', () => {
     trades = 50; flaggedTrades = 2;
     const el = await render_({ q: '30' });
     const text = el.textContent ?? '';
-    expect(text).toContain('In 2 flagged trades out of 50');
+    expect(text).toContain('In 2 flagged transfers out of 50');
     expect(text).toContain('None of them matches these filters.');
     expect(linkTo(el, 'Show the flagged ones')).toBe(`${here}?flagged=1`);
-    expect(text).toContain('1 of 50 trades matches “30” · Clear');
+    expect(text).toContain('1 of 50 transfers matches “30” · Clear');
   });
 
   it('a filter that matches nothing still titles a flagged wallet from its counts', async () => {
     trades = 50; flaggedTrades = 2;
     const text = await page({ q: '999' });
-    expect(text).toContain('In 2 flagged trades out of 50');
+    expect(text).toContain('In 2 flagged transfers out of 50');
     expect(text).toContain('None of them matches these filters.');
   });
 
@@ -175,25 +176,25 @@ describe('the wallet page', () => {
     trades = 21;
     const text = await page();
     expect(text).toContain('Not flagged by any lens');
-    expect(text).toContain('Trades 1–20 of 21 are shown; the verdict above covers these.');
+    expect(text).toContain('Transfers 1–20 of 21 are shown; the verdict above covers these.');
   });
 
   it('one flagged trade is singular', async () => {
     trades = 101;
     flaggedTrades = 1;
-    expect(await page()).toContain('In 1 flagged trade out of 101');
+    expect(await page()).toContain('In 1 flagged transfer out of 101');
   });
 
   it('?trades=2 shows rows 21–40, with a working Previous', async () => {
     trades = 500;
     const el = await render_({ trades: '2' });
-    expect(el.textContent).toContain('Trades 21–40 of 500 are shown; the verdict above covers these.');
+    expect(el.textContent).toContain('Transfers 21–40 of 500 are shown; the verdict above covers these.');
     expect(tokenShown(el, 20)).toBe(true);
     expect(tokenShown(el, 39)).toBe(true);
     expect(tokenShown(el, 19)).toBe(false);
     expect(tokenShown(el, 40)).toBe(false);
-    const trades_ = pager(el, 'trades');
-    expect(trades_.text).toContain('21–40 of 500 trades');
+    const trades_ = pager(el, 'transfers');
+    expect(trades_.text).toContain('21–40 of 500 transfers');
     expect(trades_.link('‹ Previous')).toBe(here);
     expect(trades_.link('Next ›')).toBe(`${here}?trades=3`);
   });
@@ -202,53 +203,53 @@ describe('the wallet page', () => {
     trades = 500; counterparties = 50;
     const el = await render_({ trades: '2', partners: '3' });
     expect(el.textContent).toContain('41–50 of 50 counterparties');
-    expect(pager(el, 'trades').text).toContain('21–40 of 500 trades');
+    expect(pager(el, 'transfers').text).toContain('21–40 of 500 transfers');
     expect(pager(el, 'counterparties').link('‹ Previous')).toBe(`${here}?trades=2&partners=2`);
-    expect(pager(el, 'trades').link('Next ›')).toBe(`${here}?trades=3&partners=3`);
+    expect(pager(el, 'transfers').link('Next ›')).toBe(`${here}?trades=3&partners=3`);
   });
 
   it('a page past the end is clamped to the last', async () => {
     trades = 500;
     const el = await render_({ trades: '99999' });
-    expect(el.textContent).toContain('Trades 481–500 of 500 are shown');
+    expect(el.textContent).toContain('Transfers 481–500 of 500 are shown');
     expect(tokenShown(el, 499)).toBe(true);
   });
 
   it('collection= and flagged=1 narrow the trades and say how many match', async () => {
     trades = 500; flaggedTrades = 3; unjudgedTrades = 10;
     const flagged = await render_({ flagged: '1' });
-    expect(flagged.textContent).toContain('3 of 500 trades match');
+    expect(flagged.textContent).toContain('3 of 500 transfers match');
     expect([0, 1, 2].every((n) => tokenShown(flagged, n))).toBe(true);
     expect(tokenShown(flagged, 3)).toBe(false);
     cleanup();
     const one = await page({ collection: OTHER });
-    expect(one).toContain('10 of 500 trades match');
-    expect(one).toContain('Trades 1–10 of 10 are shown');
+    expect(one).toContain('10 of 500 transfers match');
+    expect(one).toContain('Transfers 1–10 of 10 are shown');
   });
 
   it('a Find that names no token or wallet says it matches nothing', async () => {
     trades = 5;
     const text = await page({ q: 'hello' });
-    expect(text).toContain('0 of 5 trades match');
+    expect(text).toContain('0 of 5 transfers match');
     expect(text).toContain('“hello” is not a token number, or a wallet address or the start of one, so it matches nothing.');
   });
 
   it('the match line and the shown line agree in number', async () => {
     trades = 5; flaggedTrades = 2;
-    expect(await page({ q: '3' })).toContain('1 of 5 trades matches');
+    expect(await page({ q: '3' })).toContain('1 of 5 transfers matches');
     cleanup();
     const two = await page({ flagged: '1' });
-    expect(two).toContain('2 of 5 trades match ·');
-    expect(two).toContain('Trades 1–2 of 2 are shown; the verdict above covers these.');
+    expect(two).toContain('2 of 5 transfers match ·');
+    expect(two).toContain('Transfers 1–2 of 2 are shown; the verdict above covers these.');
     cleanup();
     trades = 1; flaggedTrades = 1;
     const one = await page({ flagged: '1' });
-    expect(one).toContain('1 of 1 trade matches');
-    expect(one).toContain('Trade 1 of 1 is shown; the verdict above covers it.');
+    expect(one).toContain('1 of 1 transfer matches');
+    expect(one).toContain('Transfer 1 of 1 is shown; the verdict above covers it.');
     cleanup();
     // A last page holding one trade reads the same way.
     trades = 21; flaggedTrades = 0;
-    expect(await page({ trades: '2' })).toContain('Trade 21 of 21 is shown; the verdict above covers it.');
+    expect(await page({ trades: '2' })).toContain('Transfer 21 of 21 is shown; the verdict above covers it.');
   });
 
   it('sorts its partners by their headers, and each count opens what passed between the two', async () => {
@@ -263,6 +264,23 @@ describe('the wallet page', () => {
     const cells = [...row.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(cells).toContain(`${here}?trades=2&with=${partner(0)}&dir=sent#between`);
     expect(cells).toContain(`${here}?trades=2&with=${partner(0)}&dir=received#between`);
+  });
+
+  it('a flagged wallet says what it means, as the token page does; a clean one does not', async () => {
+    trades = 5; flaggedTrades = 2;
+    expect(await page()).toContain('What this means: Tokens it traded came back to a wallet that sold them.');
+    cleanup();
+    flaggedTrades = 0;
+    expect(await page()).not.toContain('What this means');
+  });
+
+  it('its payment counts look like the links they are, and the kinds of payment sit in the lead, not floated beside it', async () => {
+    trades = 5; counterparties = 1;
+    const el = await render_();
+    const count = [...el.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(short(partner(0))))!.querySelector('td.text-right a')!;
+    expect(count.className).toMatch(/\bunderline\b/);
+    const section = [...el.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === 'Who did it move money with?')!;
+    expect(section.querySelector('h2')!.nextElementSibling!.textContent).toContain('Payments are native, internal and wrapped-native, both directions.');
   });
 
   it('with=…&dir=sent lists the payments it sent and the trades between the two', async () => {
@@ -353,6 +371,59 @@ describe('the wallet page', () => {
   });
 });
 
+/** Every element of `type` in a page's tree, through every prop: the panels read in their own Suspense, so the tree is where they show. */
+function elementsOf(node: unknown, type: unknown): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    if (n.type === type) out.push(n as { props: Record<string, unknown> });
+    Object.values(n.props as Record<string, unknown>).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+describe('the wallet outside any collection\'s tabs', () => {
+  async function tree() {
+    const { default: WalletPage } = await import('@/app/w/[chain]/[address]/page');
+    return WalletPage({ params, searchParams: Promise.resolve({}) });
+  }
+
+  it('in one collection: its parent line names it after "/", and the page opens under its tabs', async () => {
+    trades = 2;
+    const el = await render_();
+    const line = [...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
+    expect(line.textContent).toBe('Collections/Bees');
+    expect(line.closest('header')).toBeNull();
+    expect(linkTo(el, 'Open in Bees →')).toBe(`/c/1/${COLL}/w/${SELF}`);
+  });
+
+  it('in one collection: its ring chips, strip and Connected to are that collection\'s', async () => {
+    trades = 2; counterparties = 1;
+    const t = await tree();
+    const { RingChips } = await import('@/components/rings');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    for (const type of [RingChips, WhereItSits]) expect(elementsOf(t, type).map((e) => [e.props.address, e.props.of])).toEqual([[COLL, { wallet: SELF }]]);
+    const rail = elementsOf(t, ConnectedRail);
+    expect(rail.map((e) => e.props.address)).toEqual([COLL]);
+    expect(rail[0]!.props.wallets).toContainEqual({ address: partner(0), role: 'funder · payee' });
+  });
+
+  it('in several collections: no one collection\'s panels, and each collection a link under its tabs', async () => {
+    trades = 3; unjudgedTrades = 1;
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    const el = render(t).container;
+    const nav = el.querySelector('nav[aria-label="Its collections"]')!;
+    expect([...nav.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')]))
+      .toEqual([['Bees', `/c/1/${COLL}/w/${SELF}`], [short(OTHER), `/c/1/${OTHER}/w/${SELF}`]]);
+    expect([...el.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!.textContent).toBe('Collections');
+  });
+});
+
 describe('the wallet under a collection\'s tabs', () => {
   const inColl = `/c/1/${COLL}`;
   async function scoped(sp: Record<string, string> = {}): Promise<HTMLElement> {
@@ -364,7 +435,7 @@ describe('the wallet under a collection\'s tabs', () => {
     // Ten trades: the last four in another collection, two flagged here.
     trades = 10; unjudgedTrades = 4; flaggedTrades = 2;
     const el = await scoped({ collection: OTHER });
-    expect(el.textContent).toContain('In 2 flagged trades out of 6');
+    expect(el.textContent).toContain('In 2 flagged transfers out of 6');
     expect(el.querySelector('select[name="collection"]')).toBeNull();
     // The plain page under the tabs is no filter of the reader's.
     expect(el.textContent).toContain('Every transfer it sent or received in this collection.');
@@ -388,8 +459,20 @@ describe('the wallet under a collection\'s tabs', () => {
   it('with no trade in the collection says so, and not that it is in none', async () => {
     trades = 3; unjudgedTrades = 3;
     const text = (await scoped()).textContent ?? '';
-    expect(text).toContain(`No trade in ${short(COLL)}`);
+    expect(text).toContain(`No transfer of it in ${short(COLL)}`);
     expect(text).not.toContain('Not in any watched collection');
+  });
+
+  it('a wallet that never traded here claims no part of it, and its lines agree', async () => {
+    const { default: Page } = await import('@/app/c/[chain]/[address]/w/[wallet]/page');
+    const t = await Page({ params: Promise.resolve({ chain: '1', address: COLL, wallet: SELF }), searchParams: Promise.resolve({}) });
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    const text = render(t).container.textContent ?? '';
+    expect(text).toContain('Its money is not read: no transfer of it is read in a watched collection.');
+    expect(text).toContain(`No transfer of it is read in ${short(COLL)}.`);
+    expect(text).not.toContain('No transfers read yet');
+    expect(text).not.toContain('never traded');
   });
 
   it('names the wallet\'s own page as the canonical one', async () => {

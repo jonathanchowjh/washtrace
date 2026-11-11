@@ -72,6 +72,12 @@ describe('SpotCheck', () => {
     expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({ chainId: 1, tx: TX, lens: 'L7' });
   });
 
+  it('offers the built-ins as lenses, the word every page uses, before yours', () => {
+    const c = view();
+    expect(c.container.querySelector('option')!.textContent).toBe('Built-in lenses');
+    expect(c.container.textContent).not.toContain('method');
+  });
+
   it('choosing another lens clears the last answer, which was not that lens\'s', async () => {
     routes({ status: 200, body: { status: 'done', result: { ...linked, source: 'watched' } } });
     const c = view();

@@ -1,18 +1,19 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { type TradeRow } from '@washtrace/detect';
+import { type Method, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
 import { Time } from '@/components/time';
 import { SortHead } from '@/components/ui';
-import { FunnelIcon, TierMark } from '@/components/kit';
+import { FunnelIcon, SearchIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';
 import { NOT_JUDGED_YET, NOT_RUN, eth, lensInfo, localTime, num, pct, tokenLabel, weiToEth, type Lenses } from '@/lib/format';
 import { cardSrc, txHref, withFrom } from '@/lib/links';
-import { APART_WHY_TITLE, judgedBy, SHOWN } from '@/lib/metrics';
+import { judgedBy, SHOWN } from '@/lib/metrics';
 import { dateIn, midnight } from '@/lib/zone';
 import { MEDIAN, bandLabel, chips, duration, groupFilter, tradesHref, type View } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { HoverCard } from './hover-card';
+import { TierWord } from './methods';
 
 /**
  * The Trades view's three parts: the Find box, chips and filter form; the
@@ -23,8 +24,8 @@ import { HoverCard } from './hover-card';
 /** `own` is your lenses by key, for their names and hues; the built-ins need no entry. */
 interface Where { base: string; q: TradeQuery; view: View; zone: string; own?: Lenses }
 
-// One item in a header's row, so a lens not counted says so under its name rather than in what reads as a column of its own.
-const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <span>{i.name}{i.tone === 'apart' ? <span title={APART_WHY_TITLE} className="block text-[11px] font-normal text-muted-foreground">not counted</span> : null}</span>; };
+// One item in a header's row, so each built-in's standing sits under its name rather than in what reads as a column of its own; yours have none.
+const lensTitle = (m: LensKey, own: Lenses = {}) => { const i = lensInfo(m, own); return i === null ? '' : <span>{i.name}{isOwnKey(m) ? null : <TierWord m={m as Method} />}</span>; };
 
 /** Your lenses' keys, built-ins first: the lenses a table can draw, in the order it draws them. */
 const withOwn = (ran: readonly LensKey[]) => [...SHOWN.filter((m) => ran.includes(m)), ...ran.filter(isOwnKey)];
@@ -74,7 +75,7 @@ function Day({ name, label, ms, zone }: { name: string; label: string; ms: numbe
     <label className="flex flex-col gap-1 text-sm">
       <span className="text-muted-foreground">{label}</span>
       <input type="date" name={`${name}_day`} defaultValue={value} disabled={kept} className="field disabled:opacity-50" />
-      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone, 'en-US')}; remove the date chip to change it.</span> : null}
+      {kept ? <span className="text-xs text-muted-foreground">Kept at {localTime(ms!, 'datetime', zone, 'en-GB')}; remove the date chip to change it.</span> : null}
     </label>
   );
 }
@@ -110,21 +111,26 @@ export function FilterBar(w: Where) {
   const venues = Object.entries(VENUES).map(([k, v]): [string, string] => [k, v.name]);
   return (
     <section aria-label="Filters" className="mt-4 space-y-3">
-      <form action={`${base}/trades`} method="get" role="search" className="flex flex-wrap items-center gap-2">
+      {/* Find looks one trade up, so it wears the magnifier; the funnel is Filter's alone. The box gives way on a phone so Find stays beside it. */}
+      <form action={`${base}/trades`} method="get" role="search" className="flex items-center gap-2">
         {carried(w, (k) => k !== 'q')}
-        <FunnelIcon className="text-muted-foreground" />
-        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field w-72 max-w-full" />
+        <SearchIcon className="text-muted-foreground" />
+        <input type="search" name="q" defaultValue={q.find ?? ''} placeholder="Token number, wallet or tx" aria-label="Find a trade by token number, wallet or transaction" className="field min-w-0 flex-1 sm:w-72 sm:flex-none" />
         <button type="submit" className="btn-secondary text-sm">Find</button>
       </form>
 
       <div className="flex flex-wrap items-start gap-2">
         {chips(base, q, view, zone, names).map((c) => (
-          <Link key={c.key} href={c.href} title="Remove this filter" className="rounded-full border bg-muted/50 px-2.5 py-1 text-sm hover:bg-card">
+          <Link key={c.key} href={c.href} prefetch={false} title="Remove this filter" className="rounded-full border bg-muted/50 px-2.5 py-1 text-sm hover:bg-card">
             {c.label} <span aria-hidden className="text-muted-foreground">×</span>
           </Link>
         ))}
-        <details className="rounded-md border bg-card">
-          <summary className="cursor-pointer px-2.5 py-1 text-sm font-medium"><FunnelIcon className="mr-1 inline size-3.5 align-[-2px] text-muted-foreground" />+ Filter</summary>
+        {/* One control: the funnel says it narrows the list, the chevron that it opens; the browser's own triangle is hidden. A plain <details>, so it opens with no script. */}
+        <details className="group rounded-md border bg-card">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium hover:bg-muted group-open:rounded-b-none [&::-webkit-details-marker]:hidden">
+            <FunnelIcon className="size-3.5 text-muted-foreground" />Filter
+            <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
+          </summary>
           <form action={`${base}/trades`} method="get" aria-label="Filter trades" className="space-y-4 border-t p-3">
             {carried(w, (k) => ['wallet', 'token', 'group', 'q', 'all', 'sort', 'dir', 'by'].includes(k)
               || (k === 'from' && offMidnight(q.fromMs, zone)) || (k === 'to' && offMidnight(q.toMs, zone)))}
@@ -196,12 +202,12 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
       <nav className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
         <span className="text-muted-foreground">Group by</span>
         {BYS.map(([b, label]) => (
-          <Link key={b} href={tradesHref(base, q, { by: b })} aria-current={b === by ? 'page' : undefined}
+          <Link key={b} href={tradesHref(base, q, { by: b })} prefetch={false} aria-current={b === by ? 'page' : undefined}
             className={cn('rounded-md px-2 py-0.5', b === by ? 'bg-foreground text-background' : 'border bg-card hover:bg-muted')}>
             {label}
           </Link>
         ))}
-        {by === null ? null : <Link href={tradesHref(base, q)} className="px-1 text-muted-foreground hover:underline">No grouping</Link>}
+        {by === null ? null : <Link href={tradesHref(base, q)} prefetch={false} className="px-1 text-muted-foreground hover:underline">No grouping</Link>}
       </nav>
       {by === null || groups === null ? null : (
         <div className="mt-3 overflow-x-auto rounded-lg border bg-card">
@@ -209,7 +215,8 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 font-medium">{BY_NAME[by]}</th>
-                <th className="px-3 py-2 text-right font-medium">Trades</th>
+                {/* What the count is of, as the match line above says it. */}
+                <th className="px-3 py-2 text-right font-medium">{q.kind === 'all' ? 'Changes of owner' : 'Sales'}</th>
                 {cols.map((m) => <th key={m} className="px-3 py-2 text-right font-medium">{lensTitle(m, own)}</th>)}
               </tr>
             </thead>
@@ -220,7 +227,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
                 return (
                   // A row no filter can hold (the unknown group, a marketplace with no name here) is not a list to open.
                   <tr key={g.key} data-unlisted={f === null ? '' : undefined}>
-                    <td className="px-3 py-2">{groupLabel(by, g.key)}</td>
+                    <td className="px-3 py-2"><Cell href={to()}>{groupLabel(by, g.key)}</Cell></td>
                     <td className="px-3 py-2 text-right tabular-nums"><Cell href={to()}>{num(g.trades)}</Cell></td>
                     {cols.map((m) => (
                       <td key={m} className="px-3 py-2 text-right tabular-nums">
@@ -239,7 +246,7 @@ export function GroupBy({ base, q, view, zone, own = {}, groups, ran }: Where & 
 }
 
 function Cell({ href, children }: { href: string | null; children: React.ReactNode }) {
-  return href === null ? <>{children}</> : <Link href={href} className="hover:underline">{children}</Link>;
+  return href === null ? <>{children}</> : <Link href={href} prefetch={false} className="hover:underline">{children}</Link>;
 }
 
 // ---- trades -----------------------------------------------------------------
@@ -268,11 +275,20 @@ function Th({ sort, label, where, tone }: { sort: TradeSort; label: ReactNode; w
   );
 }
 
+/** What one lens says of one trade: past the block its run read, flagged, or judged and passed. */
+function verdictOf(r: TradeRow, m: LensKey, through: TradeContext['through']): 'later' | 'flagged' | 'clear' {
+  return !judgedBy(r, m, through) ? 'later' : r.lenses.includes(m) ? 'flagged' : 'clear';
+}
+
 /**
  * One page of trades: a dot per lens that ran, and links from every name and
  * number to what it opens. `through` is, for each lens of yours, the block its
  * run read (lensContext): a trade past it reads not judged yet in that lens's
- * column, as a trade no analysis covered reads across them all.
+ * column, as a trade no analysis covered reads across them all. Below `sm` the
+ * table is too wide for the screen, so each trade is a card there instead:
+ * both draw the same cells and the breakpoint shows one, so it needs no script.
+ * Its links do not prefetch: each one renders the collection's layout, counts
+ * and all, and a page of them queues the click that matters behind them.
  */
 export function TradesTable({ chainId, rows, ran, through, money, from, ...where }: Where & {
   chainId: number; rows: readonly TradeRow[]; ran: readonly LensKey[]; through: TradeContext['through']; money: ReadonlySet<string>;
@@ -282,59 +298,100 @@ export function TradesTable({ chainId, rows, ran, through, money, from, ...where
   const { base, q, view, own = {} } = where;
   const lenses = withOwn(ran);
   const only = (extra: Partial<TradeQuery>, title: string) => (
-    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
+    <Link href={tradesHref(base, { ...q, ...extra }, { by: view.by })} prefetch={false} title={title} className="ml-1 text-muted-foreground hover:text-foreground">⊕</Link>
   );
   const wallet = (a: string) => (
     <span className="whitespace-nowrap"><Wallet chainId={chainId} address={a} within={base} />{/^0x0+$/.test(a) ? null : only({ wallet: a }, 'Only trades with this wallet')}</span>
   );
+  // Each trade's cells, made once: the table row and the card both draw these.
+  const trades = rows.map((r) => {
+    const venue = r.marketplace === null ? null : venueOf(r.marketplace);
+    const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
+    const href = withFrom(txHref(chainId, r.txHash, base), from);
+    const verdicts = lenses.map((m) => {
+      const v = verdictOf(r, m, through);
+      const name = lensInfo(m, own)?.name;
+      const mark = v === 'later'
+        ? <span title={`Newer than the block ${name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
+        : v === 'flagged'
+          ? <span role="img" aria-label={`Flagged by ${name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
+          : <span aria-label="Not flagged" className="text-muted-foreground">–</span>;
+      return { m, v, name, mark };
+    });
+    return {
+      key: `${r.txHash}-${r.logIndex}`,
+      judged: r.judged,
+      verdicts,
+      date: <Link href={href} prefetch={false} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>,
+      token: <><HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} prefetch={false} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>{only({ token: r.tokenId }, 'Only trades with this token')}</>,
+      parties: <>{wallet(r.from)} → {wallet(r.to)}</>,
+      // The price opens the trade, as a price does in the transfer tables.
+      price: priced ? <Link href={href} prefetch={false} title="Open this trade" className="hover:underline">{eth(r.priceWei)}</Link> : '—',
+      market: venue === null ? '—' : VENUES[venue]?.name ?? venue,
+      held: span(r.heldS),
+      buyerAge: span(r.buyerAgeS),
+      floor: r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`,
+    };
+  });
   return (
-    <div className="mt-4 overflow-x-auto rounded-lg border bg-card">
-      <table className="w-full text-sm">
-        <thead className="text-xs text-muted-foreground">
-          <tr>
-            {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
-            {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {rows.map((r) => {
-            const venue = r.marketplace === null ? null : venueOf(r.marketplace);
-            const priced = r.priceWei !== null && r.currency !== null && money.has(r.currency);
-            // The price opens the trade, as a price does in the transfer tables.
-            const trade = (v: string) => (v === '—' ? v : <Link href={withFrom(txHref(chainId, r.txHash, base), from)} title="Open this trade" className="hover:underline">{v}</Link>);
-            return (
-              <tr key={`${r.txHash}-${r.logIndex}`}>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <Link href={withFrom(txHref(chainId, r.txHash, base), from)} className="hover:underline">{r.blockTime === null ? 'Unknown time' : <Time ms={r.blockTime * 1000} />}</Link>
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 font-mono">
-                  <HoverCard src={cardSrc(base, 'token', r.tokenId)}><Link href={`${base}/t/${r.tokenId}`} className="hover:underline">#{tokenLabel(r.tokenId)}</Link></HoverCard>
-                  {only({ token: r.tokenId }, 'Only trades with this token')}
-                </td>
-                <td className="px-3 py-2">{wallet(r.from)} → {wallet(r.to)}</td>
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{trade(priced ? eth(r.priceWei) : '—')}</td>
-                <td className="whitespace-nowrap px-3 py-2">{venue === null ? '—' : VENUES[venue]?.name ?? venue}</td>
+    <>
+      <ul aria-label="Trades" className="mt-4 divide-y rounded-lg border bg-card text-sm sm:hidden">
+        {trades.map((t) => {
+          // Only the lenses with something to say: a card has no column to hold a dash.
+          const said = t.verdicts.filter((x) => x.v !== 'clear');
+          return (
+            <li key={t.key} className="space-y-1 px-3 py-2">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                <span className="whitespace-nowrap font-mono">{t.token}</span>
+                <span className="text-xs text-muted-foreground">{t.date}</span>
+              </div>
+              {lenses.length === 0 ? null : (
+                <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                  {!t.judged ? NOT_JUDGED_YET : said.length === 0 ? 'Not flagged' : said.map((x) => (
+                    // A flagged mark names its lens to a screen reader already, so there the name beside it is for the eye.
+                    <span key={x.m} className="chip">{x.mark}<span aria-hidden={x.v === 'flagged' ? true : undefined}>{x.name}</span></span>
+                  ))}
+                </div>
+              )}
+              <div>{t.parties}</div>
+              <div className="flex flex-wrap gap-x-3 tabular-nums">
+                <span>{t.price}</span>
+                <span className="text-muted-foreground">{t.market}</span>
+              </div>
+              <p data-measure className="text-xs text-muted-foreground tabular-nums">Held {t.held} · buyer age {t.buyerAge} · {t.floor} vs {MEDIAN}</p>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-4 hidden overflow-x-auto rounded-lg border bg-card sm:block">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-muted-foreground">
+            <tr>
+              {COLUMNS.map(([sort, label]) => <Th key={sort} sort={sort} label={label} where={where} />)}
+              {lenses.map((m) => <Th key={m} sort={`lens-${m}`} label={lensTitle(m, own)} where={where} tone={m} />)}
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {trades.map((t) => (
+              <tr key={t.key}>
+                <td className="whitespace-nowrap px-3 py-2">{t.date}</td>
+                <td className="whitespace-nowrap px-3 py-2 font-mono">{t.token}</td>
+                <td className="px-3 py-2">{t.parties}</td>
+                <td className="whitespace-nowrap px-3 py-2 tabular-nums">{t.price}</td>
+                <td className="whitespace-nowrap px-3 py-2">{t.market}</td>
                 {/* The trade's own measures count no list, and the row's date opens the trade. */}
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{span(r.heldS)}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{span(r.buyerAgeS)}</td>
-                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{r.floorRatio === null ? '—' : `${r.floorRatio.toFixed(2)}×`}</td>
-                {r.judged
-                  ? lenses.map((m) => (
-                    <td key={m} className="px-3 py-2">
-                      {!judgedBy(r, m, through)
-                        ? <span title={`Newer than the block ${lensInfo(m, own)?.name}'s run read through`} className="whitespace-nowrap text-xs text-muted-foreground">{NOT_JUDGED_YET}</span>
-                        : r.lenses.includes(m)
-                        ? <span role="img" aria-label={`Flagged by ${lensInfo(m, own)?.name}`} className="inline-flex"><TierMark tone={lensInfo(m, own)?.tone ?? 'apart'} /></span>
-                        : <span aria-label="Not flagged" className="text-muted-foreground">–</span>}
-                    </td>
-                  ))
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.held}</td>
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.buyerAge}</td>
+                <td data-measure className="whitespace-nowrap px-3 py-2 tabular-nums">{t.floor}</td>
+                {t.judged
+                  ? t.verdicts.map((x) => <td key={x.m} className="px-3 py-2">{x.mark}</td>)
                   // With no lens run there is no lens column to say it in.
                   : lenses.length > 0 ? <td colSpan={lenses.length} className="px-3 py-2 text-muted-foreground">{NOT_JUDGED_YET}</td> : null}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopEdge, Method, OwnFlag } from '@washtrace/detect';
 import { DEFAULT_RULE, type LensRule } from '@washtrace/detect/lens-rule';
@@ -142,6 +143,8 @@ describe('the trade page: one card per lens', () => {
     const c = await txPage();
     const card = cards(c, 'How each lens reads First #7');
     const title = 'How each lens reads First #7';
+    // A lens caught it, so the graph is drawn and the lead points to it.
+    expect(c.textContent).toContain('the token’s graph below lights the loop of each that caught it.');
     // One graph for the token, not one a card.
     expect([...c.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === title)!.querySelectorAll('figure')).toHaveLength(1);
     expect(c.querySelectorAll('li[data-lens] figure')).toHaveLength(0);
@@ -195,6 +198,9 @@ describe('the trade page: one card per lens', () => {
     // Nothing caught it, so nothing is drawn and the token was not read.
     expect(c.querySelectorAll('li[data-lens] figure')).toHaveLength(0);
     expect(flows).not.toHaveBeenCalled();
+    // And the lead says no graph is below.
+    expect(c.textContent).toContain('why it caught this transfer or why not.');
+    expect(c.textContent).not.toContain('graph below');
   });
 
   it('the copy says each built-in’s miss in its own words', async () => {
@@ -244,6 +250,23 @@ describe('the trade page: one card per lens', () => {
     expect(card.get('Linked wallets')!.textContent).not.toContain(CAPPED.trim());
   });
 
+  it('an unread transaction, or one not judged, says "Not judged yet" once: the answer\'s title, no chip over it', async () => {
+    const text = (await txPage()).textContent ?? '';
+    expect(text.split('Not judged yet').length - 1).toBe(1);
+    roundTrip([]);
+    state.through = { 1: 4, 2: 4 };
+    const c = await txPage();
+    expect(c.querySelector('header .chip')).toBeNull();
+    expect(c.querySelector('p.text-lg')!.textContent).toBe('Not judged yet');
+  });
+
+  it('a trade flagged only by the lens not counted names it, and no place on the screen', async () => {
+    roundTrip(['AU']);
+    const body = (await txPage()).querySelector('p.text-lg')!.nextElementSibling!.textContent!;
+    expect(body).toContain('Only Money loops back flags it:');
+    expect(body).not.toContain('on the right');
+  });
+
   it('a trade past the latest analysis is not judged yet by the built-ins, not clean', async () => {
     const { NOT_CAUGHT, BUILT_IN_BEHIND } = await import('@/lib/format');
     roundTrip([]);
@@ -288,8 +311,11 @@ describe('the trade page: one card per lens', () => {
     state.ran = { 1: ['A', 'AU', 'AC'], 2: ['A'] };
     const c = await txPage();
     const body = c.querySelector('p.text-lg')!.nextElementSibling!.textContent!;
-    expect(body).toContain('The lenses on the right flag it.');
-    expect(body).toContain('Money loops back and Linked wallets did not run in the latest analysis of Second, so they flag nothing there.');
+    // The flagging lenses by name, not by where they sit: beside the answer on a wide screen, under it on a phone.
+    expect(body).toContain('Round trips flags it.');
+    expect(body).not.toMatch(/on the right|below it|beside it/);
+    // Floor, ceiling, then the one not counted, as every page lists lenses; the API keeps A, AU, AC.
+    expect(body).toContain('Linked wallets and Money loops back did not run in the latest analysis of Second, so they flag nothing there.');
     expect(body).not.toMatch(/did not run in the latest analysis, so (it|they) flag/);
   });
 
@@ -308,7 +334,7 @@ describe('the trade page: one card per lens', () => {
     roundTrip();
     state.ran = { 1: ['A'], 2: ['A'] };
     const body = (await txPage()).querySelector('p.text-lg')!.nextElementSibling!.textContent!;
-    expect(body).toContain('Money loops back and Linked wallets did not run in the latest analysis, so they flag nothing.');
+    expect(body).toContain('Linked wallets and Money loops back did not run in the latest analysis, so they flag nothing.');
     expect(body).not.toContain(' of First');
   });
 
@@ -351,11 +377,19 @@ describe('the trade page: one card per lens', () => {
     expect(answer).not.toContain('Slow loops');
   });
 
-  it('lists the counted lenses that flag it first, and sets Money loops back apart under them as not counted', async () => {
+  it('lists the counted lenses that flag it first, each with its tier, and sets Money loops back apart under them as not counted', async () => {
     roundTrip(['A', 'AU', 'AC']);
     const c = await txPage();
     const aside = c.querySelector('p.text-lg')!.closest('div')!.parentElement!.lastElementChild!;
-    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips', 'Linked wallets', 'Money loops back · not counted']);
+    expect([...aside.children].map((x) => x.textContent)).toEqual(['Round trips · the floor', 'Linked wallets · the ceiling', 'Money loops back · not counted']);
+  });
+
+  it('gives every built-in\'s card its tier, and a lens of yours none', async () => {
+    roundTrip();
+    state.lenses = [lens(7, 'Fast flips', { 1: {} })];
+    const c = await txPage();
+    const tiers = [...cards(c, 'How each lens reads First #7')].map(([name, li]) => [name, li.querySelector('[data-tier]')?.textContent ?? null]);
+    expect(tiers).toEqual([['Round trips', '· the floor'], ['Linked wallets', '· the ceiling'], ['Money loops back', '· not counted'], ['Fast flips', null]]);
   });
 
   it('a sale a built-in and your lens both caught says your lens also catches it', async () => {
@@ -625,6 +659,76 @@ describe('the trade page: a spot check', () => {
     roundTrip();
     const judged = await txPage();
     expect(judged.querySelector('#spot-check')).toBeNull();
+  });
+
+  it('sets the check in a card of its own, and the parent line above the head, as a collection page has it', async () => {
+    const c = await txPage();
+    expect(c.querySelector('#spot-check')!.closest('section')!.className).toMatch(/\brounded-lg border bg-card\b/);
+    const up = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!;
+    expect(up.getAttribute('href')).toBe('/');
+    expect(up.closest('header')).toBeNull();
+    expect(up.parentElement!.nextElementSibling?.tagName).toBe('HEADER');
+  });
+});
+
+/** Every element of `type` in a page's tree, through every prop: the panels read in their own Suspense, so the tree is where they show. */
+function elementsOf(node: unknown, type: unknown): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown) => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    if (n.type === type) out.push(n as { props: Record<string, unknown> });
+    Object.values(n.props as Record<string, unknown>).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+describe('the trade page outside a collection\'s tabs', () => {
+  async function tree() {
+    const { default: P } = await import('@/app/tx/[chain]/[hash]/page');
+    return P({ params: Promise.resolve({ chain: '1', hash: TX }) });
+  }
+
+  it('in one collection: its ring chips, strip and Connected to are that collection\'s, and it opens under its tabs', async () => {
+    roundTrip();
+    const t = await tree();
+    const { RingChips } = await import('@/components/rings');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    for (const type of [RingChips, WhereItSits]) expect(elementsOf(t, type).map((e) => [e.props.address, e.props.of])).toEqual([[A1, { tx: TX }]]);
+    expect(elementsOf(t, ConnectedRail).map((e) => [e.props.address, e.props.token, e.props.wallets]))
+      .toEqual([[A1, '7', [{ address: S, role: 'seller' }, { address: B, role: 'buyer' }]]]);
+    const link = [...render(t).container.querySelectorAll('a')].find((a) => a.textContent === 'Open in First →');
+    expect(link?.getAttribute('href')).toBe(`/c/1/${A1}/tx/${TX}`);
+  });
+
+  it('in several collections: no one collection\'s panels, and each collection a link', async () => {
+    state.tx = [transfer(A1, '7', TX, 5, 5), transfer(A2, '8', TX, 9, 5)];
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    const { WhereItSits } = await import('@/components/sales-strip');
+    expect([...elementsOf(t, ConnectedRail), ...elementsOf(t, WhereItSits)]).toEqual([]);
+    const nav = render(t).container.querySelector('nav[aria-label="Its collections"]')!;
+    expect([...nav.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])).toEqual([['First', `/c/1/${A1}`], ['Second', `/c/1/${A2}`]]);
+  });
+
+  it('unread: no panels and no way in', async () => {
+    const t = await tree();
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    expect(elementsOf(t, ConnectedRail)).toEqual([]);
+    expect(render(t).container.textContent).not.toContain('Open in');
+  });
+});
+
+describe('the trade page\'s parent line', () => {
+  it('names its one collection after "/", above the head', async () => {
+    roundTrip();
+    const c = await txPage();
+    const line = [...c.querySelectorAll('a')].find((a) => a.textContent === 'Collections')!.parentElement!;
+    expect(line.textContent).toBe('Collections/First');
+    expect([...line.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['/', `/c/1/${A1}`]);
+    expect(c.querySelector('header nav[aria-label="Trail"]')).toBeNull();
   });
 });
 

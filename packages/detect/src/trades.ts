@@ -147,7 +147,8 @@ export function findOf(raw: string): Find {
     const hex = text.toLowerCase();
     if (hex.length === 66) return { kind: 'tx', tx: hex };
     if (hex.length === 42) return { kind: 'address', address: hex };
-    if (hex.length >= 6 && hex.length < 42) return { kind: 'prefix', prefix: hex };
+    // Past an address's 42 characters only a transaction hash is that long: still its start (trade-sql reads it as one).
+    if (hex.length >= 6 && hex.length < 66) return { kind: 'prefix', prefix: hex };
   }
   if (TOKEN_ID.test(text)) return { kind: 'token', tokenId: BigInt(text).toString() };
   return { kind: 'none' };

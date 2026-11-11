@@ -196,12 +196,13 @@ const formatters = new Map<string, Intl.DateTimeFormat>();
  * The three methods as lenses, in the order they are shown. The paper's names (SCC A, AU,
  * AC) stay in the API and README; a reader sees only these.
  * `tone` is the lens's standing as a hue: the token's own cycle, a link
- * through money, or apart (never counted, so grey everywhere).
+ * through money, or apart (never counted, so grey everywhere). `tier` is the
+ * same standing in words, the one copy every page says it in.
  */
 export const LENSES = {
-  A: { name: 'Round trips', tone: 'cycle', says: 'The token keeps coming back to wallets that already held it.' },
-  AU: { name: 'Money loops back', tone: 'apart', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
-  AC: { name: 'Linked wallets', tone: 'money', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
+  A: { name: 'Round trips', tone: 'cycle', tier: 'the floor', says: 'The token keeps coming back to wallets that already held it.' },
+  AU: { name: 'Money loops back', tone: 'apart', tier: 'not counted', says: 'The token goes one way, and the payment finds its way back to the seller through other wallets.' },
+  AC: { name: 'Linked wallets', tone: 'money', tier: 'the ceiling', says: 'A round trip, or a buyer and seller joined by money: one paid the other, or both share a funder.' },
 } as const;
 
 /**
@@ -293,12 +294,12 @@ export function lensList(methods: readonly (keyof typeof LENSES)[]): string {
 /**
  * The sentence for built-ins that have not run, one or several, in the words
  * every page says it in: NOT_RUN_LATEST once the collection has an analysis
- * (`analysed`), and before any, that they have not run at all, as a lens of
+ * (`analyzed`), and before any, that they have not run at all, as a lens of
  * yours with no run says.
  */
-export function notRunAll(methods: readonly (keyof typeof LENSES)[], analysed = true): string {
-  if (methods.length === 1) return analysed ? `${LENSES[methods[0]!].name} ${NOT_RUN_LATEST}` : notRunHere(LENSES[methods[0]!].name);
-  return `${lensList(methods)} ${analysed ? 'did not run in the latest analysis, so they flag nothing.' : 'have not run on this collection, so they flag nothing yet.'}`;
+export function notRunAll(methods: readonly (keyof typeof LENSES)[], analyzed = true): string {
+  if (methods.length === 1) return analyzed ? `${LENSES[methods[0]!].name} ${NOT_RUN_LATEST}` : notRunHere(LENSES[methods[0]!].name);
+  return `${lensList(methods)} ${analyzed ? 'did not run in the latest analysis, so they flag nothing.' : 'have not run on this collection, so they flag nothing yet.'}`;
 }
 
 /**

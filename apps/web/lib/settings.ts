@@ -1,12 +1,13 @@
 import type { SettingSource } from '@washtrace/detect';
 import { MAX_FOLLOW_HOPS } from '@washtrace/detect/lens-rule';
+import { chainName } from './chains';
 
 /**
  * The settings the console can change, how each is checked, and how each is
  * shown. The worker reads the same keys (workerConfig), a console value
  * first, then the environment; this file only decides what the API accepts
  * and what it answers.
- * Free of server imports (its one runtime import, the hop limit, is client-safe), so the settings page can use FIELDS as well.
+ * Free of server imports (its runtime imports, the hop limit and the chain names, are client-safe), so the settings page can use FIELDS as well.
  */
 
 /**
@@ -195,9 +196,41 @@ export function pinned(key: string, sources: Record<string, SettingSource>, sett
  * once cleared, the environment's `env` is what the worker will use. While a
  * field is pinned the worker ignores a saved value, so it isn't shown. A secret
  * is shown masked (shownSecret), and to someone who may not change it as
- * '••••' alone, whatever its source.
+ * '••••' alone, whatever its source. After them come the RPCs of the other
+ * chains the worker reads (envRpcViews), which only .env sets.
  */
 export function fieldViews(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
+  return [...ownViews(settings, sources, writable), ...envRpcViews(sources, writable)];
+}
+
+/** Why a chain's RPC other than Ethereum's can't be changed here: the console saves Ethereum's alone (FIELDS). */
+export const ENV_ONLY_RPC = 'Only .env sets this chain\'s RPC: the console saves Ethereum\'s alone.';
+
+/**
+ * The RPC of each other chain the worker reported reading, read-only, so
+ * Settings lists every chain the worker reads (as the Worker page names them)
+ * and where its URL comes from. In chain order, masked as the worker reported
+ * it, and as '••••' alone to someone who may not change settings. The API
+ * saves no RPC but Ethereum's, so each of these came from .env.
+ */
+function envRpcViews(sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
+  const chains = Object.keys(sources).flatMap((key) => {
+    const m = /^rpc\.(\d+)$/.exec(key);
+    return m && !FIELDS.some((f) => f.key === key) ? [Number(m[1])] : [];
+  });
+  return chains.sort((a, b) => a - b).map((id) => {
+    const reported = sources[`rpc.${id}`]!;
+    const env = reported.env ?? reported.value;
+    return {
+      key: `rpc.${id}`, label: `${chainName(id)} RPC URL`, secret: true, set: true,
+      shown: writable ? env ?? MASK : MASK, source: 'env', env: env === null ? null : writable ? env : MASK,
+      locked: true, pinned: ENV_ONLY_RPC, invalid: null,
+    };
+  });
+}
+
+/** Each of FIELDS for the page, as fieldViews says. */
+function ownViews(settings: ReadonlyMap<string, string>, sources: Record<string, SettingSource>, writable: boolean): FieldView[] {
   return FIELDS.map((f) => {
     const reported = sources[f.key];
     const why = pinned(f.key, sources, settings);

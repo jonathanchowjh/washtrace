@@ -4,11 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { SpotResult, Witness } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
+import { LENSES, SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
 import { send } from '@/lib/send';
 
 const POLL_MS = 1000;
-const BUILT_IN: Record<string, string> = { A: 'Round trips', AU: 'Money loops back', AC: 'Linked wallets' };
 
 type Flag = SpotResult['transfers'][number]['flags'][string];
 
@@ -81,28 +80,29 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
     setId(said.body.id ?? null);
   }
 
-  const nameOf = (key: string) => BUILT_IN[key] ?? lenses.find((l) => l.key === key)?.name ?? key;
+  const nameOf = (key: string) => (Object.hasOwn(LENSES, key) ? LENSES[key as keyof typeof LENSES].name : lenses.find((l) => l.key === key)?.name ?? key);
   const running = busy || lost || status === 'queued' || status === 'running';
   const flagged = result?.transfers.filter((t) => Object.keys(t.flags).some((k) => result.methods.includes(k))) ?? [];
   const failed = status === 'failed' || (error !== null && id !== null);
   return (
-    <section aria-labelledby="spot-check" className="space-y-3">
-      <h2 id="spot-check" className="font-medium">Check this transaction</h2>
+    // A card set off from the answer above it: a form of its own, not more of the verdict.
+    <section aria-labelledby="spot-check" className="mt-6 space-y-3 rounded-lg border bg-card p-4 sm:p-5">
+      <h2 id="spot-check" className="text-base font-semibold">Check this transaction</h2>
       <p className="text-sm text-muted-foreground">
         Reads only this transaction: its tokens&apos; histories and the money of its sellers and buyers. Nothing is watched.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-sm" htmlFor="spot-lens">Judge with</label>
-        <select id="spot-lens" className="rounded-md border px-2 py-1 text-sm" value={lens}
+        <select id="spot-lens" className="field text-sm" value={lens}
           onChange={(e) => { setLens(e.target.value); setResult(null); setError(null); setStatus(null); }} disabled={running}>
-          <option value="">Built-in methods</option>
+          <option value="">Built-in lenses</option>
           {lenses.map((l) => (
             <option key={l.key} value={l.key} disabled={l.refusal !== null} title={l.refusal ?? undefined}>
               {l.refusal === null ? l.name : `${l.name} (${l.refusal})`}
             </option>
           ))}
         </select>
-        <button type="button" className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+        <button type="button" className="btn text-sm"
           disabled={!writable || running} title={writable ? undefined : LOCAL_ONLY} onClick={start}>Check this transaction</button>
         {running && !lost ? <span aria-live="polite" className="text-sm">{SPOT_CHECKING}</span> : null}
       </div>
@@ -110,11 +110,11 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
       {error !== null ? (
         <div className="flex flex-wrap items-center gap-2">
           <p role="alert" className="text-sm text-fault">{error}</p>
-          {failed ? <button type="button" className="rounded-md border px-2 py-1 text-xs" disabled={!writable} onClick={start}>Try again</button> : null}
+          {failed ? <button type="button" className="btn text-xs" disabled={!writable} onClick={start}>Try again</button> : null}
         </div>
       ) : null}
       {result !== null ? (
-        <div className="space-y-2 rounded-lg border bg-card p-3 text-sm">
+        <div className="space-y-2 rounded-md border bg-muted/40 p-3 text-sm">
           <p className="font-medium">
             {result.washTrade === true ? `Flagged as a wash trade by ${andList(result.methods.map(nameOf))}.`
               : result.washTrade === false ? 'Not flagged: every lens asked ran on every trade, and none flagged it.'
@@ -131,7 +131,7 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
                     <span key={k}>
                       {nameOf(k)}: {whyOf(f)} (
                       {walletsOf(f).map((a, i) => (
-                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={`/w/${chainId}/${a}`}>{short(a)}</Link></span>
+                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={`/w/${chainId}/${a}`} prefetch={false}>{short(a)}</Link></span>
                       ))}
                       ){' '}
                     </span>

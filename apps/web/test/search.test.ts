@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { hitRow, kindsFor, parseSearch, scopeOf, scopeOfPath, searchArgs } from '@/lib/search';
+import { hitRow, kindsFor, parseSearch, scopeOf, scopeOfPath, searchArgs, tooShort } from '@/lib/search';
 
 describe('parseSearch', () => {
   it('reads what was typed', () => {
     expect(parseSearch(' 0x' + 'A'.repeat(64))).toEqual({ kind: 'tx', tx: '0x' + 'a'.repeat(64) });
     expect(parseSearch('0x' + 'B'.repeat(40))).toEqual({ kind: 'address', address: '0x' + 'b'.repeat(40) });
     expect(parseSearch('0x3A1f')).toEqual({ kind: 'prefix', prefix: '0x3a1f' });
+    // Longer than an address, only a transaction hash is that long: its start.
+    expect(parseSearch('0x' + 'C'.repeat(48))).toEqual({ kind: 'prefix', prefix: '0x' + 'c'.repeat(48) });
     expect(parseSearch('#12')).toEqual({ kind: 'token', tokenId: '12', text: '12' });
     expect(parseSearch('1234')).toEqual({ kind: 'token', tokenId: '1234', text: '1234' });
     expect(parseSearch('12')).toEqual({ kind: 'text', text: '12' });
@@ -19,9 +21,25 @@ describe('parseSearch', () => {
     expect(parseSearch('#')).toEqual({ kind: 'empty' });
     expect(parseSearch('0x')).toEqual({ kind: 'text', text: '0x' });
     expect(parseSearch('0xabc')).toEqual({ kind: 'text', text: '0xabc' });
-    expect(parseSearch('0x' + 'a'.repeat(50))).toEqual({ kind: 'text', text: '0x' + 'a'.repeat(50) });
+    // Longer than a transaction hash, hex is no address or hash, nor the start of one.
+    expect(parseSearch('0x' + 'a'.repeat(70))).toEqual({ kind: 'text', text: '0x' + 'a'.repeat(70) });
     expect(parseSearch('#hello')).toEqual({ kind: 'text', text: 'hello' });
     expect(parseSearch('1'.repeat(200)).kind).toBe('text');
+  });
+});
+
+describe('tooShort', () => {
+  it('says how much more a start of an address or a bare token number needs, as parseSearch reads them', () => {
+    expect(tooShort('0x18')).toBe('Too short to search wallets and transactions: type at least 4 characters after 0x.');
+    expect(tooShort(' 0X1 ')).toBe('Too short to search wallets and transactions: type at least 4 characters after 0x.');
+    expect(tooShort('10')).toBe('Too short for a token number: type 3 digits, or #10.');
+    // Each is just past what parseSearch reads as a prefix or a token.
+    expect(parseSearch('0x18').kind).toBe('text');
+    expect(parseSearch('10').kind).toBe('text');
+  });
+
+  it('is null for what was read in full: a prefix, a token, a hashed number, a name', () => {
+    expect(['0x1832', '101', '#10', 'terra', '0xzz'].map(tooShort)).toEqual([null, null, null, null, null]);
   });
 });
 

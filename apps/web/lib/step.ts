@@ -66,7 +66,7 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
     const r = anchor === null ? null : await s.ring(c.id, anchor, ctx);
     if (r === null) return { items: [], total: 0 };
     const tokens = params.get('of') === 'tokens';
-    // In the order its page lists them: those that traded, then those that only moved the money.
+    // In the order its page lists them: those that traded, then those in between.
     const items = tokens
       ? r.tokens.map((t) => ({ id: t.tokenId, label: `#${tokenLabel(t.tokenId)}`, href: withFrom(`${base}/t/${t.tokenId}`, from(1)) }))
       : [...r.wallets.filter((w) => w.traded), ...r.wallets.filter((w) => !w.traded)].map((w) => ({ id: w.address, label: short(w.address), href: withFrom(walletHref(c.chainId, w.address, base), from(1)) }));
@@ -97,7 +97,7 @@ async function pageOfList(c: CollectionRow, kind: ListKind, params: URLSearchPar
   const items = rows.flatMap((t, i) => {
     if (seen.has(t.txHash)) return [];
     seen.add(t.txHash);
-    const by = q.sort === 'price' ? (t.priceWei == null ? null : eth(t.priceWei)) : t.blockTime == null ? null : localTime(t.blockTime * 1000, 'date', zone);
+    const by = q.sort === 'price' ? (t.priceWei == null ? null : eth(t.priceWei)) : t.blockTime == null ? null : localTime(t.blockTime * 1000, 'date', zone, 'en-GB');
     return [{ id: t.txHash, label: `#${tokenLabel(t.tokenId)}${by === null ? '' : ` · ${by}`}`, href: withFrom(txHref(c.chainId, t.txHash, base), from(page)), at: offset + i + 1 }];
   });
   return { total, items };

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlaggedTransfer } from '@washtrace/detect';
 import { layout } from '@/lib/layout';
-import { LoopFigure, TokenLoops } from '@/components/token-graph';
+import { LensGraph, LoopFigure, TokenLoops } from '@/components/token-graph';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
@@ -190,5 +190,109 @@ describe('the arrows’ links', () => {
     show();
     expect(tradeLinks().length).toBeGreaterThan(0);
     for (const a of tradeLinks()) expect(a.getAttribute('tabindex')).toBe('-1');
+  });
+});
+
+describe('the graph on a phone', () => {
+  it('is drawn no narrower than 0.8 of its size below sm, scrolling in its own box, so its 10 px labels stay 8 px or more', () => {
+    const c = render(<LoopFigure drawing={d} chainId={1} lit={{ edges: [], nodes: [] }} base="" />).container;
+    const svg = c.querySelector<SVGSVGElement>('figure svg')!;
+    expect(svg.parentElement!.className).toBe('overflow-x-auto');
+    expect(svg.getAttribute('class')).toContain('max-sm:min-w-(--figure-min)');
+    expect(svg.style.getPropertyValue('--figure-min')).toBe(`${Math.round(d.view.w * 0.8)}px`);
+    // From sm it fits its column as before: full width, never wider than drawn.
+    expect(svg.getAttribute('class')).toContain('w-full');
+    expect(svg.style.maxWidth).toBe(`${Math.round(d.view.w)}px`);
+    // The legend stays put, outside the scrolling box.
+    expect(c.querySelector('figure > figcaption')).not.toBeNull();
+  });
+});
+
+describe('the numbers on the arrows', () => {
+  const legend = () => [...document.querySelectorAll('figcaption span')].map((s) => s.textContent);
+
+  it('say their rule in the legend: one token’s place from its first transfer, several tokens’ each under its token', () => {
+    render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend()).toContain('numbered from the token’s first transfer');
+    cleanup();
+    const several = layout([{ ...t(A, B, '0xs1'), n: 2 }, { ...t(B, A, '0xs2'), tokenId: '9', n: 4 }], [], []);
+    render(<LoopFigure drawing={several} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect([...document.querySelectorAll('svg text')].map((x) => x.textContent)).toContain('#9·4');
+    expect(legend()).toContain('#token·n: that token’s transfer n, counted from its first');
+  });
+
+  it('are not explained when none is drawn: a bundle carries a count', () => {
+    const ping = Array.from({ length: 14 }, (_, i) => t(i % 2 === 0 ? A : B, i % 2 === 0 ? B : A, `0xp${i}`));
+    render(<LoopFigure drawing={layout(ping, [], [])} chainId={1} base="" lit={{ edges: [], nodes: [] }} />);
+    expect(legend().some((x) => x?.includes('numbered'))).toBe(false);
+  });
+});
+
+describe('a trade page’s graph', () => {
+  const caught = [{ key: 'A' as const, name: 'Round trips', loop: d.loops[0]! }];
+
+  it('marks the arrow of the trade it is about, undimmed, and says so in the legend and the arrow’s name', () => {
+    render(<LensGraph drawing={d} chainId={1} base="" tokenHref="/t/1" caught={caught} transfer={{ txHash: '0xs2', logIndex: 0 }} />);
+    expect([...document.querySelectorAll('[data-mark]')].map((e) => e.getAttribute('data-edge'))).toEqual(['t2']);
+    expect(document.querySelector('[data-edge="t2"]')!.getAttribute('class') ?? '').not.toContain('opacity-25');
+    expect(document.querySelector('[data-edge="t2"] a')!.getAttribute('aria-label')).toBe('Open the trade: #3 transfer · flagged · this trade');
+    expect([...document.querySelectorAll('figcaption span')].map((s) => s.textContent)).toContain('this trade');
+  });
+
+  it('marks the bundle that holds the trade, and nothing without one', () => {
+    const ping = Array.from({ length: 14 }, (_, i) => t(i % 2 === 0 ? A : B, i % 2 === 0 ? B : A, `0xp${i}`, { A: scc([A, B]) }));
+    const bundled = layout(ping, [], []);
+    render(<LensGraph drawing={bundled} chainId={1} base="" tokenHref="/t/1" caught={[{ key: 'A', name: 'Round trips', loop: bundled.loops[0]! }]} transfer={{ txHash: '0xp5', logIndex: 0 }} />);
+    expect([...document.querySelectorAll('[data-mark]')].map((e) => e.getAttribute('data-edge'))).toEqual([`b${B}>${A}`]);
+    cleanup();
+    render(<LensGraph drawing={d} chainId={1} base="" tokenHref="/t/1" caught={caught} />);
+    expect(document.querySelector('[data-mark]')).toBeNull();
+    expect([...document.querySelectorAll('figcaption span')].map((s) => s.textContent)).not.toContain('this trade');
+  });
+});
+
+describe('a graph wider than its box', () => {
+  // jsdom lays nothing out: give the box a phone's width, the drawing twice that, and the svg its drawn width.
+  const wide = (svgWidth: number) => {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 300; } });
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get() { return svgWidth; } });
+    const rect = SVGElement.prototype.getBoundingClientRect;
+    SVGElement.prototype.getBoundingClientRect = () => ({ width: svgWidth } as DOMRect);
+    return () => {
+      // Own properties over Element's: deleting them leaves jsdom's.
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+      SVGElement.prototype.getBoundingClientRect = rect;
+    };
+  };
+
+  it('opens scrolled to the lit loop, not its left edge', () => {
+    const restore = wide(d.view.w);
+    try {
+      // The A and B reason, right of the drawing's middle: its wallets' middle is put in the box's.
+      const loop = d.loops[0]!;
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: loop.edges, nodes: loop.nodes }} />).container;
+      const xs = d.nodes.filter((n) => loop.nodes.includes(n.id)).map((n) => n.x);
+      const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.round(mid) - d.view.x - 150);
+      expect(mid).toBeGreaterThan(d.view.x + d.view.w / 2 + 10);
+    } finally { restore(); }
+  });
+
+  it('opens on the arrow it marks, before what is lit', () => {
+    const restore = wide(d.view.w);
+    try {
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: d.loops[0]!.edges, nodes: d.loops[0]!.nodes }} mark="0xs3:0" />).container;
+      const arrow = d.edges.find((e) => e.key === 't3')!;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.max(0, Math.round(arrow.lx) - d.view.x - 150));
+    } finally { restore(); }
+  });
+
+  it('opens at its middle with nothing lit', () => {
+    const restore = wide(d.view.w);
+    try {
+      const c = render(<LoopFigure drawing={d} chainId={1} base="" lit={{ edges: [], nodes: [] }} />).container;
+      expect(c.querySelector<HTMLElement>('figure > div')!.scrollLeft).toBe(Math.max(0, Math.round(d.view.x + d.view.w / 2) - d.view.x - 150));
+    } finally { restore(); }
   });
 });

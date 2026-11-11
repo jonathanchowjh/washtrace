@@ -1,6 +1,6 @@
 import { HEADLINE, METHODS, type Method, type Transfer, type Witness } from './types.js';
 import { UINT256_DIGITS } from './lens-rule.js';
-import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
+import { AGE_BANDS, FLOOR_BANDS, HELD_BANDS, VENUES, findOf, isLensKey, isOwnKey, lensIdOf, type Find, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
 
 /**
  * One row of a Trades list: the transfer, the lenses that ran and flag it, and
@@ -115,7 +115,7 @@ export function walletWhere(chainId: number, address: string, filter: WalletFilt
   if (filter.flaggedOnly) {
     where.push(`EXISTS (SELECT 1 FROM washtrace.flags f
       WHERE f.collection_id = t.collection_id AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index AND f.method = ANY(${p(HEADLINE)}::text[])
-        AND (SELECT a.totals FROM washtrace.analyses a WHERE a.collection_id = t.collection_id ORDER BY a.ran_at DESC LIMIT 1) -> f.method ->> 'available' = 'true')`);
+        AND (SELECT a.totals FROM washtrace.analyses a WHERE a.collection_id = t.collection_id ${LATEST}) -> f.method ->> 'available' = 'true')`);
   }
   // The other side: the buyer of what it sold, the seller of what it bought.
   const other = (op: '=' | 'LIKE', v: string) => {
@@ -125,7 +125,9 @@ export function walletWhere(chainId: number, address: string, filter: WalletFilt
   if (filter.with !== undefined) other('=', filter.with.toLowerCase());
   if (filter.find !== undefined) {
     const f = findOf(filter.find);
+    const hash = f.kind === 'token' ? null : hashFind(f, p);
     if (f.kind === 'token') where.push(`t.token_id = ${p(f.tokenId)}::numeric`);
+    else if (hash !== null) where.push(hash);
     else if (f.kind === 'address') other('=', f.address);
     // Hex only, so the pattern holds no wildcard but its own.
     else if (f.kind === 'prefix') other('LIKE', `${f.prefix}%`);
@@ -203,7 +205,38 @@ export function caughtOf(key: LensKey, params: unknown[]): { from: string; where
     where: `f.collection_id = $1 AND ${src.where} AND x.counted`,
   };
 }
+/** The counted lenses as a SQL list, `('A', 'AC')`: a flag of a lens out of it (Money loops back) is in no share, ring or count. From HEADLINE, so the two never part. */
+export const COUNTED = `(${HEADLINE.map((m) => `'${m}'`).join(', ')})`;
+/**
+ * The latest analysis of a collection, as the end of a subquery over
+ * washtrace.analyses: the latest run, and of two saved in the same instant the
+ * later row, so every read picks the same one.
+ */
+export const LATEST = 'ORDER BY ran_at DESC, id DESC LIMIT 1';
 /** Transfer `t`'s facts, when the analysis counted it. */
+/**
+ * The end of the range of hashes that start with lowercase hex `prefix`: the
+ * prefix with its last character one higher ('9' is followed by 'a'). The
+ * collation is not C, so a LIKE alone reads every transfer; lowercase hex
+ * sorts in its own order under any collation, so `>= prefix AND < end` is the
+ * strings that start with it, and an index on tx_hash serves it.
+ */
+export function hashPrefixEnd(prefix: string): string {
+  const last = prefix.at(-1)!;
+  return prefix.slice(0, -1) + (last === '9' ? 'a' : String.fromCharCode(last.charCodeAt(0) + 1));
+}
+
+/**
+ * A Find that names a transaction: its hash, or a start of one longer than an
+ * address (findOf), as a range on transfers_tx_idx. Null for any other Find.
+ */
+function hashFind(f: Find, p: (v: unknown) => string): string | null {
+  if (f.kind === 'tx') return `t.tx_hash = ${p(f.tx)}`;
+  if (f.kind !== 'prefix' || f.prefix.length <= 42) return null;
+  const a = p(f.prefix);
+  return `t.tx_hash >= ${a} AND t.tx_hash < ${p(hashPrefixEnd(f.prefix))} AND t.tx_hash LIKE ${a} || '%'`;
+}
+
 export const COUNTED_JOIN = 'JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted';
 /** Transfer `t` once for each wallet in it, as `s.address`: a wallet that sold to itself is in it once. */
 export const SIDES = 'CROSS JOIN LATERAL unnest(CASE WHEN t.to_address = t.from_address THEN ARRAY[t.from_address] ELSE ARRAY[t.from_address, t.to_address] END) s(address)';
@@ -322,7 +355,7 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
   if (q.ring !== null) {
     // A trade is the ring's when a counted lens flags it through one of the ring's witnesses.
     where.push(`EXISTS (SELECT 1 FROM washtrace.flags rf JOIN washtrace.witnesses rw ON rw.collection_id = rf.collection_id AND rw.id = rf.witness_id
-      WHERE rf.collection_id = ${c} AND rf.tx_hash = t.tx_hash AND rf.log_index = t.log_index AND rf.method IN ('A', 'AC') AND rw.ring = ${p(q.ring.toLowerCase())})`);
+      WHERE rf.collection_id = ${c} AND rf.tx_hash = t.tx_hash AND rf.log_index = t.log_index AND rf.method IN ${COUNTED} AND rw.ring = ${p(q.ring.toLowerCase())})`);
   }
   if (q.group !== null) {
     const g = q.group;
@@ -354,8 +387,9 @@ export function tradeWhere(id: number, q: TradeQuery, ctx: TradeContext, params:
   }
   if (q.find !== null) {
     const f = findOf(q.find);
+    const hash = f.kind === 'token' ? null : hashFind(f, p);
     if (f.kind === 'token') where.push(`t.token_id = ${p(f.tokenId)}::numeric`);
-    else if (f.kind === 'tx') where.push(`t.tx_hash = ${p(f.tx)}`);
+    else if (hash !== null) where.push(hash);
     else if (f.kind === 'address') either(f.address);
     else if (f.kind === 'prefix') {
       // Hex only, so the pattern holds no wildcard but its own; the text_pattern_ops indexes serve it.

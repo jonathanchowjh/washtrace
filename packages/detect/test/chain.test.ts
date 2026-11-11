@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HttpRequestError, LimitExceededRpcError, RpcRequestError, TimeoutError, TransactionReceiptNotFoundError, UnknownRpcError, WebSocketRequestError, type PublicClient } from 'viem';
-import { Chain, CHECK_TIMEOUT_MS, TERRAFORMS, TRANSFER } from '../src/chain.js';
+import { Chain, CHECK_TIMEOUT_MS, TERRAFORMS } from '../src/chain.js';
+import { TRANSFER } from '../src/marketplaces.js';
 
 /** A Chain whose node answers from these functions; nothing reaches a network. */
 function fake(answer: { finalized?: () => unknown; balance?: () => unknown; logs?: () => unknown }): { c: Chain; asked: unknown[] } {

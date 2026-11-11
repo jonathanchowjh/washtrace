@@ -60,6 +60,7 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
 | `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
 | `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`; for a token `transfers`, `flagged`; for a ring `ring` |
+| `GET /api/collections/{chain}/{address}/counts` | `method` (a lens key, Linked wallets when left out or unknown) | 200, 404 | `trades`, and that lens's `tokens` and `wallets`: each `null` when the lens has not run |
 
 Notes:
 
@@ -72,7 +73,7 @@ Notes:
 - Rings ([methods.md](methods.md#rings)) are 20 a page, the most ETH first. Each is `{anchor, rank, wallets,
   sample, sales, floorSales, tokens, volumeWei, firstAt, lastAt}`: `anchor` is its smallest wallet and its name in
   the path, `sample` its first three wallets by address, `sales` its counted flagged sales and `floorSales` those
-  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one that only moved the money,
+  Round trips flags. A ring's `wallets` are `{address, traded}`, `traded` false for one in between (joined by money only),
   at most 500 (`walletsCut` true past them); its `tokens` are `{tokenId, sales, volumeWei}`, the most ETH first.
 - `.../card` is the console's hover card: a few counts, never a verdict. A wallet's `trades` and `flagged` are in
   this collection, and `ring` is the first of its `rings`; a token's `flagged` counts its transfers Round trips or
@@ -125,6 +126,12 @@ leading `'`.
   address, a transaction hash and collection names are searched everywhere still; a scope that names no watched
   collection narrows nothing. In a scoped search each wallet hit carries `here`, whether it traded in that
   collection: false only for one found by its full address.
+- Each collection hit carries `totals`, its latest analysis's totals per lens (as in `GET /api/collections`), or
+  `null` before the first analysis. The search page draws the range of washed sales from them.
+- The start of a hex string (4 characters or more after `0x`) finds wallets and also trades whose transaction hash
+  starts that way, in every collection: a trade's link needs every transfer of its transaction, so a scope never
+  narrows trades. Each token hit carries `flagged`, true when Round trips or Linked wallets flagged one of its
+  counted trades in the latest analysis; false says only that none is, not that it was judged clean.
 - `connected` comes with a scoped search of every kind (no `kind`) whose best match, the first hit of the kind
   listed first, is a wallet on the scope's chain: `{wallet, rings, tokens}`, its first 3 rings there by rank
   (`{anchor, rank}`) and the 3 tokens it traded there most. The search box lists them under that wallet.
@@ -161,6 +168,9 @@ The keys are `rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow
 | `POST /api/settings/check` | `{kind: "rpc", chainId}` or `{kind: "etherscan"}` | 201, 400 | `id` |
 | `GET /api/settings/check/{id}` | | 200, 403, 404 | `finished`, `ok`, `detail` |
 
+- `fields` ends with a read-only `rpc.<chainId>` entry for each other chain the worker reports an RPC for: only
+  `.env` sets those, and the API saves no RPC but Ethereum's (`rpc.1`). `POST /api/settings/check` tests the RPC of
+  any chain id, a positive whole number; the worker tests the URL it reads, and says so when it has none.
 - Each entry of `fields` has `key`, `label`, `secret`, `set`, `shown`, `source`, `env` (what `.env` holds,
   masked the same way), `locked`, `pinned` and `invalid`. A secret answers as `••••` and at most its last 4
   characters (an RPC URL also keeps its scheme and host); a client can replace or clear a secret and never read
@@ -196,7 +206,8 @@ check is 400 with the reason.
 
 One transaction judged without watching its collection: the worker reads its receipt, each of its tokens'
 histories, and the money of its sellers, buyers and the wallets that could join them, at the start of a fund pass
-and between wallets in one. The console's Check this transaction button uses these two routes.
+and between wallets in one, within a third of the pass, so a queue of them never holds up the money reading. One
+still queued goes first in the next pass. The console's Check this transaction button uses these two routes.
 
 | Route | Body or query | Status | Top-level keys |
 |---|---|---|---|
@@ -209,7 +220,8 @@ and between wallets in one. The console's Check this transaction button uses the
   always queued: stored verdicts hold only the built-ins.
 - **Reuse.** A check of the same transaction, with the same lens at the same version, that is queued or running is
   shared (`reused: true`), so two requests at once make one check. A done one is answered again for an hour when
-  its block was final. A failed one is asked again.
+  its block was final and it was complete: not `atLeast`, and nothing but `AU` in `notRun`. An incomplete one, or a
+  failed one, is asked again.
 - **400** for a bad `chainId`, `tx` or `lens`, and for a lens a spot check cannot run, with the sentence: `This lens
   uses Other tokens, which a spot check does not read.` or `This lens follows other tokens in the collection, which
   a spot check does not read.` **404** `No such lens.` and `No such spot check.` (swept a day after it was asked).
@@ -226,7 +238,7 @@ and between wallets in one. The console's Check this transaction button uses the
 | `washTrade` | `true` when a counted method flags a trade (Round trips or Linked wallets; with a lens, that lens). `false` only when each of them ran on every trade, nothing is `atLeast`, and none flagged. Otherwise `null`. |
 | `methods` | The counted methods, or the lens, that flagged. |
 | `notRun` | What could not run: `AU` always on a spot check; `AC` (or the lens) without an Etherscan key or when a seller's or buyer's money could not be read. |
-| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, more than 200 other transactions joined the wallets (a payment whose receipt is not read is left out, since it may be another sale's price), a lens needs money further out than the sellers and buyers, or a lens skipped a trade (one no marketplace filled, when it judges sales; an untimed one, under a window or loop order) or its search hit its cap. |
+| `atLeast` | Some of it could not be judged: more than 10 tokens moved, a possible middle wallet moved money with more than 20 wallets or could not be read, more than 200 other transactions joined the wallets or the RPC had no receipt for one (a payment whose receipt is not read is left out, since it may be another sale's price), a lens needs money further out than the sellers and buyers, or a lens skipped a trade (one no marketplace filled, when it judges sales; an untimed one, under a window or loop order) or its search hit its cap. |
 | `finalized` | The transaction's block was final when read. A check of one that was not is never reused. |
 | `source` | `spot` or `watched`. |
 | `transfers` | The transaction's transfers, each with its `collection` and `flags`: a built-in's witness as in the verdict keys, or a lens's `{path, wallets}`. |

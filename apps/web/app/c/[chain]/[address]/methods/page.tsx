@@ -150,6 +150,8 @@ export default async function MethodsPage({ params, searchParams }: Props) {
           <LensTabs
             base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyReasons={moneyReasons} tokens={tokensFloor}
             coverage={{ trail: c.trailImportedSha !== null, funded, funding: config.funding, coming, silent: silent !== null }} writable={writable}
+            // A new lens or a copy lights + New lens; an edit stays under the lens it changes.
+            drafting={Boolean(editing && needs) && editing?.lensId === undefined}
             editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing}
               others={all.filter((o) => o.id !== c.id).map((o) => ({ chainId: o.chainId, address: o.address, name: o.name ?? short(o.address) }))} /> : null}
           >
@@ -171,7 +173,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
                     sort={tv.sort} sortHref={(ts) => here({ ts, tp: 1 })} find={tv.find} findParam="tq"
                     pager={{ page: tokens.page, size: TOP, href: (tp) => here({ tp }), param: 'tp' }} empty={`${lens.name} flags no token.`}
                   />
-                  <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} →</MoreLink>
+                  <MoreLink href={flagged('tokens', tv)} className="mt-2">All {plural(tokenCount, 'token')} ›</MoreLink>
                 </div>
                 <div>
                   <LensList
@@ -179,7 +181,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
                     sort={wv.sort} sortHref={(ws) => here({ ws, wp: 1 })} find={wv.find} findParam="wq"
                     pager={{ page: wallets.page, size: TOP, href: (wp) => here({ wp }), param: 'wp' }} empty={`${lens.name} flags no wallet.`}
                   />
-                  <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} →</MoreLink>
+                  <MoreLink href={flagged('wallets', wv)} className="mt-2">All {plural(walletCount, 'wallet')} ›</MoreLink>
                 </div>
               </div>
             ) : null}
@@ -190,14 +192,18 @@ export default async function MethodsPage({ params, searchParams }: Props) {
       {a && timeline && timeline.points.length > 0 ? (
         <Section
           title="When did it happen?"
-          lead={<>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.{timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
+          lead={<>{timeline.points.length === 1
+            // One period draws no chart (History says it in words), so the lead names no bar and no shaded stretch.
+            ? <>Every trade so far falls in one {timeline.bucket}, so each lens&rsquo;s share of its sales is said in words. The period opens its trades; the list leaves out mints and custody moves.</>
+            : <>Each lens&rsquo;s share of the sales in each {timeline.bucket}, across the collection&rsquo;s life from its first trade{unread(cov) ? '. The shaded stretch is history the worker has not read yet' : ''}. A period opens its trades; the list leaves out mints and custody moves, so it can be a little shorter than the bar.</>}
+            {timeline.untimed > 0 ? ` ${plural(timeline.untimed, 'transfer')} without a block time are left out.` : ''}</>}
         >
           <History timeline={{ ...timeline, readThrough: unread(cov) ? timeline.readThrough : null }} totals={a.totals} notFinal={cov.notFinal} funded={funded} funding={config.funding} now={Date.now()} zone={zone} base={base}
             own={chartOwn} ownLeft={chartLeft} ownNotRun={chartNotRun} />
         </Section>
       ) : null}
 
-      <Section id="reading" title="How far has it read?" lead="The six stages under every number on this page. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
+      <Section id="reading" title="How far has it read?" lead="The six reading stages under every number on this page; the worker's jobs do the work, these say how far this collection has got. Stages 4 and 5 run side by side, and a money trail can still be loading after stage 3.">
         <Pipeline c={c} stages={stages} cov={cov} why={why} rpcChains={rpcChains} funding={config.funding} funded={funded} trail={trail} trailBytes={entry?.trail?.bytes ?? null} transfersBytes={entry?.transfers.bytes ?? null} trailComing={coming} now={Date.now()} />
         {history.length > 1 ? (
           <details className="group mt-3">
@@ -207,7 +213,7 @@ export default async function MethodsPage({ params, searchParams }: Props) {
         ) : null}
       </Section>
 
-      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the others\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
+      <Section title="Pause, resume, prioritize or delete data" lead={c.pausedAt === null ? 'Prioritize checks this collection\'s wallets for money before the other collections\'. Pause stops the worker reading new blocks and keeps what it has read. Only a paused collection can have its data deleted.' : 'Paused: the worker is not reading new blocks, and its data is kept. Resume to read on, or delete its data.'}>
         {writable ? null : <p className="mb-2 text-xs text-muted-foreground">{LOCAL_ONLY}</p>}
         <CollectionControls writable={writable} chainId={chainId} address={address} paused={c.pausedAt !== null} priority={c.priority} />
       </Section>

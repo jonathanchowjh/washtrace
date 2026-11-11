@@ -104,7 +104,18 @@ const reads = (c: Element) => [c.textContent, ...[...c.querySelectorAll('[aria-l
 describe('the tab strip', () => {
   it('lists the built-ins and yours by name with their shares, and then + New lens and Compare', async () => {
     state.runs = [run('done')];
-    expect(tabs(await draw())).toEqual(['Round trips 4.1%', 'Linked wallets 17.2%', 'Money loops back 9.8%', 'Blur 3-hop 12.6%', '+ New lens', 'Compare']);
+    expect(tabs(await draw())).toEqual(['Round trips 4.1% the floor', 'Linked wallets 17.2% the ceiling', 'Money loops back 9.8% not counted', 'Blur 3-hop 12.6%', '+ New lens', 'Compare']);
+  });
+
+  it('says each built-in\'s standing under its name, why not counted on hover, and nothing under yours', async () => {
+    state.runs = [run('done')];
+    const nav = strip(await draw());
+    const under = (name: string) => [...nav.querySelectorAll('a')].find((a) => a.textContent!.startsWith(name))!.querySelector('span.block');
+    expect(under('Round trips')?.textContent).toBe('the floor');
+    expect(under('Linked wallets')?.textContent).toBe('the ceiling');
+    expect(under('Money loops back')?.textContent).toBe('not counted');
+    expect(under('Money loops back')?.getAttribute('title')).toMatch(/^On real data it flags/);
+    expect(under('Blur 3-hop')).toBeNull();
   });
 
   it('marks the chosen tab and opens yours by its key', async () => {
@@ -153,7 +164,7 @@ describe('the tab strip', () => {
 
   it('a built-in the latest analysis did not run reads as not run, in the same words', async () => {
     state.off = ['AU'];
-    expect(tabs(await draw())[2]).toBe('Money loops back not run');
+    expect(tabs(await draw())[2]).toBe('Money loops back not run not counted');
   });
 
   it('shows the tabs before the first analysis, with yours waiting on it', async () => {
@@ -231,12 +242,12 @@ describe("your lens's panel", () => {
     state.runs = [run('done')];
     state.checked = 30;
     const c = await draw({ method: 'L7' });
-    expect(tabs(c).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets at least 17.2%', 'Money loops back at least 9.8%', 'Blur 3-hop at least 12.6%']);
+    expect(tabs(c).slice(0, 4)).toEqual(['Round trips 4.1% the floor', 'Linked wallets at least 17.2% the ceiling', 'Money loops back at least 9.8% not counted', 'Blur 3-hop at least 12.6%']);
     expect(panel(c).textContent).toContain('Its share is at least this, because money past the stored trail is not read without an Etherscan key.');
     cleanup();
     state.keyed = true;
     const keyed = await draw({ method: 'L7' });
-    expect(tabs(keyed).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets 17.2% so far', 'Money loops back 9.8% so far', 'Blur 3-hop 12.6% so far']);
+    expect(tabs(keyed).slice(0, 4)).toEqual(['Round trips 4.1% the floor', 'Linked wallets 17.2% so far the ceiling', 'Money loops back 9.8% so far not counted', 'Blur 3-hop 12.6% so far']);
     expect(panel(keyed).textContent).toContain('Its share can still rise while reads finish: money is not fully read yet.');
   });
 
@@ -466,6 +477,24 @@ describe('without permission to write', () => {
   it('offers + New lens as a link when writing is allowed', async () => {
     expect(anchor(await draw(), '+ New lens')?.getAttribute('href')).toBe(`${BASE}/methods?method=AC&lens=new`);
   });
+
+  it('lights + New lens, and only it, while a new lens or a copy is drafted; an edit stays under its lens', async () => {
+    state.runs = [run('done')];
+    const lit = (c: Element) => [...strip(c).querySelectorAll('[aria-current="page"]')].map((t) => t.textContent!.replace(/\s+/g, ' ').trim());
+    for (const lens of ['new', 'copy-A']) {
+      const c = await draw({ method: 'A', lens });
+      expect(lit(c), lens).toEqual(['+ New lens']);
+      expect(panel(c).getAttribute('aria-label')).toBe('New lens');
+      cleanup();
+    }
+    const edit = await draw({ method: 'L7', lens: 'edit-L7' });
+    expect(lit(edit)).toEqual(['Blur 3-hop 12.6%']);
+    cleanup();
+    // Without the editor + New lens is a tab like the others, on their line, and not lit.
+    const plain = await draw({ method: 'A' });
+    expect(lit(plain)).toEqual(['Round trips 4.1% the floor']);
+    expect(anchor(plain, '+ New lens')!.className).not.toContain('btn');
+  });
 });
 
 describe('the copy rule', () => {
@@ -645,7 +674,7 @@ describe('a lens\'s share is at least while the money it needs is not read that 
     const nft = needing(4);
     for (const k of ['eth', 'internal', 'weth'] as const) nft.edges[k].use = false;
     state.runs = [run('done', {}, { rule: nft })];
-    expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1%', 'Linked wallets 17.2%', 'Money loops back 9.8%', 'Blur 3-hop 12.6%']);
+    expect(tabs(await draw({ method: 'L7' })).slice(0, 4)).toEqual(['Round trips 4.1% the floor', 'Linked wallets 17.2% the ceiling', 'Money loops back 9.8% not counted', 'Blur 3-hop 12.6%']);
   });
 
   it('reads at least, listing both causes in order, when a cap and unread money apply together', async () => {

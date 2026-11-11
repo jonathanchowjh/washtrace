@@ -1,5 +1,5 @@
 import { toEventSelector, type Log } from 'viem';
-import type { Chain } from './chain.js';
+import { topicAddress, type Chain } from './chain.js';
 import type { Etherscan } from './etherscan.js';
 import { ZERO, chainOrder, tokenGraph } from './graph.js';
 import { runLens } from './lens.js';
@@ -57,7 +57,6 @@ export function lensRefusal(rule: LensRule): string | null {
   return null;
 }
 
-const topicAddress = (topic: string) => `0x${topic.slice(26)}`.toLowerCase();
 
 /** The ERC-721 transfers in a transaction's logs (an ERC-20 Transfer has 3 topics, not 4), each with its collection, marked as sales. */
 export function receiptTrades(tx: string, blockNumber: number, logs: readonly Log[]): (Transfer & { collection: string })[] {
@@ -168,23 +167,24 @@ export class SpotCheck {
     }
     if (trades.length === 0) throw new Error('This transaction holds no trade: a mint, a burn or a move into or out of custody.');
 
-    // The sellers' and buyers' money: a stored read that reaches the trade is used as it is.
+    // The sellers' and buyers' money to now: a stored read is read on from where it stopped, since a payment after it
+    // could link the pair. A truncated one is a hub whatever more is read, and reading on could save it untruncated over its gap.
     const contracts = contractsFor(chainId);
     const wallets = [...new Set(trades.flatMap((t) => [t.seller, t.buyer]))];
     const funded = new Set<string>();
     const truncated = new Set<string>();
     let moneyOk = this.etherscan !== null;
     if (this.etherscan !== null) {
-      const covering = await this.store.moneyCovering(chainId, wallets, receipt.blockNumber);
+      const stored = await this.store.moneyReadOn(chainId, wallets);
       for (const w of wallets) {
-        const c = covering.get(w);
-        if (c !== undefined && c.from === null) {
+        const c = stored.get(w);
+        if (c?.truncated) {
           funded.add(w);
-          if (c.truncated) truncated.add(w);
+          truncated.add(w);
           continue;
         }
         try {
-          const r = await this.etherscan.flows(chainId, w, this.left(), c?.from ?? undefined);
+          const r = await this.etherscan.flows(chainId, w, this.left(), c?.from);
           // Added only once read: a row whose read failed would wait forever, since no lane serves it.
           await this.store.addWallets(chainId, [w]);
           await this.store.saveMoney(chainId, w, r.flows, r.truncated, undefined, r.through, c !== undefined);
@@ -221,14 +221,16 @@ export class SpotCheck {
     const legs = [...new Set(flows.filter((f) => (pairs.has(f.from) && near.has(f.to)) || (pairs.has(f.to) && near.has(f.from)))
       .map((f) => f.txHash).filter((h) => !histTxs.has(h)))];
     // A leg whose receipt is not read may be a sale's price, so its flows are dropped: that can only lose a flag.
+    // Unread are those past the cap and those the node has no receipt for (Etherscan saw it, the node does not, or not
+    // yet): one missing leaves its leg out, not the check failed. Each read alone, which the RPC transport batches.
     const unread = new Set(legs.slice(SPOT_RECEIPTS_MAX));
-    if (unread.size > 0) atLeast = true;
     const saleLegs = new Set<string>();
-    if (legs.length > 0) {
-      for (const [h, logs] of await this.chain.receipts(legs.slice(0, SPOT_RECEIPTS_MAX))) {
-        if (logs.some((l) => l.topics.length === 4 && l.topics[0] === TRANSFER && histories.has(l.address.toLowerCase()))) saleLegs.add(h);
-      }
+    const read = await Promise.all(legs.slice(0, SPOT_RECEIPTS_MAX).map(async (h) => ({ h, r: await this.chain.receipt(h) })));
+    for (const { h, r } of read) {
+      if (r === null) unread.add(h);
+      else if (r.logs.some((l) => l.topics.length === 4 && l.topics[0] === TRANSFER && histories.has(l.address.toLowerCase()))) saleLegs.add(h);
     }
+    if (unread.size > 0) atLeast = true;
     const money = flows.filter((f) => !saleLegs.has(f.txHash) && !unread.has(f.txHash));
 
     const flags = new Map<string, Record<string, Witness | Pick<LensFlag, 'path' | 'wallets'>>>();

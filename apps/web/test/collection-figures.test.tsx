@@ -7,7 +7,7 @@ const BASE = `/c/1/${ADDR}`;
 
 // Round trips flags 41 of 1,000 sales, Money loops back 300, Linked wallets 120.
 const FLAGGED = { A: 41, AU: 300, AC: 120 } as const;
-const state = { moneyRan: true, loops: true, lensRuns: [] as unknown[], history: [] as unknown[] };
+const state = { moneyRan: true, loops: true, lensRuns: [] as unknown[], history: [] as unknown[], rings: 0, missing: false };
 const totals = (m: 'A' | 'AU' | 'AC') => ({
   transfers: 5000, flagged: 400, sales: 1000, flaggedSales: FLAGGED[m], volumeWei: String(19_032n * 10n ** 18n),
   flaggedVolumeWei: String(BigInt(FLAGGED[m]) * 20n * 10n ** 18n), wallets: 1207, tokens: 644, available: m === 'A' || state.moneyRan,
@@ -19,7 +19,7 @@ const collection = () => ({
   downloadFile: null, downloadProgress: null, downloadNote: null, restoreProgress: null, restoreNote: null, trailNote: null, trailImportedSha: null,
   rules: {}, contract: null, addedAt: 0, ingestedAt: 0, servedAt: 0, readRate: null,
   latest: {
-    ranAt: 1_700_000_000_000, tookMs: 5, throughBlock: 10, missingData: 0, fundedWallets: 37, wallets: 37, truncatedSearches: 0,
+    ranAt: 1_700_000_000_000, tookMs: 5, throughBlock: 10, missingData: 0, fundedWallets: 37, wallets: 37, truncatedSearches: 0, rings: state.rings,
     // A lens that did not run carries Round trips' copy, as the engine writes it.
     loops: state.loops ? { A: { loops: 388, pairs: 0 }, AU: { loops: 388, pairs: 0 }, AC: { loops: 120, pairs: 300 } } : null,
     totals: { A: totals('A'), AU: totals('AU'), AC: totals('AC') },
@@ -28,7 +28,7 @@ const collection = () => ({
 
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => collection(),
+    collection: async () => (state.missing ? null : collection()),
     lensRuns: async () => state.lensRuns ?? [],
     history: async () => state.history,
     timeline: async () => ({ bucket: 'day', untimed: 0, readThrough: null, points: [] }),
@@ -43,6 +43,7 @@ vi.mock('@/lib/store', () => ({
     importedMoney: async () => false,
     lensTokens: async () => ({ rows: [], total: 0 }),
     lensWallets: async () => ({ rows: [], total: 0 }),
+    rings: async () => ({ rows: [{ anchor: ADDR, rank: 1, wallets: 2, sample: [], sales: 3, floorSales: 1, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null }], total: state.rings }),
   }),
   storedEntry: async () => null,
 }));
@@ -50,7 +51,7 @@ vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 
-afterEach(() => { cleanup(); state.moneyRan = true; state.loops = true; state.history = []; });
+afterEach(() => { cleanup(); state.moneyRan = true; state.loops = true; state.history = []; state.rings = 0; });
 
 async function draw(sp: Record<string, string> = {}): Promise<HTMLElement> {
   const { default: Page } = await import('@/app/c/[chain]/[address]/page');
@@ -82,8 +83,8 @@ describe('the answer on the collection page', () => {
     expect(hrefs).toContain(tradesHref(BASE, { caught: ['AC'], sort: 'price', dir: 'desc' }));
   });
 
-  it('offers the whole trades list under the headline', async () => {
-    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'All 1,000 trades ›');
+  it('offers the whole sales list under the headline', async () => {
+    const dig = [...answer(await draw()).querySelectorAll('a')].find((x) => x.textContent === 'All 1,000 sales ›');
     expect(dig?.getAttribute('href')).toBe(tradesHref(BASE, {}));
   });
 });
@@ -144,5 +145,27 @@ describe('links never sit inside links', () => {
       expect(c.querySelectorAll('a a').length).toBe(0);
       cleanup();
     }
+  });
+});
+
+describe('the overview on a phone', () => {
+  it('stacks Who did it over its caption, and gives the live stamp room under the address', async () => {
+    state.rings = 1;
+    const c = await draw();
+    const h = c.querySelector('section[aria-label="Who did it"] h2')!;
+    expect(h.className).toMatch(/(^| )flex-col( |$)/);
+    expect(h.className).toContain('sm:flex-row');
+    const live = [...c.querySelectorAll('header span')].find((x) => x.textContent?.startsWith('live · every'))!;
+    expect(live.parentElement!.className).toMatch(/(^| )pt-2( |$)/);
+  });
+});
+
+describe('the tab title', () => {
+  it('names the collection, and says Not watched for one nobody watches', async () => {
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/page');
+    const title = async () => (await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({}) })).title;
+    expect(await title()).toBe('Coll');
+    state.missing = true;
+    try { expect(await title()).toBe('Not watched'); } finally { state.missing = false; }
   });
 });

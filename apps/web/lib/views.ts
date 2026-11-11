@@ -81,13 +81,14 @@ const RING_DRAWN = 25;
 /**
  * A ring's loops as a token's graph draws them (layout()): each of its tokens
  * changing hands between two of its wallets, with the flags of the lenses that
- * ran, and the money among its wallets; those that only moved the money sit
- * inside as middles. Null past RING_DRAWN wallets, or for one with no such transfer.
+ * ran, and the money among its wallets; those on none of its flagged trades
+ * sit inside as middles, in between. Null past RING_DRAWN wallets, or for one with no such transfer.
  */
 export async function ringDrawing(s: Store, chainId: number, c: Pick<CollectionRow, 'id' | 'latest'>, ring: { wallets: readonly { address: string; traded: boolean }[]; tokens: readonly { tokenId: string }[] }): Promise<Pick<TokenDrawing, 'transfers' | 'middles' | 'flows'> | null> {
   if (ring.wallets.length === 0 || ring.wallets.length > RING_DRAWN) return null;
   const inRing = new Set(ring.wallets.map((w) => w.address));
-  const all = (await Promise.all(ring.tokens.map((t) => s.token(c.id, t.tokenId)))).flat();
+  // Each transfer keeps its place in its token's history (the mint is 1), so an arrow's number is the one its token page gives it.
+  const all = (await Promise.all(ring.tokens.map((t) => s.token(c.id, t.tokenId)))).flatMap((h) => h.map((t, i) => ({ ...t, n: i + 1 })));
   const transfers = all.filter((t) => inRing.has(t.from) && inRing.has(t.to)).map((t) => ranFlags(t, c.latest))
     .sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex);
   if (transfers.length === 0) return null;

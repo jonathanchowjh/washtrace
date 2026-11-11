@@ -1,13 +1,11 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import Link from 'next/link';
-import { plural } from '@/lib/format';
 import type { Tone } from '@/lib/metrics';
-import type { Notice } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
 import { Time } from './time';
 
-const KIND_NAME: Record<Kind, string> = { collection: 'Collection', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
+const KIND_NAME: Record<Kind, string> = { collection: 'Collection', lens: 'Lens', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
 
 /**
  * A page's title, the trail back up to it, and whatever it states on the
@@ -39,7 +37,8 @@ export function Head({ title, crumb = [], sub, kind, part, children }: {
         ) : null}
         {kind ? <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{KIND_NAME[kind]}</p> : null}
         <h1 className="truncate text-2xl font-semibold tracking-tight">{title}</h1>
-        {sub ? <p className="mt-1 text-sm text-muted-foreground">{sub}</p> : null}
+        {/* A full hash or address breaks where it must, so a phone never scrolls sideways for it. */}
+        {sub ? <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">{sub}</p> : null}
         {part ? <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">{part}</div> : null}
       </div>
       </div>
@@ -93,45 +92,6 @@ export function Problem({ title, children, doThis = 'check that the store is run
       <p className="flex items-center gap-2 font-medium text-fault"><Warn />{title}</p>
       <div className="mt-1 text-body">{children}</div>
       <p className="mt-2 text-sm text-body"><b className="text-fault">Do this:</b> {doThis}</p>
-    </div>
-  );
-}
-
-/**
- * What the worker has to say, by how serious it is. Only "needs you" is loud:
- * a neutral card with a warning icon and a "Do this" line. "Working" shows
- * progress; "info" is muted. The heading counts needs-you items only, so
- * "Nothing has failed." is the normal state even while hours of work remain.
- * It does not say the worker is reading: a missing key is an info notice, a
- * limit to lift, so the notices below the heading matter too.
- */
-export function Notices({ notices }: { notices: Notice[] }) {
-  const needs = notices.filter((n): n is Extract<Notice, { severity: 'needs-you' }> => n.severity === 'needs-you');
-  const rest = notices.filter((n): n is Exclude<Notice, { severity: 'needs-you' }> => n.severity !== 'needs-you');
-  return (
-    <div className="space-y-2">
-      <h2 className="text-lg font-semibold text-foreground">{needs.length === 0 ? 'Nothing has failed.' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}</h2>
-      {needs.map((n, i) => (
-        <div key={i} role="alert" className="flex gap-3 rounded-lg border border-fault/40 bg-card p-3 text-sm">
-          <Warn className="mt-0.5 size-5 text-fault" />
-          <div>
-            <p className="font-semibold text-foreground">{n.text}</p>
-            <p className="mt-0.5"><b className="text-fault">Do this:</b> {n.href ? <Link className="underline" href={n.href}>{n.doThis}</Link> : n.doThis}</p>
-          </div>
-        </div>
-      ))}
-      {rest.length > 0 ? (
-        <ul className="space-y-1 text-sm">
-          {rest.map((n, i) => (
-            <li key={i} className={cn('flex items-start gap-2', n.severity === 'info' && 'text-muted-foreground')}>
-              {n.severity === 'working'
-                ? <span aria-hidden className="mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-focus" />
-                : <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full border border-muted-foreground" />}
-              <span>{n.text}{n.action ? <> <Link className="underline" href={n.action.href}>{n.action.label}</Link></> : null}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </div>
   );
 }
@@ -218,12 +178,15 @@ export function MoreLink({ href, className, children }: { href: string; classNam
   return <Link href={href} className={cn('inline-block text-sm font-medium text-foreground underline-offset-4 hover:underline', className)}>{children}</Link>;
 }
 
-/** An exclusive choice among views of the same thing, as one bar of links. `label` says what is chosen. */
+/**
+ * An exclusive choice among views of the same thing, as one bar of links. `label` says what is chosen.
+ * The links do not prefetch: each is this page again, and a prefetch renders all of it.
+ */
 export function Segmented({ label, items }: { label: string; items: { key: string; href: string; label: string; current: boolean }[] }) {
   return (
     <nav aria-label={label} className="flex rounded-md border bg-card p-0.5 text-sm">
       {items.map((i) => (
-        <Link key={i.key} href={i.href} aria-current={i.current ? 'page' : undefined}
+        <Link key={i.key} href={i.href} prefetch={false} aria-current={i.current ? 'page' : undefined}
           className={cn('rounded px-3 py-1', i.current ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
           {i.label}
         </Link>
@@ -258,11 +221,12 @@ export function Bar({ share, paused = false, name, className }: { share: number;
 
 /**
  * A link that sorts by one thing. On the sort in force it says which way it runs (`dir`) with an arrow; elsewhere `dir` is null.
- * `href` is the page re-sorted, so the caller decides what a second press does.
+ * `href` is the page re-sorted, so the caller decides what a second press does. It does not prefetch: a
+ * header row of them would render the page once a column.
  */
 export function SortLink({ href, dir, title, className, children }: { href: string; dir: 'asc' | 'desc' | null; title?: string; className?: string; children: ReactNode }) {
   return (
-    <Link href={href} title={title} aria-current={dir === null ? undefined : 'true'}
+    <Link href={href} prefetch={false} title={title} aria-current={dir === null ? undefined : 'true'}
       className={cn('inline-flex items-center gap-1.5 hover:text-foreground hover:underline', dir !== null && `font-medium text-foreground after:text-[0.6rem] ${dir === 'asc' ? "after:content-['▲']" : "after:content-['▼']"}`, className)}>
       {children}
     </Link>

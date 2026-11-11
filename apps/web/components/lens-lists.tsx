@@ -10,7 +10,7 @@ import { Empty } from './ui';
 import { Pager } from './pager';
 import { Wallet } from './transfers';
 import { HoverCard } from './hover-card';
-import { FILL, FunnelIcon } from './kit';
+import { FILL, KindIcon, SearchIcon } from './kit';
 import { cardSrc, withFrom } from '@/lib/links';
 
 /**
@@ -58,13 +58,13 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
           {SORTS[kind].map(([s, label], i) => (
             <span key={s}>
               {i > 0 ? ' · ' : ''}
-              <Link href={sortHref(s)} aria-current={s === sort ? 'true' : undefined} className={cn('hover:underline', s === sort ? 'font-medium text-foreground' : '')}>{label}</Link>
+              <Link href={sortHref(s)} prefetch={false} aria-current={s === sort ? 'true' : undefined} className={cn('hover:underline', s === sort ? 'font-medium text-foreground' : '')}>{label}</Link>
             </span>
           ))}
         </nav>
         <form action={`${first.pathname}${first.hash}`} method="get" role="search" className="flex items-center gap-1.5">
           {kept.map(([k, v], i) => <input key={i} type="hidden" name={k} value={v} />)}
-          <FunnelIcon className="text-muted-foreground" />
+          <SearchIcon className="text-muted-foreground" />
           <input
             type="search" name={findParam} defaultValue={find ?? ''} placeholder={kind === 'tokens' ? 'Find a token number' : 'Find a wallet (0x…)'}
             aria-label={kind === 'tokens' ? `Find a token ${lens.name} flagged, by its number` : `Find a wallet ${lens.name} flagged, by its address or the start of it`}
@@ -86,7 +86,7 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ? (rows as TokenLine[]).map((l, i) => (
               <Row key={l.tokenId} n={start + i + 1} line={l} tone={lens.tone} why={tokenWhy(method, l)}
                 // A lens of yours opens the token page with its loops lit, down at the why section.
-                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="font-mono font-medium text-foreground hover:underline">#{tokenLabel(l.tokenId)}</Link></HoverCard>}
+                name={<HoverCard src={cardSrc(base, 'token', l.tokenId)}><Link href={withFrom(yours ? `${base}/t/${l.tokenId}?method=${method}#why` : `${base}/t/${l.tokenId}`, from)} prefetch={false} title={yours ? `Token #${l.tokenId}, with the loops ${lens.name} found lit` : `Token #${l.tokenId}`} className="inline-flex items-center gap-1.5 font-mono font-medium text-foreground hover:underline"><KindIcon kind="token" className="size-3.5 text-muted-foreground" />#{tokenLabel(l.tokenId)}</Link></HoverCard>}
                 loops={withFrom(`${base}/t/${l.tokenId}?method=${method}${yours ? '#why' : ''}`, from)}
                 group={tradesHref(base, { kind: 'all', group: { method, token: l.tokenId } })}
                 trades={tradesHref(base, { kind: 'all', token: l.tokenId })}
@@ -96,7 +96,8 @@ export function LensList({ kind, method, own = {}, base, chainId, rows, total, o
             ))
             : (rows as WalletLine[]).map((l, i) => (
               <Row key={l.address} n={start + i + 1} line={l} tone={lens.tone} why={walletWhy(method, l)}
-                name={<Wallet chainId={chainId} address={l.address} within={base} from={from} />}
+                // Wallet draws the link alone, so its mark sits just before it.
+                name={<span className="inline-flex items-center gap-1.5"><KindIcon kind="wallet" className="size-3.5 text-muted-foreground" /><Wallet chainId={chainId} address={l.address} within={base} from={from} /></span>}
                 loops={tradesHref(base, { kind: 'all', caught: [method], wallet: l.address })}
                 group={tradesHref(base, { kind: 'all', group: { method, wallet: l.address } })}
                 trades={tradesHref(base, { kind: 'all', wallet: l.address })}
@@ -132,23 +133,24 @@ function Row({ n, line, tone, why, name, loops, group, trades, caught, volume }:
   const number = 'font-medium text-foreground hover:underline';
   return (
     <li className="border-b px-3 py-2 last:border-b-0">
-      <div className="flex items-baseline gap-2">
+      {/* A name keeps its width (a short address is already cut); on a phone the counts wrap under it instead. */}
+      <div className="flex flex-wrap items-baseline gap-x-2">
         <span data-row-number className="w-7 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{n}</span>
-        <span className="min-w-0 truncate">{name}</span>
+        <span className="min-w-0 max-w-full shrink-0 truncate">{name}</span>
         <span className="ml-auto shrink-0 text-xs tabular-nums">
-          <Link href={caught} title="The trades it flagged" className={number}>{num(line.caught)}</Link>
+          <Link href={caught} prefetch={false} title="The trades it flagged" className={number}>{num(line.caught)}</Link>
           {' of '}
-          <Link href={trades} title="All its counted trades" className={number}>{num(line.trades)}</Link>
-          {' trades'}
+          <Link href={trades} prefetch={false} title="All its counted trades" className={number}>{num(line.trades)}</Link>
+          {line.trades === 1 ? ' trade' : ' trades'}
         </span>
         <span className="w-20 shrink-0 text-right text-xs tabular-nums" title="Volume of the flagged sales priced in ETH or WETH">
-          {line.volumeWei === '0' ? '—' : <Link href={volume} title="The trades it flagged, biggest first" className={number}>{eth(line.volumeWei)}</Link>}
+          {line.volumeWei === '0' ? '—' : <Link href={volume} prefetch={false} title="The trades it flagged, biggest first" className={number}>{eth(line.volumeWei)}</Link>}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-3 pl-9">
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
           {why.map((p, i) => p.opens === undefined ? <span key={i}>{p.text}</span> : (
-            <Link key={i} href={p.opens === 'loops' ? loops : group} className="text-foreground hover:underline">{p.text}</Link>
+            <Link key={i} href={p.opens === 'loops' ? loops : group} prefetch={false} className="text-foreground hover:underline">{p.text}</Link>
           ))}
         </p>
         <span aria-hidden className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">

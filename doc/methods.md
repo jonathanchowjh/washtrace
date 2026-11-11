@@ -194,9 +194,10 @@ that paid or was paid by both. It is narrower than a full read, and says so:
 
 - **Round trips** reads the token's whole history to the finalized head, so it gives the answer a full read gives
   with the default rules.
-- **Linked wallets** finds a link a full read would. It can't count how many of the collection's wallets a middle
-  wallet is linked to, so a middle that moved money with more than 20 wallets makes the answer `atLeast`, never
-  clean.
+- **Linked wallets** finds a link a full read would. It reads the sellers' and buyers' money up to now, a stored
+  read read on from where it stopped, so a payment made after the worker last read them still links them. It can't
+  count how many of the collection's wallets a middle wallet is linked to, so a middle that moved money with more
+  than 20 wallets makes the answer `atLeast`, never clean.
 - **Money loops back** needs money followed several wallets out, so it is not run. Neither is a lens using Other
   tokens or the collection's other tokens.
 

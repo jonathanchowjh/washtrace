@@ -1,4 +1,5 @@
 import { cleanup, render } from '@testing-library/react';
+import { isValidElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { short } from '@/lib/format';
 import { tradesHref } from '@/lib/trades-url';
@@ -9,12 +10,13 @@ const A = '0x' + 'a1'.repeat(20), B = '0x' + 'b1'.repeat(20), M = '0x' + 'c1'.re
 const line = (rank: number, anchor = A, floorSales = 2) => ({ anchor, rank, wallets: 3, sample: [A, B, M], sales: 3, floorSales, tokens: 1, volumeWei: '9000000000000000000', firstAt: null, lastAt: null });
 const X = '0x' + 'd1'.repeat(20);
 const moved = (from: string, to: string, n: number) => ({ txHash: '0x' + String(n).repeat(64), logIndex: 0, blockNumber: n, blockTime: n, tokenId: '114', from, to, marketplace: 'opensea', priceWei: '1', currency: '', flags: {} });
-const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)] };
+const MEMBERS = [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }];
+const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 };
 vi.mock('@/lib/store', () => ({
   store: () => ({
     collection: async () => ({ id: 1, name: 'Demo Apes', address: ADDR, latest: state.latest ? { rings: state.rings } : null }),
     rings: async (_id: number, _ctx: unknown, limit: number, offset: number) => ({ rows: state.list.slice(offset, offset + limit), total: state.list.length }),
-    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1), wallets: [{ address: A, traded: true }, { address: B, traded: true }, { address: M, traded: false }], walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
+    ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1, A, state.floorSales), wallets: state.members, walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
     ringsOf: async (_id: number, of: { wallet?: string }) => (of.wallet === M ? [A] : []),
     ringLines: async (_id: number, anchors: string[]) => anchors.map((a) => line(3, a)),
     // A and B pass #114 back and forth; it then leaves the ring for X.
@@ -25,7 +27,7 @@ vi.mock('@/lib/store', () => ({
 vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
-afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)] }); });
+afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 }); });
 
 const params = Promise.resolve({ chain: '1', address: ADDR });
 async function list(page?: string) {
@@ -51,6 +53,28 @@ describe('the rings list', () => {
     expect(links(rows[0]!)).toContainEqual([short(M), `${BASE}/w/${M}`]);
   });
 
+  it('says what ties a ring in a sentence that agrees with itself', async () => {
+    const c = await list();
+    expect(c.textContent).toContain('Wallets tied together by what Round trips and Linked wallets flag, the most ETH first.');
+    expect(c.textContent).not.toContain('ties together');
+  });
+
+  it('on a phone each ring is a card with the row’s links, its counts named, and the table is hidden there', async () => {
+    const c = await list();
+    const cards = [...c.querySelectorAll('ul[aria-label=Rings] > li')];
+    expect(c.querySelector('ul[aria-label=Rings]')!.className).toContain('sm:hidden');
+    expect(c.querySelector('table')!.parentElement!.className).toMatch(/^hidden .*sm:block/);
+    const rows = [...c.querySelectorAll('tbody tr')];
+    expect(cards).toHaveLength(rows.length);
+    cards.forEach((card, i) => expect(links(card)).toEqual(links(rows[i]!)));
+    expect(cards[0]!.querySelector('p.tabular-nums')!.textContent!.replace(/\s+/g, ' ')).toBe('1 token3 sales9 ETH');
+  });
+
+  it('marks each sampled wallet with the wallet symbol, as other wallet links are', async () => {
+    const c = await list();
+    expect([...c.querySelectorAll('tbody tr')][0]!.querySelectorAll('td:nth-child(2) a[href*="/w/"] svg')).toHaveLength(3);
+  });
+
   it('says why it is empty: no analysis, rings not worked out yet, or none', async () => {
     state.latest = false;
     expect((await list()).textContent).toContain('No analysis yet, so no ring.');
@@ -62,6 +86,14 @@ describe('the rings list', () => {
     expect((await list()).textContent).toContain('No ring: nothing Round trips or Linked wallets flags ties wallets together.');
   });
 
+  it('says its count once, and titles its tab "Rings · <Collection>"', async () => {
+    const c = await list();
+    expect(c.textContent!.match(/\b2 rings\b/g)).toHaveLength(1);
+    expect(c.querySelector('h1')?.textContent).toBe('Rings');
+    const { generateMetadata } = await import('@/app/c/[chain]/[address]/rings/page');
+    expect((await generateMetadata({ params, searchParams: Promise.resolve({}) })).title).toBe('Rings · Demo Apes');
+  });
+
   it('reads a page past the last as the last', async () => {
     state.list = Array.from({ length: 25 }, (_, i) => line(i + 1, '0x' + String(i).padStart(40, '0')));
     state.rings = 25;
@@ -71,33 +103,122 @@ describe('the rings list', () => {
 });
 
 describe('a ring', () => {
-  it('heads as a ring, splits who traded from who only moved the money, and opens its sales and tokens', async () => {
+  it('heads as a ring, splits who traded from who is in between, and opens its sales and tokens', async () => {
     const c = await one(A);
     expect(c.querySelector('h1')?.textContent).toBe('Ring 1');
     expect(c.querySelector('header')?.textContent).toContain('Ring');
     const groups = [...c.querySelectorAll('h3')].map((h) => h.textContent);
-    expect(groups).toEqual(['Traded (2)', 'Only moved the money (1)']);
+    expect(groups).toEqual(['Traded (2)', 'In between (1)']);
     expect(links(c)).toContainEqual(['All its 3 sales →', tradesHref(BASE, { ring: A })]);
     // A member opened from here steps through the ring's tokens or wallets, and leads back to it.
     expect(links(c)).toContainEqual(['#114', `${BASE}/t/114?from=${encodeURIComponent(`ring?anchor=${A}&of=tokens`)}`]);
     expect(links(c)).toContainEqual([`${A.slice(0, 6)}…${A.slice(-4)}`, `${BASE}/w/${A}?from=${encodeURIComponent(`ring?anchor=${A}&of=wallets`)}`]);
-    expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 only moved the money');
+    expect(c.querySelector('svg[role=img]')?.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 in between');
   });
 
   it('draws its loops as a token\'s graph: its own wallets\' transfers, each opening its trade, and the money among them', async () => {
     const c = await one(A);
     const fig = c.querySelector('svg[aria-label="Transfers and money among the wallets of Ring 1"]')!;
     expect(fig).toBeTruthy();
-    // The two transfers between its wallets, not the one out to X; numbered by block, each opening its trade.
+    // The two transfers between its wallets, not the one out to X; numbered by their place in their token's history, each opening its trade.
     const hrefs = [...fig.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(expect.arrayContaining([`${BASE}/tx/0x${'1'.repeat(64)}`, `${BASE}/tx/0x${'2'.repeat(64)}`]));
     expect(hrefs.some((h) => h?.includes('3'.repeat(64)))).toBe(false);
+  });
+
+  it('answers what the ring is and what its flagged sales add up to, in the token page\'s voice', async () => {
+    const c = await one(A);
+    const answer = c.querySelector('p.text-lg')!;
+    expect(answer.textContent).toBe('3 wallets joined by 3 flagged sales');
+    const body = answer.nextElementSibling!.textContent;
+    expect(body).toContain('2 traded the tokens and 1 is in between, joining them by money.');
+    expect(body).toContain('Its 3 flagged sales, 2 of them round trips, moved 9 ETH across 1 token.');
+    expect(body).toContain('What this means: Tokens went round among these wallets');
+    expect(links(answer.nextElementSibling!)).toContainEqual(['Demo Apes’s share', BASE]);
+  });
+
+  it('gives Connected to its wallets: each trader by its side of the sales, the rest in between', async () => {
+    const { default: P } = await import('@/app/c/[chain]/[address]/r/[anchor]/page');
+    const { ConnectedRail } = await import('@/components/connected-rail');
+    const rails: { props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown) => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      if (n.type === ConnectedRail) rails.push(n as { props: Record<string, unknown> });
+      Object.values(n.props as Record<string, unknown>).forEach(walk);
+    };
+    walk(await P({ params: Promise.resolve({ chain: '1', address: ADDR, anchor: A }) }));
+    expect(rails.map((r) => r.props.wallets)).toEqual([[
+      { address: A, role: 'seller · buyer' }, { address: B, role: 'buyer · seller' }, { address: M, role: 'in between' },
+    ]]);
+  });
+
+  it('leaves out an empty group, and says it in the lead', async () => {
+    state.members = MEMBERS.filter((w) => w.traded);
+    const c = await one(A);
+    expect([...c.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['Traded (2)']);
+    expect(c.textContent).toContain('Every wallet listed traded; none is in between.');
+    expect(c.textContent).not.toContain('None.');
+    // The answer and the picture's legend say no zero count either.
+    expect(c.textContent).toContain('Every one traded the tokens.');
+    expect(c.textContent).not.toContain('0 in between');
+  });
+
+  it('a ring of linked pairs alone says no loop and headlines no zero', async () => {
+    state.floorSales = 0;
+    const c = await one(A);
+    const text = c.textContent ?? '';
+    expect(text).toContain('Its 3 flagged sales moved 9 ETH across 1 token.');
+    expect(text).not.toContain('round trips');
+    expect([...c.querySelectorAll('dt')].map((d) => d.textContent)).toEqual(['Flagged sales', 'ETH they moved']);
+    expect(text).toContain('What this means: Buyers and sellers among these wallets are linked by money.');
+    expect(text).not.toMatch(/see the loop/);
+  });
+
+  it('says a ring is not one person once', async () => {
+    const text = (await one(A)).textContent ?? '';
+    expect(text.split('not one person').length - 1).toBe(1);
   });
 
   it('says when no ring of the latest analysis has the anchor, and links the list', async () => {
     const c = await one(B);
     expect(c.textContent).toContain(`No ring of the latest analysis is named by ${short(B)}`);
     expect(links(c)).toContainEqual(['All rings', `${BASE}/rings`]);
+  });
+});
+
+describe('the ring’s picture', () => {
+  const ws = (traders: number, movers: number) => [
+    ...Array.from({ length: traders }, (_, i) => ({ address: `0xt${i}`, traded: true })),
+    ...Array.from({ length: movers }, (_, i) => ({ address: `0xm${i}`, traded: false })),
+  ];
+
+  it('draws traders and money-only wallets in their two styles, the count in the middle, with a legend', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(2, 1)} total={3} />).container;
+    expect(c.querySelector('svg[role=img]')!.getAttribute('aria-label')).toBe('3 wallets: 2 traded, 1 in between');
+    expect(c.querySelectorAll('svg[role=img] g[data-traded]')).toHaveLength(2);
+    expect(c.querySelectorAll('svg[role=img] g:not([data-traded]) circle[stroke-dasharray]')).toHaveLength(1);
+    expect([...c.querySelectorAll('svg[role=img] text')].map((t) => t.textContent)).toEqual(['3', 'wallets']);
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['2 traded', '1 in between']);
+  });
+
+  it('gives a kind with no wallet no legend line, and the kind that is every wallet no second count', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(3, 0)} total={3} />).container;
+    // The middle already says 3 wallets.
+    expect([...c.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['traded']);
+    cleanup();
+    const m = render(<RingFigure wallets={ws(0, 2)} total={2} />).container;
+    expect([...m.querySelectorAll('figcaption > span')].map((s) => s.textContent)).toEqual(['in between']);
+  });
+
+  it('past a dozen, keeps each kind’s share of the dots, never dropping one, and says how many are drawn', async () => {
+    const { RingFigure } = await import('@/components/rings');
+    const c = render(<RingFigure wallets={ws(30, 1)} total={31} />).container;
+    expect(c.querySelectorAll('svg[role=img] g')).toHaveLength(12);
+    expect(c.querySelectorAll('svg[role=img] g:not([data-traded])')).toHaveLength(1);
+    expect(c.querySelector('figcaption')!.textContent).toContain('12 of 31 drawn');
   });
 });
 

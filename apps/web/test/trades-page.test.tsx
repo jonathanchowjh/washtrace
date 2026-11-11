@@ -94,8 +94,8 @@ describe('the trades page', () => {
 
   it('shows matching trades with a dot per lens that ran, named by lens, and the date opens the trade', async () => {
     const el = await dom({ caught: 'A' });
-    expect(el.textContent).toContain('2 trades match');
-    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round trips', 'Money loops backnot counted', 'Linked wallets']));
+    expect(el.textContent).toContain('2 sales match');
+    expect([...el.querySelectorAll('th')].map((t) => t.textContent)).toEqual(expect.arrayContaining(['Round tripsthe floor', 'Money loops backnot counted', 'Linked walletsthe ceiling']));
     expect(el.querySelector('th [title^="On real data it flags"]')!.textContent).toBe('not counted');
     expect(tradeLink(el, `${BASE}/tx/0xs2`)).not.toBeUndefined();
     expect(el.textContent).not.toMatch(/\bAU\b|\bAC\b/);
@@ -118,8 +118,8 @@ describe('the trades page', () => {
   it('draws only the lenses that ran', async () => {
     state.moneyRan = false;
     const th = [...(await dom()).querySelectorAll('thead th')].map((t) => t.textContent);
-    expect(th).toContain('Round trips');
-    expect(th).not.toContain('Linked wallets');
+    expect(th).toContain('Round tripsthe floor');
+    expect(th.join()).not.toContain('Linked wallets');
     expect(th.join()).not.toContain('Money loops back');
   });
 
@@ -141,7 +141,7 @@ describe('the trades page', () => {
   it('says how many matching trades are newer than the latest analysis, and shows them as not judged', async () => {
     Object.assign(state, { count: { total: 3, unjudged: 1 }, rows: [row('0xs1'), row('0xs2', { judged: false, lenses: [] })] });
     const el = await dom();
-    expect(el.textContent).toContain('3 trades match');
+    expect(el.textContent).toContain('3 sales match');
     expect(el.textContent).toContain(' 1 of them are newer than the latest analysis and not judged yet.');
     const cell = [...el.querySelectorAll('td')].find((td) => td.textContent === 'Not judged yet');
     expect(cell?.getAttribute('colspan')).toBe('3');
@@ -170,6 +170,42 @@ describe('the trades page', () => {
     expect(unknown).toBeDefined();
     expect(unknown!.querySelectorAll('a')).toHaveLength(0);
     expect([...el.querySelectorAll('th')].filter((t) => t.textContent === 'Money loops backnot counted').length).toBe(2);
+  });
+
+  it('every built-in column, in both tables, says its standing under its name', async () => {
+    const el = await dom({ by: 'marketplace' });
+    const tiers = [...el.querySelectorAll('thead th span.block')].map((s) => s.textContent);
+    expect(tiers.filter((t) => t === 'the floor')).toHaveLength(2);
+    expect(tiers.filter((t) => t === 'the ceiling')).toHaveLength(2);
+    expect(tiers.filter((t) => t === 'not counted')).toHaveLength(2);
+  });
+
+  it('opens its filters from one control, a funnel and a word, with the browser\'s triangle hidden and no script needed', async () => {
+    const el = await dom();
+    const summary = el.querySelector('details > summary')!;
+    expect(summary.textContent).toBe('Filter›');
+    expect(summary.className).toContain('list-none');
+    expect(summary.className).toContain('[&::-webkit-details-marker]:hidden');
+    expect(summary.querySelectorAll('svg')).toHaveLength(1);
+    expect(summary.closest('details')!.querySelector('form[aria-label="Filter trades"]')).not.toBeNull();
+  });
+
+  it('counts what it lists, in the glossary\'s words: sales by default, changes of owner with every one shown', async () => {
+    const sales = await dom({ by: 'marketplace' });
+    expect(sales.textContent).toContain('2 sales match');
+    expect([...sales.querySelectorAll('thead th')].map((t) => t.textContent)).toContain('Sales');
+    const all = await dom({ all: '1', by: 'marketplace' });
+    expect(all.textContent).toContain('2 changes of owner match');
+    expect([...all.querySelectorAll('thead th')].map((t) => t.textContent)).toContain('Changes of owner');
+    expect(all.textContent).not.toMatch(/\d trades? match/);
+  });
+
+  it('a group\'s name opens its trades, as its count does', async () => {
+    const el = await dom({ by: 'marketplace' });
+    const row = [...el.querySelectorAll('tbody tr')].find((r) => r.querySelector('td')?.textContent === 'Blur')!;
+    const [name, count] = [...row.querySelectorAll('td')].slice(0, 2).map((td) => td.querySelector('a')?.getAttribute('href'));
+    expect(name).toBe(`${BASE}/trades?market=blur&by=marketplace`);
+    expect(name).toBe(count);
   });
 
   it('a lens that did not run shows not run in a group row', async () => {
@@ -221,13 +257,13 @@ describe('the trades page', () => {
     const el = await dom({ by: 'marketplace' });
     expect(tradeLink(el, `${BASE}/tx/0xs1`)?.textContent).toBe('Unknown time');
     const text = el.textContent!;
-    expect(text.indexOf('trades match')).toBeLessThan(text.indexOf('Not a marketplace sale'));
+    expect(text.indexOf('sales match')).toBeLessThan(text.indexOf('Not a marketplace sale'));
   });
 
   it('with no match, still says a not-caught lens did not run', async () => {
     Object.assign(state, { moneyRan: false, count: { total: 0, unjudged: 0 }, rows: [] });
     const text = await page({ not: 'AC' });
-    expect(text).toContain('No trade matches these filters.');
+    expect(text).toContain('No sale matches these filters.');
     expect(text).toContain('Linked wallets did not run in the latest analysis, so it flags nothing. It is left out of "not flagged by".');
   });
 
@@ -235,7 +271,7 @@ describe('the trades page', () => {
     const el = await dom({ sort: 'price', dir: 'asc' });
     const link = (name: string) => [...el.querySelectorAll('thead th a')].find((a) => a.textContent === name)?.getAttribute('href');
     expect(link('Price')).toBe(`${BASE}/trades?sort=price`);
-    expect(link('Round trips')).toBe(`${BASE}/trades?sort=lens-A`);
+    expect(link('Round tripsthe floor')).toBe(`${BASE}/trades?sort=lens-A`);
     expect(link('Seller → buyer')).toContain('sort=seller');
     expect(link('Date')).toBe(`${BASE}/trades`);
   });
@@ -251,20 +287,20 @@ describe('the trades page', () => {
     state.count = { total: 120, unjudged: 0 };
     const el = await dom({ page: '99999' });
     expect(el.textContent).toContain('Page');
-    expect(el.textContent).toContain('101–120 of 120 trades');
+    expect(el.textContent).toContain('101–120 of 120 sales');
     expect(state.calls.trades[0]!.slice(3)).toEqual([20, 100]);
   });
 
   it('junk in the URL is dropped and shows the unfiltered list', async () => {
     const el = await dom({ caught: 'ZZ', pmin: 'abc', page: '-2', by: 'nope' });
-    expect(el.textContent).toContain('2 trades match');
+    expect(el.textContent).toContain('2 sales match');
     expect(el.querySelectorAll('a[title="Remove this filter"]')).toHaveLength(0);
   });
 
   it('no match says so, with the chips still shown', async () => {
     Object.assign(state, { count: { total: 0, unjudged: 0 }, rows: [] });
     const el = await dom({ market: 'x2y2' });
-    expect(el.textContent).toContain('No trade matches these filters.');
+    expect(el.textContent).toContain('No sale matches these filters.');
     expect(el.textContent).toContain('Marketplace: X2Y2');
   });
 
@@ -276,7 +312,7 @@ describe('the trades page', () => {
 
   it('a lens link replaces the caught filter', async () => {
     const el = await dom({ caught: 'AC,A' });
-    const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets');
+    const lens = [...el.querySelectorAll('nav[aria-label=Lens] a')].find((a) => a.textContent === 'Linked wallets · the ceiling');
     expect(lens?.getAttribute('href')).toBe(`${BASE}/trades?caught=AC`);
   });
   it.each([
@@ -322,6 +358,8 @@ describe('the trades page', () => {
     const { q } = parseView(sent, 'UTC', new Set());
     expect([q.fromMs, q.toMs]).toEqual([Date.parse(from), Date.parse(to)]);
     expect(q.venues).toEqual(['blur']);
+    // A kept bound reads day first, as the date chip and every <Time> do.
+    expect(el.textContent).toContain('Kept at 1 Mar 2023, 05:00');
   });
 
   it('a kept hour bound disables its day field and says how to change it', async () => {
@@ -352,14 +390,14 @@ describe('the trades page', () => {
     state.moneyRan = false;
     const text = await page({ group: `AU.t.7` });
     expect(text).toContain('Money loops back did not run in the latest analysis, so it flags nothing.');
-    expect(text).not.toContain('No trade matches');
+    expect(text).not.toContain('No sale matches');
     expect(state.calls.trades).toHaveLength(0);
   });
 
   it('a sort on a lens that did not run says nothing and falls back to newest first', async () => {
     state.moneyRan = false;
     const el = await dom({ sort: 'lens-AU' });
-    expect(el.textContent).toContain('2 trades match');
+    expect(el.textContent).toContain('2 sales match');
     expect(el.textContent).not.toContain('did not run');
     expect((state.calls.trades[0]![1] as { sort: string }).sort).toBe('date');
     expect([...el.querySelectorAll('thead th')].find((t) => t.textContent === 'Date')?.getAttribute('aria-sort')).toBe('descending');
@@ -381,7 +419,7 @@ describe('the trades page', () => {
   it('a collection never analysed says so in the count line', async () => {
     Object.assign(state, { analysed: false, count: { total: 2, unjudged: 2 } });
     const text = await page();
-    expect(text).toContain('2 trades match · everything is in the address bar, so this view can be shared. Not judged yet.');
+    expect(text).toContain('2 sales match · everything is in the address bar, so this view can be shared. Not judged yet.');
     expect(text).not.toContain('newer than the latest analysis');
   });
 
@@ -456,7 +494,7 @@ describe('the trades page', () => {
     it('a deleted lens in the URL is dropped: no chip, no failure, every trade listed', async () => {
       mine();
       const el = await dom({ caught: 'L99', not: 'L99', group: 'L99.t.5', sort: 'lens-L99' });
-      expect(el.textContent).toContain('2 trades match');
+      expect(el.textContent).toContain('2 sales match');
       expect(el.querySelector('a[title="Remove this filter"]')).toBeNull();
       expect(state.calls.trades[0]![1]).toMatchObject({ caught: [], notCaught: [], group: null, sort: 'date' });
     });
@@ -472,7 +510,74 @@ describe('the trades page', () => {
       const el = await flaggedDom({ kind: 'tokens', method: 'L7' });
       expect(el.textContent).toContain('Tokens flagged by Blur 3-hop');
       const { generateMetadata } = await import('@/app/c/[chain]/[address]/tokens/page');
-      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'L7' }) })).toEqual({ title: `Tokens flagged by Blur 3-hop` });
+      expect(el.textContent).toContain('Blur 3-hop · your lens');
+      expect(await generateMetadata({ params: Promise.resolve({ chain: '1', address: ADDR }), searchParams: Promise.resolve({ method: 'L7' }) })).toEqual({ title: 'Tokens · Blur 3-hop · Coll' });
     });
+  });
+});
+
+describe('the trades list on a phone', () => {
+  /** Each trade's card and its table row, in the list's order. */
+  async function both(sp: Record<string, string> = {}) {
+    const el = await dom(sp);
+    const cards = [...el.querySelectorAll('ul[aria-label="Trades"] > li')];
+    const rows = [...el.querySelectorAll('table tbody tr')];
+    return { el, cards, rows };
+  }
+  const sorted = (c: Element) => hrefs(c as HTMLElement, 'a').sort();
+
+  it('draws the same trades as cards below sm, and the table from sm up', async () => {
+    const { el, cards, rows } = await both({ caught: 'A' });
+    expect(cards).toHaveLength(2);
+    expect(rows).toHaveLength(2);
+    expect(el.querySelector('ul[aria-label="Trades"]')!.classList).toContain('sm:hidden');
+    expect(el.querySelector('table')!.parentElement!.classList).toContain('hidden');
+    expect(el.querySelector('table')!.parentElement!.classList).toContain('sm:block');
+  });
+
+  it('links each card to all its row links to: the trade with the same from, the token, the wallets, the only-this filters', async () => {
+    const { cards, rows } = await both({ caught: 'A' });
+    cards.forEach((card, i) => expect(sorted(card)).toEqual(sorted(rows[i]!)));
+    const opens = hrefs(cards[1] as HTMLElement, 'a').filter((h) => h?.startsWith(`${BASE}/tx/0xs2`));
+    // The date and the price both open the trade, as in the row.
+    expect(opens).toHaveLength(2);
+    expect(opens[0]).toMatch(/\?from=/);
+    expect(opens[0]).toBe(hrefs(rows[1] as HTMLElement, 'a').find((h) => h?.startsWith(`${BASE}/tx/0xs2`)));
+  });
+
+  it('keeps the wallets\' hover cards: the seller and buyer are the row\'s own markup', async () => {
+    const { cards, rows } = await both();
+    const parties = (c: Element) => [...c.querySelectorAll('a')].filter((a) => a.getAttribute('title') === SELLER || a.getAttribute('title') === BUYER);
+    cards.forEach((card, i) => {
+      expect(parties(card)).toHaveLength(2);
+      expect(parties(card).map((a) => a.parentElement!.outerHTML)).toEqual(parties(rows[i]!).map((a) => a.parentElement!.outerHTML));
+    });
+  });
+
+  it('puts the token and date first, then the lenses that flagged it, then the facts the row has', async () => {
+    const { cards } = await both();
+    const card = cards[1]!;
+    expect(card.firstElementChild!.textContent).toMatch(/^#7⊕/);
+    expect(card.firstElementChild!.querySelector('time')).not.toBeNull();
+    expect([...card.querySelectorAll('[role="img"]')].map((m) => m.getAttribute('aria-label'))).toEqual(['Flagged by Round trips', 'Flagged by Money loops back']);
+    expect(card.textContent).toContain('1.5 ETH');
+    expect(card.textContent).toContain('Blur');
+    expect(card.textContent).toContain('Held 2 h · buyer age 3 d · 1.25× vs 7-day median');
+  });
+
+  it('says a trade no lens flagged is not flagged, and one no analysis covered is not judged yet', async () => {
+    state.rows = [row('0xs1', { lenses: [] }), row('0xs2', { judged: false, lenses: [] })];
+    const { cards } = await both();
+    expect(cards[0]!.textContent).toContain('Not flagged');
+    expect(cards[0]!.querySelector('[role="img"]')).toBeNull();
+    expect(cards[1]!.textContent).toContain('Not judged yet');
+  });
+
+  it('says a trade past the block your lens\'s run read is not judged yet by it', async () => {
+    state.runs = [ownRun(7, 'Blur 3-hop', 'done', { throughBlock: 8 })];
+    state.rows = [row('0xs2', { blockNumber: 9, lenses: ['A'] })];
+    const { cards } = await both();
+    const later = cards[0]!.querySelector('[title^="Newer than the block Blur 3-hop"]');
+    expect(later!.closest('.chip')!.textContent).toBe('Not judged yetBlur 3-hop');
   });
 });

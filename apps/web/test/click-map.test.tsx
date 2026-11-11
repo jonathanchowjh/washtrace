@@ -147,8 +147,9 @@ describe('lens names and chips', () => {
   it('on a row both lenses flag, each chip wears its own lens’s colour and opens its tab', async () => {
     const c = await PAGES.trade!();
     const chip = (name: string) => [...c.querySelectorAll('tbody a')].find((a) => a.textContent === name)!;
-    expect(chip('Money loops back').className).toContain('bg-muted-foreground');
-    expect(chip('Round trips').className).toContain('bg-cycle');
+    // The colour is the chip's tier mark, as on every other page's lens tags.
+    expect(chip('Money loops back').querySelector('i')!.className).toContain('border-muted-foreground');
+    expect(chip('Round trips').querySelector('i')!.className).toContain('bg-cycle');
     expect(chip('Round trips').getAttribute('href')).toBe(`${BASE}/methods?method=A#evidence`);
     expect(chip('Money loops back').getAttribute('href')).toBe(`${BASE}/methods?method=AU#evidence`);
   });
@@ -229,8 +230,8 @@ const ALLOWED: { why: string; test: (el: Element) => boolean }[] = [
   { why: 'the range a table page shows, as a pager says it: the list is already open', test: (el) => /^Showing /.test(el.textContent ?? '') },
   { why: 'the pipeline’s progress figures: how far a stage has read, not a list', test: (el) => el.closest('[data-progress]') !== null },
   { why: 'a Group by row no filter can hold, such as the unknown group: its trades are in the list below, but no list holds only them', test: (el) => el.closest('tr[data-unlisted]') !== null },
-  { why: "a trade row's own measure: it counts no list, and the row's date opens the trade", test: (el) => el.closest('td[data-measure]') !== null },
-  { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
+  { why: "a trade's own measure, in its row or its card: it counts no list, and the trade's date opens the trade", test: (el) => el.closest('[data-measure]') !== null },
+  { why: 'a pager label: the range of the list already open', test: (el) => el.closest('nav[aria-label="Pages"]') !== null || /^[\d,]+ (trades|transfers|sales|changes of owner|results|tokens|wallets)$/.test(el.textContent ?? '') && el.tagName === 'P' },
 ];
 
 /** Every figure outside a link, a time or an allowed place: the text itself, not its wrapper, so one loose digit among links still counts. */

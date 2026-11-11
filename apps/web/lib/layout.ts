@@ -1,6 +1,6 @@
 import { METHODS, TOKENS, ZERO, type FlaggedTransfer, type Flow, type LoopEdge, type Method, type OwnFlag, type Witness } from '@washtrace/detect';
-import type { LensKey } from '@washtrace/detect/trades';
-import { LENSES, andList, weiToEth, type Lenses } from './format';
+import { VENUES, venueOf, type LensKey } from '@washtrace/detect/trades';
+import { LENSES, andList, tokenLabel, weiToEth, type Lenses } from './format';
 import { toneOf, type Tone } from './metrics';
 
 /** Two witnesses that would read as the same sentence share a key. */
@@ -39,6 +39,12 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 /** Past this many transfers between one pair, the fan's arcs leave the drawing and stop being countable. */
 const FAN_MAX = 6;
 
+/** Between two neighbouring wallets on the ring, in px: room for a fan of FAN_MAX arcs and their numbers. */
+const SPACING = 160;
+
+/** How far a middle sits off the line between a pair: past the furthest of a full fan's arcs, which bows about 60 px out. */
+const FAN_CLEAR = 76;
+
 /** `lx`, `ly`: where its label goes, outward from the centre, clear of the arrows arriving at it; `anchor`, which end of the label sits there. */
 interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; anchor: 'start' | 'middle' | 'end'; middle: boolean; first: boolean }
 /**
@@ -49,9 +55,20 @@ interface DrawnNode { id: string; x: number; y: number; lx: number; ly: number; 
  * this token no built-in flagged that a loop of yours lights: `yours` then
  * names those lenses, so the arrow is never drawn or called "not flagged".
  */
-export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[] }
+export interface DrawnEdge { key: string; d: string; kind: 'asset' | 'money'; tone: Tone | 'own'; title: string; from: string; to: string; tx: string | null; row: number | null; lx: number; ly: number; label: string; token?: string; yours?: string[];
+  /** The transfers of the drawing it draws, each as `txHash:logIndex` (a bundle all of its own), so a page can mark the one it is about; none for money or another token. */
+  ids: string[] }
 /** One reason a token was flagged: the arrows and wallets that make it, for the graph to light together. A lens of yours's loop is one reason, of its one lens. */
 export interface DrawnLoop { key: string; methods: LensKey[]; edges: string[]; nodes: string[] }
+/**
+ * A transfer as layout() takes it. `n` is its place in its token's history, 1
+ * the first, a mint included: what its arrow is numbered, so a sale has one
+ * number in every graph that draws it and in its token's table. Left out, it
+ * is the transfer's place in the list given, which is that history when the
+ * list is one token's every transfer, as on a token or trade page.
+ */
+export type Numbered = FlaggedTransfer & { n?: number };
+
 /** `view`: the part of the `size` square the drawing covers, its labels included, so a small graph is not drawn in a mostly empty square. */
 export interface Drawing { size: number; view: { x: number; y: number; w: number; h: number }; nodes: DrawnNode[]; edges: DrawnEdge[]; loops: DrawnLoop[] }
 
@@ -116,7 +133,7 @@ function ownTitle(e: LoopEdge): string {
  * held the token (a money middle, a funder, the far end of another token's
  * transfer) joins the middles inside the ring.
  */
-export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Flow[], middles: readonly string[], own: readonly OwnFlag[] = [], names: Lenses = {}, size = 560): Drawing {
+export function layout(transfers: readonly Numbered[], flows: readonly Flow[], middles: readonly string[], own: readonly OwnFlag[] = [], names: Lenses = {}, size = 560): Drawing {
   const holders: string[] = [];
   for (const t of transfers) for (const a of [t.from, t.to]) if (a !== ZERO && !holders.includes(a)) holders.push(a);
   const inner = middles.filter((m) => !holders.includes(m));
@@ -129,19 +146,28 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   // between them, under the very arrow it explains.
   const ring = (list: readonly string[], r: number, middle: boolean): DrawnNode[] =>
     list.map((id, i) => {
-      const start = !middle && list.length === 2 ? Math.PI : -Math.PI / 2;
+      const pair = !middle && list.length === 2;
+      const start = pair ? Math.PI : -Math.PI / 2;
       const angle = start + (2 * Math.PI * i) / Math.max(1, list.length);
       const lone = list.length === 1 && !middle;
       const x = lone ? c : c + r * Math.cos(angle);
       const y = lone ? c : c + r * Math.sin(angle);
+      // A pair's labels hang under their wallets, reaching outward from just inside them: set beside, each would add its
+      // whole width to the strip's, and a phone would have to shrink the strip's text below reading to show it.
+      if (pair) return { id, x, y, lx: x + (i === 0 ? 10 : -10), ly: y + 24, anchor: i === 0 ? 'end' : 'start', middle, first: i === 0 };
       const out = lone ? 0 : middle ? -Math.PI / 2 : angle;
       const gap = lone ? 0 : 26;
       const lx = x + gap * Math.cos(out);
       return { id, x, y, lx, ly: (lone ? y + 24 : y + gap * Math.sin(out)), anchor: lx < x - 4 ? 'end' : lx > x + 4 ? 'start' : 'middle', middle, first: !middle && i === 0 };
     });
-  // Room past the ring for a label set outward: an address is about 70 px of mono text.
-  const r = c - 100;
-  const nodes = [...ring(holders, r, false), ...ring(inner, r * 0.42, true)];
+  // Neighbours on the ring sit SPACING apart, so a loop of a few wallets is drawn small, not on the big ring a crowd needs;
+  // past six the ring stops growing, leaving room in the square for a label set outward (an address is about 70 px of mono text).
+  // One wallet, or two, is spaced as a pair is.
+  const around = (n: number) => Math.min(c - 100, SPACING / (2 * Math.sin(Math.PI / Math.max(2, n))));
+  const r = holders.length < 2 ? 0 : around(holders.length);
+  // A pair's middles sit above and below the line between them, past the highest of its fan of arrows; any other ring's, inside it.
+  // A lone holder sits at the centre with no ring to be inside, so its middles ring it, spaced as holders are: at 0.42 of a radius of 0 each would sit on it.
+  const nodes = [...ring(holders, r, false), ...ring(inner, holders.length === 2 ? FAN_CLEAR : holders.length < 2 ? around(inner.length) : r * 0.42, true)];
   const at = new Map(nodes.map((n) => [n.id, n]));
 
   // Edges grouped by unordered pair, so A→B and B→A share one fan.
@@ -162,8 +188,18 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const key = pairKey(t.from, t.to);
     pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
   }
-  const bundles = new Map<string, { first: number; rows: number[]; tone: Tone }>();
+  const bundles = new Map<string, { first: number; rows: number[]; tone: Tone; ids: string[] }>();
   const RANK: Record<Tone, number> = { clean: 0, apart: 1, money: 2, cycle: 3 };
+
+  // Each arrow's number (Numbered). A drawing of several tokens, as a ring's, puts each number under its token: two tokens both have a sale 2.
+  const several = new Set(transfers.map((t) => t.tokenId)).size > 1;
+  const numberOf = (i: number) => {
+    const t = transfers[i]!, n = String(t.n ?? i + 1);
+    return several ? `#${tokenLabel(t.tokenId, 8)}·${n}` : n;
+  };
+  /** The number as a title says it: "#2", or "#114·2" already marked. */
+  const named = (i: number) => (several ? numberOf(i) : `#${numberOf(i)}`);
+  const idOf = (t: FlaggedTransfer) => `${t.txHash}:${t.logIndex}`;
 
   const edges: DrawnEdge[] = [];
   /** Which arrow draws each transfer (by index), so a reason can name its arrows. */
@@ -171,8 +207,9 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
   transfers.forEach((t, i) => {
     if (t.from === ZERO || t.to === ZERO) return;
     if (pairCount.get(pairKey(t.from, t.to))! > FAN_MAX) {
-      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], tone: 'clean' as Tone };
+      const b = bundles.get(`${t.from}>${t.to}`) ?? { first: i, rows: [], tone: 'clean' as Tone, ids: [] };
       b.rows.push(i + 1);
+      b.ids.push(idOf(t));
       const v = toneOf(t);
       if (RANK[v] > RANK[b.tone]) b.tone = v;
       bundles.set(`${t.from}>${t.to}`, b);
@@ -182,8 +219,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const k = nextIn(t.from, t.to);
     const tone = toneOf(t);
     edges.push({
-      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: String(i + 1),
-      title: `#${i + 1} ${t.marketplace ? `sale on ${t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
+      key: `t${i}`, kind: 'asset', tone, from: t.from, to: t.to, tx: t.txHash, row: i + 1, label: numberOf(i), ids: [idOf(t)],
+      title: `${named(i)} ${t.marketplace ? `sale on ${VENUES[venueOf(t.marketplace)]?.name ?? t.marketplace}` : 'transfer'}${flaggedNote(tone)}`,
       ...curve(at.get(t.from)!, at.get(t.to)!, k, c),
     });
     edgeOf.set(i, `t${i}`);
@@ -196,8 +233,8 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     // Money between the pair keeps the fan, and starts in the middle.
     const k = from < to ? 1 : 2;
     edges.push({
-      key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`,
-      title: `${b.rows.length} transfers this way, rows ${b.rows[0]} to ${b.rows[b.rows.length - 1]}${flaggedNote(b.tone)}`,
+      key: `b${key}`, kind: 'asset', tone: b.tone, from, to, tx: transfers[b.first]!.txHash, row: b.first + 1, label: `×${b.rows.length}`, ids: b.ids,
+      title: `${b.rows.length} transfers this way, ${named(b.rows[0]! - 1)} to ${named(b.rows[b.rows.length - 1]! - 1)}${flaggedNote(b.tone)}`,
       ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }
@@ -212,7 +249,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
     const [from, to] = key.split('>') as [string, string];
     const k = nextIn(from, to);
     edges.push({
-      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '',
+      key: `m${key}`, kind: 'money', tone: 'money', from, to, tx: null, row: null, label: count > 1 ? `×${count}` : '', ids: [],
       title: `${count} money ${count === 1 ? 'flow' : 'flows'}`, ...curve(at.get(from)!, at.get(to)!, k, c),
     });
   }
@@ -244,7 +281,7 @@ export function layout(transfers: readonly FlaggedTransfer[], flows: readonly Fl
       const asset = e.kind === 'nft-token' || e.kind === 'nft-collection';
       const key = `o${i}e${j}`;
       edges.push({
-        key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null,
+        key, kind: asset ? 'asset' : 'money', tone: 'own', from: e.from, to: e.to, tx: asset ? e.tx : null, row: null, ids: [],
         label: asset ? (e.kind === 'nft-collection' && e.tokenId !== null ? `#${e.tokenId}` : '') : tokenPaid(e) ?? amount(e.amountWei),
         title: ownTitle(e), ...(e.kind === 'nft-collection' && e.tokenId !== null ? { token: e.tokenId } : {}),
         ...curve(at.get(e.from)!, at.get(e.to)!, nextIn(e.from, e.to), c),

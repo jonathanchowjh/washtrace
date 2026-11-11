@@ -2,12 +2,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { connection } from 'next/server';
 import { messageOf } from '@washtrace/detect';
-import { Bar, Head, Notices, Pill, Problem, STORE_DOWN, Section, type PillTone } from '@/components/ui';
+import { Answer, Bar, Head, Pill, Problem, STORE_DOWN, Section, Warn, type PillTone } from '@/components/ui';
 import { Refresh } from '@/components/refresh';
 import { chainName } from '@/lib/chains';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, LENSES, eta, interval, num, plural, stageName, took, withoutKey } from '@/lib/format';
 import { FIELDS } from '@/lib/settings';
-import { JOB_STEP, type JobState } from '@/lib/status';
+import { JOB_STEP, type JobState, type Notice } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { readerZone } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -56,28 +56,26 @@ export default async function WorkerPage() {
         <Refresh everyMs={5_000} />
       </Head>
 
-      <Notices notices={v.notices} />
-      <p className="mt-3 text-sm text-muted-foreground">
-        <b className="font-medium text-foreground">Now</b>{' '}
-        {now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')}
-      </p>
+      <Status notices={v.notices} now={now.length === 0 ? 'Idle between passes. The next one starts on its own.' : now.map((p) => p.doing).join(' · ')} />
 
-      <Section title="What it does" lead="Four jobs, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analyzed.">
-        <ol className="grid gap-3 lg:grid-cols-4">
+      <Section title="What it does" lead="Four jobs, each run over every collection on its own timer, in the order data flows through them. The first three feed the console; the last runs your own lenses on what the third analyzed. They are not the reading stages below, which say how far one collection has got.">
+        {/* Each card spans four rows of the list's grid, so its title, what it does, its figures and the backlog line up across cards. */}
+        {/* The jobs are not numbered: the reading stages below are, 1 to 6, and a job's number read as a stage's. The arrows give their order. */}
+        <ol aria-label="Jobs" className="grid gap-3 lg:grid-cols-4">
           {v.jobs.map((j, i) => {
             const step = STEPS[j.job];
             const state = STATE[j.state];
             // In flight, running or stuck: what the row holds besides its start is the last pass's, not this one's.
             const inFlight = j.startedAt !== null && (j.finishedAt === null || j.finishedAt < j.startedAt);
             return (
-              <li key={j.job} className="relative flex flex-col gap-2 rounded-lg border bg-card p-4">
+              <li key={j.job} className="relative flex flex-col gap-2 rounded-lg border bg-card p-4 lg:row-span-4 lg:grid lg:grid-rows-subgrid">
                 {i > 0 ? <span aria-hidden className="absolute top-1/2 -left-3 hidden -translate-y-1/2 text-muted-foreground lg:block">→</span> : null}
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium text-foreground"><span className="mr-1.5 text-muted-foreground tabular-nums">{i + 1}</span>{step.title}</p>
+                  <p className="font-medium text-foreground">{step.title}</p>
                   <Pill tone={state.tone}>{state.label}</Pill>
                 </div>
                 <p className="text-sm text-muted-foreground">{step.does}</p>
-                <dl className="mt-auto grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                <dl className="mt-auto grid grid-cols-[auto_1fr] content-start gap-x-3 gap-y-0.5 text-xs lg:mt-0">
                   <dt className="text-muted-foreground">Every</dt><dd>{interval(v.every[j.job])}</dd>
                   <dt className="text-muted-foreground">Last run</dt><dd>{j.startedAt === null ? 'never' : <Time ms={j.startedAt} />}{j.tookMs !== null && !inFlight ? `, took ${took(j.tookMs)}` : ''}</dd>
                   <dt className="text-muted-foreground">Said</dt><dd className={cn(!inFlight && j.outcome === 'failed' && 'text-fault')}>{inFlight ? '…' : j.detail ?? '—'}</dd>
@@ -110,7 +108,8 @@ export default async function WorkerPage() {
             <span><span className="font-medium text-foreground">Chain RPC</span> <span className="text-muted-foreground">→ {stageName(4)}</span></span>
             {v.rpcChains.length === 0
               ? <Link href="/settings#rpc.1" className="text-money underline">No RPC. Add an RPC URL in Settings →</Link>
-              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc.1" className="text-muted-foreground underline">change in Settings</Link></span>}
+              // Settings lists every chain's RPC with where it comes from, but saves only Ethereum's: another chain's is set in .env.
+              : <span>{v.rpcChains.map(chainName).join(', ')} · <Link href="/settings#rpc" className="text-muted-foreground underline">{v.rpcChains.every((id) => id === 1) ? 'change in Settings' : 'where each comes from, in Settings'}</Link></span>}
           </li>
           <li className="flex flex-wrap justify-between gap-2 px-4 py-2.5">
             <span><span className="font-medium text-foreground">Funding</span> <span className="text-muted-foreground">→ {stageName(5)}</span></span>
@@ -121,10 +120,49 @@ export default async function WorkerPage() {
         </ul>
       </Section>
 
-      <Section title="How far along is each collection?" lead="One row per collection, one column per stage of its reading. Open a row for what each stage means and what feeds what.">
+      <Section title="How far along is each collection?" lead="Each collection's reading in six stages, and how far each has got: the jobs above do the work, a stage says where one collection stands. Open one for what each stage means and what feeds what.">
         <PipelineTable rows={v.collections} />
         <PipelineErrors rows={v.collections.map((c) => ({ ...c, paused: c.turn === 'paused', rpc: v.rpcChains.includes(c.chainId) }))} />
       </Section>
     </>
+  );
+}
+
+/**
+ * The page's answer: nothing has failed, or how many things need a person,
+ * each with what to do; then what is under way or limited, and what the
+ * worker is doing now. "Nothing has failed." is the normal state even while
+ * hours of work remain, so the notices under it matter too.
+ */
+function Status({ notices, now }: { notices: Notice[]; now: string }) {
+  const needs = notices.filter((n): n is Extract<Notice, { severity: 'needs-you' }> => n.severity === 'needs-you');
+  const rest = notices.filter((n): n is Exclude<Notice, { severity: 'needs-you' }> => n.severity !== 'needs-you');
+  return (
+    <Answer tone="clean" title={needs.length === 0 ? 'Nothing has failed.' : `${plural(needs.length, 'thing')} ${needs.length === 1 ? 'needs' : 'need'} you`}>
+      <div className="space-y-2">
+        {needs.map((n, i) => (
+          <div key={i} role="alert" className="flex gap-3 rounded-lg border border-fault/40 bg-card p-3">
+            <Warn className="mt-0.5 size-5 text-fault" />
+            <div>
+              <p className="font-semibold text-foreground">{n.text}</p>
+              <p className="mt-0.5"><b className="text-fault">Do this:</b> {n.href ? <Link className="underline" href={n.href}>{n.doThis}</Link> : n.doThis}</p>
+            </div>
+          </div>
+        ))}
+        {rest.length > 0 ? (
+          <ul className="space-y-1">
+            {rest.map((n, i) => (
+              <li key={i} className={cn('flex items-start gap-2', n.severity === 'info' && 'text-muted-foreground')}>
+                {n.severity === 'working'
+                  ? <span aria-hidden className="mt-1.5 size-2 shrink-0 animate-pulse rounded-full bg-focus" />
+                  : <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full border border-muted-foreground" />}
+                <span>{n.text}{n.action ? <> <Link className="underline" href={n.action.href}>{n.action.label}</Link></> : null}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <p className="text-muted-foreground"><b className="font-medium text-foreground">Now</b> {now}</p>
+      </div>
+    </Answer>
   );
 }

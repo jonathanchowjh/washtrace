@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import pgClient from 'pg';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, SECRET_KEYS, Store, TOKEN_COUNT_MS, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, HISTORY_KEEP, Store, TooManyStreams, WALK_CAP, type TokenCounts } from '../src/store.js';
+import { SECRET_KEYS } from '../src/env.js';
+import { TOKEN_COUNT_MS } from '../src/worker.js';
 import type { ListOpts, TokenSort, WalletSort } from '../src/trade-sql.js';
 import { followOf } from '../src/reach.js';
 import { FACTS_VERSION } from '../src/facts.js';
@@ -96,6 +98,26 @@ describe('Store.schemaVersion', () => {
     } finally {
       await bare.pool.end();
     }
+  });
+});
+
+describe('the counted trades index, built concurrently', () => {
+  const index = async () => (await store.pool.query(
+    `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS def FROM pg_index i
+     JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'washtrace' AND c.relname = 'trade_facts_counted_idx'`,
+  )).rows;
+
+  it('holds the counted rows’ keys, so a lens list’s counted join reads the index alone, and is built again when missing', async () => {
+    const step = MIGRATIONS.at(-1)!;
+    expect(typeof step).toBe('object');
+    await store.migrate();
+    const built = [{ valid: true, def: 'CREATE INDEX trade_facts_counted_idx ON washtrace.trade_facts USING btree (collection_id, tx_hash, log_index) WHERE counted' }];
+    expect(await index()).toEqual(built);
+    await store.pool.query('DROP INDEX washtrace.trade_facts_counted_idx');
+    await store.pool.query('UPDATE washtrace.schema_version SET version = $1', [MIGRATIONS.length - 1]);
+    expect(await store.migrate()).toBe(MIGRATIONS.length);
+    expect(await index()).toEqual(built);
   });
 });
 
@@ -4178,6 +4200,14 @@ describe('Store.search', () => {
       expect(byName.more.collections).toBe(false);
       expect((await store.search({ kind: 'text', text: '100%' })).collections).toEqual([]);
       expect((await store.search({ kind: 'text', text: '%' })).collections).toEqual([]);
+      // A hit carries its latest analysis's totals, and none before the first.
+      expect(byName.collections.map((r) => r.totals)).toEqual([null, null]);
+      const save = (n: number) => store.pool.query(
+        `INSERT INTO washtrace.analyses (collection_id, took_ms, through_block, totals, missing_data, funded_wallets, wallets, truncated_searches)
+         VALUES ($1, 1, 100, $2, 0, 0, 0, 0)`, [one, JSON.stringify({ A: { sales: n } })]);
+      await save(1);
+      await save(2);
+      expect((await store.search({ kind: 'address', address: c1 })).collections[0]!.totals).toEqual({ A: { sales: 2 } });
 
       // Token 7 is in both collections, token 8 in one; busiest first.
       const tokens = (await store.search({ kind: 'token', tokenId: '7', text: '7' })).tokens;
@@ -4207,6 +4237,109 @@ describe('Store.search', () => {
       // A transaction.
       expect((await store.search({ kind: 'tx', tx })).trades).toEqual([{ chainId: 10, txHash: tx, address: c2, name: 'Searchable Cats', tokenId: '7' }]);
       expect(await store.search({ kind: 'empty' })).toMatchObject({ collections: [], tokens: [], wallets: [], trades: [] });
+    } finally {
+      await drop(1, c1);
+      await drop(10, c2);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[alice, bob, carol]]);
+    }
+  });
+
+  it('finds trades by the start of their hash, in every collection, on transfers_tx_idx', async () => {
+    await store.migrate();
+    const one = (await store.addCollection(1, c1, 'Searchable Apes', 1)).id;
+    const two = (await store.addCollection(10, c2, 'Searchable Cats', 1)).id;
+    const h = (start: string, fill: string) => start + fill.repeat(66 - start.length);
+    // Each pair sits either side of a prefix's end: 9 is followed by a, f by g.
+    const [a, b, c, d, e, f, g] = [h('0x1ee2', 'a'), h('0x1ee2', 'b'), h('0x1ee3', 'a'), h('0x1ee9', 'a'), h('0x1eea', 'a'), h('0x1eef', 'a'), h('0x1ef0', 'a')];
+    await store.ingest(one, 1, [
+      transfer('1', alice, bob, { txHash: a }), transfer('2', alice, bob, { txHash: b }), transfer('3', bob, alice, { txHash: b, logIndex: 1 }),
+      transfer('4', alice, bob, { txHash: d }), transfer('5', alice, bob, { txHash: e }), transfer('6', alice, bob, { txHash: f }),
+    ], 100, [alice, bob]);
+    await store.ingest(two, 10, [transfer('7', carol, alice, { txHash: c }), transfer('8', carol, alice, { txHash: g })], 100, [carol, alice]);
+    const found = async (prefix: string, opts = {}) => (await store.search({ kind: 'prefix', prefix }, opts)).trades.map((r) => [r.txHash, r.tokenId]);
+    try {
+      expect(await found('0x1ee2')).toEqual([[a, '1'], [b, '2'], [b, '3']]);
+      expect(await found('0x1ee9')).toEqual([[d, '4']]);
+      expect(await found('0x1eef')).toEqual([[f, '6']]);
+      expect(await found('0x1ee')).toEqual([[a, '1'], [b, '2'], [b, '3'], [c, '7'], [d, '4'], [e, '5'], [f, '6']]);
+      expect(await found('0x1eef' + 'a'.repeat(30))).toEqual([[f, '6']]);
+      expect(await found('0x1ee4')).toEqual([]);
+      // The scope narrows wallets only: a hash's start, like the whole of one, is found wherever it is.
+      expect(await found('0x1ee3', { scope: { id: one, chainId: 1 } })).toEqual([[c, '7']]);
+      const cut = await store.search({ kind: 'prefix', prefix: '0x1ee' }, { limit: 2, offset: 1 });
+      expect([cut.trades.map((r) => r.tokenId), cut.more.trades]).toEqual([['2', '3'], true]);
+
+      const pg = await store.pool.connect();
+      try {
+        await pg.query('BEGIN');
+        // Enough transfers that the planner costs an index scan, not a seq scan over a handful; rolled back.
+        await pg.query(
+          `INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, token_id, from_address, to_address)
+           SELECT $1, '0x' || md5(g::text) || md5((g + 1)::text), 0, g, g, $2, $3 FROM generate_series(1, 20000) g`,
+          [one, alice, bob],
+        );
+        await pg.query('ANALYZE washtrace.transfers');
+        // Store.search's own read of a prefix's trades.
+        const plan = (await pg.query(
+          `EXPLAIN SELECT c.chain_id, t.tx_hash FROM washtrace.transfers t JOIN washtrace.collections c ON c.id = t.collection_id
+           WHERE t.tx_hash >= $1 AND t.tx_hash < $2 AND t.tx_hash LIKE $1 || '%' ORDER BY t.tx_hash, c.id, t.log_index LIMIT 21`,
+          ['0x1ee2', '0x1ee3'],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/transfers_tx_idx/);
+      } finally {
+        await pg.query('ROLLBACK');
+        pg.release();
+      }
+    } finally {
+      await drop(1, c1);
+      await drop(10, c2);
+      await store.pool.query('DELETE FROM washtrace.wallets WHERE address = ANY($1)', [[alice, bob, carol]]);
+    }
+  });
+
+  it('says whether a token has a flagged trade in the latest analysis, read by key from the token\'s own transfers', async () => {
+    await store.migrate();
+    const one = (await store.addCollection(1, c1, 'Searchable Apes', 1)).id;
+    const two = (await store.addCollection(10, c2, 'Searchable Cats', 1)).id;
+    const h = (n: number) => '0x' + String(n).repeat(64);
+    await store.ingest(one, 1, [
+      transfer('7', alice, bob, { txHash: h(1) }), transfer('7', bob, alice, { txHash: h(2) }), transfer('8', alice, bob, { txHash: h(3) }),
+    ], 100, [alice, bob]);
+    await store.ingest(two, 10, [transfer('7', alice, carol, { txHash: h(4) })], 100, [alice, carol]);
+    const q = (sql: string, args: unknown[]) => store.pool.query(sql, args);
+    // Token 7's first trade is flagged by Round trips; token 8's only by Money loops back, which no count holds.
+    await q(`INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) VALUES ($1, $2, 0, true), ($1, $3, 0, true)`, [one, h(1), h(3)]);
+    await q(`INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) VALUES ($1, 'A', $2, 0, '{}'), ($1, 'AU', $3, 0, '{}')`, [one, h(1), h(3)]);
+    try {
+      const tokens = async (tokenId: string) => (await store.search({ kind: 'token', tokenId, text: tokenId })).tokens.map((r) => [r.address, r.flagged]);
+      expect(await tokens('7')).toEqual([[c1, true], [c2, false]]);
+      expect(await tokens('8')).toEqual([[c1, false]]);
+
+      const pg = await store.pool.connect();
+      try {
+        await pg.query('BEGIN');
+        // A collection's worth of flagged, counted transfers, so the plan is costed as on a real install; rolled back.
+        await pg.query(
+          `WITH t AS (INSERT INTO washtrace.transfers (collection_id, tx_hash, log_index, block_number, token_id, from_address, to_address)
+             SELECT $1, '0xfill' || g, 0, g, g % 5000, $2, $3 FROM generate_series(1, 20000) g RETURNING tx_hash),
+           x AS (INSERT INTO washtrace.trade_facts (collection_id, tx_hash, log_index, counted) SELECT $1, tx_hash, 0, true FROM t)
+           INSERT INTO washtrace.flags (collection_id, method, tx_hash, log_index, witness) SELECT $1, 'A', tx_hash, 0, '{}' FROM t`,
+          [one, alice, bob],
+        );
+        await pg.query('ANALYZE washtrace.transfers, washtrace.trade_facts, washtrace.flags');
+        // Store.search's own read of whether one collection's token has a flagged trade.
+        const plan = (await pg.query(
+          `EXPLAIN SELECT 1 FROM washtrace.transfers t JOIN washtrace.trade_facts x ON x.collection_id = t.collection_id AND x.tx_hash = t.tx_hash AND x.log_index = t.log_index AND x.counted
+           JOIN washtrace.flags f ON f.collection_id = t.collection_id AND f.method IN ('A', 'AC') AND f.tx_hash = t.tx_hash AND f.log_index = t.log_index
+           WHERE t.collection_id = $1 AND t.token_id = $2::numeric`,
+          [one, '7'],
+        )).rows.map((r) => r['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/transfers_token_idx/);
+        expect(plan).not.toMatch(/Seq Scan/);
+      } finally {
+        await pg.query('ROLLBACK');
+        pg.release();
+      }
     } finally {
       await drop(1, c1);
       await drop(10, c2);
@@ -5000,13 +5133,17 @@ describe('a wallet', () => {
     expect(await store.walletTokens(CHAIN, W, ran, 2)).toEqual(['1', '2']);
   });
 
-  it('a Find reads a token number, or the other side of the trade by its address or the start of it; anything else matches nothing', async () => {
+  it('a Find reads a token number, the other side of the trade by its address or the start of it, or a transaction by its hash; anything else matches nothing', async () => {
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '#1' }))).toEqual(['u1', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: P }))).toEqual(['u1', 't2', 't1']);
     expect(keys(await store.walletTransfers(CHAIN, W, 50, 0, { find: '0xbb0000' }))).toEqual(['u1', 't2', 't1']);
     // The wallet itself is no other side.
     expect(await store.walletTradeCount(CHAIN, W, { find: W })).toBe(0);
-    for (const find of ['hello', tx(1)]) expect(await store.walletTradeCount(CHAIN, W, { find })).toBe(0);
+    expect(await store.walletTradeCount(CHAIN, W, { find: 'hello' })).toBe(0);
+    // A transaction's hash finds its trade, and so does the start of one longer than an address.
+    expect(await store.walletTradeCount(CHAIN, W, { find: tx(1) })).toBe(1);
+    // tx(n) are zero-padded: their first 50 characters are every one of its trades' hashes.
+    expect(await store.walletTradeCount(CHAIN, W, { find: tx(1).slice(0, 50) })).toBe(await store.walletTradeCount(CHAIN, W));
   });
 
   it('with another wallet, holds the trades where the two are seller and buyer, either way', async () => {
@@ -7106,6 +7243,20 @@ describe('spot checks', () => {
     expect((await store.requestSpot(1, tx(2), null)).id).not.toBe(one.id);
   });
 
+  it('does not reuse a done check that was not complete, so Check again after its cause is fixed checks again', async () => {
+    const incomplete: SpotResult[] = [
+      { ...finished, washTrade: null, notRun: ['AU', 'AC'] },
+      { ...finished, washTrade: true, atLeast: true },
+      { ...finished, washTrade: null, notRun: ['L7'] },
+    ];
+    for (const [i, result] of incomplete.entries()) {
+      const one = await store.requestSpot(1, tx(40 + i), null);
+      await store.pool.query(`UPDATE washtrace.spot_checks SET status = 'running' WHERE id = $1`, [one.id]);
+      await store.saveSpot(one.id, result);
+      expect((await store.requestSpot(1, tx(40 + i), null)).id).not.toBe(one.id);
+    }
+  });
+
   it('two requests at once make one row', async () => {
     const [p, q] = await Promise.all([store.requestSpot(1, tx(3), null), store.requestSpot(1, tx(3), null)]);
     expect(p.id).toBe(q.id);
@@ -7159,24 +7310,24 @@ describe('spot checks', () => {
     expect(done!.finishedAt).not.toBeNull();
   });
 
-  it('moneyCovering says which reads cover the block and where the rest read on', async () => {
-    const covered = w('5c01'), older = w('5c02'), empty = w('5c03'), waiting = w('5c04');
-    await store.addWallets(77, [covered, older, empty, waiting]);
-    await store.saveMoney(77, covered, [flow(covered, x, { blockNumber: 50_000 })], false, undefined, 50_000);
+  it('moneyReadOn says where each stored read goes on from, however far it reached', async () => {
+    const reached = w('5c01'), older = w('5c02'), empty = w('5c03'), waiting = w('5c04');
+    await store.addWallets(77, [reached, older, empty, waiting]);
+    await store.saveMoney(77, reached, [flow(reached, x, { blockNumber: 50_000 })], false, undefined, 50_000);
     await store.saveMoney(77, older, [flow(older, x, { blockNumber: 30_000 })], true, undefined, 30_000);
     await store.saveMoney(77, empty, [], false, undefined, null);
-    const at = await store.moneyCovering(77, [covered, older, empty, waiting], 40_000);
-    expect(at.get(covered)).toEqual({ from: null, truncated: false });
+    const at = await store.moneyReadOn(77, [reached, older, empty, waiting]);
+    // A read past the trade still reads on: a payment since it was read can link the pair. A day of blocks (7,200)
+    // before the one after its last read.
+    expect(at.get(reached)).toEqual({ from: 50_000 + 1 - 7_200, truncated: false });
     // A truncated read is a hub either way, and reading on could save it as untruncated over its gap: never read on.
-    expect(at.get(older)).toEqual({ from: null, truncated: true });
+    expect(at.get(older)).toEqual({ from: 30_000 + 1 - 7_200, truncated: true });
     // A read that found no rows has no block: it reads again from 0.
     expect(at.get(empty)).toEqual({ from: 0, truncated: false });
     expect(at.has(waiting)).toBe(false);
-    // A day of blocks (7,200) before the one after its last read.
-    expect((await store.moneyCovering(77, [covered], 90_000)).get(covered)).toEqual({ from: 50_000 + 1 - 7_200, truncated: false });
     // Floored at 0 near the chain's start.
     await store.saveMoney(77, waiting, [flow(waiting, x, { blockNumber: 100 })], false, undefined, 100);
-    expect((await store.moneyCovering(77, [waiting], 200)).get(waiting)).toEqual({ from: 0, truncated: false });
+    expect((await store.moneyReadOn(77, [waiting])).get(waiting)).toEqual({ from: 0, truncated: false });
   });
 
   it('addWallets adds a row once, and flowsOf returns flows either way', async () => {

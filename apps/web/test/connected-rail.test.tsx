@@ -11,8 +11,13 @@ const fake = {
   collection: vi.fn(async (_c: number, a: string) => (a === ADDR ? { id: 1, name: 'Demo Apes', latest: { totals: { A: t(18, 1), AC: t(25, 1), AU: t(30, 1) } } } : null)),
   ringsOf: vi.fn(async () => [RING]),
   ringLines: vi.fn(async () => [{ anchor: RING, rank: 3, wallets: 3, sample: [], sales: 1, floorSales: 0, tokens: 1, volumeWei: '0', firstAt: null, lastAt: null }]),
+  lensRuns: vi.fn(async () => []),
+  // A ring's trades, read by the rail itself: `limit` of them, block by block, and how many the ring has in all.
+  trades: vi.fn(async (_id: number, _q: unknown, _ctx: unknown, limit: number) => Array.from({ length: limit }, (_, i) => ({ txHash: `0x${i + 1}`, blockNumber: i + 1, tokenId: '114', marketplace: 'opensea' }))),
+  tradeCount: vi.fn(async () => ({ total: 40, unjudged: 0 })),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
+vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
 
 const { ConnectedRail, partnersOf, railTxs, walletRoles } = await import('@/components/connected-rail');
 afterEach(cleanup);
@@ -61,5 +66,21 @@ describe('the Connected to rail', () => {
     const many = Array.from({ length: 8 }, (_, i) => ({ address: w(String(i)), role: 'buyer' }));
     expect(render(await ConnectedRail({ chainId: 1, address: ADDR, wallets: many })!).container.textContent).toContain('and 2 more below');
     expect(await ConnectedRail({ chainId: 1, address: w('e') })).toBeNull();
+  });
+
+  it('on a ring\'s page, which lists no transactions below, says how many trades the ring has and opens them on Trades', async () => {
+    const c = render(await ConnectedRail({ chainId: 1, address: ADDR, salesOf: { ring: RING } })!).container;
+    const group = [...c.querySelectorAll('h3')].find((h) => h.textContent === 'Transactions')!.parentElement!;
+    expect(group.querySelectorAll('li a[href*="/tx/"]')).toHaveLength(6);
+    expect(group.textContent).not.toContain('below');
+    const all = [...group.querySelectorAll('a')].find((a) => !a.getAttribute('href')!.includes('/tx/'))!;
+    expect(all.textContent).toBe('All 40 trades, on Trades ›');
+    expect(all.getAttribute('href')).toBe(`${BASE}/trades?ring=${RING}`);
+  });
+
+  it('on a ring\'s page with no more trades than it shows, links nothing more', async () => {
+    fake.tradeCount.mockResolvedValueOnce({ total: 6, unjudged: 0 });
+    const c = render(await ConnectedRail({ chainId: 1, address: ADDR, salesOf: { ring: RING } })!).container;
+    expect(c.textContent).not.toContain('on Trades');
   });
 });

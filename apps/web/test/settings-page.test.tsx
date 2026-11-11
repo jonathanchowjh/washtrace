@@ -78,7 +78,7 @@ describe('Settings, each field', () => {
     const payees: FieldView = { key: 'tokens.payees', label: 'Read tokens of wallets paid in tokens', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
     render(<Settings writable fields={[...fields(), payees]} />);
     expect(box('tokens.payees').querySelector('[data-hint]')?.textContent).toBe(
-      `on or off. On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
+      `On, reading other tokens also reads the tokens of wallets your traders paid in the listed tokens, so a one-wallet token loop can be seen; up to ${FOLLOW_FANOUT} more reads per trader. `
       + `Not read: the payees of a trader that paid over ${FOLLOW_FANOUT} others or whose list was too long to read, and any marketplace, custodian, wrapped token or other contract washtrace knows, or the zero address.`);
   });
 
@@ -102,6 +102,32 @@ describe('Settings, each field', () => {
     expect(box('etherscan.key').textContent).toContain('From .env (WASHTRACE_ETHERSCAN_KEY).');
     expect(box('follow.hops').textContent).toContain('Saved here.');
     expect(box('etherscan.rps').textContent).toContain('None: not saved here or in .env');
+  });
+
+  it('shows another chain\'s RPC under the chain\'s heading, read-only, with where it comes from and a Test', () => {
+    const anvil: FieldView = {
+      key: 'rpc.31337', label: 'Local (anvil) RPC URL', secret: true, set: true, shown: 'http://anvil:8545/••••8545', source: 'env', env: 'http://anvil:8545/••••8545',
+      locked: true, pinned: "Only .env sets this chain's RPC: the console saves Ethereum's alone.", invalid: null,
+    };
+    render(<Settings writable fields={[...fields(), anvil]} />);
+    expect(box('rpc.31337').closest('section')!.querySelector('h2')!.textContent).toBe('Where it reads the chain');
+    expect(box('rpc.31337').textContent).toContain('http://anvil:8545/••••8545');
+    expect(box('rpc.31337').textContent).toContain("Only .env sets this chain's RPC: the console saves Ethereum's alone. From .env (WASHTRACE_RPC_31337).");
+    expect(box('rpc.31337').querySelector('[data-hint]')!.textContent).toBe('Where the worker reads the blocks and transfers of collections on Local (anvil). Shown as the worker reported it.');
+    expect((screen.getByRole('button', { name: 'Replace Local (anvil) RPC URL' }) as HTMLButtonElement).disabled).toBe(true);
+    // The worker tests the URL it reads, so a read-only one can be tested too.
+    expect(box('rpc.31337').querySelector('button[data-test]')).not.toBeNull();
+  });
+
+  it('puts the stored data dataset under a heading of its own, not with who paid whom', () => {
+    const repo: FieldView = { key: 'stored.repo', label: 'Stored data dataset', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null };
+    render(<Settings writable fields={[...fields(), repo]} />);
+    const section = box('stored.repo').closest('section')!;
+    expect(section.id).toBe('stored');
+    expect(section.querySelector('h2')!.textContent).toBe('Where it downloads stored data');
+    expect(section.textContent).toContain('Download stored data, reading stage 1 (Download) for every collection');
+    expect(box('etherscan.key').closest('section')!.querySelector('#stored\\.repo')).toBeNull();
+    expect(box('stored.repo').querySelector('[data-hint]')!.textContent).toMatch(/^The Hugging Face dataset/);
   });
 
   it('shows a value from .env with where it came from, and lets it be replaced', () => {
@@ -212,6 +238,50 @@ describe('Settings, each field', () => {
     await waitFor(() => expect(live('follow.hops').textContent).toContain('Follow money (wallets out) must be a whole number from 0 to 10.'));
     expect(live('follow.hops').querySelector('.text-fault')).toBeTruthy();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('Settings, an on/off setting', () => {
+  const payees = (more: Partial<FieldView> = {}): FieldView[] => [...fields(), { key: 'tokens.payees', label: 'Read tokens of wallets paid in tokens', secret: false, set: false, shown: null, source: null, env: null, locked: false, pinned: null, invalid: null, ...more }];
+  const toggle = () => screen.getByRole('switch', { name: 'Read tokens of wallets paid in tokens' }) as HTMLInputElement;
+  const sent = (fetch: ReturnType<typeof vi.fn>, i: number) => JSON.parse(String((fetch.mock.calls[i] as unknown as [string, RequestInit])[1].body));
+
+  it('is a switch, off by default and on when the saved value is on, with no text box', () => {
+    render(<Settings writable fields={payees()} />);
+    expect(toggle().checked).toBe(false);
+    expect(box('tokens.payees').querySelector('input:not([type=checkbox])')).toBeNull();
+    cleanup();
+    render(<Settings writable fields={payees({ set: true, shown: 'on', source: 'console' })} />);
+    expect(toggle().checked).toBe(true);
+  });
+
+  it('saves on, then off, through the same save as every field, and refreshes', async () => {
+    const fetch = vi.fn(async () => json({ key: 'tokens.payees', set: true }));
+    vi.stubGlobal('fetch', fetch);
+    render(<Settings writable fields={payees()} />);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect((fetch.mock.calls[0] as unknown as [string])[0]).toBe('/api/settings');
+    expect(sent(fetch, 0)).toEqual({ key: 'tokens.payees', value: 'on' });
+    expect(toggle().checked).toBe(true);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(sent(fetch, 1)).toEqual({ key: 'tokens.payees', value: 'off' });
+    expect(toggle().checked).toBe(false);
+  });
+
+  it('flips back and says why when the save is refused', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Read tokens of wallets paid in tokens is on or off.' }, 400)));
+    render(<Settings writable fields={payees()} />);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(live('tokens.payees').textContent).toContain('is on or off.'));
+    expect(toggle().checked).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('is disabled for a reader who may not write', () => {
+    render(<Settings writable={false} fields={payees({ locked: true })} />);
+    expect(toggle().disabled).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { TimeChart, type TimePoint } from '@/components/trend';
+import { BUILT_INS, TimeChart, type TimePoint } from '@/components/trend';
+import { SHOWN } from '@/lib/metrics';
 
 // The chart opens a period through the router.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -119,5 +120,69 @@ describe('the time chart, with lenses of yours', () => {
     const el = render(<TimeChart kind="analyses" points={[point(0), point(DAY)]} zone="UTC" />).container;
     expect(el.textContent).toMatch(/built-in lenses only/i);
     expect(el.textContent).toMatch(/keeps only its latest run/i);
+  });
+});
+
+describe('the time chart, for a history in one period', () => {
+  const HOUR = 3_600_000;
+  const at = Date.UTC(2023, 3, 3, 14);
+  const one = (q: TimePoint, more: { periodHrefs?: string[]; lensHrefs?: Partial<Record<string, string>>[]; readThrough?: number } = {}) => render(
+    <TimeChart kind="history" bucket="hour" readThrough={more.readThrough ?? null} now={at + 400 * DAY} notFinal={[]} funded funding zone="UTC" own={[]} ownLeft={[]} ownNotRun={[]}
+      points={[q]} periodHrefs={more.periodHrefs} lensHrefs={more.lensHrefs} />,
+  ).container;
+
+  it('says all its sales fell in one hour, and when, with each lens\'s share of them, in place of a near-empty chart', () => {
+    const el = one({ ...point(at), sales: 12, lens: { A: frac(3, 12), AU: frac(1, 12), AC: frac(6, 12) } }, { periodHrefs: ['/c/1/0xabc/trades?from=1'], lensHrefs: [{ A: '/c/1/0xabc/trades?caught=A' }] });
+    const fig = el.querySelector<HTMLElement>('figure[data-one-period]')!;
+    expect(fig.querySelector('p')!.textContent).toMatch(/^All 12 sales in one hour, .*2023/);
+    expect(within(fig).getByRole('link', { name: /^All 12 sales/ }).getAttribute('href')).toBe('/c/1/0xabc/trades?from=1');
+    expect(within(fig).getByRole('link', { name: '25%' }).getAttribute('href')).toBe('/c/1/0xabc/trades?caught=A');
+    expect(fig.textContent).toContain('6 of 12 sales');
+    expect(fig.textContent).toContain('Linked wallets');
+    expect(el.querySelector('polyline')).toBeNull();
+    expect(el.textContent).not.toMatch(/hours? with trades/);
+  });
+
+  it('lists the lenses in the order every page does, each in its own lens\'s hue', () => {
+    expect(BUILT_INS).toEqual(SHOWN);
+    const el = one({ ...point(at), sales: 12, lens: { A: frac(3, 12), AU: frac(1, 12), AC: frac(6, 12) } });
+    const items = [...el.querySelectorAll('figure[data-one-period] li')];
+    expect(items.map((li) => li.textContent?.match(/Round trips|Linked wallets|Money loops back/)?.[0])).toEqual(['Round trips', 'Linked wallets', 'Money loops back']);
+    expect(items[1]!.querySelector('line')!.getAttribute('class')).toContain('stroke-money');
+  });
+
+  it('says one sale as one, and a period read only part way says how far the chain is read', () => {
+    const el = one({ ...point(at), sales: 1, lens: { A: frac(1, 1), AU: frac(0, 1), AC: frac(1, 1) } }, { readThrough: at + HOUR });
+    const fig = el.querySelector('figure[data-one-period]')!;
+    expect(fig.querySelector('p')!.textContent).toMatch(/^One sale, /);
+    expect(fig.textContent).toContain('anything later is not read yet');
+  });
+});
+
+describe('the time chart\'s axis', () => {
+  const spread = () => render(
+    <TimeChart kind="history" bucket="day" readThrough={null} now={60 * DAY} notFinal={[]} funded funding zone="UTC" own={[]} ownLeft={[]} ownNotRun={[]}
+      points={[point(0), point(20 * DAY), point(40 * DAY), point(59 * DAY)]} />,
+  ).container;
+  // The x axis's labels sit just under the plot: H - B + 17.
+  const ticks = (c: Element) => c.querySelectorAll('svg text[y="217"]').length;
+
+  it('counts its periods in words, "4 days with trades"', () => {
+    expect(spread().querySelector('figcaption')!.textContent).toContain('4 days with trades');
+  });
+
+  it('on a phone draws as wide as it is shown, so its labels stay 11px, and with fewer ticks', () => {
+    const wide = ticks(spread());
+    cleanup();
+    const was = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')!;
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 340 });
+    try {
+      const el = spread();
+      expect(el.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 340 230');
+      expect(ticks(el)).toBeLessThanOrEqual(3);
+      expect(ticks(el)).toBeLessThan(wide);
+    } finally {
+      Object.defineProperty(Element.prototype, 'clientWidth', was);
+    }
   });
 });

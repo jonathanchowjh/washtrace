@@ -24,57 +24,69 @@ describe('layout', () => {
       {
         "edges": [
           {
-            "d": "M 280 100 Q 344.0858798800485 243 428.2690268357464 359.4641819740558",
+            "d": "M 280 187.62395692965987 Q 306.143593539449 264.905989232415 351.41828539142705 316.42307533065843",
             "from": "0x00000000000000000000000000000000000000w1",
+            "ids": [
+              "0xlab_s1:0",
+            ],
             "key": "t1",
             "kind": "asset",
             "label": "2",
-            "lx": 351.014083110324,
-            "ly": 239,
+            "lx": 313.07179676972453,
+            "ly": 260.905989232415,
             "row": 2,
-            "title": "#2 sale on blur · flagged",
+            "title": "#2 sale on Blur · flagged",
             "to": "0x00000000000000000000000000000000000000w2",
             "tone": "cycle",
             "tx": "0xlab_s1",
           },
           {
-            "d": "M 435.88457268119896 370 Q 280 354 137.04748630164502 368.6726528471252",
+            "d": "M 360 326.18802153517004 Q 280 310.18802153517004 212.74754878398196 323.6385117783737",
             "from": "0x00000000000000000000000000000000000000w2",
+            "ids": [
+              "0xlab_s2:0",
+            ],
             "key": "t2",
             "kind": "asset",
             "label": "3",
             "lx": 280,
-            "ly": 362,
+            "ly": 318.18802153517004,
             "row": 3,
-            "title": "#3 sale on blur · flagged",
+            "title": "#3 sale on Blur · flagged",
             "to": "0x00000000000000000000000000000000000000w3",
             "tone": "cycle",
             "tx": "0xlab_s2",
           },
           {
-            "d": "M 124.11542731880107 370.00000000000006 Q 215.91412011995155 243.00000000000003 274.6834868626086 111.86316517881905",
+            "d": "M 200 326.1880215351701 Q 253.85640646055103 264.905989232415 275.83416582459097 199.93841289096787",
             "from": "0x00000000000000000000000000000000000000w3",
+            "ids": [
+              "0xlab_s3:0",
+            ],
             "key": "t3",
             "kind": "asset",
             "label": "4",
-            "lx": 208.98591688967605,
-            "ly": 239.00000000000003,
+            "lx": 246.92820323027553,
+            "ly": 260.905989232415,
             "row": 4,
-            "title": "#4 sale on blur · flagged",
+            "title": "#4 sale on Blur · flagged",
             "to": "0x00000000000000000000000000000000000000w1",
             "tone": "cycle",
             "tx": "0xlab_s3",
           },
           {
-            "d": "M 280 100 Q 314.6410161513775 260 426.2566050247291 361.2648847285242",
+            "d": "M 280 187.62395692965987 Q 276.69872981077805 281.905989232415 348.5211079256864 320.0859696879419",
             "from": "0x00000000000000000000000000000000000000w1",
+            "ids": [
+              "0xlab_s4:0",
+            ],
             "key": "t4",
             "kind": "asset",
             "label": "5",
-            "lx": 336.29165124598853,
-            "ly": 247.5,
+            "lx": 298.34936490538905,
+            "ly": 269.405989232415,
             "row": 5,
-            "title": "#5 sale on blur · flagged",
+            "title": "#5 sale on Blur · flagged",
             "to": "0x00000000000000000000000000000000000000w2",
             "tone": "cycle",
             "tx": "0xlab_s4",
@@ -105,38 +117,38 @@ describe('layout', () => {
             "first": true,
             "id": "0x00000000000000000000000000000000000000w1",
             "lx": 280,
-            "ly": 74,
+            "ly": 161.62395692965987,
             "middle": false,
             "x": 280,
-            "y": 100,
+            "y": 187.62395692965987,
           },
           {
             "anchor": "start",
             "first": false,
             "id": "0x00000000000000000000000000000000000000w2",
-            "lx": 458.4012331795944,
-            "ly": 383,
+            "lx": 382.5166604983954,
+            "ly": 339.18802153517004,
             "middle": false,
-            "x": 435.88457268119896,
-            "y": 370,
+            "x": 360,
+            "y": 326.18802153517004,
           },
           {
             "anchor": "end",
             "first": false,
             "id": "0x00000000000000000000000000000000000000w3",
-            "lx": 101.59876682040567,
-            "ly": 383.00000000000006,
+            "lx": 177.4833395016046,
+            "ly": 339.1880215351701,
             "middle": false,
-            "x": 124.11542731880107,
-            "y": 370.00000000000006,
+            "x": 200,
+            "y": 326.1880215351701,
           },
         ],
         "size": 560,
         "view": {
-          "h": 349.00000000000006,
-          "w": 516.8024663591887,
-          "x": 21.59876682040567,
-          "y": 54,
+          "h": 217.56406460551023,
+          "w": 365.03332099679085,
+          "x": 97.4833395016046,
+          "y": 141.62395692965987,
         },
       }
     `);
@@ -176,6 +188,20 @@ describe('layout', () => {
     expect(layout(LAB, [], []).view.h).toBeGreaterThan(d.view.h);
   });
 
+  it('draws a two-wallet loop narrow enough for a phone’s column at full size, its labels under its wallets', () => {
+    const d = layout([t(ZERO, a), t(a, b), t(b, a), t(a, b), t(b, a)], [], []);
+    // A phone's graph box is about 312 px: the strip fits it unscaled, so its 10 px labels stay 10 px.
+    expect(d.view.w).toBeLessThanOrEqual(312);
+    for (const n of d.nodes) expect(n.ly).toBeGreaterThan(n.y + 10);
+  });
+
+  it('draws a loop of three no wider than a phone shows at 0.8 of its size, and a crowd on the full ring', () => {
+    expect(layout(LAB, [], []).view.w * 0.8).toBeLessThanOrEqual(312);
+    const crowd = Array.from({ length: 8 }, (_, i) => t(w(`c${i}`), w(`c${(i + 1) % 8}`)));
+    const [n0, n4] = [layout(crowd, [], []).nodes[0]!, layout(crowd, [], []).nodes[4]!];
+    expect(Math.abs(n0.y - n4.y)).toBeCloseTo(360);
+  });
+
   it('draws no node for the zero address and no edge for a mint', () => {
     const d = layout([t(ZERO, a), t(a, b)], [], []);
     expect(d.nodes.map((n) => n.id)).toEqual([a, b]);
@@ -188,6 +214,18 @@ describe('layout', () => {
     // Holders left and right on one horizontal line; the middle above it.
     expect(na!.y).toBeCloseTo(nb!.y);
     expect(Math.abs(nx!.y - na!.y)).toBeGreaterThan(20);
+  });
+
+  it('sets middles around a lone holder, apart from it and from each other, and apart with no holder at all', () => {
+    const apart = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y);
+    for (const [transfers, n] of [[[t(ZERO, a)], 3], [[], 2]] as const) {
+      const nodes = layout(transfers, [], [b, x]).nodes;
+      expect(nodes).toHaveLength(n);
+      for (const [i, p] of nodes.entries()) for (const q of nodes.slice(i + 1)) expect(apart(p, q)).toBeGreaterThan(60);
+    }
+    // One middle too sits off the lone holder, not on it.
+    const [h, m] = layout([t(ZERO, a)], [], [x]).nodes;
+    expect(apart(h!, m!)).toBeGreaterThan(60);
   });
 
   it('gives parallel transfers between one pair distinct paths', () => {
@@ -238,6 +276,38 @@ describe('layout', () => {
     const d = layout(ping, [], []);
     expect(d.loops[0]!.edges).toHaveLength(2);
     expect(d.edges.map((e) => e.tx).sort()).toEqual(['0xp0', '0xp1']);
+  });
+
+  describe('an arrow’s number', () => {
+    const ts = [{ ...t(ZERO, a), txHash: '0xs0' }, { ...t(a, b), txHash: '0xs1' }, { ...t(b, a), txHash: '0xs2', logIndex: 3 }];
+
+    it('is the transfer’s place in its token’s history, the mint 1, as the token’s table numbers it', () => {
+      const asset = layout(ts, [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => [e.label, e.title])).toEqual([['2', '#2 transfer'], ['3', '#3 transfer']]);
+    });
+
+    it('keeps that place when the list is not the whole history, as a ring’s is', () => {
+      // The ring draws only its wallets' transfers: no mint, so the list's own order would start at 1.
+      const asset = layout([{ ...ts[1]!, n: 2 }, { ...ts[2]!, n: 3 }], [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => e.label)).toEqual(['2', '3']);
+      // The row stays the list's, which a page's links are keyed by.
+      expect(asset.map((e) => e.row)).toEqual([1, 2]);
+    });
+
+    it('names its token in a drawing of several, where two tokens each have a transfer 2', () => {
+      const several = [{ ...t(a, b), n: 2 }, { ...t(b, a), tokenId: '114', n: 2 }];
+      const asset = layout(several, [], []).edges.filter((e) => e.kind === 'asset');
+      expect(asset.map((e) => [e.label, e.title])).toEqual([['#1·2', '#1·2 transfer'], ['#114·2', '#114·2 transfer']]);
+    });
+
+    it('is said for a bundle’s first and last, and a bundle holds every transfer it draws', () => {
+      const ping = Array.from({ length: 14 }, (_, i) => ({ ...(i % 2 === 0 ? t(a, b) : t(b, a)), txHash: `0xp${i}` }));
+      const bundle = layout([t(ZERO, a), ...ping], [], []).edges.find((e) => e.from === a)!;
+      expect(bundle.title).toBe('7 transfers this way, #2 to #14');
+      expect(bundle.ids).toEqual([0, 2, 4, 6, 8, 10, 12].map((i) => `0xp${i}:0`));
+      // An arrow holds its one transfer, by hash and log index; money holds none.
+      expect(layout(ts, [], []).edges.map((e) => e.ids)).toEqual([['0xs1:0'], ['0xs2:3']]);
+    });
   });
 
   describe('a lens of yours', () => {

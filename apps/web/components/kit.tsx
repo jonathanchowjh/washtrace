@@ -1,5 +1,5 @@
 import type { Witness } from '@washtrace/detect';
-import { plural } from '@/lib/format';
+import { LENSES, NOT_JUDGED_YET, plural } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
@@ -9,14 +9,15 @@ import { cn } from '@/lib/utils';
  * and follows the dark theme with no colours of its own.
  */
 
-export type Kind = 'collection' | 'ring' | 'token' | 'wallet' | 'transaction';
+export type Kind = 'collection' | 'lens' | 'ring' | 'token' | 'wallet' | 'transaction';
 
-/** The five kinds of thing a page or link can be; the same shape on every link to it, so a reader learns it once. */
+/** The kinds of thing a page or link can be; the same shape on every link to it, so a reader learns it once. */
 export function KindIcon({ kind, className }: { kind: Kind; className?: string }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
       className={cn('size-4 shrink-0', className)}>
       {kind === 'collection' ? <><rect x="2" y="4" width="10" height="10" rx="2" /><path d="M5 2h8a1 1 0 0 1 1 1v8" /></>
+        : kind === 'lens' ? <><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></>
         : kind === 'ring' ? <><path d="M3.5 6.5A5 5 0 0 1 12.5 5" /><path d="M12.5 2.5V5H10" /><path d="M12.5 9.5A5 5 0 0 1 3.5 11" /><path d="M3.5 13.5V11H6" /></>
         : kind === 'token' ? <path d="M8 1.5l5.6 3.25v6.5L8 14.5l-5.6-3.25v-6.5z" />
         : kind === 'wallet' ? <><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="1.5" fill="currentColor" /></>
@@ -35,8 +36,18 @@ export function FunnelIcon({ className }: { className?: string }) {
   );
 }
 
+/** Finding one row, as against the funnel's narrowing of the list: a box that looks things up, not a filter. */
+export function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"
+      className={cn('size-4 shrink-0', className)}>
+      <circle cx="7" cy="7" r="4.25" /><path d="M10.25 10.25 13.5 13.5" />
+    </svg>
+  );
+}
+
 // Each verdict by the tier of the lens behind it, in the lenses' own names.
-const VERDICT = { cycle: 'Round trips · the floor', money: 'Linked wallets · the ceiling', apart: 'Money loops back · not counted', clean: 'Not flagged' } as const;
+const VERDICT = { cycle: `${LENSES.A.name} · ${LENSES.A.tier}`, money: `${LENSES.AC.name} · ${LENSES.AC.tier}`, apart: `${LENSES.AU.name} · ${LENSES.AU.tier}`, clean: 'Not flagged' } as const;
 
 /**
  * A detail page's verdict as a chip under its title: the tier's mark and the
@@ -47,7 +58,7 @@ export function VerdictChip({ tone }: { tone: keyof typeof VERDICT | null }) {
   return (
     <span className="chip font-medium">
       {tone === null ? <i aria-hidden className="inline-block size-2.5 shrink-0 rounded-[2px] border border-dashed border-muted-foreground" /> : <TierMark tone={tone} />}
-      {tone === null ? 'Not judged yet' : VERDICT[tone]}
+      {tone === null ? NOT_JUDGED_YET : VERDICT[tone]}
     </span>
   );
 }
@@ -62,7 +73,8 @@ export const HATCH = 'bg-[repeating-linear-gradient(135deg,var(--money)_0_2px,va
 const MARK = {
   cycle: 'rounded-[2px] bg-cycle',
   money: `rounded-[2px] ${HATCH}`,
-  apart: 'rounded-full border border-dashed border-muted-foreground',
+  // Grey and dashed, as never counted; a 1.5 px ring round a tinted disc, so it has the weight of the marks beside it and never reads as the "–" of a sale no lens flagged.
+  apart: 'rounded-full border-[1.5px] border-dashed border-muted-foreground bg-muted-foreground/30',
   own: 'rotate-45 rounded-[1px] bg-flow',
   clean: 'rounded-[2px] bg-muted',
 } as const;

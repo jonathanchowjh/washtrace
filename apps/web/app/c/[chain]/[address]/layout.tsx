@@ -1,21 +1,21 @@
-import { Suspense, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { METHODS, type CollectionRow } from '@washtrace/detect';
-import { NO_FILTER } from '@washtrace/detect/trades';
+import { METHODS } from '@washtrace/detect';
 import { CollectionNav } from '@/components/collection-nav';
-import { collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
-import { num, short } from '@/lib/format';
+import { lensKeyOf } from '@/lib/api';
+import { collectionOf, runsOf } from '@/lib/collection-reads';
+import { short } from '@/lib/format';
 import { addressOf, chainOf } from '@/lib/params';
-import { store } from '@/lib/store';
 
 type Props = { params: Promise<{ chain: string; address: string }>; children: ReactNode };
 
 /**
  * Every page of one collection sits under its parent line and tab bar, so a
  * token, a list or a trade always says which collection it belongs to and
- * which part of it the reader is in. The counts stream in after the page: a
- * slow count never holds the page back.
+ * which part of it the reader is in. The counts come after the page, from
+ * the browser: a slow count never holds the page back, and a prefetch of a
+ * tab never reads them.
  */
 export default async function CollectionLayout({ params, children }: Props) {
   await connection();
@@ -25,41 +25,20 @@ export default async function CollectionLayout({ params, children }: Props) {
   if (chainId === null || address === null) notFound();
   const c = await collectionOf(chainId, address);
   if (!c) notFound();
-  const count = (kind: Counted) => <Suspense fallback={null}><Count c={c} kind={kind} /></Suspense>;
   // The page under it reads the same runs, from the same request's cache.
-  const lenses = [...METHODS, ...(await runsOf(c.id)).map((r) => r.lens.key)];
+  const runs = await runsOf(c.id);
+  const lenses = [...METHODS, ...runs.map((r) => r.lens.key)];
+  // Each lens's counts are read by the browser, once a page and again when an analysis, a read or (for yours) a run changes them:
+  // here they ran for every prefetch and refresh. Only the lens in view is asked for.
+  const stamp = `analysis=${c.latest?.id ?? 'none'}&transfers=${c.transfers}`;
+  const finished = new Map<string, number | 'none'>(runs.map((r) => [r.lens.key, r.run?.finishedAt ?? 'none']));
+  const counts = Object.fromEntries(lenses.map((m) => [m,
+    `/api/collections/${chainId}/${address}/counts?method=${encodeURIComponent(m)}&${stamp}${finished.has(m) ? `&run=${finished.get(m)}` : ''}`]));
   return (
     <>
-      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analysedAt={c.latest?.ranAt ?? null} lenses={lenses}
-        counts={{ rings: c.latest?.rings == null ? null : <Badge n={c.latest.rings} />, tokens: count('tokens'), wallets: count('wallets'), trades: count('trades') }} />
+      <CollectionNav base={`/c/${chainId}/${address}`} name={c.name ?? short(address)} analyzedAt={c.latest?.ranAt ?? null} lenses={lenses}
+        opensOn={lensKeyOf(null, {})} counts={counts} rings={c.latest?.rings ?? null} />
       {children}
     </>
   );
-}
-
-type Counted = 'tokens' | 'wallets' | 'trades';
-
-/** A tab's count. Rings' is the analysis's own, saved with it, so it needs no read. */
-function Badge({ n }: { n: number }) {
-  return <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{num(n)}</span>;
-}
-
-/**
- * A tab's count as its list counts it: the trades are every sale, as Trades
- * opens; the tokens and wallets are Linked wallets', the default lens, and
- * only once it has run. A count that cannot be read shows nothing.
- */
-async function Count({ c, kind }: { c: CollectionRow; kind: Counted }) {
-  try {
-    const ctx = await tradeContextOf(c);
-    const s = store();
-    const none = { sort: 'caught', find: null, limit: 0, offset: 0 } as const;
-    const n = kind === 'trades' ? (await s.tradeCount(c.id, NO_FILTER, ctx)).total
-      : !ctx.ran.includes('AC') ? null
-        : kind === 'tokens' ? (await s.lensTokens(c.id, 'AC', none, ctx)).total
-          : (await s.lensWallets(c.id, 'AC', none, ctx)).total;
-    return n === null ? null : <Badge n={n} />;
-  } catch {
-    return null;
-  }
 }

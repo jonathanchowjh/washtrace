@@ -20,7 +20,7 @@ describe('a hover card', () => {
     await wait(OPEN_MS - 1);
     expect(screen.queryByRole('tooltip')).toBeNull();
     await wait(1);
-    expect(screen.getByRole('tooltip').textContent).toContain('4 trades here · 2 flagged');
+    expect(screen.getByRole('tooltip').textContent).toContain('4 transfers here · 2 flagged');
     fireEvent.mouseLeave(screen.getByText('wallet').parentElement!);
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
@@ -71,5 +71,11 @@ describe('a hover card', () => {
   it('says not judged yet before any analysis, never 0 flagged', () => {
     expect(cardLines({ kind: 'token', judged: false, tokenId: '7', transfers: 2, flagged: 0 }).lines).toEqual(['2 transfers · not judged yet']);
     expect(cardLines(wallet).lines[1]).toBe('In Ring 3 and 1 more ring');
+  });
+
+  it('names each count by what it counts: a wallet\'s and a token\'s transfers, a ring\'s flagged sales', () => {
+    expect(cardLines(wallet).lines[0]).toBe('4 transfers here · 2 flagged');
+    expect(cardLines({ kind: 'token', judged: true, tokenId: '7', transfers: 5, flagged: 4 }).lines).toEqual(['5 transfers · 4 flagged']);
+    expect(cardLines({ kind: 'ring', judged: true, ring: { ...wallet.ring!, wallets: 3, tokens: 2, sales: 4, volumeWei: '0' } }).lines[1]).toBe('4 flagged sales · 0 ETH');
   });
 });

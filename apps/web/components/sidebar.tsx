@@ -12,8 +12,10 @@ const ITEM = 'flex items-center gap-2 rounded-md px-2 py-1 whitespace-nowrap hov
 
 /**
  * Collections, each watched collection by name, the worker and its settings, and a search box
- * that takes a collection name, a token number, a wallet or a transaction. Under 768 px the
- * search box is a row of its own above one row that scrolls sideways, above the page.
+ * that takes a collection name, a token number, a wallet or a transaction. Under 768 px it is
+ * a header above the page, read in order: the name and the search box on one row, then the
+ * links, wrapping onto as many rows as they need. A row that scrolled sideways hid Settings and
+ * the theme past a phone's edge, and a fade at that edge did not say enough that they were there.
  */
 export function Sidebar({ watched }: { watched: { chainId: number; address: string; name: string | null }[] }) {
   const path = usePathname();
@@ -21,15 +23,18 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
   return (
     // The wrapper stretches to the grid row, so the sidebar's ground and edge run the page's full height; the aside inside stays put while the page scrolls.
     <div className="bg-sidebar md:border-r">
-      {/* Under 768 px the search box has a row of its own, so a type-ahead list under it is not clipped by the row below, which scrolls sideways. */}
-      <SearchBox id="q-top" className="border-b p-2 md:hidden" watched={watched} wide={false} />
-      <aside className="flex items-center gap-1 overflow-x-auto border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
-        <Link href="/" className="px-2 md:pb-1">
+      {/* Under 768 px the name leads and the search box takes the rest of its row, above the links, so its type-ahead list opens over the page rather than among them. */}
+      <div className="flex items-center gap-1 border-b p-2 md:hidden">
+        <Link href="/" className="shrink-0 px-2 font-mono text-[13px]/5 font-semibold text-foreground">washtrace</Link>
+        <SearchBox id="q-top" className="min-w-0 flex-1" watched={watched} wide={false} />
+      </div>
+      <aside className="flex flex-wrap items-center gap-1 border-b bg-sidebar p-2 text-[13px]/5 md:sticky md:top-0 md:h-screen md:flex-col md:flex-nowrap md:items-stretch md:gap-3.5 md:overflow-y-auto md:border-b-0 md:px-2.5 md:py-3.5">
+        <Link href="/" className="px-2 pb-1 max-md:hidden">
           <span className="block font-mono font-semibold text-foreground">washtrace</span>
-          <span className="block text-xs text-muted-foreground max-md:hidden">NFT wash trading detector</span>
+          <span className="block text-xs text-muted-foreground">NFT wash trading detector</span>
         </Link>
         <SearchBox id="q" className="max-md:hidden" watched={watched} wide />
-        <nav aria-label="Collections" className="flex gap-px md:flex-col">
+        <nav aria-label="Collections" className="flex flex-wrap gap-px md:flex-col">
           <Link href="/" aria-current={current('/', true)} className={ITEM}>All collections</Link>
           {watched.map((c) => {
             const href = `/c/${c.chainId}/${c.address}`;
@@ -40,7 +45,7 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
             );
           })}
         </nav>
-        <nav aria-label="Service" className="flex items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
+        <nav aria-label="Service" className="flex flex-wrap items-center gap-1 md:mt-auto md:flex-col md:items-stretch">
           <span className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase max-md:hidden">Behind the numbers</span>
           <Link href="/lab" aria-current={current('/lab')} className={ITEM}>Lab<span className="text-xs text-muted-foreground max-md:hidden">your lenses</span></Link>
           <Link href="/worker" aria-current={current('/worker')} className={ITEM}>Worker</Link>
@@ -52,3 +57,4 @@ export function Sidebar({ watched }: { watched: { chainId: number; address: stri
     </div>
   );
 }
+
