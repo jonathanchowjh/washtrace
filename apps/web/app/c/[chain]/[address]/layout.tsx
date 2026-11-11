@@ -4,9 +4,8 @@ import { connection } from 'next/server';
 import { METHODS } from '@washtrace/detect';
 import { CollectionNav } from '@/components/collection-nav';
 import { lensKeyOf } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import { collectionAt, runsOf } from '@/lib/collection-reads';
 import { short } from '@/lib/format';
-import { addressOf, chainOf } from '@/lib/params';
 
 type Props = { params: Promise<{ chain: string; address: string }>; children: ReactNode };
 
@@ -19,12 +18,8 @@ type Props = { params: Promise<{ chain: string; address: string }>; children: Re
  */
 export default async function CollectionLayout({ params, children }: Props) {
   await connection();
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  if (chainId === null || address === null) notFound();
-  const c = await collectionOf(chainId, address);
-  if (!c) notFound();
+  const c = (await collectionAt(await params)) ?? notFound();
+  const { chainId, address } = c;
   // The page under it reads the same runs, from the same request's cache.
   const runs = await runsOf(c.id);
   const lenses = [...METHODS, ...runs.map((r) => r.lens.key)];

@@ -7,7 +7,8 @@ import { contractsFor } from '../src/marketplaces.js';
 import { analyze } from '../src/methods.js';
 import { MOVE_KIND, Moves } from '../src/moves.js';
 import { previewStored } from '../src/lens-thread.js';
-import type { LensInput, Store } from '../src/store.js';
+import type { LensInput } from '../src/lens.js';
+import type { Store } from '../src/store.js';
 import type { Flow, TokenFlow, Transfer } from '../src/types.js';
 import { LAB, LAB_MIXED, MONEY, USDC, WETH, chain, flow, input, transfer, w } from './fixtures.js';
 

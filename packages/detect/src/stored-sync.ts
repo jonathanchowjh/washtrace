@@ -3,9 +3,10 @@ import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type pg from 'pg';
 import { messageOf } from './env.js';
+import { Backoff } from './backoff.js';
 import { LockedRun } from './locked-run.js';
 import { HUB, download, fetchManifest, hubUrl, partPath, removeStaleParts } from './hub.js';
-import { LOCKS, retryMs, type CollectionRow, type Store } from './store.js';
+import { LOCKS, type CollectionRow, type Store } from './store.js';
 import {
   DOWNLOAD_NOTES, StoredDataError, entryFor, readManifest, readTrail, readTransfers, sha256File, storedFile, storedKey, trailPaths, writeManifest,
   type Manifest, type StoredEntry, type StoredFileMeta, type StoredPart,
@@ -131,7 +132,7 @@ export class StoredSync {
    * fail with the load (a full disk), and the next pass would load it all
    * again.
    */
-  private readonly restoreFailed = new Map<number, { failures: number; retryAt: number }>();
+  private readonly restoreFailed = new Backoff();
   /**
    * When the Hub was last asked for its manifest, whatever it answered, and
    * which repo. In memory: a restart asks at once. `hubFailing` is that the
@@ -143,11 +144,11 @@ export class StoredSync {
   /** The download running in this process, outside every pass (see startDownload). One at a time. */
   private downloading: { id: number; file: 'transfers' | 'trail'; abort: AbortController; done: Promise<void> } | null = null;
   /** Downloads that failed, by collection, timed as the store times them: kept here too, as restoreFailed is, since the write that records the back-off can fail with the download (a full disk). */
-  private readonly downloadsFailed = new Map<number, { failures: number; retryAt: number }>();
+  private readonly downloadsFailed = new Backoff();
   /** The trail import running in this process, outside every pass (see startTrailImport). One at a time. */
   private importing: { id: number; sha: string; abort: AbortController; done: Promise<void> } | null = null;
   /** Trail imports the store failed, by collection, timed as a failed load is. In memory only: the note says it failed, and a restart tries again. */
-  private readonly trailsRetry = new Map<number, { failures: number; retryAt: number }>();
+  private readonly trailsRetry = new Backoff();
   /** Collections whose progress an import could not clear (the store itself failing, usually). The value is this process's own, as it held the lock; each pass tries again (see trails). */
   private readonly progressUncleared = new Set<number>();
 
@@ -267,7 +268,7 @@ export class StoredSync {
       const entry = entryFor(manifest, c.chainId, c.address);
       if (entry === null || !reaches(c, entry)) {
         if (c.restoreNote !== null) {
-          await this.store.clearRestoreNote(c.id).catch((err) => console.error('[washtrace] collection %d: stored data note not cleared: %s', c.id, this.worker.scrubbed(err)));
+          await this.store.clearRestoreNote(c.id).catch(this.logged(c.id, 'stored data note not cleared'));
         }
         continue;
       }
@@ -286,17 +287,16 @@ export class StoredSync {
       await this.worker.beat('ingest', `Loading stored data for ${c.name ?? entry.name}`, c.id);
       try {
         await this.store.restore(c.id, c.chainId, entry, this.storedTransfers(entry), key);
-        this.restoreFailed.delete(c.id);
+        this.restoreFailed.clear(c.id);
         loaded += 1;
         // Only a load that went through spends the pass: one that failed leaves the next to go now.
         loadedOne = true;
       } catch (err) {
         console.error('[washtrace] collection %d: stored data not loaded: %s', c.id, this.worker.scrubbed(err));
         // Bad stored data is keyed on the file, not timed.
-        if (err instanceof StoredDataError) this.restoreFailed.delete(c.id);
+        if (err instanceof StoredDataError) this.restoreFailed.clear(c.id);
         else {
-          const failures = (this.restoreFailed.get(c.id)?.failures ?? 0) + 1;
-          this.restoreFailed.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
+          this.restoreFailed.fail(c.id, Date.now());
         }
       }
     }
@@ -305,7 +305,7 @@ export class StoredSync {
 
   /** Whether to load a collection's stored data now: needsRestore, and no back-off held here (restoreFailed) still running. */
   restoreDue(c: CollectionRow, entry: StoredEntry | null, key: string | null, now: number): boolean {
-    return (this.restoreFailed.get(c.id)?.retryAt ?? 0) <= now && needsRestore(c, entry, key, now);
+    return !this.restoreFailed.waits(c.id, now) && needsRestore(c, entry, key, now);
   }
 
   /** What a collection's stored data is now (storedKey), for one whose last load the data failed; else null, and nothing is read. */
@@ -394,7 +394,7 @@ export class StoredSync {
       if (!needsTrail(c, entry, disk !== null) || this.trailsUnreadable.get(trailPaths(this.stored, entry).flows) === disk!.key) continue;
       // One at a time; the first due goes.
       if (this.importing !== null || next !== null) continue;
-      if (now < (this.trailsRetry.get(c.id)?.retryAt ?? 0)) continue;
+      if (this.trailsRetry.waits(c.id, now)) continue;
       if (needsRestore(c, entry, await this.noteKey(c, entry), now)) continue;
       next = { c, entry, key: disk!.key };
     }
@@ -474,7 +474,7 @@ export class StoredSync {
     })();
     try {
       const { wallets, flows } = await this.store.importTrail(c.id, c.chainId, sha, open, { onFlows, signal: abort.signal });
-      this.trailsRetry.delete(c.id);
+      this.trailsRetry.clear(c.id);
       console.info('[washtrace] collection %d: money trail loaded, %d wallets and %d flows', c.id, wallets, flows);
     } catch (err) {
       await run.writes;
@@ -484,7 +484,7 @@ export class StoredSync {
       if (halt === null && err instanceof StoredDataError) {
         // Bad stored data is keyed on the files, not timed.
         console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, this.worker.scrubbed(err));
-        this.trailsRetry.delete(c.id);
+        this.trailsRetry.clear(c.id);
         this.trailsUnreadable.set(trailPaths(this.stored, entry).flows, key);
         await this.noteTrail(c.id, err.kind === 'mismatch' ? TRAIL_NOTES.mismatch : TRAIL_NOTES.unreadable);
         return;
@@ -492,8 +492,7 @@ export class StoredSync {
       const why = halt === 'stalled' ? `nothing was written for ${TRAIL_STALL_MS / 60_000} minutes`
         : halt === 'lost' ? `the connection holding its lock was lost (${this.worker.scrubbed(run.lost)})` : this.worker.scrubbed(err);
       console.error('[washtrace] collection %d: money trail not loaded: %s', c.id, why);
-      const failures = (this.trailsRetry.get(c.id)?.failures ?? 0) + 1;
-      this.trailsRetry.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
+      this.trailsRetry.fail(c.id, Date.now());
       await this.noteTrail(c.id, TRAIL_NOTES.failed);
     } finally {
       clearInterval(watch);
@@ -532,7 +531,7 @@ export class StoredSync {
 
   /** Say on the collection why its trail was not loaded, or with null that nothing is wrong. Fail-soft: the rest of the pass goes on. */
   private async noteTrail(id: number, note: string | null): Promise<void> {
-    await this.store.setTrailNote(id, note).catch((err) => console.error('[washtrace] collection %d: money trail note not written: %s', id, this.worker.scrubbed(err)));
+    await this.store.setTrailNote(id, note).catch(this.logged(id, 'money trail note not written'));
   }
 
   /** A catch for a fail-soft write about collection `id`: logs, scrubbed, that `what` failed, and the run goes on. */
@@ -719,7 +718,7 @@ export class StoredSync {
     for (const c of collections) {
       const idle = c.downloadFile === null && this.downloading?.id !== c.id;
       if (c.downloadNote !== null && idle && c.pausedAt === null && !(await this.wantsDownload(c, manifest))) {
-        this.downloadsFailed.delete(c.id);
+        this.downloadsFailed.clear(c.id);
         await this.store.clearDownloadNote(c.id, true).catch(this.logged(c.id, 'download note not cleared'));
       }
       if (held.has(c.id)) {
@@ -740,7 +739,7 @@ export class StoredSync {
 
   /** Whether a collection's last download failed and is still waiting out its back-off: the store's, or the one held here. */
   downloadWaits(c: CollectionRow, now: number): boolean {
-    return now < (c.downloadRetryAt ?? 0) || now < (this.downloadsFailed.get(c.id)?.retryAt ?? 0);
+    return now < (c.downloadRetryAt ?? 0) || this.downloadsFailed.waits(c.id, now);
   }
 
   /**
@@ -756,7 +755,7 @@ export class StoredSync {
     const abort = new AbortController();
     const done = this.store.locked(LOCKS.download, false, async (client) => {
       // A retry: the failure it noted is being tried again, and "could not be downloaded" must not show beside the progress. The back-off count stays.
-      if (c.downloadNote !== null) await this.store.clearDownloadNote(c.id, false).catch((err) => console.error('[washtrace] collection %d: download note not cleared: %s', c.id, this.worker.scrubbed(err)));
+      if (c.downloadNote !== null) await this.store.clearDownloadNote(c.id, false).catch(this.logged(c.id, 'download note not cleared'));
       return this.fetchStored(client, c.id, file, parts, abort);
     })
       .then(() => {}, (err) => console.error('[washtrace] collection %d: stored data not downloaded: %s', c.id, this.worker.scrubbed(err)))
@@ -823,7 +822,7 @@ export class StoredSync {
         done += p.bytes;
       }
       await run.writes;
-      this.downloadsFailed.delete(id);
+      this.downloadsFailed.clear(id);
       await this.store.downloadDone(id).catch(this.logged(id, 'finished download not noted'));
       console.info('[washtrace] collection %d: stored %s downloaded', id, file);
     } catch (err) {
@@ -840,8 +839,7 @@ export class StoredSync {
       // A part fetched whole before this one is on disk, and is not fetched again.
       const mismatch = err instanceof StoredDataError && err.kind === 'mismatch' && !resumed;
       if (mismatch) this.hubAskedAt = -Infinity;
-      const failures = (this.downloadsFailed.get(id)?.failures ?? 0) + 1;
-      this.downloadsFailed.set(id, { failures, retryAt: Date.now() + retryMs(failures) });
+      this.downloadsFailed.fail(id, Date.now());
       const note = mismatch ? DOWNLOAD_NOTES.mismatch : err instanceof StoredDataError && err.kind === 'disk' ? DOWNLOAD_NOTES.disk : DOWNLOAD_NOTES.failed;
       await this.store.downloadFailed(id, note, mismatch ? current.url : null).catch(this.logged(id, 'failed download not noted'));
     } finally {

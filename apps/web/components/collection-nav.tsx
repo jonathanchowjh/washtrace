@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { num } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
-import { Time } from './time';
+import { Time } from './zone';
 
 type CollectionTab = 'overview' | 'methods' | 'rings' | 'tokens' | 'wallets' | 'trades';
 
@@ -86,7 +86,7 @@ function useOffEdges(bar: RefObject<HTMLElement | null>): { left: boolean; right
 }
 
 /** A tab's count, as a small grey pill. */
-export function Badge({ n }: { n: number }) {
+function Badge({ n }: { n: number }) {
   return <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{num(n)}</span>;
 }
 

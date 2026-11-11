@@ -1,9 +1,9 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MethodTotals, TimelinePoint, TokenLine, TradeRow } from '@washtrace/detect';
-import { HowSure, NotCounted, TopList, worstStage } from '@/components/overview';
+import { HowSure, NotCounted, TopList } from '@/components/overview';
 import { SalesStrip, WhereItSits, saleStanding, standing } from '@/components/sales-strip';
-import type { Stage } from '@/lib/pipeline';
+import { worstStage, type Stage } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 
 afterEach(cleanup);

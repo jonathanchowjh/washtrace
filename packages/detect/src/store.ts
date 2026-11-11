@@ -5,16 +5,17 @@ import { MOVE_KIND, Moves } from './moves.js';
 import { MIGRATIONS } from './migrations.js';
 import { Payments } from './payments.js';
 import { findOf, isOwnKey, NO_FILTER, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery } from './trades.js';
-import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_JOIN, LATEST, hashPrefixEnd, flagSource, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
+import { judgedColumn, lensesColumn, caughtColumns, caughtOf, COUNTED, COUNTED_JOIN, LATEST, hashPrefixEnd, flagSource, judgedOnly, judgedThrough, LIST_ORDER, PARTNERS_FROM, PARTNER_ORDER, SIDES, TRADES_FROM, SELECT_TRANSFER, FLAGS_AGG, TRANSFERS, betweenWhere, binder, groupKey, loopsOf, ownLoopsOf, toFlagged, toTrade, toTransfer, tradeSelect, tradeWhere, walletWhere, type FlaggedTransfer, type FlowDir, type ListOpts, type PartnerSort, type TokenLine, type TokenSort, type TradeGroup, type TradeRow, type WalletFilter, type WalletLine, type WalletSort } from './trade-sql.js';
 import { FOLLOW_FANOUT, checkRule, type EdgeKind, type LensRule } from './lens-rule.js';
 import type { FollowEstimate } from './lens-reads.js';
 import type { Rules } from './methods.js';
 import { anchorsOf } from './rings.js';
 import { SECRET_KEYS, type SettingSource } from './env.js';
 import { FOLLOWED_NEAR, REACH_LIMIT, SERVED_LIVE, SERVED_NAMES, SERVED_REACH, UNSEEDED, addTraders, followOf, paidBy, raiseReach, servedWallet, stepReach, timeLeft, tokenSetSql, walkOut, type Follow } from './reach.js';
-import { COLLECTION_SELECT, FLAG_BATCH_CHARS, FLAG_BATCH_ROWS, LENS_SELECT, deadlockRetried, insertFlows, insertTransfers, pgCode, queueWallets, tally, toAnalysis, toCollection, toFlow, toLens, toLensRun, toOwnFlag, OWN_FLAG, readable } from './store-rows.js';
+import { COLLECTION_SELECT, FLAG_BATCH_CHARS, FLAG_BATCH_ROWS, FLOW_SELECT, LENS_SELECT, deadlockRetried, insertFlows, insertTransfers, pgCode, queueWallets, tally, toAnalysis, toCollection, toFlow, toLens, toLensRun, toOwnFlag, toRing, OWN_FLAG, readable } from './store-rows.js';
 import { factsKey, writeFacts } from './facts.js';
 import { StoredDataError, type StoredDataFault, type StoredEntry } from './stored.js';
+import type { LensFlag, LensInput, LensTotals } from './lens.js';
 import type { SpotResult } from './spot.js';
 import { type Analysis, type Flag, type Flow, type Method, type MethodTotals, type TokenFlow, type Transfer, type Witness } from './types.js';
 
@@ -386,6 +387,8 @@ const TOKEN_LANES_MS = 5_000;
  * by ON CONFLICT DO NOTHING.
  */
 const REREAD_OVERLAP_BLOCKS = 7200;
+/** The block a re-read starts from, with REREAD_OVERLAP_BLOCKS bound as `$3`; `read_block` is the last read's. */
+const REREAD_FROM_SQL = 'GREATEST(coalesce(read_block + 1 - $3, 0), 0)';
 
 /**
  * How far one collection's other tokens are read (Start reading), as the
@@ -419,6 +422,8 @@ export interface PassRow {
   subjectId: number | null;
 }
 
+/** A preview that is due, as nextPreview hands it to the worker. */
+export type DuePreview = { id: number; collectionId: number; chainId: number; name: string; rule: LensRule; through: number | null };
 /** A lens run that is due, as nextLensRun hands it to the worker: the lens, where, and the analysis it reads. */
 export type DueRun = { lens: Lens; collectionId: number; chainId: number; name: string; analysisId: number; through: number | null; dueAt: number };
 
@@ -462,7 +467,6 @@ export const BUILT_IN_NAMES = ['Round trips', 'Money loops back', 'Linked wallet
 
 export interface Lens { id: number; key: `L${number}`; name: string; rule: LensRule; version: number; createdAt: number; updatedAt: number }
 type LensRunStatus = 'queued' | 'running' | 'done' | 'failed';
-export interface LensTotals extends MethodTotals { truncated: number; untimed: number }
 export interface LensRun {
   lensId: number; collectionId: number; status: LensRunStatus; progress: number | null; lensVersion: number;
   analysisId: number | null; throughBlock: number | null; totals: LensTotals | null; error: string | null;
@@ -470,13 +474,6 @@ export interface LensRun {
   /** The collection's token_counts.read the run took in, so a page can tell the run is behind its token reads; null when it read none. */
   tokensRead: number | null;
 }
-/**
- * One edge of a found loop. `token` is an other-token edge's token address
- * (TOKENS), and then `amountWei` is its raw amount, in the token's own units;
- * null for every other edge, and for a path stored before edges had one.
- */
-export interface LoopEdge { from: string; to: string; kind: EdgeKind | 'funds'; tx: string | null; time: number | null; amountWei: string | null; tokenId: string | null; token: string | null }
-export interface LensFlag { txHash: string; logIndex: number; path: LoopEdge[]; wallets: string[] }
 /** A stored flag of a lens of yours, with the lens and the collection it belongs to. */
 export type OwnFlag = LensFlag & { lensId: number; collectionId: number };
 
@@ -487,9 +484,9 @@ export const PREVIEW_SAMPLE = 2_000;
 /** A preview is kept this long from when it was asked for, then swept: the editor that asked has long stopped polling. */
 export const PREVIEW_KEEP_MS = 60 * 60_000;
 /** A done spot check of a final block is answered again for this long; after, the money may have moved on. */
-export const SPOT_FRESH_MS = 60 * 60_000;
+const SPOT_FRESH_MS = 60 * 60_000;
 /** A spot check is kept this long from when it was asked for, then swept with the previews. */
-export const SPOT_KEEP_MS = 24 * 60 * 60_000;
+const SPOT_KEEP_MS = 24 * 60 * 60_000;
 /** One spot check as `GET /api/spots/{id}` returns it. */
 export interface SpotRow {
   id: number; chainId: number; tx: string; lens: string | null; status: 'queued' | 'running' | 'done' | 'failed';
@@ -522,26 +519,10 @@ export interface Preview {
   result: PreviewResult | null; error: string | null; requestedAt: number; finishedAt: number | null;
 }
 
-/** What a lens run reads: the transfers, and the money edges its rule may follow, held as numbers. */
-export interface LensInput {
-  transfers: Transfer[]; through: number | null; moves: Moves;
-  contracts: ReadonlySet<string>; custodians: ReadonlySet<string>; money: ReadonlySet<string>;
-  /** Wallets with more history than the funding source would page through, as analysisInput reads them: never a middle of a money lens. Empty with no money row. */
-  truncated: ReadonlySet<string>;
-  /** The collection's transfer transaction hashes, each once: the engine tells a hop's transaction by its index here. */
-  tradeTxs: string[];
-  /**
-   * The collection's token_counts.read as it stood when the run began
-   * loading, for a rule using other tokens; null for any other rule, or
-   * with no counts yet. The count, not a live one, so the run is behind
-   * exactly when the counts move on.
-   */
-  tokensRead: number | null;
-}
-
 /**
- * Every read and write of the `washtrace` schema. A class because every one
- * of them needs the pool, and nothing else.
+ * Every read and write of the `washtrace` schema. It holds the pool, the
+ * count of downloads open, and the limits a test makes small (the fields
+ * below); the methods share these and nothing else.
  */
 export class Store {
   constructor(readonly pool: pg.Pool) {}
@@ -1335,8 +1316,7 @@ export class Store {
         (r): string => r.address,
       ),
       flows: this.stream(
-        `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
-                extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
+        `SELECT ${FLOW_SELECT} FROM washtrace.flows f
          WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[])
            OR f.from_address = ANY($3::text[]) OR f.to_address = ANY($3::text[]))
          -- A total order: the same flows cut again give the same file, and the same sha256.
@@ -1587,11 +1567,48 @@ export class Store {
    */
   async rereadFrom(chainId: number, address: string, kind: 'money' | 'tokens'): Promise<number | null> {
     const { rows } = await this.pool.query<{ from: string }>(
-      `SELECT GREATEST(coalesce(read_block + 1 - $3, 0), 0) AS "from" FROM washtrace.${kind === 'money' ? 'wallets' : 'token_reads'}
+      `SELECT ${REREAD_FROM_SQL} AS "from" FROM washtrace.${kind === 'money' ? 'wallets' : 'token_reads'}
        WHERE chain_id = $1 AND address = $2 AND stale_at IS NOT NULL`,
       [chainId, address, REREAD_OVERLAP_BLOCKS],
     );
     return rows[0] === undefined ? null : Number(rows[0].from);
+  }
+
+  /**
+   * The wallets among `wallets` whose money read is done, each with the block
+   * a spot check reads on from, as rereadFrom gives it (a day of blocks back,
+   * floored at 0; 0 for a read with no rows, which recorded no block), and
+   * whether it was truncated. Read on however far it reached: Linked wallets
+   * links a pair by a payment at any time, so one since the read could link
+   * the trade's.
+   */
+  async moneyReadOn(chainId: number, wallets: readonly string[]): Promise<Map<string, { from: number; truncated: boolean }>> {
+    const { rows } = await this.pool.query<{ address: string; truncated: boolean; from: string }>(
+      `SELECT address, truncated, ${REREAD_FROM_SQL} AS "from"
+       FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND address = ANY($2::text[])`,
+      [chainId, wallets, REREAD_OVERLAP_BLOCKS],
+    );
+    return new Map(rows.map((r) => [r.address, { from: Number(r.from), truncated: r.truncated }]));
+  }
+
+  /** The stored flows from or to any of `wallets`. A spot check reads a few wallets, so these are few. */
+  async flowsOf(chainId: number, wallets: readonly string[]): Promise<Flow[]> {
+    if (wallets.length === 0) return [];
+    const { rows } = await this.pool.query(
+      `SELECT ${FLOW_SELECT} FROM washtrace.flows f
+       WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[]))
+       ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address`,
+      [chainId, wallets],
+    );
+    return rows.map(toFlow);
+  }
+
+  /** A wallets row for each, so saveMoney has one to update; one already there is left as it is. */
+  async addWallets(chainId: number, wallets: readonly string[]): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO washtrace.wallets (chain_id, address) SELECT $1, unnest($2::text[]) ORDER BY 2 ON CONFLICT (chain_id, address) DO NOTHING`,
+      [chainId, wallets],
+    );
   }
 
   /**
@@ -3819,7 +3836,7 @@ export class Store {
    * again (as for a run). One whose stored rule no longer
    * checks is failed, and the next taken in the same call.
    */
-  async nextPreview(): Promise<{ id: number; collectionId: number; chainId: number; name: string; rule: LensRule; through: number | null } | null> {
+  async nextPreview(): Promise<DuePreview | null> {
     await this.pool.query(
       `UPDATE washtrace.lens_previews SET status = 'failed', progress = NULL, error = 'The worker stopped during this preview.', finished_at = now()
        WHERE status = 'running'`,
@@ -3909,8 +3926,8 @@ export class Store {
     );
   }
 
-  /** Delete every preview asked for more than PREVIEW_KEEP_MS before `now`, whatever its state. Returns how many. */
-  async sweepPreviews(now: number): Promise<number> {
+  /** Delete every preview asked for more than PREVIEW_KEEP_MS before `now`, whatever its state, and every spot check asked for more than SPOT_KEEP_MS before `now`, whatever its state. Returns how many previews. */
+  async sweepFinished(now: number): Promise<number> {
     const { rowCount } = await this.pool.query(
       `DELETE FROM washtrace.lens_previews WHERE requested_at < to_timestamp($1::float8 / 1000) - make_interval(secs => $2::float8 / 1000)`,
       [now, PREVIEW_KEEP_MS],
@@ -4028,52 +4045,6 @@ export class Store {
       [id, status, result === null ? null : JSON.stringify(result), error, from],
     );
   }
-
-  /**
-   * The wallets among `wallets` whose money read is done, each with the block
-   * a spot check reads on from, as rereadFrom gives it (a day of blocks back,
-   * floored at 0; 0 for a read with no rows, which recorded no block), and
-   * whether it was truncated. Read on however far it reached: Linked wallets
-   * links a pair by a payment at any time, so one since the read could link
-   * the trade's.
-   */
-  async moneyReadOn(chainId: number, wallets: readonly string[]): Promise<Map<string, { from: number; truncated: boolean }>> {
-    const { rows } = await this.pool.query<{ address: string; truncated: boolean; from: string }>(
-      `SELECT address, truncated, GREATEST(coalesce(read_block + 1 - $3, 0), 0) AS "from"
-       FROM washtrace.wallets WHERE chain_id = $1 AND status = 'done' AND address = ANY($2::text[])`,
-      [chainId, wallets, REREAD_OVERLAP_BLOCKS],
-    );
-    return new Map(rows.map((r) => [r.address, { from: Number(r.from), truncated: r.truncated }]));
-  }
-
-  /** The stored flows from or to any of `wallets`. A spot check reads a few wallets, so these are few. */
-  async flowsOf(chainId: number, wallets: readonly string[]): Promise<Flow[]> {
-    if (wallets.length === 0) return [];
-    const { rows } = await this.pool.query(
-      `SELECT f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
-              extract(epoch FROM f.block_time)::float8 AS bt FROM washtrace.flows f
-       WHERE f.chain_id = $1 AND (f.from_address = ANY($2::text[]) OR f.to_address = ANY($2::text[]))
-       ORDER BY f.block_number, f.tx_hash, f.kind, f.from_address, f.to_address`,
-      [chainId, wallets],
-    );
-    return rows.map(toFlow);
-  }
-
-  /** A wallets row for each, so saveMoney has one to update; one already there is left as it is. */
-  async addWallets(chainId: number, wallets: readonly string[]): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO washtrace.wallets (chain_id, address) SELECT $1, unnest($2::text[]) ORDER BY 2 ON CONFLICT (chain_id, address) DO NOTHING`,
-      [chainId, wallets],
-    );
-  }
-}
-
-function toRing(r: Record<string, unknown>): RingLine {
-  return {
-    anchor: r.ring as string, rank: r.rank as number, wallets: r.wallets as number, sample: r.sample as string[],
-    sales: r.sales as number, floorSales: r.floor_sales as number, tokens: r.tokens as number, volumeWei: String(r.volume),
-    firstAt: r.first_at as number | null, lastAt: r.last_at as number | null,
-  };
 }
 
 /**
@@ -4112,16 +4083,6 @@ function walletsOf(w: Witness): readonly string[] {
   return w.kind === 'pair' ? (w.middle === null ? [...w.pair] : [...w.pair, w.middle]) : w.wallets;
 }
 
-/**
- * ` AND` the bound that keeps a lens list's counted trades to those `method`
- * judged, for its rows' denominators, or '' when it judged them all.
- */
-function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): string {
-  const judged = judgedThrough(method, ctx, params);
-  return judged === null ? '' : ` AND ${judged}`;
-}
-
-// bigint and numeric columns arrive as strings; each is converted where it is read.
 /** What a setting's report may keep: a secret only when it is masked, the store's own guard against its caller. */
 function safe(key: string, shown: string | null): string | null {
   return SECRET_KEYS(key) && !shown?.includes('••••') ? null : shown;

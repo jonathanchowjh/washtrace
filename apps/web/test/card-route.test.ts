@@ -10,7 +10,6 @@ const fake = {
   token: vi.fn(async (_id: number, tokenId: string) => (tokenId === '7' ? [{ flags: { A: {} } }, { flags: {} }, { flags: { AU: {} } }] : [])),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { GET } = await import('@/app/api/collections/[chain]/[address]/card/route');
 const card = (q: string) => GET(new Request(`http://x/api/collections/1/${ADDR}/card?${q}`), { params: Promise.resolve({ chain: '1', address: ADDR }) });

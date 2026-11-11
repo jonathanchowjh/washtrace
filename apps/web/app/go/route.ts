@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { connection } from 'next/server';
+import { txHref, walletHref } from '@/lib/links';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { hitRow, parseSearch, scopeOf, scopeParam, tradeHref } from '@/lib/search';
 import { store } from '@/lib/store';
@@ -24,11 +25,11 @@ export async function GET(req: NextRequest): Promise<Response> {
   // own: in the container it is the 0.0.0.0 it binds, so an absolute one sent the reader off to another host.
   const to = (path: string) => new Response(null, { status: 303, headers: { Location: path } });
   const tx = txOf(q);
-  if (tx && given !== null) return to(`/tx/${given}/${tx}`);
+  if (tx && given !== null) return to(txHref(given, tx));
   const address = addressOf(q);
   if (address && given !== null) {
     const watched = await store().collection(given, address).catch(() => null);
-    return to(watched ? `/c/${given}/${address}` : `/w/${given}/${address}`);
+    return to(watched ? `/c/${given}/${address}` : walletHref(given, address));
   }
   // A search from inside a collection (the sidebar under /c/) is narrowed to it, and its results page says so.
   const scope = scopeOf(req.nextUrl.searchParams.get('scope'));
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (address && hits !== null) {
     // A watched collection's contract can also have traded as a wallet; the collection is what was meant.
     if (hits.collections.length === 1 && !hits.more.collections) return to(`/c/${hits.collections[0]!.chainId}/${address}`);
-    if (hits.collections.length === 0 && hits.wallets.length === 0) return to(`/w/1/${address}`);
+    if (hits.collections.length === 0 && hits.wallets.length === 0) return to(walletHref(1, address));
   }
   // A hash's hits are its transfers, which its page lists in full: more of them past the limit is still one transaction.
   const cut = hits !== null && Object.entries(hits.more).some(([k, more]) => more && !(parsed.kind === 'tx' && k === 'trades'));

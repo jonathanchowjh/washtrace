@@ -6090,7 +6090,7 @@ describe('previews', () => {
     expect(await store.preview(id)).toBeNull();
   });
 
-  it('sweepPreviews deletes rows past an hour', async () => {
+  it('sweepFinished deletes rows past an hour', async () => {
     const lab = await analysed(w('1b41'));
     try {
       const old = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
@@ -6098,12 +6098,12 @@ describe('previews', () => {
       const fresh = await store.requestPreview(lab, DEFAULT_RULE) as { id: number };
       await store.pool.query(`UPDATE washtrace.lens_previews SET requested_at = now() - interval '61 minutes' WHERE id = ANY($1)`, [[old.id, done.id]]);
       await store.pool.query(`UPDATE washtrace.lens_previews SET status = 'done', finished_at = now() WHERE id = $1`, [done.id]);
-      expect(await store.sweepPreviews(Date.now())).toBe(2);
+      expect(await store.sweepFinished(Date.now())).toBe(2);
       expect(await store.preview(old.id)).toBeNull();
       expect(await store.preview(done.id)).toBeNull();
       expect(await store.preview(fresh.id)).not.toBeNull();
       // By the clock it is given: an hour on, the fresh one goes too.
-      expect(await store.sweepPreviews(Date.now() + 61 * 60_000)).toBe(1);
+      expect(await store.sweepFinished(Date.now() + 61 * 60_000)).toBe(1);
       expect(await store.preview(fresh.id)).toBeNull();
     } finally {
       await drop(1, w('1b41'));
@@ -7344,11 +7344,11 @@ describe('spot checks', () => {
     expect(await store.flowsOf(78, [])).toEqual([]);
   });
 
-  it('sweepPreviews also deletes spot checks past a day', async () => {
+  it('sweepFinished also deletes spot checks past a day', async () => {
     const old = await store.requestSpot(1, tx(30), null);
     const fresh = await store.requestSpot(1, tx(31), null);
     await store.pool.query(`UPDATE washtrace.spot_checks SET requested_at = now() - interval '25 hours' WHERE id = $1`, [old.id]);
-    await store.sweepPreviews(Date.now());
+    await store.sweepFinished(Date.now());
     expect(await store.spot(old.id)).toBeNull();
     expect(await store.spot(fresh.id)).not.toBeNull();
   });

@@ -1,4 +1,4 @@
-import { bad, handle, json, writeBody } from '@/lib/api';
+import { bad, handle, json, noLens, writeBody } from '@/lib/api';
 import { chainIdOf, txOf } from '@/lib/params';
 import { fromVerdict } from '@/lib/spot';
 import { store } from '@/lib/store';
@@ -28,7 +28,7 @@ export async function POST(req: Request): Promise<Response> {
     if (body.lens !== undefined && body.lens !== null) {
       if (typeof body.lens !== 'string' || !isOwnKey(body.lens)) return bad('lens must be the key of a lens of yours, such as L7.');
       const found = await s.lens(Number(body.lens.slice(1)));
-      if (found === null) return bad('No such lens.', 404);
+      if (found === null) return noLens();
       const refusal = lensRefusal(found.rule);
       if (refusal !== null) return bad(refusal);
       lens = { key: found.key, version: found.version };

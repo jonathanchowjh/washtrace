@@ -16,3 +16,7 @@ data/stored/
 # The publish token and a dry run's files never go into an image.
 .env
 publish-dry/
+# Local env files and Claude worktrees never go into an image; the example stays.
+.env.*
+!.env.example
+.claude

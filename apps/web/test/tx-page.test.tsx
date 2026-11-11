@@ -78,7 +78,6 @@ vi.mock('@/lib/store', () => ({
     },
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'localhost:8080' }) }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn() }) }));
 
@@ -534,7 +533,9 @@ describe('a transfer a lens does not judge says so, never that it was not caught
    * them. Row `at` is the transaction's.
    */
   async function engine(rows: ReturnType<typeof transfer>[], at: number, lenses: [number, LensRule][], custodians: string[] = []) {
-    const { analyze, runLens, Moves, Payments } = await import('@washtrace/detect');
+    const { analyze, Payments } = await import('@washtrace/detect');
+    const { Moves } = await import('../../../packages/detect/src/moves');
+    const { runLens } = await import('../../../packages/detect/src/lens');
     const r = analyze({
       transfers: rows, payments: Payments.from([], rows), fundingAvailable: true, funded: new Set([S, B]), truncated: new Set(),
       custodians: new Set(custodians), contracts: new Set(), money: new Set(['']),

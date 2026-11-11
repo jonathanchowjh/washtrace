@@ -6,7 +6,7 @@ import { listHref } from '@/lib/links';
 import { ownLenses } from '@/lib/metrics';
 import { addressOf, chainOf } from '@/lib/params';
 import { parseView, tradesHref } from '@/lib/trades-url';
-import { askedOf } from './view';
+import { askedOf } from '../list-view';
 
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 

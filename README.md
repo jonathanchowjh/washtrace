@@ -97,7 +97,7 @@ lens that caught it; the tokens and wallets most flagged ETH went through; and
 what looks suspicious but is not counted. Every figure opens the trades it
 counts.
 
-- **Tabs.** Overview, Rings, Tokens, Wallets and Trades. A lens chosen on one tab
+- **Tabs.** Overview, Methods, Rings, Tokens, Wallets and Trades. A lens chosen on one tab
   is kept on the others.
 - **Methods** shows what the overview stands on: a tab per lens, each lens's share
   over time, the six stages of the reading, and your own lenses.
@@ -156,28 +156,29 @@ receipt, its tokens' histories, and the money of the wallets in it.
 ```sh
 curl -X POST http://localhost:8080/api/spots -H 'content-type: application/json' \
   -d '{"chainId": 31337, "tx": "0x083d0b4dc33d0b699b212e551c5195e31efbef22b285456be6c2181f97b05470"}'
-# {"id":1,"status":"queued","reused":false}
-
-curl http://localhost:8080/api/spots/1
 ```
+
+The demo watches Demo Apes and has judged this sale, so the answer is 200 at once,
+from the store, with `status: 'done'` and the result:
 
 ```jsonc
 {
-  "id": 1,
-  "status": "done",          // queued, running, done or failed (with "error")
+  "status": "done",
   "result": {
     "washTrade": true,
     "methods": ["AC"],
-    "notRun": ["AU"],        // a spot check never runs Money loops back
+    "notRun": [],            // lenses that could not run
     "atLeast": false,        // true: some wallets could not be judged, so this is not clean
-    "source": "spot",        // "watched" when a watched collection already judged it
-    "transfers": [{ "tokenId": "114", "flags": { "AC": { "kind": "pair", "middle": "0x8318…67d8" } } }]
+    "finalized": true,
+    "source": "watched",     // "spot" when a spot check read it
+    "transfers": [{ "tokenId": "114", "collection": "0x…", "flags": { "AC": { "kind": "pair", "middle": "0x8318…67d8" } } }]
   }
 }
 ```
 
-Asked of a console that does not watch Demo Apes, the same sale comes back in
-seconds with the same middle wallet a full read names. Add `"lens": "L7"` to
+A collection that is not watched gets `{"id":1,"status":"queued","reused":false}`
+(202) instead. Poll `GET /api/spots/1` until its `status` is `done`; the same
+`result` is there, with `"source": "spot"`. Add `"lens": "L7"` to
 judge with a lens of yours. How a spot check is narrower than a full read is in
 [doc/methods.md](doc/methods.md#a-spot-check); every route is in
 [doc/api.md](doc/api.md).

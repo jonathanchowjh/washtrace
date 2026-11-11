@@ -23,6 +23,12 @@ export function bad(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+/** The 404 for a collection that is not watched. */
+export const notWatched = (): Response => bad('This collection is not watched.', 404);
+
+/** The 404 for a lens that does not exist. */
+export const noLens = (): Response => bad('No such lens.', 404);
+
 /**
  * The body of a request that changes state. JSON only: a browser cannot send
  * `application/json` cross-origin without a preflight, which is the CSRF
@@ -84,7 +90,7 @@ export async function collectionFrom(params: Promise<{ chain: string; address: s
   if (chainId === null || address === null) return bad('Not a chain id and collection address.', 404);
   const s = store();
   const collection = await s.collection(chainId, address);
-  return collection ? { s, chainId, address, collection } : bad('This collection is not watched.', 404);
+  return collection ? { s, chainId, address, collection } : notWatched();
 }
 
 /** The reader's time zone from their cookie, UTC when they have none. Here, not in zone.ts, which the browser reads too and so cannot import next/headers. */

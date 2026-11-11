@@ -10,16 +10,15 @@ import { LensName } from '@/components/methods';
 import { Pager } from '@/components/pager';
 import { FilterBar, GroupBy, TradesTable } from '@/components/trades';
 import { lensKeyOf, readerZone } from '@/lib/api';
-import { collectionOf, runsOf } from '@/lib/collection-reads';
+import { collectionAt, runsOf } from '@/lib/collection-reads';
 import { LENSES, NOT_JUDGED_YET, lensInfo, notRunAll, notRunHere, plural, short, num } from '@/lib/format';
 import { behindLine, behindOf } from '@/lib/lens-state';
 import { listHref } from '@/lib/links';
 import { lensContext, ownLenses, SHOWN } from '@/lib/metrics';
-import { addressOf, chainOf, pages } from '@/lib/params';
+import { listView, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { TRADES_PAGE, holdsNothing, parseView, tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
-import { listView } from '@/lib/params';
 import { LIST_PAGE, clampedPage } from '@/lib/views';
 import { fromParam } from '@/lib/step';
 
@@ -50,10 +49,7 @@ export function askedOf(q: Record<string, string | string[] | undefined>) {
 /** The tab title of a page showing `kind`. */
 export async function metadataOf(kind: Kind, { params, searchParams }: Props): Promise<Metadata> {
   await connection();
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const c = await collectionAt(await params);
   if (!c) return { title: WORD[kind] };
   const { one } = askedOf(await searchParams);
   const own = ownLenses(await runsOf(c.id));
@@ -71,12 +67,9 @@ export async function FlaggedView({ kind, params, searchParams }: Props & { kind
   await connection();
   const p = await params;
   const q = await searchParams;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  if (chainId === null || address === null) notFound();
+  const c = (await collectionAt(p)) ?? notFound();
   const s = store();
-  const c = await collectionOf(chainId, address);
-  if (!c) notFound();
+  const { chainId, address } = c;
   const { one } = askedOf(q);
   // The reader's zone, detected in the browser: months and dates are read in their calendar. UTC until it is known.
   const zone = await readerZone();

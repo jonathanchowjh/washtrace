@@ -5,7 +5,8 @@ import Link from 'next/link';
 import type { SpotResult, Witness } from '@washtrace/detect';
 import { LOCAL_ONLY } from '@/lib/auth';
 import { LENSES, SPOT_AT_LEAST, SPOT_CHECKING, SPOT_NOT_FINAL, SPOT_ONLY, SPOT_STORED, andList, short, tokenLabel } from '@/lib/format';
-import { send } from '@/lib/send';
+import { walletHref } from '@/lib/links';
+import { poll, send } from '@/lib/send';
 
 const POLL_MS = 1000;
 
@@ -52,22 +53,18 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
 
   useEffect(() => {
     if (id === null) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    async function poll() {
-      const res = await fetch(`/api/spots/${id}`).catch(() => null);
-      const said = res ? await res.json().catch(() => null) : null;
-      if (stopped) return;
-      if (res?.status === 404) { setLost(false); setStatus(null); setError(said?.error ?? 'This check is gone. Ask again.'); return; }
-      if (!res?.ok || typeof said?.status !== 'string') { setLost(true); timer = setTimeout(poll, POLL_MS); return; }
-      setLost(false);
-      setStatus(said.status);
-      if (said.status === 'done') setResult(said.result);
-      else if (said.status === 'failed') setError(said.error ?? 'The check failed.');
-      else timer = setTimeout(poll, POLL_MS);
-    }
-    void poll();
-    return () => { stopped = true; clearTimeout(timer); };
+    return poll<{ status: string; result: SpotResult; error: string | null }>(`/api/spots/${id}`, {
+      every: POLL_MS,
+      done: (said) => said.status === 'done' || said.status === 'failed',
+      onRow: (said) => {
+        setLost(false);
+        setStatus(said.status);
+        if (said.status === 'done') setResult(said.result);
+        else if (said.status === 'failed') setError(said.error ?? 'The check failed.');
+      },
+      onLost: () => setLost(true),
+      onGone: (said) => { setLost(false); setStatus(null); setError(said?.error ?? 'This check is gone. Ask again.'); },
+    });
   }, [id]);
 
   async function start() {
@@ -131,7 +128,7 @@ export function SpotCheck({ chainId, tx, lenses, writable }: {
                     <span key={k}>
                       {nameOf(k)}: {whyOf(f)} (
                       {walletsOf(f).map((a, i) => (
-                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={`/w/${chainId}/${a}`} prefetch={false}>{short(a)}</Link></span>
+                        <span key={a}>{i > 0 ? ', ' : ''}<Link className="font-mono underline" href={walletHref(chainId, a)} prefetch={false}>{short(a)}</Link></span>
                       ))}
                       ){' '}
                     </span>

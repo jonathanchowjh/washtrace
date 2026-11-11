@@ -14,35 +14,12 @@ import { explorerAddress, explorerTx, walletHref, walletLinks } from '@/lib/link
 import { HEADLINE } from '@washtrace/detect';
 import { FLAGGED_ONLY_AU, NOT_JUDGED, TINT_LEAD, answer, counted, toneOf, type Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
-import { walletOpts, type WalletOpts } from '@/lib/params';
+import { hrefOf, walletOpts, type WalletOpts } from '@/lib/params';
 import { COUNTERPARTIES, FLOWS, TRADES, walletView } from '@/lib/views';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { Suspense } from 'react';
 import { RingChips } from '@/components/rings';
 import { StepLine } from '@/components/step-line';
-
-/**
- * This page with `o`'s lists, filter and pages, defaults left out. Every link
- * and pager here builds on the page as shown, so moving one list keeps the
- * others where they are.
- */
-function hrefOf(base: string, o: WalletOpts): string {
-  const sp = new URLSearchParams();
-  const f = o.filter;
-  if (f.collection !== undefined) sp.set('collection', f.collection);
-  if (f.flaggedOnly) sp.set('flagged', '1');
-  if (f.find !== undefined) sp.set('q', f.find);
-  if (o.trades > 1) sp.set('trades', String(o.trades));
-  if (o.psort !== 'flows') sp.set('psort', o.psort);
-  if (o.partners > 1) sp.set('partners', String(o.partners));
-  if (f.with !== undefined) {
-    sp.set('with', f.with);
-    if (o.dir !== 'both') sp.set('dir', o.dir);
-    if (o.flows > 1) sp.set('flows', String(o.flows));
-  }
-  const q = sp.toString();
-  return q === '' ? base : `${base}?${q}`;
-}
 
 /** The partner table's sortable columns, by the order each sets. */
 const PARTNER_COLUMNS: readonly { sort: PartnerSort; label: string; right: boolean }[] = [

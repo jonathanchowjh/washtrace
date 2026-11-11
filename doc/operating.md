@@ -48,7 +48,7 @@ The [Dockerfile](../Dockerfile) builds two images (`--target worker` and `--targ
 
 ## The worker's jobs
 
-The worker runs four jobs on timers. A pass that is due while the last one is still running is skipped, not
+The worker runs four jobs, three on timers. A pass that is due while the last one is still running is skipped, not
 queued.
 
 | Job | Every | Does |
@@ -96,7 +96,7 @@ the console, a URL saved in the console is ignored, so a console edit can't send
 
 | Limit | Value | When it is hit |
 |---|---|---|
-| A trade's money search | 5,000 edges (`SEARCH_CAP`) | The trade is never called clean for it, and the share reads "at least". |
+| A trade's money search in a lens of yours | 5,000 edges (`SEARCH_CAP`) | The trade is never called clean for it, and the share reads "at least". The built-in searches stop at `visitCap` instead. |
 | A lens run's money edges | 40 million (`MONEY_EDGE_CEILING`) | The run fails, saying so. Terraforms' 37 million fit. |
 | Wallets between seller and buyer in a lens | 6 (`MAX_HOPS`) | The rule is refused. |
 | `follow.hops` | 10 (`MAX_FOLLOW_HOPS`) | A larger value in `.env` reads as the default, 3. |

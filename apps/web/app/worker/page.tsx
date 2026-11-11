@@ -11,7 +11,7 @@ import { JOB_STEP, type JobState, type Notice } from '@/lib/status';
 import { workerView } from '@/lib/views';
 import { readerZone } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { PipelineErrors, PipelineTable } from '@/components/pipeline';
 
 export const metadata: Metadata = { title: 'Worker' };

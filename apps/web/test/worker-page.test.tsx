@@ -11,7 +11,6 @@ vi.mock('@/lib/views', () => ({
   }),
 }));
 vi.mock('@/lib/api', () => ({ readerZone: async () => 'UTC' }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
 afterEach(() => { cleanup(); state.notices = []; state.rpc = [1]; });

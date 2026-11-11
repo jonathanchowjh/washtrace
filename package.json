@@ -15,9 +15,12 @@
   "scripts": {
     "test": "vitest run --project unit",
     "test:int": "vitest run --project integration",
-    "test:web": "npm run --workspace @washtrace/detect build && vitest run --project web",
+    "test:web": "vitest run --project web",
     "test:watch": "vitest",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "typecheck": "npm run -w @washtrace/detect build && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.scripts.json && npm run -w @washtrace/web typecheck",
+    "check": "npm run typecheck && npm test && npm run test:web",
+    "prepare": "git config core.hooksPath .githooks || true",
     "dev": "npm run --workspace @washtrace/web dev",
     "worker": "npm run --workspace @washtrace/worker dev",
     "stored": "npm run --workspace @washtrace/worker build && node apps/worker/dist/stored.js",
@@ -39,7 +42,6 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.8",
-    "yaml": "2.9.1"
+    "vitest": "^4.1.8"
   }
 }

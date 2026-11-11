@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { type Method, type TradeRow } from '@washtrace/detect';
 import { VENUES, isOwnKey, venueOf, type LensKey, type TradeContext, type TradeGroupBy, type TradeQuery, type TradeSort } from '@washtrace/detect/trades';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { SortHead } from '@/components/ui';
 import { FunnelIcon, SearchIcon, TierMark } from '@/components/kit';
 import { Wallet } from '@/components/transfers';

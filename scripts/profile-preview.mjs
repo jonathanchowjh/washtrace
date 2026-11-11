@@ -1,3 +1,4 @@
+// @ts-check
 // Measures one Preview on real data, as the worker runs it: the run's full input
 // is read, then the lens judges a seeded sample of 2,000 sales. It prints the
 // sample's search time, the load time, the total, the peak and the result.
@@ -19,10 +20,9 @@
 // and once at the first progress report and at the end. The search is synchronous
 // and holds the timer for its length, so a sample inside it is missed; the peak is
 // then what the load and the search's edges reached, and a lower bound on it.
-import { readFileSync } from 'node:fs';
 import { Store, storeUrl } from '../packages/detect/dist/index.js';
 import { previewStored } from '../packages/detect/dist/lens-thread.js';
-import { COPIES, DEFAULT_RULE, checkRule } from '../packages/detect/dist/lens-rule.js';
+import { FOLLOW_HOPS, PAYEES, readOnly, ruleFor } from './profile-shared.mjs';
 import { PREVIEW_SAMPLE } from '../packages/detect/dist/store.js';
 
 const SEED = 1;
@@ -32,21 +32,6 @@ const which = process.argv[3];
 if (!Number.isInteger(id) || !which) {
   console.error('usage: node scripts/profile-preview.mjs <collectionId> <A|AU|AC|path/to/rule.json|default>');
   process.exit(2);
-}
-
-function ruleFor(arg) {
-  if (arg === 'default') return DEFAULT_RULE;
-  if (COPIES[arg]) return COPIES[arg].rule;
-  const checked = checkRule(JSON.parse(readFileSync(arg, 'utf8')));
-  if ('error' in checked) throw new Error(`${arg}: ${checked.error}`);
-  return checked.rule;
-}
-
-function readOnly(raw) {
-  const url = new URL(raw);
-  const options = url.searchParams.get('options');
-  url.searchParams.set('options', `${options ? `${options} ` : ''}-c default_transaction_read_only=on`);
-  return url.toString();
 }
 
 const rule = ruleFor(which);
@@ -84,7 +69,7 @@ try {
   let loadMs = null;
   const result = await previewStored(
     store,
-    { storeUrl: url, previewId: SEED, collectionId: id, chainId: c.chain_id, rule, through },
+    { storeUrl: url, previewId: SEED, collectionId: id, chainId: c.chain_id, rule, through, followHops: FOLLOW_HOPS, payees: PAYEES },
     () => { if (loadMs === null) { loadMs = Math.round(performance.now() - started); measure(); } },
   );
   measure();

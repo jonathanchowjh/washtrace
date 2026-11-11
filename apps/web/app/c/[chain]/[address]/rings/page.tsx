@@ -5,9 +5,9 @@ import { moneyFor } from '@washtrace/detect';
 import { Empty, Head } from '@/components/ui';
 import { Pager } from '@/components/pager';
 import { RingsTable } from '@/components/rings';
-import { collectionOf } from '@/lib/collection-reads';
+import { collectionAt } from '@/lib/collection-reads';
 import { LENSES, short } from '@/lib/format';
-import { addressOf, chainOf, pageOf, pages } from '@/lib/params';
+import { pageOf, pages } from '@/lib/params';
 import { store } from '@/lib/store';
 import { RINGS_PAGE } from '@/lib/views';
 import { fromParam } from '@/lib/step';
@@ -15,10 +15,7 @@ import { fromParam } from '@/lib/step';
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ page?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const c = await collectionAt(await params);
   return { title: c ? `Rings · ${c.name ?? short(c.address)}` : 'Rings' };
 }
 
@@ -28,12 +25,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  */
 export default async function RingsPage({ params, searchParams }: Props) {
   await connection();
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  if (chainId === null || address === null) notFound();
-  const c = await collectionOf(chainId, address);
-  if (!c) notFound();
+  const c = (await collectionAt(await params)) ?? notFound();
+  const { chainId, address } = c;
   const base = `/c/${chainId}/${address}`;
   const counted = c.latest?.rings ?? null;
   // A page past the last reads as the last; the analysis's count says which that is without a read.

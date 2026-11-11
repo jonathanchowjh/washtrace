@@ -3,12 +3,12 @@ import Link from 'next/link';
 import type { CollectionProfile, LensRun, Lens, Method, MethodTotals, TokenLine, WalletLine } from '@washtrace/detect';
 import { LENSES, NOT_RUN, eth, num, pctTenth, plural, short, tokenLabel } from '@/lib/format';
 import { cardSrc, lensTabHref, listHref, venues, walletHref } from '@/lib/links';
-import type { Stage, StageState } from '@/lib/pipeline';
+import { STEPS, worstStage, type Stage, type StageState } from '@/lib/pipeline';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { KindIcon, TierMark } from './kit';
 import { LensPicture } from './methods';
-import { Time } from './time';
+import { Time } from './zone';
 import { HoverCard } from './hover-card';
 
 /**
@@ -18,23 +18,6 @@ import { HoverCard } from './hover-card';
  * your lenses. Each is a picture first and a few words second; the numbers
  * behind them are on the Methods page.
  */
-
-/** The six reading stages as four steps a reader thinks in: stages 1–3 are all "stored data". */
-const STEPS: readonly { label: string; keys: readonly Stage['key'][] }[] = [
-  { label: 'Stored data', keys: ['download', 'load', 'stored-analysis'] },
-  { label: 'Chain', keys: ['chain'] },
-  { label: 'Money', keys: ['money'] },
-  { label: 'Analysis', keys: ['analysis'] },
-];
-
-// Worst first: a step reads as the worst of its stages, so a failure is never hidden behind a stage that is done.
-const WORST: readonly StageState[] = ['failed', 'blocked', 'silent', 'running', 'waiting', 'paused', 'live', 'done', 'not-needed'];
-
-/** One step's state and the stage that gives it: the worst of its stages, "not needed" only when every one is. */
-export function worstStage(stages: readonly Stage[], keys: readonly Stage['key'][]): Stage | null {
-  const mine = stages.filter((x) => keys.includes(x.key));
-  return mine.sort((a, b) => WORST.indexOf(a.state) - WORST.indexOf(b.state))[0] ?? null;
-}
 
 const STEP_MARK: Record<StageState, { mark: string; word: string; tone: string }> = {
   failed: { mark: '✕', word: 'failed', tone: 'text-fault' },

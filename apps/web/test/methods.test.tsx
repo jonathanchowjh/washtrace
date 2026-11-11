@@ -1,7 +1,7 @@
 import { cleanup, render } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MethodTotals } from '@washtrace/detect';
-import { LensStats } from '@/components/methods';
+import { History, LensStats } from '@/components/methods';
 import { tradesHref } from '@/lib/trades-url';
 
 afterEach(cleanup);
@@ -64,5 +64,40 @@ describe('the lens stat line', () => {
 
   it('holds no anchor inside another', () => {
     expect(draw('A', t(), { loops: 1, pairs: 1 }).querySelectorAll('a a').length).toBe(0);
+  });
+});
+
+// The chart is replaced by a probe of what History hands it: the mapping from the store's counts to a share's part and whole.
+const seen = vi.hoisted(() => ({ points: [] as { lens: Record<string, { part: number; whole: number } | null> }[] }));
+vi.mock('@/components/trend', () => ({ TimeChart: (p: { points: typeof seen.points }) => { seen.points = p.points; return null; } }));
+
+const on = { available: true } as MethodTotals;
+const off = { available: false } as MethodTotals;
+
+describe('History, at the boundary to the chart', () => {
+  it('a built-in is flagged of the period\'s sales; a lens of yours is flagged of the sales it has judged', () => {
+    render(
+      <History
+        timeline={{ bucket: 'day', readThrough: null, points: [{ at: 0, transfers: 20, sales: 10, apartSales: 0, flaggedSales: { A: 3, AU: 4, AC: 5, L7: 2 }, judgedSales: { L7: 6 } }] }}
+        totals={{ A: on, AU: on, AC: off }} notFinal={[]} funded funding now={0} zone="UTC" base="/c/1/0xabc"
+        own={[{ key: 'L7', name: 'Quick flips', qualifier: null }]}
+      />,
+    );
+    const lens = seen.points[0]!.lens;
+    expect(lens.A).toEqual({ part: 3, whole: 10 });
+    expect(lens.AU).toEqual({ part: 4, whole: 10 });
+    expect(lens.AC).toBeNull();
+    expect(lens.L7).toEqual({ part: 2, whole: 6 });
+  });
+
+  it('a lens of yours with nothing judged in a period has a whole of 0, never the period\'s sales', () => {
+    render(
+      <History
+        timeline={{ bucket: 'day', readThrough: null, points: [{ at: 0, transfers: 20, sales: 10, apartSales: 0, flaggedSales: { A: 0, AU: 0, AC: 0, L7: 0 }, judgedSales: { L7: 0 } }] }}
+        totals={{ A: on, AU: on, AC: on }} notFinal={[]} funded funding now={0} zone="UTC" base="/c/1/0xabc"
+        own={[{ key: 'L7', name: 'Quick flips', qualifier: null }]}
+      />,
+    );
+    expect(seen.points[0]!.lens.L7).toEqual({ part: 0, whole: 0 });
   });
 });

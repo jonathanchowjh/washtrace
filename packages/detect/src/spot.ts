@@ -8,7 +8,8 @@ import { CUSTODIANS, TRANSFER, contractsFor, moneyFor, tagSales } from './market
 import { RULES, analyze } from './methods.js';
 import { MOVE_KIND, Moves } from './moves.js';
 import { Payments } from './payments.js';
-import type { LensFlag, LensInput, Store } from './store.js';
+import type { LensFlag, LensInput } from './lens.js';
+import type { Store } from './store.js';
 import type { Flow, Transfer, Witness } from './types.js';
 
 /**
@@ -21,7 +22,7 @@ import type { Flow, Transfer, Witness } from './types.js';
 /** The most tokens one check reads the history of. A sweep of more is judged on these, and says "at least". */
 export const SPOT_TRADES_MAX = 10;
 /** The most possible middles one check reads. The rest cannot be judged, so the answer says "at least". */
-export const SPOT_MIDDLES = 10;
+const SPOT_MIDDLES = 10;
 /** The most transactions one check reads receipts of to find other sales' payments. */
 export const SPOT_RECEIPTS_MAX = 200;
 /** One deadline for all of a check's Etherscan reads, far inside the fund pass's stuck ceiling. */
@@ -74,21 +75,20 @@ export function receiptTrades(tx: string, blockNumber: number, logs: readonly Lo
   return out;
 }
 
+/** The wallets `wallet` moved money with. */
+export function near(flows: readonly Flow[], wallet: string): Set<string> {
+  return new Set(flows.flatMap((f) => (f.from === wallet ? [f.to] : f.to === wallet ? [f.from] : [])));
+}
+
 /** The wallets that moved money with both `seller` and `buyer`: the possible middles of a Linked wallets path. */
 export function middlesOf(flows: readonly Flow[], seller: string, buyer: string, skip: ReadonlySet<string>): string[] {
-  const near = (me: string) => new Set(flows.flatMap((f) => (f.from === me ? [f.to] : f.to === me ? [f.from] : [])));
-  const bySeller = near(seller);
-  const byBuyer = near(buyer);
+  const bySeller = near(flows, seller);
+  const byBuyer = near(flows, buyer);
   return [...bySeller].filter((m) => byBuyer.has(m) && m !== seller && m !== buyer && m !== ZERO && !skip.has(m)).sort();
 }
 
-/** How many distinct wallets `wallet` moved money with. */
-export function counterparties(flows: readonly Flow[], wallet: string): number {
-  return new Set(flows.flatMap((f) => (f.from === wallet ? [f.to] : f.to === wallet ? [f.from] : []))).size;
-}
-
 /** The money edges a lens may follow among `flows`: the kind and smallest-amount filter Store.lensInput writes in SQL, in memory. */
-export function spotMoves(rule: LensRule, flows: readonly Flow[], chainId: number, sales: ReadonlySet<string>): Moves {
+function spotMoves(rule: LensRule, flows: readonly Flow[], chainId: number, sales: ReadonlySet<string>): Moves {
   const wrapped = new Set([...moneyFor(chainId)].filter((m) => m !== ''));
   const atLeast = (kind: 'eth' | 'internal' | 'weth', v: bigint) => rule.edges[kind].use && v >= BigInt(rule.edges[kind].minWei ?? '0');
   const moves = new Moves();
@@ -108,6 +108,43 @@ export function spotMoves(rule: LensRule, flows: readonly Flow[], chainId: numbe
 
 /** One trade of the checked transaction: a hop of its token's graph, custody collapsed. */
 interface Trade { collection: string; ref: number; seller: string; buyer: string }
+
+/** The trades of `tx` in the histories: each a hop of its token's graph, custody collapsed. */
+function tradesOf(histories: ReadonlyMap<string, Transfer[]>, tx: string, custodians: ReadonlySet<string>): Trade[] {
+  const trades: Trade[] = [];
+  for (const [collection, hist] of histories) {
+    const order = chainOrder(hist);
+    for (const tokenId of new Set(hist.map((t) => t.tokenId))) {
+      const graph = tokenGraph(hist, order.filter((i) => hist[i]!.tokenId === tokenId), custodians);
+      for (const h of graph.hops) if (h.ref !== null && hist[h.ref]!.txHash === tx) trades.push({ collection, ref: h.ref, seller: h.from, buyer: h.to });
+    }
+  }
+  return trades;
+}
+
+/** The check's answer: the built-ins' A and AC, or the lens, are what count toward a flagged or clean verdict. */
+function answerOf(
+  tx: string, lens: { key: string } | null, histories: ReadonlyMap<string, Transfer[]>,
+  flags: ReadonlyMap<string, Record<string, Witness | Pick<LensFlag, 'path' | 'wallets'>>>,
+  methods: ReadonlySet<string>, notRun: string[], atLeast: boolean, finalized: boolean,
+): SpotResult {
+  const counted = lens === null ? ['A', 'AC'] : [lens.key];
+  const flagged = counted.some((m) => methods.has(m));
+  const ranAll = counted.every((m) => !notRun.includes(m));
+  const transfers = [...histories].flatMap(([collection, hist]) => hist
+    .filter((t) => t.txHash === tx)
+    .sort((x, y) => x.logIndex - y.logIndex)
+    .map((t) => ({ ...t, collection, flags: flags.get(`${collection}:${t.logIndex}`) ?? {} })));
+  return {
+    washTrade: flagged ? true : ranAll && !atLeast ? false : null,
+    methods: counted.filter((m) => methods.has(m)),
+    notRun,
+    atLeast,
+    finalized,
+    source: 'spot',
+    transfers,
+  };
+}
 
 /**
  * Runs one spot check. A class because the reads share the store, the chain,
@@ -157,79 +194,17 @@ export class SpotCheck {
     }
 
     const custodians = new Set(CUSTODIANS);
-    const trades: Trade[] = [];
-    for (const [collection, hist] of histories) {
-      const order = chainOrder(hist);
-      for (const tokenId of new Set(hist.map((t) => t.tokenId))) {
-        const graph = tokenGraph(hist, order.filter((i) => hist[i]!.tokenId === tokenId), custodians);
-        for (const h of graph.hops) if (h.ref !== null && hist[h.ref]!.txHash === tx) trades.push({ collection, ref: h.ref, seller: h.from, buyer: h.to });
-      }
-    }
+    const trades = tradesOf(histories, tx, custodians);
     if (trades.length === 0) throw new Error('This transaction holds no trade: a mint, a burn or a move into or out of custody.');
 
-    // The sellers' and buyers' money to now: a stored read is read on from where it stopped, since a payment after it
-    // could link the pair. A truncated one is a hub whatever more is read, and reading on could save it untruncated over its gap.
     const contracts = contractsFor(chainId);
     const wallets = [...new Set(trades.flatMap((t) => [t.seller, t.buyer]))];
-    const funded = new Set<string>();
-    const truncated = new Set<string>();
-    let moneyOk = this.etherscan !== null;
-    if (this.etherscan !== null) {
-      const stored = await this.store.moneyReadOn(chainId, wallets);
-      for (const w of wallets) {
-        const c = stored.get(w);
-        if (c?.truncated) {
-          funded.add(w);
-          truncated.add(w);
-          continue;
-        }
-        try {
-          const r = await this.etherscan.flows(chainId, w, this.left(), c?.from);
-          // Added only once read: a row whose read failed would wait forever, since no lane serves it.
-          await this.store.addWallets(chainId, [w]);
-          await this.store.saveMoney(chainId, w, r.flows, r.truncated, undefined, r.through, c !== undefined);
-          funded.add(w);
-          if (r.truncated) truncated.add(w);
-        } catch {
-          moneyOk = false;
-        }
-      }
-    }
-    const flows = await this.store.flowsOf(chainId, [...funded]);
-
-    // The possible middles, read in memory only: saved, one exchange-like wallet would re-queue every collection it touched.
-    const middles = new Map<Trade, string[]>();
-    for (const t of trades) middles.set(t, funded.has(t.seller) && funded.has(t.buyer) ? middlesOf(flows, t.seller, t.buyer, contracts) : []);
-    const state = new Map<string, 'ok' | 'hub' | 'busy' | 'unread'>();
-    for (const m of new Set([...middles.values()].flat())) {
-      if (this.etherscan === null || state.size >= SPOT_MIDDLES) { state.set(m, 'unread'); continue; }
-      try {
-        const r = await this.etherscan.flows(chainId, m, this.left());
-        state.set(m, r.truncated ? 'hub' : counterparties(r.flows, m) > RULES.hubDegree ? 'busy' : 'ok');
-      } catch {
-        state.set(m, 'unread');
-      }
-    }
+    const { funded, truncated, moneyOk, flows } = await this.readMoney(wallets);
+    const { middles, state } = await this.readMiddles(trades, funded, flows, contracts);
     const hubs = new Set([...truncated, ...[...state].filter(([, s]) => s !== 'ok').map(([m]) => m)]);
     const unsure = (t: Trade) => (middles.get(t) ?? []).some((m) => state.get(m) === 'busy' || state.get(m) === 'unread');
 
-    // Another sale's payment between the same wallets is the price of that sale, not a way back: the product leaves
-    // out every flow in a transaction of the collection, so read the receipts of the flows that could join a pair.
-    const histTxs = new Set([...histories.values()].flat().map((t) => t.txHash));
-    const pairs = new Set(wallets);
-    const near = new Set([...wallets, ...state.keys()]);
-    const legs = [...new Set(flows.filter((f) => (pairs.has(f.from) && near.has(f.to)) || (pairs.has(f.to) && near.has(f.from)))
-      .map((f) => f.txHash).filter((h) => !histTxs.has(h)))];
-    // A leg whose receipt is not read may be a sale's price, so its flows are dropped: that can only lose a flag.
-    // Unread are those past the cap and those the node has no receipt for (Etherscan saw it, the node does not, or not
-    // yet): one missing leaves its leg out, not the check failed. Each read alone, which the RPC transport batches.
-    const unread = new Set(legs.slice(SPOT_RECEIPTS_MAX));
-    const saleLegs = new Set<string>();
-    const read = await Promise.all(legs.slice(0, SPOT_RECEIPTS_MAX).map(async (h) => ({ h, r: await this.chain.receipt(h) })));
-    for (const { h, r } of read) {
-      if (r === null) unread.add(h);
-      else if (r.logs.some((l) => l.topics.length === 4 && l.topics[0] === TRANSFER && histories.has(l.address.toLowerCase()))) saleLegs.add(h);
-    }
+    const { saleLegs, unread } = await this.readSaleLegs(wallets, state, flows, histories);
     if (unread.size > 0) atLeast = true;
     const money = flows.filter((f) => !saleLegs.has(f.txHash) && !unread.has(f.txHash));
 
@@ -286,22 +261,79 @@ export class SpotCheck {
       }
     }
 
-    const counted = lens === null ? ['A', 'AC'] : [lens.key];
-    const flagged = counted.some((m) => methods.has(m));
-    const ranAll = counted.every((m) => !notRun.includes(m));
-    const transfers = [...histories].flatMap(([collection, hist]) => hist
-      .filter((t) => t.txHash === tx)
-      .sort((x, y) => x.logIndex - y.logIndex)
-      .map((t) => ({ ...t, collection, flags: flags.get(`${collection}:${t.logIndex}`) ?? {} })));
-    return {
-      washTrade: flagged ? true : ranAll && !atLeast ? false : null,
-      methods: counted.filter((m) => methods.has(m)),
-      notRun,
-      atLeast,
-      finalized: receipt.blockNumber <= head,
-      source: 'spot',
-      transfers,
-    };
+    return answerOf(tx, lens, histories, flags, methods, notRun, atLeast, receipt.blockNumber <= head);
+  }
+
+  /** The sellers' and buyers' money to now: a stored read is read on from where it stopped, since a payment after it
+   * could link the pair. A truncated one is a hub whatever more is read, and reading on could save it untruncated over its gap. */
+  private async readMoney(wallets: string[]) {
+    const { chainId } = this;
+    const funded = new Set<string>();
+    const truncated = new Set<string>();
+    let moneyOk = this.etherscan !== null;
+    if (this.etherscan !== null) {
+      const stored = await this.store.moneyReadOn(chainId, wallets);
+      for (const w of wallets) {
+        const c = stored.get(w);
+        if (c?.truncated) {
+          funded.add(w);
+          truncated.add(w);
+          continue;
+        }
+        try {
+          const r = await this.etherscan.flows(chainId, w, this.left(), c?.from);
+          // Added only once read: a row whose read failed would wait forever, since no lane serves it.
+          await this.store.addWallets(chainId, [w]);
+          await this.store.saveMoney(chainId, w, r.flows, r.truncated, undefined, r.through, c !== undefined);
+          funded.add(w);
+          if (r.truncated) truncated.add(w);
+        } catch {
+          moneyOk = false;
+        }
+      }
+    }
+    const flows = await this.store.flowsOf(chainId, [...funded]);
+    return { funded, truncated, moneyOk, flows };
+  }
+
+  /** The possible middles, read in memory only: saved, one exchange-like wallet would re-queue every collection it touched. */
+  private async readMiddles(trades: Trade[], funded: ReadonlySet<string>, flows: readonly Flow[], contracts: ReadonlySet<string>) {
+    const middles = new Map<Trade, string[]>();
+    for (const t of trades) middles.set(t, funded.has(t.seller) && funded.has(t.buyer) ? middlesOf(flows, t.seller, t.buyer, contracts) : []);
+    const state = new Map<string, 'ok' | 'hub' | 'busy' | 'unread'>();
+    for (const m of new Set([...middles.values()].flat())) {
+      if (this.etherscan === null || state.size >= SPOT_MIDDLES) { state.set(m, 'unread'); continue; }
+      try {
+        const r = await this.etherscan.flows(this.chainId, m, this.left());
+        state.set(m, r.truncated ? 'hub' : near(r.flows, m).size > RULES.hubDegree ? 'busy' : 'ok');
+      } catch {
+        state.set(m, 'unread');
+      }
+    }
+    return { middles, state };
+  }
+
+  /**
+   * Another sale's payment between the same wallets is the price of that sale, not a way back: the product leaves
+   * out every flow in a transaction of the collection, so read the receipts of the flows that could join a pair.
+   */
+  private async readSaleLegs(wallets: string[], state: ReadonlyMap<string, 'ok' | 'hub' | 'busy' | 'unread'>, flows: readonly Flow[], histories: ReadonlyMap<string, Transfer[]>) {
+    const histTxs = new Set([...histories.values()].flat().map((t) => t.txHash));
+    const pairs = new Set(wallets);
+    const joiners = new Set([...wallets, ...state.keys()]);
+    const legs = [...new Set(flows.filter((f) => (pairs.has(f.from) && joiners.has(f.to)) || (pairs.has(f.to) && joiners.has(f.from)))
+      .map((f) => f.txHash).filter((h) => !histTxs.has(h)))];
+    // A leg whose receipt is not read may be a sale's price, so its flows are dropped: that can only lose a flag.
+    // Unread are those past the cap and those the node has no receipt for (Etherscan saw it, the node does not, or not
+    // yet): one missing leaves its leg out, not the check failed. Each read alone, which the RPC transport batches.
+    const unread = new Set(legs.slice(SPOT_RECEIPTS_MAX));
+    const saleLegs = new Set<string>();
+    const read = await Promise.all(legs.slice(0, SPOT_RECEIPTS_MAX).map(async (h) => ({ h, r: await this.chain.receipt(h) })));
+    for (const { h, r } of read) {
+      if (r === null) unread.add(h);
+      else if (r.logs.some((l) => l.topics.length === 4 && l.topics[0] === TRANSFER && histories.has(l.address.toLowerCase()))) saleLegs.add(h);
+    }
+    return { saleLegs, unread };
   }
 
   /** The block a collection's history is read from: its creation, where Etherscan knows it, else 0. */

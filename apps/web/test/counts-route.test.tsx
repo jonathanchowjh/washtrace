@@ -12,7 +12,6 @@ const fake = {
   lensWallets: vi.fn(async () => ({ rows: [], total: 13 })),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ usePathname: () => '/', useSearchParams: () => new URLSearchParams() }));
 
 const { GET } = await import('@/app/api/collections/[chain]/[address]/counts/route');

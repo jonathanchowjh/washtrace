@@ -11,7 +11,6 @@ const fake = {
   ring: vi.fn(async (_id: number, anchor: string) => (anchor === ANCHOR ? { line: line(1), wallets: [], walletsCut: false, tokens: [] } : null)),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { GET: list } = await import('@/app/api/collections/[chain]/[address]/rings/route');
 const { GET: one } = await import('@/app/api/collections/[chain]/[address]/rings/[anchor]/route');

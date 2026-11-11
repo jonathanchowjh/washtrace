@@ -1,3 +1,9 @@
+import { EventEmitter } from 'node:events';
+import { vi } from 'vitest';
+import type { CollectionRow } from '../src/store.js';
+import type { StoredEntry } from '../src/stored.js';
+import { StoredSync } from '../src/stored-sync.js';
+import type { Worker } from '../src/worker.js';
 import type { Analysis, Flag, Flow, Method, MethodTotals, Transfer, Witness } from '../src/types.js';
 import { ZERO } from '../src/graph.js';
 import type { Input } from '../src/methods.js';
@@ -153,4 +159,57 @@ export const LAB_MIXED = {
     uncounted: [],
     missingData: 0, fundedWallets: 4, wallets: 4, truncatedSearches: 0,
   } satisfies Analysis,
+};
+
+// ---- the worker fixtures ---------------------------------------------------
+
+/** No test reaches the Hub: one that forgets to say what the Hub answers finds it unreachable, and downloads nothing. */
+export function refuseHub(): void {
+  vi.spyOn(StoredSync.prototype, 'fetchHubManifest').mockRejectedValue(new Error('tests never reach the Hub'));
+  vi.spyOn(StoredSync.prototype, 'downloadFile').mockRejectedValue(new Error('tests never reach the Hub'));
+}
+
+/** The Hub was asked a moment ago, so a pass reads the manifest on disk (`manifest`, as the test overrides it) and asks nothing. */
+export function askedHub(w: Worker): Worker {
+  (w.sync as any).hubAskedAt = Date.now();
+  return w;
+}
+
+/**
+ * The connection a lock is held on, as Store.locked hands it over and as
+ * pg's: it emits 'error' when lost, and answers a query while `alive`.
+ */
+export function lockClient() {
+  const client = Object.assign(new EventEmitter(), { alive: true, query: async () => { if (!client.alive) throw new Error('Connection terminated unexpectedly'); return { rows: [] }; } });
+  return client;
+}
+
+/** A store whose `locked` runs the pass at once on a live lock connection; `over` is the rest of what the test needs. */
+export const stubStore = (over: Record<string, unknown>) => ({
+  locked: async (_key: number, _wait: boolean, fn: (c: unknown) => Promise<void>) => { await fn(lockClient()); return 'ran'; }, ...over,
+});
+
+/**
+ * An analyze pass's analysis, without the lock or the pick: the collection
+ * dueAnalysis gives, analysed, or 'nothing due' when none is. It rejects as
+ * the analysis does, where a pass would only record the failure.
+ */
+export async function analyzeDue(w: Worker): Promise<string> {
+  const c = await w.dueAnalysis(Date.now());
+  return c === null ? 'nothing due' : (w as any).analyzeOne(c);
+}
+
+export function row(more: Partial<CollectionRow> = {}): CollectionRow {
+  return {
+    id: 1, chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, cursorBlock: 995, headBlock: 1_000,
+    addedAt: 0, ingestedAt: 0, error: null, errorAt: null, transfers: 10, wallets: 4, fundedWallets: 4,
+    stale: false, latest: null, servedAt: null, readRate: null, priority: false, pausedAt: null, rules: {}, contract: null,
+    restoreProgress: null, restoreNote: null, restoreNoteKey: null, restoreRetryAt: null, analysisError: null, analysisRetryAt: null, storedThroughTime: null, storedThroughBlock: null, trailImportedSha: null, trailNote: null, trailProgress: null,
+    downloadFile: null, downloadProgress: null, downloadNote: null, downloadRetryAt: null, downloadMismatch: null, readTokens: false, ...more,
+  };
+}
+
+export const ENTRY: StoredEntry = {
+  chainId: 1, address: '0xbc4c', name: 'BAYC', startBlock: 100, throughBlock: 900, throughTime: 1_700_000_000_000,
+  transfers: { file: '1-0xbc4c.transfers.csv.zst', rows: 3, bytes: 10, sha256: 'abc' }, trail: null,
 };

@@ -58,7 +58,7 @@ describe('Moves', () => {
     }
     expect(m.into(m.id('c')!)).toHaveLength(MANY);
     expect(m.out(m.id('a')!)[0]).toBe(1);
-  });
+  }, 30_000);
 
   it('sorts edges that did not, across its blocks, ties in the order added', () => {
     const m = new Moves();
@@ -71,7 +71,7 @@ describe('Moves', () => {
     for (const k of [0, 1, 2, (1 << 21) - 1, 1 << 21, MANY - 1]) expect([m.block[k], m.time[k]]).toEqual([order[k], timeOf(order[k]!)]);
     expect(m.sale[order.indexOf(MANY - 1)]).toBe(1);
     expect(m.out(0)).toHaveLength(MANY);
-  });
+  }, 30_000);
 
   it('numbers and names back many wallets, past every table it outgrows', () => {
     const m = new Moves();

@@ -15,7 +15,6 @@ const fake = {
   walletTokens: vi.fn(async () => ['101', '7']),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { GET } = await import('@/app/api/search/route');
 const search = async (query: string) => (await GET(new Request(`http://x/api/search?${query}`))).json();

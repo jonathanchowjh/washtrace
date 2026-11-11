@@ -13,7 +13,6 @@ vi.mock('@/lib/store', () => ({
     sources: async () => state.sources, settings: async () => new Map<string, string>(), collection: async () => state.collection,
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
 afterEach(() => { cleanup(); Object.assign(state, { hits: none, calls: [], sources: {}, collection: null }); });

@@ -1,11 +1,11 @@
-import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type OwnFlag, type Store } from '@washtrace/detect';
+import { CUSTODIANS, EVERY, FOLLOW_FANOUT, TOKENS, WRAPPED, ZERO, entryFor, parkedOf, type AnalysisRow, type CollectionRow, type FlaggedTransfer, type Flow, type Lens, type LensRun, type OwnFlag, type PassRow, type SettingSource, type Store, type StoredEntry } from '@washtrace/detect';
 import { lensIdOf } from '@washtrace/detect/trades';
 import type { LensRule } from '@washtrace/detect/lens-rule';
 import { moneyReason, tokensReason } from '@washtrace/detect/lens-reads';
-import type { Lenses } from './format';
+import { short, type Lenses } from './format';
 import { pages as pagesOf, type WalletOpts } from './params';
 import { authConfigured, mayWrite } from './auth';
-import { analyzingOn, storedOnly, unread, type Coverage } from './coverage';
+import { analysisWaitText, analyzingOn, storedOnly, unread, type Coverage } from './coverage';
 import { shareCauses, shareQualifier, staleSinceLastWrite, runStateWords, type TokensFloor } from './lens-state';
 import { lensContext, ownLenses, ranFlags, verdict, type Verdict } from './metrics';
 import { callsPerSecond, configFromSources, fieldViews, hopsFollowed, type SourcesConfig } from './settings';
@@ -422,4 +422,18 @@ export async function workerView(zone = 'UTC') {
       backfillEtaMs: c.readRate && c.headBlock !== null && c.cursorBlock !== null ? (Math.max(0, c.headBlock - c.cursorBlock) / c.readRate) * 1000 : null,
     })),
   };
+}
+
+/**
+ * What the collection page and Methods both show of the worker and the
+ * reading, from the reads each already holds: the chains it can read, whether
+ * it has gone quiet, the six stages, and why an analysis waits.
+ */
+export function collectionStatus(c: CollectionRow, r: { passes: readonly PassRow[]; all: readonly CollectionRow[]; sources: Record<string, SettingSource>; settings: ReadonlyMap<string, string>; entry: StoredEntry | null; zone: string }) {
+  const config = configFromSources(r.sources, r.settings);
+  const rpcChains = new Set(config.chains);
+  const silent = workerSilent(r.passes, Date.now());
+  const stages = pipeline({ c, entry: r.entry, rpcChains, funding: config.funding, analyzing: analyzingOn(r.passes, c.id), silent: silent !== null });
+  const why = analysisWaitText(c, r.passes.find((x) => x.job === 'analyze'), new Map(r.all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), r.zone, silent !== null);
+  return { config, rpcChains, silent, stages, why };
 }

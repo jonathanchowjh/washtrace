@@ -204,7 +204,7 @@ export function fieldViews(settings: ReadonlyMap<string, string>, sources: Recor
 }
 
 /** Why a chain's RPC other than Ethereum's can't be changed here: the console saves Ethereum's alone (FIELDS). */
-export const ENV_ONLY_RPC = 'Only .env sets this chain\'s RPC: the console saves Ethereum\'s alone.';
+const ENV_ONLY_RPC = 'Only .env sets this chain\'s RPC: the console saves Ethereum\'s alone.';
 
 /**
  * The RPC of each other chain the worker reported reading, read-only, so

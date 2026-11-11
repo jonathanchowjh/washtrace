@@ -12,17 +12,14 @@ import { RangeBar, RangeFigure, RangeKey, VolumeDetail } from '@/components/meth
 import { Refresh } from '@/components/refresh';
 import { mayWrite } from '@/lib/auth';
 import { chainName } from '@/lib/chains';
-import { collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
-import { analysisWaitText, analyzingOn } from '@/lib/coverage';
+import { collectionAt, collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
 import { num, plural, short } from '@/lib/format';
 import { collectionLinks, explorerAddress } from '@/lib/links';
 import { range } from '@/lib/metrics';
 import { addressOf, chainOf } from '@/lib/params';
-import { pipeline } from '@/lib/pipeline';
-import { configFromSources } from '@/lib/settings';
-import { workerSilent } from '@/lib/status';
 import { store, storedEntry } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
+import { collectionStatus } from '@/lib/views';
 
 /** The top tokens and wallets the overview lists; the rest are a click away. */
 const TOP = 5;
@@ -37,9 +34,7 @@ const PANEL_PARAMS = ['method', 'lens', 'tp', 'ts', 'tq', 'wp', 'ws', 'wq'];
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const c = await collectionAt(p);
   // No row: the page is the not-watched one, and its tab says so.
   return { title: c === null ? 'Not watched' : (c.name ?? short(p.address)) };
 }
@@ -83,11 +78,7 @@ export default async function CollectionPage({ params, searchParams }: Props) {
     few ? s.trades(c.id, { ...NO_FILTER, sort: 'date', dir: 'asc' }, ctx, SQUARES + 1, 0) : null,
     ringed ? s.rings(c.id, ctx, RINGS_TOP, 0) : null,
   ]);
-  const config = configFromSources(sources, settings);
-  const rpcChains = new Set(config.chains);
-  const silent = workerSilent(passes, Date.now());
-  const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
-  const why = analysisWaitText(c, passes.find((x) => x.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone, silent !== null);
+  const { silent, stages, why } = collectionStatus(c, { passes, all, sources, settings, entry, zone });
   const writable = mayWrite(process.env, await headers());
   const sales = a === null ? null : range(a.totals, 'sales');
   const volume = a === null ? null : range(a.totals, 'volume');

@@ -2,7 +2,33 @@ import { AddressGraph, chainOrder, tokenGraph } from './graph.js';
 import { EDGE_TYPES, type EdgeKind, type LensRule } from './lens-rule.js';
 import { methodTotals } from './methods.js';
 import { MOVE_KIND, adjacency, type Moves } from './moves.js';
-import type { LensFlag, LensInput, LensTotals, LoopEdge } from './store.js';
+import type { MethodTotals, Transfer } from './types.js';
+
+export interface LensTotals extends MethodTotals { truncated: number; untimed: number }
+/**
+ * One edge of a found loop. `token` is an other-token edge's token address
+ * (TOKENS), and then `amountWei` is its raw amount, in the token's own units;
+ * null for every other edge, and for a path stored before edges had one.
+ */
+export interface LoopEdge { from: string; to: string; kind: EdgeKind | 'funds'; tx: string | null; time: number | null; amountWei: string | null; tokenId: string | null; token: string | null }
+export interface LensFlag { txHash: string; logIndex: number; path: LoopEdge[]; wallets: string[] }
+
+/** What a lens run reads: the transfers, and the money edges its rule may follow, held as numbers. */
+export interface LensInput {
+  transfers: Transfer[]; through: number | null; moves: Moves;
+  contracts: ReadonlySet<string>; custodians: ReadonlySet<string>; money: ReadonlySet<string>;
+  /** Wallets with more history than the funding source would page through, as analysisInput reads them: never a middle of a money lens. Empty with no money row. */
+  truncated: ReadonlySet<string>;
+  /** The collection's transfer transaction hashes, each once: the engine tells a hop's transaction by its index here. */
+  tradeTxs: string[];
+  /**
+   * The collection's token_counts.read as it stood when the run began
+   * loading, for a rule using other tokens; null for any other rule, or
+   * with no counts yet. The count, not a live one, so the run is behind
+   * exactly when the counts move on.
+   */
+  tokensRead: number | null;
+}
 
 /**
  * The most edges one trade's search may read, every edge it examines

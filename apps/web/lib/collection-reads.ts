@@ -3,6 +3,7 @@ import { moneyFor, type CollectionRow } from '@washtrace/detect';
 import type { TradeQuery } from '@washtrace/detect/trades';
 import { readerZone } from './api';
 import { lensContext } from './metrics';
+import { addressOf, chainOf } from './params';
 import { store } from './store';
 
 /**
@@ -10,6 +11,13 @@ import { store } from './store';
  * (the tab bar) and the page under it, and a page's tab title, all need them.
  */
 export const collectionOf = cache((chainId: number, address: string) => store().collection(chainId, address));
+
+/** The collection a page's path names, through the same cached read: null for a bad chain, a bad address or a collection not watched. */
+export async function collectionAt(p: { chain: string; address: string }) {
+  const chainId = chainOf(p.chain);
+  const address = addressOf(p.address);
+  return chainId === null || address === null ? null : await collectionOf(chainId, address);
+}
 
 export const runsOf = cache((collectionId: number) => store().lensRuns(collectionId));
 

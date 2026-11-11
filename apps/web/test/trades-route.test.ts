@@ -36,7 +36,6 @@ vi.mock('@/lib/store', () => ({
     tradeStream: (...a: unknown[]) => { state.streamArgs.push(a); return state.stream(); },
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
 
 afterEach(() => { Object.assign(state, fresh()); });

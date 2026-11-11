@@ -126,6 +126,22 @@ describe('SpotCheck', () => {
     expect(fetchMock.mock.calls.length).toBe(calls);
   });
 
+  it('says the check is gone on a 404 mid-poll, clears the status, stops polling, and offers Try again', async () => {
+    const fetchMock = routes({ status: 202, body: { id: 46, status: 'queued' } }, [
+      { status: 200, body: { id: 46, status: 'running' } },
+      { status: 404, body: { error: 'No such check.' } },
+    ]);
+    const c = view();
+    await check(c);
+    await tick();
+    expect(c.getByRole('alert').textContent).toBe('No such check.');
+    expect(c.queryByText('Checking this transaction…')).toBeNull();
+    expect(c.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    const calls = fetchMock.mock.calls.length;
+    await tick(5_000);
+    expect(fetchMock.mock.calls.length).toBe(calls);
+  });
+
   it('is disabled where this console may not write', () => {
     const c = render(<SpotCheck chainId={1} tx={TX} lenses={[]} writable={false} />);
     expect((c.getByRole('button', { name: 'Check this transaction' }) as HTMLButtonElement).disabled).toBe(true);

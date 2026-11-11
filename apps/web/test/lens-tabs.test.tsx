@@ -77,7 +77,6 @@ vi.mock('@/lib/store', () => ({
   }),
   storedEntry: async () => null,
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
   headers: async () => new Headers({ host: state.remote ? 'example.com' : 'localhost:3000' }),

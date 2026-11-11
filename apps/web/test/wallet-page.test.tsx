@@ -52,7 +52,7 @@ function flows(dir: 'sent' | 'received' | 'both'): Flow[] {
 vi.mock('@/lib/store', () => ({
   store: () => ({
     wallet: async () => funding,
-    collection: async (_c: number, a: string) => ({ id: 1, latest: a === OTHER ? null : { throughBlock: 1000, totals } }),
+    collection: async (c: number, a: string) => ({ id: 1, chainId: c, address: a, latest: a === OTHER ? null : { throughBlock: 1000, totals } }),
     counterparties: async (_c: number, _a: string, limit: number, offset: number) => Array.from({ length: counterparties }, (_, i) => ({ address: partner(i), flows: 2, sent: 1, received: 1, watched: false })).slice(offset, offset + limit),
     counterpartyCount: async () => counterparties,
     walletTransfers: async (_c: number, _a: string, limit: number, offset: number, f?: WalletFilter) => narrowed(f).slice(offset, offset + limit),
@@ -62,7 +62,6 @@ vi.mock('@/lib/store', () => ({
     flowsBetweenCount: async (_c: number, _a: string, _b: string, dir: 'sent' | 'received' | 'both') => flows(dir).length,
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
 afterEach(() => {

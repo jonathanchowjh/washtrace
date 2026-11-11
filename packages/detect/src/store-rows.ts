@@ -1,8 +1,10 @@
 // Row mappers, their SELECTs and the bulk writes ingest, funding and loads of stored data share: apart from
 // store.ts because none of them needs the Store's connection.
+// Postgres sends bigint and numeric columns as strings; each is converted where it is read.
 import pg from 'pg';
 import { checkRule } from './lens-rule.js';
-import type { AnalysisRow, CollectionRow, Lens, LensRun, LoopEdge, OwnFlag } from './store.js';
+import type { LoopEdge } from './lens.js';
+import type { AnalysisRow, CollectionRow, Lens, LensRun, OwnFlag, RingLine } from './store.js';
 import type { Flow, Transfer } from './types.js';
 import { LATEST } from './trade-sql.js';
 
@@ -52,10 +54,22 @@ SELECT c.*, extract(epoch FROM c.added_at)::float8 AS added, extract(epoch FROM 
 FROM washtrace.collections c
 LEFT JOIN LATERAL (SELECT * FROM washtrace.analyses x WHERE x.collection_id = c.id ${LATEST}) a ON true`;
 
+/** The columns `toFlow` reads from a flows row `f`, with its time as `bt`. */
+export const FLOW_SELECT = `f.tx_hash, f.kind, f.from_address, f.to_address, f.value_wei, f.token, f.block_number,
+              extract(epoch FROM f.block_time)::float8 AS bt`;
+
 export function toFlow(r: any): Flow {
   return {
     txHash: r.tx_hash, kind: r.kind, from: r.from_address, to: r.to_address, valueWei: String(r.value_wei),
     token: r.token, blockNumber: Number(r.block_number), blockTime: r.bt,
+  };
+}
+
+export function toRing(r: Record<string, unknown>): RingLine {
+  return {
+    anchor: r.ring as string, rank: r.rank as number, wallets: r.wallets as number, sample: r.sample as string[],
+    sales: r.sales as number, floorSales: r.floor_sales as number, tokens: r.tokens as number, volumeWei: String(r.volume),
+    firstAt: r.first_at as number | null, lastAt: r.last_at as number | null,
   };
 }
 

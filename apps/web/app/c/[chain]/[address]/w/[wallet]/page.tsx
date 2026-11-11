@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
-import { collectionOf } from '@/lib/collection-reads';
+import { collectionAt } from '@/lib/collection-reads';
 import { short } from '@/lib/format';
+import { walletHref } from '@/lib/links';
 import { addressOf, chainOf } from '@/lib/params';
 import { WalletView } from '@/app/w/[chain]/[address]/view';
 
@@ -13,19 +14,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const p = await params;
   const chainId = chainOf(p.chain);
   const wallet = addressOf(p.wallet);
-  return wallet === null || chainId === null ? { title: 'Wallet' } : { title: short(wallet), alternates: { canonical: `/w/${chainId}/${wallet}` } };
+  return wallet === null || chainId === null ? { title: 'Wallet' } : { title: short(wallet), alternates: { canonical: walletHref(chainId, wallet) } };
 }
 
 /** One wallet as seen from a collection: its trades there, under the collection's tabs; its money, all of it. */
 export default async function CollectionWalletPage({ params, searchParams }: Props) {
   await connection();
   const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const wallet = addressOf(p.wallet);
-  if (chainId === null || address === null || wallet === null) notFound();
+  const wallet = addressOf(p.wallet) ?? notFound();
   // The layout read it already: this is the same request's read.
-  const c = await collectionOf(chainId, address);
-  if (!c) notFound();
+  const c = (await collectionAt(p)) ?? notFound();
+  const { chainId, address } = c;
   return WalletView({ chainId, address: wallet, sp: await searchParams, within: { base: `/c/${chainId}/${address}`, collection: address, name: c.name ?? short(address), id: c.id } });
 }

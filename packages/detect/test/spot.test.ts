@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TransactionReceiptNotFoundError, toEventSelector, type Log } from 'viem';
 import type pg from 'pg';
-import { SPOT_CHECK_MS, SPOT_RECEIPTS_MAX, SPOT_TRADES_MAX, SpotCheck, counterparties, lensRefusal, middlesOf, receiptTrades } from '../src/spot.js';
+import { SPOT_CHECK_MS, SPOT_RECEIPTS_MAX, SPOT_TRADES_MAX, SpotCheck, lensRefusal, middlesOf, near, receiptTrades } from '../src/spot.js';
 import { Store } from '../src/store.js';
 import { Chain } from '../src/chain.js';
 import { Etherscan } from '../src/etherscan.js';
@@ -113,14 +113,14 @@ describe('receiptTrades', () => {
   });
 });
 
-describe('middlesOf and counterparties', () => {
+describe('middlesOf and near', () => {
   it('finds wallets that moved money with both sides, never the pair, the zero address or a contract', () => {
     const flows = [flow(F, S), flow(B, F), flow(X, S), flow(SEAPORT, S), flow(B, SEAPORT), flow(ZERO, S), flow(ZERO, B), flow(S, B)];
     expect(middlesOf(flows, S, B, new Set([SEAPORT]))).toEqual([F]);
   });
 
   it('counts distinct wallets either way', () => {
-    expect(counterparties([flow(F, S), flow(S, F), flow(F, B), flow(X, F)], F)).toBe(3);
+    expect(near([flow(F, S), flow(S, F), flow(F, B), flow(X, F)], F).size).toBe(3);
   });
 });
 

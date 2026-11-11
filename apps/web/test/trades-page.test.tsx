@@ -38,7 +38,6 @@ vi.mock('@/lib/store', () => ({
     tradeGroups: async (...a: unknown[]) => { state.calls.groups.push(a); return state.groups; },
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, redirect: (to: string) => { throw new Error(`redirect:${to}`); }, useRouter: () => ({ push: vi.fn() }) }));
 

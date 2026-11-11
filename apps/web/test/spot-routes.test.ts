@@ -19,8 +19,6 @@ const fake = {
 const verdictOf = vi.fn(async (): Promise<object> => ({ ...judgedView, transfers: [], judged: false, washTrade: null, by: [] }));
 vi.mock('@/lib/store', () => ({ store: () => fake }));
 vi.mock('@/lib/views', () => ({ txVerdict: verdictOf }));
-// handle() opts into dynamic rendering with connection(), which only works inside a Next request.
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { POST: ask } = await import('@/app/api/spots/route');
 const { GET: poll } = await import('@/app/api/spots/[id]/route');

@@ -17,8 +17,6 @@ const fake = {
   importedMoney: vi.fn(async (_id: number) => true),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-// handle() opts into dynamic rendering with connection(), which only works inside a Next request.
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const settingsRoute = await import('@/app/api/settings/route');
 const checkRoute = await import('@/app/api/settings/check/route');

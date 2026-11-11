@@ -1,5 +1,5 @@
-import { handle, json, writeBody } from '@/lib/api';
-import { collectionIdsOf, collectionRaced, lensFields, lensIdFromPath, nameRaced, noLens, notWatched, taken } from '@/lib/lens-api';
+import { handle, json, noLens, notWatched, writeBody } from '@/lib/api';
+import { collectionIdsOf, collectionRaced, lensFields, lensIdFromPath, nameRaced, taken } from '@/lib/lens-api';
 import { store } from '@/lib/store';
 
 type Ctx = { params: Promise<{ id: string }> };

@@ -6,7 +6,7 @@ import { TRAIL_LOADING, progress, restoreNext, trust, type Coverage } from '@/li
 import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
 import type { Stage } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 
 /** Each reading's pill hue: progress is blue, done is green, and everything that is not moving is grey (the limit, a pause or a silent worker is not a fault). */
 const TONE: Record<Coverage['reading'], PillTone> = {

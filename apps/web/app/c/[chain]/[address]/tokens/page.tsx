@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { FlaggedView, metadataOf } from '../flagged/view';
+import { FlaggedView, metadataOf } from '../list-view';
 
 type Props = Omit<Parameters<typeof FlaggedView>[0], 'kind'>;
 

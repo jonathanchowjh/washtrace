@@ -1,4 +1,4 @@
-import { bad, collectionFrom, handle, json, writeBody } from '@/lib/api';
+import { collectionFrom, handle, json, notWatched, writeBody } from '@/lib/api';
 
 type Ctx = { params: Promise<{ chain: string; address: string }> };
 
@@ -17,7 +17,7 @@ export async function POST(req: Request, { params }: Ctx): Promise<Response> {
     if (found instanceof Response) return found;
     const { s, chainId, address, collection: c } = found;
     const set = await s.startTokens(c.id);
-    if (set === 'gone') return bad('This collection is not watched.', 404);
+    if (set === 'gone') return notWatched();
     if (set === 'set') console.info('[washtrace] %s started reading other tokens of %d/%s', written.actor, chainId, address);
     return json({ started: set === 'set' }, set === 'set' ? 202 : 200);
   });

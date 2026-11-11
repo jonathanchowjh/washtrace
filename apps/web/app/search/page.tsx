@@ -6,7 +6,7 @@ import { Empty, Ext, Head, Problem, STORE_DOWN, Section } from '@/components/ui'
 import { Pager } from '@/components/pager';
 import { short } from '@/lib/format';
 import { range, rangeEnds } from '@/lib/metrics';
-import { explorerAddress, explorerTx } from '@/lib/links';
+import { explorerAddress, explorerTx, txHref } from '@/lib/links';
 import { addressOf, txOf } from '@/lib/params';
 import { hitRow, kindsFor, parseSearch, scopeOf, scopeParam, searchArgs, SEARCH_LIMIT, tooShort, type Scope } from '@/lib/search';
 import { KindIcon, type Kind } from '@/components/kit';
@@ -88,9 +88,9 @@ export default async function SearchPage({ searchParams }: Props) {
         <Empty>
           Nothing watched matches “{q}”. washtrace searches watched collections, their tokens and wallets, and the trades it has read.
           {outside ? <> <Ext href={outside} className="underline">Look it up on Etherscan</Ext></> : null}
-          {checkOn.length > 0 ? (
+          {tx !== null && checkOn.length > 0 ? (
             <> Check it on{' '}
-              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={`/tx/${c}/${tx}`} prefetch={false}>{chainName(c)}</Link></span>)}
+              {checkOn.map((c, i) => <span key={c}>{i > 0 ? ', ' : ''}<Link className="underline" href={txHref(c, tx)} prefetch={false}>{chainName(c)}</Link></span>)}
               : washtrace reads that one transaction, without watching its collection.
             </>
           ) : null}

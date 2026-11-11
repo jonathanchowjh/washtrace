@@ -4,12 +4,13 @@ import { NO_FILTER } from '@washtrace/detect/trades';
 import { collectionOf, tradeContextOf, tradesOf, whose, type Item } from '@/lib/collection-reads';
 import { LENSES, num, plural } from '@/lib/format';
 import { txHref } from '@/lib/links';
+import { SHOWN } from '@/lib/metrics';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cn } from '@/lib/utils';
 import { nextStart } from '@/lib/zone';
 import { HATCH, KindIcon, TierMark } from './kit';
-import { Time } from './time';
+import { Time } from './zone';
 
 /**
  * The collection's strip of every sale, in order, each coloured by the
@@ -82,7 +83,7 @@ export function SalesStrip({ timeline, base, zone, chainId, sales, mine }: {
           <Link href={tradesHref(base, { caught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="cycle" />{num(sum.floor)} {LENSES.A.name}</Link>
           <Link href={tradesHref(base, { caught: ['AC'], notCaught: ['A'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="money" />{num(sum.ceiling)} + {LENSES.AC.name}</Link>
           <Link href={tradesHref(base, { caught: ['AU'], notCaught: ['A', 'AC'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="apart" />{num(sum.apart)} {LENSES.AU.name} alone</Link>
-          <Link href={tradesHref(base, { notCaught: ['A', 'AC', 'AU'] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="clean" />{num(sum.clean)} not flagged</Link>
+          <Link href={tradesHref(base, { notCaught: [...SHOWN] })} prefetch={false} className="flex items-center gap-1.5 hover:underline"><TierMark tone="clean" />{num(sum.clean)} not flagged</Link>
         </p>
       </div>
       {sales && total <= SQUARES && sales.length === total ? (

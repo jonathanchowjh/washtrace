@@ -23,7 +23,6 @@ vi.mock('@/lib/views', () => ({
   }),
 }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
-vi.mock('next/server', () => ({ connection: async () => undefined }));
 
 const refresh = vi.fn();
 const push = vi.fn();

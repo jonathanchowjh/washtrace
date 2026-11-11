@@ -1,13 +1,66 @@
 'use client';
 
 import type { LensRule } from '@washtrace/detect/lens-rule';
-import { RowPreview } from './row-preview';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LOCAL_ONLY } from '@/lib/auth';
-import { send } from '@/lib/send';
+import { floorPct, num, pctTenth } from '@/lib/format';
+import { poll, send } from '@/lib/send';
 import { KindIcon } from './kit';
+
+const POLL_MS = 1000;
+
+type Said = { status: 'queued' | 'running' | 'done' | 'failed'; progress: number | null; error: string | null; result: { caught: number; sampled: number; judged?: number } | null };
+
+/**
+ * Preview, on one row of the Lab's Runs on: a lens's rule on a sample of that
+ * collection's sales, started only by its button, since previews run one at a
+ * time on the worker. The line is the share alone; the collection's Methods
+ * page words how sure it is from what is read there.
+ */
+export function RowPreview({ chainId, address, rule, writable }: { chainId: number; address: string; rule: LensRule; writable: boolean }) {
+  const [id, setId] = useState<number | null>(null);
+  const [said, setSaid] = useState<Said | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // The last poll failed with no word that the preview is gone: polling goes on, as the Methods page's preview's does.
+  const [lost, setLost] = useState(false);
+
+  useEffect(() => {
+    if (id === null) return;
+    return poll<Said>(`/api/lenses/previews/${id}`, {
+      every: POLL_MS,
+      done: (body) => body.status !== 'queued' && body.status !== 'running',
+      onRow: (body) => { setLost(false); setSaid(body); },
+      onLost: () => setLost(true),
+      onGone: (body) => { setLost(false); setError(body?.error ?? 'This preview is gone. Run it again.'); setId(null); },
+    });
+  }, [id]);
+
+  async function start() {
+    setError(null);
+    setSaid(null);
+    const r = await send<{ id: number }>('/api/lenses/previews', 'POST', { chainId, address, rule });
+    if (r.error !== null) setError(r.error);
+    else setId(r.body.id);
+  }
+
+  // Still polling counts as going, so a lost poll does not invite a second preview.
+  const going = lost || said?.status === 'queued' || said?.status === 'running' || (id !== null && said === null);
+  const r = said?.status === 'done' ? said.result : null;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button type="button" onClick={start} disabled={!writable || going} className="btn-secondary text-xs">{going ? 'Previewing…' : 'Preview'}</button>
+      <span aria-live="polite" className="text-xs text-muted-foreground">
+        {said?.status === 'queued' ? 'Waiting for the worker' : null}
+        {said?.status === 'running' ? (said.progress ? `Previewing… ${floorPct(said.progress, 1)}` : 'Loading the collection…') : null}
+        {r ? `Caught ${pctTenth(r.caught, r.judged ?? r.sampled)} of ${num(r.judged ?? r.sampled)} sales judged` : null}
+        {lost ? ' Lost touch with the service; trying again every second.' : null}
+      </span>
+      {error ?? (said?.status === 'failed' ? said.error : null) ? <span role="alert" className="text-xs text-fault">{error ?? said?.error}</span> : null}
+    </span>
+  );
+}
 
 /** One watched collection in a lens's Runs on list: where its run stands, its share, what data it still needs, and its tab. */
 export type RunRow = {

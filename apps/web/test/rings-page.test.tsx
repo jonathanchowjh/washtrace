@@ -14,7 +14,7 @@ const MEMBERS = [{ address: A, traded: true }, { address: B, traded: true }, { a
 const state = { rings: 2 as number | null, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 };
 vi.mock('@/lib/store', () => ({
   store: () => ({
-    collection: async () => ({ id: 1, name: 'Demo Apes', address: ADDR, latest: state.latest ? { rings: state.rings } : null }),
+    collection: async () => ({ id: 1, chainId: 1, name: 'Demo Apes', address: ADDR, latest: state.latest ? { rings: state.rings } : null }),
     rings: async (_id: number, _ctx: unknown, limit: number, offset: number) => ({ rows: state.list.slice(offset, offset + limit), total: state.list.length }),
     ring: async (_id: number, anchor: string) => (anchor === A ? { line: line(1, A, state.floorSales), wallets: state.members, walletsCut: false, tokens: [{ tokenId: '114', sales: 1, volumeWei: '9000000000000000000' }] } : null),
     ringsOf: async (_id: number, of: { wallet?: string }) => (of.wallet === M ? [A] : []),
@@ -24,7 +24,6 @@ vi.mock('@/lib/store', () => ({
     flowsAmong: async () => [{ txHash: '0x' + 'f'.repeat(64), kind: 'native', from: M, to: A, valueWei: '1000000000000000000', token: '', blockNumber: 1, blockTime: 1 }],
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); } }));
 
 afterEach(() => { cleanup(); Object.assign(state, { rings: 2, latest: true, list: [line(1), line(2, B, 0)], members: MEMBERS, floorSales: 2 }); });

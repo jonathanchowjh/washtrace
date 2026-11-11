@@ -3,7 +3,7 @@ import Link from 'next/link';
 import type { Tone } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 import { KindIcon, type Kind } from './kit';
-import { Time } from './time';
+import { Time } from './zone';
 
 const KIND_NAME: Record<Kind, string> = { collection: 'Collection', lens: 'Lens', ring: 'Ring', token: 'Token', wallet: 'Wallet', transaction: 'Transaction' };
 

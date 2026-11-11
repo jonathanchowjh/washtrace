@@ -17,7 +17,6 @@ vi.mock('@/lib/store', () => ({
     tokenCounts: async () => null,
   }),
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'localhost:8080' }) }));
 const push = vi.fn(), refresh = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }));
@@ -145,7 +144,7 @@ describe('a row\'s preview', () => {
       ? { ok: true, status: 202, json: async () => ({ id: 5 }) }
       : { ok: true, status: 200, json: async () => ({ status: 'done', progress: 1, error: null, result: { caught: 1, sampled: 8, judged: 8 } }) }));
     vi.stubGlobal('fetch', fetchMock);
-    const { RowPreview } = await import('@/components/row-preview');
+    const { RowPreview } = await import('@/components/runs-on');
     render(<RowPreview chainId={1} address={A} rule={DEFAULT_RULE} writable />);
     expect(fetchMock).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
@@ -166,7 +165,7 @@ describe('a row\'s preview', () => {
       return { ok: true, status: 200, json: async () => ({ status: 'done', progress: 1, error: null, result: { caught: 2, sampled: 8, judged: 8 } }) };
     });
     vi.stubGlobal('fetch', fetchMock);
-    const { RowPreview } = await import('@/components/row-preview');
+    const { RowPreview } = await import('@/components/runs-on');
     render(<RowPreview chainId={1} address={A} rule={DEFAULT_RULE} writable />);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText(/Lost touch with the service/)).toBeTruthy();
@@ -174,6 +173,31 @@ describe('a row\'s preview', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(screen.getByText('Caught 25.0% of 8 sales judged')).toBeTruthy();
     expect(screen.queryByText(/Lost touch/)).toBeNull();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('says the preview is gone on a 404 mid-poll, keeps the last row it read, and stops asking', async () => {
+    vi.useFakeTimers();
+    let polls = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, status: 202, json: async () => ({ id: 5 }) };
+      polls++;
+      return polls === 1
+        ? { ok: true, status: 200, json: async () => ({ status: 'running', progress: null, error: null, result: null }) }
+        : { ok: false, status: 404, json: async () => ({ error: 'This preview is gone. Run it again.' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { RowPreview } = await import('@/components/runs-on');
+    render(<RowPreview chainId={1} address={A} rule={DEFAULT_RULE} writable />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Preview' })); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByRole('alert').textContent).toBe('This preview is gone. Run it again.');
+    // As before: the last row read ("running") is kept, so the button still reads as going.
+    expect((screen.getByRole('button', { name: 'Previewing…' }) as HTMLButtonElement).disabled).toBe(true);
+    const calls = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetchMock.mock.calls.length).toBe(calls);
     vi.unstubAllGlobals();
     vi.useRealTimers();
   });

@@ -1,14 +1,9 @@
 #!/bin/sh
-# Everything fast, before each commit: types, then the unit and console tests.
+# Everything fast, before each commit: `npm run check` (types, then the unit and console tests).
 # The integration tests need Docker and are run by hand (`npm run test:int`).
 # `git commit --no-verify` skips this for a checkpoint that does not typecheck yet.
 set -e
 
-echo "pre-commit: typecheck, unit and console tests"
+echo "pre-commit: npm run check"
 
-npm run typecheck:test
-npm run --workspace @washtrace/detect typecheck
-npm test
-npm run test:web
-npm run --workspace @washtrace/web typecheck
-npm run --workspace @washtrace/worker typecheck
+npm run check

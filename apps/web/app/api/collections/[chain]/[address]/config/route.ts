@@ -1,6 +1,6 @@
 import type { CollectionRow } from '@washtrace/detect';
 import { addressOf, chainOf } from '@/lib/params';
-import { bad, collectionFrom, handle, json, writeBody } from '@/lib/api';
+import { bad, collectionFrom, handle, json, notWatched, writeBody } from '@/lib/api';
 import { configChange, effectiveRules } from '@/lib/collections';
 import { store } from '@/lib/store';
 
@@ -35,7 +35,7 @@ export async function POST(req: Request, { params }: Ctx): Promise<Response> {
     const change = configChange(written.body);
     if (typeof change === 'string') return bad(change);
     const collection = await store().configure(chainId, address, change);
-    if (!collection) return bad('This collection is not watched.', 404);
+    if (!collection) return notWatched();
     console.info('[washtrace] %s configured %d/%s: %s', written.actor, chainId, address, JSON.stringify(change));
     return json(body(collection));
   });

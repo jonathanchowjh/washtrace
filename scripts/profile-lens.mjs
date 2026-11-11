@@ -1,3 +1,4 @@
+// @ts-check
 // Measures one lens run on real data, as the worker runs it: the input is read and
 // the search run in a lens thread. For the Round trips copy (A) it also checks the
 // flags against the ones the collection's stored analysis holds.
@@ -16,31 +17,15 @@
 // "Peak" is the process's peak resident memory, sampled every 50 ms: the search
 // runs in a thread whose own heap the main thread cannot read, and the resident
 // size is what a container's limit is held to and is never below the heap.
-import { readFileSync } from 'node:fs';
 import { Store, storeUrl } from '../packages/detect/dist/index.js';
 import { runLensInThread } from '../packages/detect/dist/lens-thread.js';
-import { COPIES, DEFAULT_RULE, checkRule } from '../packages/detect/dist/lens-rule.js';
+import { FOLLOW_HOPS, PAYEES, readOnly, ruleFor } from './profile-shared.mjs';
 
 const id = Number(process.argv[2]);
 const which = process.argv[3];
 if (!Number.isInteger(id) || !which) {
   console.error('usage: node scripts/profile-lens.mjs <collectionId> <A|AU|AC|path/to/rule.json|default>');
   process.exit(2);
-}
-
-function ruleFor(arg) {
-  if (arg === 'default') return DEFAULT_RULE;
-  if (COPIES[arg]) return COPIES[arg].rule;
-  const checked = checkRule(JSON.parse(readFileSync(arg, 'utf8')));
-  if ('error' in checked) throw new Error(`${arg}: ${checked.error}`);
-  return checked.rule;
-}
-
-function readOnly(raw) {
-  const url = new URL(raw);
-  const options = url.searchParams.get('options');
-  url.searchParams.set('options', `${options ? `${options} ` : ''}-c default_transaction_read_only=on`);
-  return url.toString();
 }
 
 const rule = ruleFor(which);
@@ -63,7 +48,7 @@ try {
 
   const started = performance.now();
   const { totals, flags } = await runLensInThread(
-    { storeUrl: url, lensId: 0, collectionId: id, chainId: c.chain_id, rule, through },
+    { storeUrl: url, lensId: 0, collectionId: id, chainId: c.chain_id, rule, through, followHops: FOLLOW_HOPS, payees: PAYEES },
     () => {},
   );
   const ms = Math.round(performance.now() - started);

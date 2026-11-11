@@ -8,8 +8,8 @@ import { WhereItSits } from '@/components/sales-strip';
 import { Answer, Empty, Head, MoreLink, Section } from '@/components/ui';
 import { KindIcon, VerdictChip } from '@/components/kit';
 import { RingFigure, ringTone } from '@/components/rings';
-import { Time } from '@/components/time';
-import { collectionOf } from '@/lib/collection-reads';
+import { Time } from '@/components/zone';
+import { collectionAt } from '@/lib/collection-reads';
 import { eth, num, plural, ringName, short, tokenLabel } from '@/lib/format';
 import { cardSrc, txHref, walletHref, withFrom } from '@/lib/links';
 import { fromParam } from '@/lib/step';
@@ -17,7 +17,7 @@ import { layout } from '@/lib/layout';
 import { ringDrawing } from '@/lib/views';
 import { LoopFigure } from '@/components/token-graph';
 import { HoverCard } from '@/components/hover-card';
-import { addressOf, chainOf } from '@/lib/params';
+import { addressOf } from '@/lib/params';
 import { store } from '@/lib/store';
 import { tradesHref } from '@/lib/trades-url';
 import { cache, Suspense } from 'react';
@@ -30,14 +30,11 @@ const DAY = 86_400_000;
 
 /** The ring of a collection named by `anchor`, read once a request: its tab title and its page both need it. Cached on the path's words, which both are given. */
 const ringAt = cache(async (chain: string, collection: string, at: string) => {
-  const chainId = chainOf(chain);
-  const address = addressOf(collection);
   const anchor = addressOf(at);
-  if (chainId === null || address === null || anchor === null) return null;
-  const c = await collectionOf(chainId, address);
-  if (!c) return null;
-  const ring = await store().ring(c.id, anchor, { money: moneyFor(chainId) });
-  return { chainId, address, anchor, c, ring };
+  const c = anchor === null ? null : await collectionAt({ chain, address: collection });
+  if (anchor === null || c === null) return null;
+  const ring = await store().ring(c.id, anchor, { money: moneyFor(c.chainId) });
+  return { chainId: c.chainId, address: c.address, anchor, c, ring };
 });
 
 async function ringOf({ params }: Props) {

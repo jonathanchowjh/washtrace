@@ -14,7 +14,6 @@ import { History, LensStats, Trend } from '@/components/methods';
 import { Refresh } from '@/components/refresh';
 import { CollectionControls } from '@/components/watch';
 import { lensKeyOf, readerZone } from '@/lib/api';
-import { addressOf, chainOf } from '@/lib/params';
 import { editorStart } from '@/lib/lens-api';
 import { LOCAL_ONLY, mayWrite } from '@/lib/auth';
 import { rulesNote } from '@/lib/collections';
@@ -22,15 +21,13 @@ import { NOT_RUN_LATEST, lensInfo, pct, pctTenth, plural, short } from '@/lib/fo
 import { builtinCauses, runStateWords, shareQualifier } from '@/lib/lens-state';
 import { type Method, type MethodTotals, type TokenSort, type WalletSort } from '@washtrace/detect';
 import { listHref } from '@/lib/links';
-import { collectionOf, runsOf, tradeContextOf } from '@/lib/collection-reads';
-import { analyzingOn, coverage, unread, analysisWaitText } from '@/lib/coverage';
+import { collectionAt, runsOf, tradeContextOf } from '@/lib/collection-reads';
+import { coverage, unread } from '@/lib/coverage';
 import { chartLenses, evidenceLead, leftOut, ownLenses } from '@/lib/metrics';
-import { pipeline, trailComing } from '@/lib/pipeline';
-import { configFromSources } from '@/lib/settings';
-import { workerSilent } from '@/lib/status';
+import { trailComing } from '@/lib/pipeline';
 import { store, storedEntry } from '@/lib/store';
 import { listView } from '@/lib/params';
-import { clampedPage, collectionView } from '@/lib/views';
+import { clampedPage, collectionStatus, collectionView } from '@/lib/views';
 
 /** Rows of each lens list a page in the lens panel; the flagged page has all of them. */
 const TOP = 10;
@@ -42,10 +39,7 @@ const TOP = 10;
 type Props = { params: Promise<{ chain: string; address: string }>; searchParams: Promise<{ method?: string; lens?: string; tp?: string; ts?: string; tq?: string; wp?: string; ws?: string; wq?: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  const c = chainId === null || address === null ? null : await collectionOf(chainId, address);
+  const c = await collectionAt(await params);
   return { title: c ? `Methods · ${c.name ?? short(c.address)}` : 'Methods' };
 }
 
@@ -57,13 +51,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  */
 export default async function MethodsPage({ params, searchParams }: Props) {
   await connection();
-  const p = await params;
-  const chainId = chainOf(p.chain);
-  const address = addressOf(p.address);
-  if (chainId === null || address === null) notFound();
+  const c = (await collectionAt(await params)) ?? notFound();
+  const { chainId, address } = c;
   const s = store();
-  const c = await collectionOf(chainId, address);
-  if (!c) notFound();
   const sp = await searchParams;
   // Your lenses on this collection with their runs: ?method=L<id> picks one that exists, and an unknown or deleted one falls back like an unknown method.
   const runs = await runsOf(c.id);
@@ -111,19 +101,15 @@ export default async function MethodsPage({ params, searchParams }: Props) {
   const a = c.latest;
   const rules = rulesNote(c.rules);
   // The chains the worker can read: with none for this one, its stored data is all there is.
-  const config = configFromSources(sources, settings);
-  const rpcChains = new Set(config.chains);
   // The manifest entry: how many traders the loaded money trail checked (when it is the one loaded), and how big the trail is while it downloads.
   const entry = await storedEntry(chainId, address);
   const trail = entry?.trail && entry.trail.sha256 === c.trailImportedSha ? { checked: entry.trail.checked, of: entry.trail.of } : null;
   // What the worker gives the next analysis: a key, or this collection's own trail with checked wallets (Worker.analyze).
   // A trail with checked wallets not loaded yet: stage 5 and the lens cards wait for it rather than saying they need a key.
   const coming = trailComing(c, entry);
-  const silent = workerSilent(passes, Date.now());
-  const why = analysisWaitText(c, passes.find((p) => p.job === 'analyze'), new Map(all.map((o) => [o.id, o.name ?? short(o.address)])), rpcChains, Date.now(), zone, silent !== null);
+  const { config, rpcChains, silent, stages, why } = collectionStatus(c, { passes, all, sources, settings, entry, zone });
   const cov = coverage(c, rpcChains, Date.now(), zone, config.funding, silent !== null);
   const { funded, needs, qualifier, moneyReasons, tokens: tokensFloor, chartOwn, chartLeft, chartNotRun } = await collectionView(s, c, runs, { config, cov, editing, watched: all.length, yours, chart });
-  const stages = pipeline({ c, entry, rpcChains, funding: config.funding, analyzing: analyzingOn(passes, c.id), silent: silent !== null });
   const lens = lensInfo(method, own)!;
   // The chosen lens's figures: the latest analysis's for a built-in, its last finished run's for yours (a lens being run again keeps showing them).
   const t: MethodTotals | null | undefined = yours ? yours.run?.totals : a?.totals[method as Method];

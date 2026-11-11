@@ -112,7 +112,6 @@ vi.mock('@/lib/store', () => ({
   }),
   storedEntry: async () => null,
 }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers({ host: 'localhost:3000' }) }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push, refresh: vi.fn() }) }));
 

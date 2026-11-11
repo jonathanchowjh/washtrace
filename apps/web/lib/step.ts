@@ -4,11 +4,10 @@ import { runsOf, tradeContextOf } from './collection-reads';
 import { eth, localTime, ringName, short, tokenLabel } from './format';
 import { txHref, walletHref, withFrom } from './links';
 import { ownLenses } from './metrics';
-import { addressOf, pageOf } from './params';
+import { addressOf, listView, pageOf, pages } from './params';
 import { store } from './store';
 import { TRADES_PAGE, holdsNothing, parseView } from './trades-url';
 import { LIST_PAGE, RINGS_PAGE } from './views';
-import { listView } from './params';
 
 /**
  * Stepping through a list from one of its items: ‹ and › (and J and K) open
@@ -111,11 +110,11 @@ export async function stepOf(c: CollectionRow, from: NonNullable<ReturnType<type
   const here = await pageOfList(c, kind, params, page);
   const i = here.items.findIndex((x) => x.id === id);
   if (i < 0) return null;
-  const pages = Math.max(1, Math.ceil(here.total / size));
+  const last = pages(here.total, size);
   // Past an edge of the page, the neighbour is the last of the page before or the first of the page after.
   const [before, after] = await Promise.all([
     i === 0 && page > 1 ? pageOfList(c, kind, params, page - 1) : null,
-    i === here.items.length - 1 && page < pages ? pageOfList(c, kind, params, page + 1) : null,
+    i === here.items.length - 1 && page < last ? pageOfList(c, kind, params, page + 1) : null,
   ]);
   const base = `/c/${c.chainId}/${c.address}`;
   const back = `${base}/${fromParam(kind, params, page)}`;

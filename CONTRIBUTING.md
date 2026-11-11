@@ -15,8 +15,7 @@ You need **Node 22.15 or newer**, **npm** and **Docker**. Docker runs the dev
 Postgres and the integration tests. Unit and component tests run without it.
 
 ```sh
-npm install
-git config core.hooksPath .githooks          # one-time: the pre-commit hook below
+npm install                                  # also turns on the pre-commit hook below
 npm run db:up                                # Postgres 17 on localhost:55433
 export WASHTRACE_STORE_URL='postgres://postgres:secret@localhost:55433/washtrace'
 export WASHTRACE_RPC_1='https://…'           # optional: any Ethereum JSON-RPC
@@ -42,8 +41,10 @@ scripts; the `--workspace` ones are each package's own.
 |---|---|---|
 | `npm test` | The `unit` Vitest project: `packages/*/test/**/*.test.ts` (not `*.int.test.ts`), `apps/worker/test/**/*.test.ts` and `scripts/**/*.test.mjs`. It reads detect's source, so it needs no build. | No |
 | `npm run test:int` | The `integration` project: `packages/**/test/**/*.int.test.ts`, the store against a real Postgres, one container per file. | Yes |
-| `npm run test:web` | Builds `packages/detect`, then runs the `web` project (`apps/web/test`, jsdom). | No |
+| `npm run test:web` | The `web` project (`apps/web/test`, jsdom). It reads detect's source through aliases, so it needs no build. | No |
 | `npm run test:watch` | Vitest in watch mode over every project. | Only for `*.int.test.ts` |
+| `npm run check` | What the pre-commit hook runs: `typecheck`, then `npm test`, then `npm run test:web`. | No |
+| `npm run typecheck` | Builds detect, then `typecheck:test`, then the profile scripts (`tsconfig.scripts.json`, `checkJs`), then the console's. | No |
 | `npm run typecheck:test` | `tsc -p tsconfig.test.json --noEmit`: `packages/*/src` and `test`, `apps/worker/src` and `test`, and `vitest.config.ts`. | No |
 | `npm run --workspace @washtrace/detect typecheck` | The package's own `tsconfig.json`, no emit. | No |
 | `npm run --workspace @washtrace/web typecheck` | The console, `tsc -p tsconfig.json --noEmit`. | No |
@@ -62,18 +63,12 @@ the images run `node` directly (see the Dockerfile), so these are for local use.
 
 ### The pre-commit hook
 
-[.githooks/pre-commit](.githooks/pre-commit) runs, in this order, stopping at
-the first failure:
+[.githooks/pre-commit](.githooks/pre-commit) runs `npm run check`, which stops at the
+first failure. `npm install` turns the hook on (its `prepare` script sets
+`core.hooksPath`).
 
-1. `npm run typecheck:test`
-2. `npm run --workspace @washtrace/detect typecheck`
-3. `npm test`
-4. `npm run test:web`
-5. `npm run --workspace @washtrace/web typecheck`
-6. `npm run --workspace @washtrace/worker typecheck`
-
-It does not run `npm run test:int` (Docker) or any build, so run `test:int`
-by hand after a change to the store, and `npm run --workspace @washtrace/web
+It does not run `npm run test:int` (Docker), and its only build is detect's, for the
+typechecks. Run `test:int` by hand after a change to the store, and `npm run --workspace @washtrace/web
 build` after a change to the console. `git commit --no-verify` skips the hook
 for a checkpoint that does not typecheck yet.
 
@@ -86,6 +81,7 @@ or `.env.example`.
 |---|---|---|
 | `WASHTRACE_DEV_IMAGE`, `WASHTRACE_DEV_PORT` | `scripts/dev-db.sh` | The dev Postgres's image (default `postgres:17-alpine`) and host port (default 55433). |
 | `WASHTRACE_PUBLISH_IMAGE`, `WASHTRACE_PUBLISH_PORT` | `scripts/publish-prep.sh` | The same for the publish throwaway (default `postgres:17-alpine`, port 55441). |
+| `WASHTRACE_SCALE` | the scale test, `trades-scale.int.test.ts` | Set to `1` to run it at its full size. |
 | `NFT70M_DIR` | `scripts/nft70m/extract.py`, `survey.mjs` | Where the NFT-70M data is kept. Default `~/washtrace-data/nft70m`. |
 | `HF_HUB_DISABLE_XET` | the Hugging Face client under `extract.py` | Set to `1` if the download stalls at 0 bytes. |
 
@@ -142,6 +138,7 @@ packages/detect/          Everything that knows chains, money and graphs. No Rea
     The worker's parts
       worker.ts           Worker: the ingest, fund and analyze passes, and pickWork
       stored-sync.ts      StoredSync: the Hub's manifest, loads, trail imports, downloads
+      backoff.ts          Backoff: failures in a row and the wait before the next try, by collection
       locked-run.ts       LockedRun: watches the connection holding a lock while a run goes on
       checks.ts           Checks: the console's Test requests
       analysis-thread.ts  analyze() in a worker thread
@@ -173,7 +170,7 @@ apps/web/                 The api service: the JSON API and the console, over th
 scripts/
   demo/                   The local market: contracts, seeder, Etherscan stand-in
   nft70m/                 The NFT-70M survey: extract.py, survey.mjs, rows.mjs and its test
-  profile-*.mjs           Time one analysis, lens run or preview on a real store
+  profile-*.mjs           Time one analysis, lens run or preview on a real store (profile-shared.mjs is what they share)
   dev-db.sh               `npm run db:*`
   publish-prep.sh         The throwaway store `npm run publish:hub` cuts from
 
@@ -191,9 +188,9 @@ and `node:*`.
 
 ## How a transfer becomes a verdict
 
-Two processes share one Postgres. The worker's `Worker` runs four timers
-(`EVERY` in `worker.ts`): ingest, analyze and lens every minute, fund every 5
-seconds. Each pass takes its job's advisory lock without waiting, so replicas
+Two processes share one Postgres. The worker's `Worker` runs three timers
+(`EVERY` in `worker.ts`): ingest and analyze every minute, fund every 5
+seconds. Lens work runs in analyze's passes. Each pass takes its job's advisory lock without waiting, so replicas
 share the work, and a pass that is due while the last is still running is
 skipped.
 
@@ -254,8 +251,8 @@ skipped.
    it has waited `LENS_WAIT_MS` (10 minutes); then an analysis; then any run.
    Before choosing, `turn` calls `Store.fillRings`, which gives one analysis
    saved before rings existed its rings from its stored witnesses; a
-   collection whose fill fails is skipped (`ringsFailed`) until the worker
-   restarts. Each job runs in a worker thread so the main thread keeps
+   collection whose fill fails is skipped (`ringsFailed`) until its `retryMs`
+   wait is over, then tried again. Each job runs in a worker thread so the main thread keeps
    ingesting and answering `/health`:
    - **Analysis** (`analyzeOne`): `analyzeInThread` starts
      `analysis-thread.ts`, which opens its own connection, reads the input
@@ -273,10 +270,10 @@ skipped.
    connection holding its lock, the thread is ended and the run is queued
    again, not counted as a failure. A thread running past an hour
    (`ANALYZE_TIMEOUT_MS`, `LENS_TIMEOUT_MS`) is ended too.
-5. **Spot checks** (`Worker.spots`, in the fund pass: first, then between wallets). `POST /api/spots` queues a
+5. **Spot checks** (`Worker.spots`, in the fund pass: first, then between wallets, looking every `SPOT_PROBE_MS`, within `SPOT_SHARE_MS` of the pass). `POST /api/spots` queues a
    row (`Store.requestSpot`, shared while one is in flight by a unique index); `nextSpot` takes it, and
    `SpotCheck.run` reads the receipt (`Chain.receipt`), each token's history (`Chain.tokenTransfers`, its own span),
-   the sellers' and buyers' money (`Store.moneyCovering` says which stored reads reach the block; the rest are read
+   the sellers' and buyers' money (`Store.moneyReadOn` reads on from any finished money read; the rest are read
    and saved), and the possible middles' money in memory only. It then runs `analyze()` per collection, or
    `runLens` on the transaction's trades, and `saveSpot` stores the `SpotResult`.
 6. **The console and the API** read the store. Neither calls a chain.
@@ -364,6 +361,7 @@ methods share.
 | `packages/detect/src/store.ts` | `Store` | The pool, its open-download count and test-tunable limits |
 | `packages/detect/src/worker.ts` | `Worker` | The store, the config, the chain clients, the timers |
 | `packages/detect/src/stored-sync.ts` | `StoredSync` | The Hub's manifest, file hashes, and the back-offs of loads, imports and downloads |
+| `packages/detect/src/backoff.ts` | `Backoff` | The failures in a row of one kind of work, by collection, and when each is next due |
 | `packages/detect/src/checks.ts` | `Checks` | The Test listener and the check run in flight |
 | `packages/detect/src/locked-run.ts` | `LockedRun` | The client holding a lock, its abort and its progress |
 | `packages/detect/src/wallets.ts` | `Wallets` | Addresses as bytes, with their numbers |
@@ -379,6 +377,6 @@ methods share.
 | `packages/detect/src/stored.ts` | `StoredDataError` | Stored data is bad |
 | `packages/detect/src/store.ts` | `TooManyStreams` | A download was refused: `MAX_STREAMS` others are open |
 
-That is 19 classes. The last three `extends Error` and carry no state of their
+That is 20 classes. The last three `extends Error` and carry no state of their
 own: they exist so a caller can tell the failure by `instanceof`. They are the
 one exception to "never inheritance"; add no other subclass.

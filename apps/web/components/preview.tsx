@@ -7,7 +7,7 @@ import { LOCAL_ONLY } from '@/lib/auth';
 import { floorPct, num, pctTenth } from '@/lib/format';
 import type { MoneyReason } from '@washtrace/detect/lens-reads';
 import { shareCauses, shareQualifier, type TokensFloor } from '@/lib/lens-state';
-import { send } from '@/lib/send';
+import { poll, send } from '@/lib/send';
 
 const POLL_MS = 1000;
 
@@ -66,32 +66,14 @@ export function Preview({ chainId, address, rule, roundTripsName, notFinal, fund
 
   useEffect(() => {
     if (id === null) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    async function poll() {
-      const res = await fetch(`/api/lenses/previews/${id}`).catch(() => null);
-      // A body that is no JSON, such as a proxy's error page, is a failed poll like no answer at all.
-      const said = res ? await res.json().catch(() => null) : null;
-      if (stopped) return;
-      if (res?.status === 404) {
-        // Swept, or its collection removed: there is no row any more, so nothing to wait for.
-        setRow(null);
-        setLost(false);
-        setError(said?.error ?? 'This preview is gone. Run it again.');
-        return;
-      }
-      if (!res?.ok || typeof said?.status !== 'string') {
-        // A restart, a 500 or a blip: the worker's preview does not depend on this page, so keep what was last read and ask again.
-        setLost(true);
-        timer = setTimeout(poll, POLL_MS);
-        return;
-      }
-      setLost(false);
-      setRow(said);
-      if (said.status === 'queued' || said.status === 'running') timer = setTimeout(poll, POLL_MS);
-    }
-    void poll();
-    return () => { stopped = true; clearTimeout(timer); };
+    return poll<PreviewRow>(`/api/lenses/previews/${id}`, {
+      every: POLL_MS,
+      done: (said) => said.status !== 'queued' && said.status !== 'running',
+      onRow: (said) => { setLost(false); setRow(said); },
+      onLost: () => setLost(true),
+      // Swept, or its collection removed: there is no row any more, so nothing to wait for.
+      onGone: (said) => { setRow(null); setLost(false); setError(said?.error ?? 'This preview is gone. Run it again.'); },
+    });
   }, [id]);
 
   async function start() {

@@ -19,7 +19,6 @@ const fake = {
   lensWallets: vi.fn(async (..._a: unknown[]) => ({ rows: [], total: 0 })),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { GET } = await import('@/app/api/collections/[chain]/[address]/route');
 const ctx = { params: Promise.resolve({ chain: '1', address: ADDR }) };

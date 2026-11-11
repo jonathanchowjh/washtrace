@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { TRAIL_NOTES, type CollectionRow } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, RestoreNote } from '@/components/coverage';
 import { Bar, Pill, Warn, type PillTone } from '@/components/ui';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { chainName } from '@/lib/chains';
 import { progress, storedOnly, type Coverage } from '@/lib/coverage';
 import { ETHERSCAN_CTA, ETHERSCAN_HREF, STAGES, floorPct, num, pct, plural, short, took } from '@/lib/format';

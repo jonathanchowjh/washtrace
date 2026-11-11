@@ -1,3 +1,4 @@
+// @ts-check
 // Times one collection's analysis stage by stage: reading its input, running
 // the three methods, and saving the result. The worker does the same three
 // in a row; this says which of them a slow analysis is spending its time in.
@@ -13,6 +14,7 @@
 // since that is what a container's memory limit is held to.
 import { Store, analyze, storeUrl, CUSTODIANS, contractsFor, moneyFor } from '../packages/detect/dist/index.js';
 import { analyzeInThread } from '../packages/detect/dist/analysis-thread.js';
+import { FOLLOW_HOPS } from './profile-shared.mjs';
 
 const id = Number(process.argv[2]);
 const thread = process.argv.includes('--thread');
@@ -50,7 +52,7 @@ try {
   const flagged = (result) => `${result.flags.length} flags (A ${count(result, 'A')}, AU ${count(result, 'AU')}, AC ${count(result, 'AC')})`;
 
   if (thread) {
-    const [{ analysis, through }, threadMs] = await time(() => analyzeInThread({ storeUrl: url, id, chainId: c.chainId, ...settings }));
+    const [{ analysis, through }, threadMs] = await time(() => analyzeInThread({ storeUrl: url, id, chainId: c.chainId, followHops: FOLLOW_HOPS, ...settings }));
     const [, saveMs] = await time(() => store.saveAnalysis(id, version, analysis, threadMs, through, settings.money));
     console.table({
       'analysisInput + analyze, in the thread': { ms: threadMs, rows: `${analysis.wallets} wallets, ${analysis.truncatedSearches} truncated searches` },
@@ -58,7 +60,7 @@ try {
       total: { ms: threadMs + saveMs, rows: '' },
     });
   } else {
-    const [input, inputMs] = await time(() => store.analysisInput(id, c.chainId));
+    const [input, inputMs] = await time(() => store.analysisInput(id, c.chainId, FOLLOW_HOPS));
     const [result, analyzeMs] = await time(() => analyze({ ...input, ...settings }));
     const [, saveMs] = await time(() => store.saveAnalysis(id, version, result, inputMs + analyzeMs, input.through, settings.money));
     console.table({

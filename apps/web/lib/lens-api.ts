@@ -1,18 +1,18 @@
 import { METHODS, type Lens, type Method } from '@washtrace/detect';
 import { COPIES, DEFAULT_RULE, INT4_MAX, NAME_MAX, checkRule, nameError, type LensRule } from '@washtrace/detect/lens-rule';
-import { bad } from './api';
+import { bad, notWatched } from './api';
 import { addressOf, chainIdOf } from './params';
 import { LENSES } from './format';
 
 /**
- * What the three lens routes share: reading a lens id, a name and a rule from
- * a request, and the refusals they answer alike. The rule is checked here as
- * the editor checked it, because the editor is not the only caller.
+ * What the lens routes share: reading a lens id, a name, a rule and the
+ * collections to run on from a request, the refusals only they answer (a
+ * taken name, a run that raced a delete), and the editor's starting point.
+ * The rule is checked here as the editor checked it, because the editor is
+ * not the only caller.
  */
 
-export const noLens = (): Response => bad('No such lens.', 404);
 export const taken = (name: string): Response => bad(`Another lens is already called "${name}".`, 409);
-export const notWatched = (): Response => bad('This collection is not watched.', 404);
 
 /** A lens id in a route's path (`/api/lenses/7`): digits that fit the int4 column. Built-in keys (A, AU, AC) and anything else are not ids. Not trades' lensIdOf, which reads a key (L7). */
 export function lensIdFromPath(raw: string): number | null {

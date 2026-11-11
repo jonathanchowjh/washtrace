@@ -177,3 +177,20 @@ export function trailComing(c: Pick<CollectionRow, 'trailImportedSha' | 'pausedA
   if (c.trailNote === TRAIL_NOTES.mismatch || c.trailNote === TRAIL_NOTES.unreadable) return false;
   return entry.trail.sha256 !== c.trailImportedSha && entry.trail.checked > 0;
 }
+
+/** The six reading stages as four steps a reader thinks in: stages 1–3 are all "stored data". */
+export const STEPS: readonly { label: string; keys: readonly Stage['key'][] }[] = [
+  { label: 'Stored data', keys: ['download', 'load', 'stored-analysis'] },
+  { label: 'Chain', keys: ['chain'] },
+  { label: 'Money', keys: ['money'] },
+  { label: 'Analysis', keys: ['analysis'] },
+];
+
+// Worst first: a step reads as the worst of its stages, so a failure is never hidden behind a stage that is done.
+const WORST: readonly StageState[] = ['failed', 'blocked', 'silent', 'running', 'waiting', 'paused', 'live', 'done', 'not-needed'];
+
+/** One step's state and the stage that gives it: the worst of its stages, "not needed" only when every one is. */
+export function worstStage(stages: readonly Stage[], keys: readonly Stage['key'][]): Stage | null {
+  const mine = stages.filter((x) => keys.includes(x.key));
+  return mine.sort((a, b) => WORST.indexOf(a.state) - WORST.indexOf(b.state))[0] ?? null;
+}

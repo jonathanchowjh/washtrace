@@ -7,7 +7,7 @@ import { TierMark } from './kit';
 import { Empty, Ext } from '@/components/ui';
 import { toneOf, SHOWN } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { HoverCard } from '@/components/hover-card';
 
 /**

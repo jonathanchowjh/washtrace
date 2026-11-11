@@ -1,7 +1,7 @@
 # Upgrading
 
 For operators. The schema is defined in one file, [migrations.ts](../packages/detect/src/migrations.ts):
-36 migrations, forward-only, numbered from 1, each safe to run again.
+37 migrations, forward-only, numbered from 1, each safe to run again.
 
 ## How a migration runs
 
@@ -9,7 +9,7 @@ For operators. The schema is defined in one file, [migrations.ts](../packages/de
   `Store.migrate()`, under one advisory lock, so replicas starting together migrate once. The others wait for the
   lock, and each tries again if the store is not up yet. `npm run migrate` runs the same code by hand.
 - **Most migrations are one transaction** that also records the version, so a failed one leaves nothing behind.
-- **Two run outside a transaction**, #28 and #30. They use `CREATE INDEX CONCURRENTLY` and
+- **Three run outside a transaction**, #28, #30 and #37. They use `CREATE INDEX CONCURRENTLY` and
   `DROP INDEX CONCURRENTLY`, which Postgres refuses inside one. The runner sends their statements one at a
   time, then records the version.
 - **A plain `CREATE INDEX` holds a SHARE lock on its table** until it is done. Reads go on, but anything that
@@ -97,8 +97,8 @@ The names and definitions are the ones in migrations.ts, so the migrations find 
 - **Some indexes cannot be built first.** `flags_witness_idx` (#23) and the two stale indexes (#34) need a column
   the migration adds, so they are built during the upgrade. #34's are partial and empty on upgrade, but they
   still scan their table once.
-- **#28 and #30 are already `CONCURRENTLY`.** Writes to `flows` carry on while `flows_moves_idx` builds, but the
+- **#28, #30 and #37 are already `CONCURRENTLY`.** Writes to `flows` carry on while `flows_moves_idx` builds, but the
   migration lock is held for the build: at about 69 million rows in `flows`, migrations.ts puts it at ten
-  minutes and more, and a service that starts meanwhile waits for it.
+  minutes and more, and a service that starts meanwhile waits for it. #37 builds on `trade_facts` the same way.
 - **A failed `CONCURRENTLY` build leaves an invalid index** behind under its name, which `IF NOT EXISTS` would
   take for done. Drop it and run the statement again. #28 does this itself for `flows_moves_idx`.

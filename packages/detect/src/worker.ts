@@ -1,5 +1,6 @@
 import { ANALYZE_TIMEOUT_MS, analyzeInThread, type Analysed, type AnalysisRequest } from './analysis-thread.js';
 import { SpotCheck } from './spot.js';
+import { Backoff } from './backoff.js';
 import { Chain } from './chain.js';
 import { Checks } from './checks.js';
 import { Etherscan, WALLET_MS, isServiceFailure } from './etherscan.js';
@@ -8,7 +9,7 @@ import { CUSTODIANS, contractsFor, moneyFor, traders } from './marketplaces.js';
 import { briefOf, configSecrets, redact, urlSecrets, type WorkerConfig } from './env.js';
 import { LockedRun } from './locked-run.js';
 import { followOf } from './reach.js';
-import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, LOCKS, retryMs, type CollectionRow, type DueRun, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
+import { ANALYZE_GAP_MS, COUNT_TIMEOUT_MS, LOCKS, retryMs, type CollectionRow, type DuePreview, type DueRun, type MoneyLane, type PreviewResult, type StaleRow, type Store } from './store.js';
 import { entryFor, storedDir } from './stored.js';
 import { StoredSync } from './stored-sync.js';
 
@@ -249,7 +250,7 @@ export class Worker {
   private etherscan: Etherscan | null = null;
   private etherscanSettings = '';
   /** The last error logged per collection, so an outage is one line and not one a minute. */
-  private readonly logged = new Map<number, string>();
+  private readonly lastError = new Map<number, string>();
   /** What each running job is doing now, so the keep-alive can say it again while a long step goes on. */
   private readonly current = new Map<Job, { doing: string | null; subjectId: number | null }>();
   /** The last failure logged per job, so a pass that fails the same way every few seconds is one line until it next succeeds. */
@@ -273,7 +274,7 @@ export class Worker {
   private readFailed = '';
   private reportFailed = '';
   /** Analyses that failed, by collection, timed as Store.analysisFailed times them: kept here too, as StoredSync's downloadsFailed is, since the write that records the wait can fail with the analysis. */
-  private readonly analysesFailed = new Map<number, { failures: number; retryAt: number }>();
+  private readonly analysesFailed = new Backoff();
   /** What the last analyze pass here ran, for pickWork. In memory only: a restart forgets it, and the first pass picks as if nothing ran. */
   private last: Work | null = null;
   /**
@@ -499,7 +500,7 @@ export class Worker {
   private async turn(started: number): Promise<void> {
     const now = Date.now();
     const failed = new Map<Job, unknown>();
-    const swept = await this.store.sweepPreviews(now).then(() => true, (err) => { failed.set('lens', err); return false; });
+    const swept = await this.store.sweepFinished(now).then(() => true, (err) => { failed.set('lens', err); return false; });
     // Rings for an analysis saved before they were (Store.fillRings): one collection a turn, under the lock saveAnalysis is under.
     // A failure is the analyze row's, and is logged: an analysis that runs after it would otherwise write over it with ok.
     await this.store.fillRings([...this.ringsFailed].filter(([, f]) => f.retryAt > now).map(([id]) => id)).catch((err) => {
@@ -513,7 +514,7 @@ export class Worker {
     });
     const due = await this.dueAnalysis(now).catch((err) => { failed.set('analyze', err); return null; });
     const analysisFirst = this.last === 'preview' && due !== null;
-    let preview: Awaited<ReturnType<Store['nextPreview']>> = null;
+    let preview: DuePreview | null = null;
     let run: DueRun | null = null;
     if (swept && !analysisFirst) {
       try {
@@ -591,7 +592,7 @@ export class Worker {
       if (deferred.has(c.id)) continue;
       if (held.has(c.id)) {
         // Its stored data is on the way: read from where that stops, not from here. Not a fault meanwhile: clears a "No RPC" left from before.
-        this.logged.delete(c.id);
+        this.lastError.delete(c.id);
         if (c.error !== null) await this.store.setError(c.id, null);
         continue;
       }
@@ -599,7 +600,7 @@ export class Worker {
       else if (c.pausedAt !== null) continue;
       else if (c.storedThroughTime !== null) {
         // Stored data and no RPC is a state, not a fault: the console says where the data stops. Clears the "No RPC" left from before it loaded.
-        this.logged.delete(c.id);
+        this.lastError.delete(c.id);
         if (c.error !== null) await this.store.setError(c.id, null);
       } else {
         // The console offers an RPC field for Ethereum only (FIELDS in the web app); other chains are set in the environment.
@@ -616,7 +617,7 @@ export class Worker {
       const got = { spans: 0, read: 0, blocks: 0 };
       try {
         await this.readSpans(c, this.chain(c.chainId, url), deadline, got);
-        this.logged.delete(c.id);
+        this.lastError.delete(c.id);
       } catch (err) {
         await this.fail(c.id, this.scrubbed(err));
       } finally {
@@ -718,25 +719,24 @@ export class Worker {
     let probeAt = Date.now() + SPOT_PROBE_MS;
     if (etherscan === null) return 'no funding source configured';
     // A check that ran past the share moves every deadline on by as much, so the pass's own work keeps its time.
-    const over = () => Math.max(0, -this.spotLeft);
-    let deadline = started + BUDGET_MS + over();
+    const deadline = () => started + BUDGET_MS + Math.max(0, -this.spotLeft);
     const collections = await this.store.collections();
     const counting = await this.store.nextCount(globalHops);
-    let countUntil = deadline - (counting === null ? 0 : COUNT_TIMEOUT_MS);
+    const countUntil = () => deadline() - (counting === null ? 0 : COUNT_TIMEOUT_MS);
     const tokenChains = new Set(collections.filter((c) => c.readTokens).map((c) => c.chainId));
-    let checkUntil = tokenChains.size > 0 ? countUntil - TOKEN_COUNT_MS : countUntil;
+    const checkUntil = () => tokenChains.size > 0 ? countUntil() - TOKEN_COUNT_MS : countUntil();
     // Every collection flagged on a chain. A paused one has no lane (the store leaves it out), so it takes no priority turn.
     const priorityOn = (chainId: number) => new Set(collections.filter((c) => c.chainId === chainId && c.priority && c.pausedAt === null).map((c) => c.id));
     let done = 0;
     let failed = 0;
     chains: for (const chainId of new Set(collections.map((c) => c.chainId))) {
-      const seedUntil = Math.min(Date.now() + SEED_MS, checkUntil);
+      const seedUntil = Math.min(Date.now() + SEED_MS, checkUntil());
       while (Date.now() < seedUntil && !this.lockLost('fund') && await this.store.seedReach(chainId, globalHops, SEED_CHUNK) > 0) {
         await this.beat('fund', "Finding watched collections' wallets from the money already read", null);
       }
       const priority = priorityOn(chainId);
       if (tokenChains.has(chainId)) {
-        await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil));
+        await this.readTokens(etherscan, chainId, collections, priority, Math.min(Date.now() + TOKENS_MS, checkUntil()));
         if (this.outage !== '') throw this.outageError();
       }
       const { lanes } = await this.store.moneyLanes(chainId, 20, globalHops);
@@ -746,16 +746,11 @@ export class Worker {
         return c === undefined ? 'followed wallets' : c.name ?? c.address;
       };
       for (const wallet of interleave(lanes, priority)) {
-        if (Date.now() > checkUntil || this.lockLost('fund')) break chains;
+        if (Date.now() > checkUntil() || this.lockLost('fund')) break chains;
         // One asked for mid-pass waits SPOT_PROBE_MS at most, not the rest of the pass.
         if (Date.now() >= probeAt) {
-          const before = over();
           spotted += await this.spots(etherscan);
           probeAt = Date.now() + SPOT_PROBE_MS;
-          const moved = over() - before;
-          deadline += moved;
-          countUntil += moved;
-          checkUntil += moved;
         }
         await this.beat('fund', `Checking wallets for ${whose(wallet)}`, null);
         try {
@@ -774,7 +769,7 @@ export class Worker {
     }
     // After every chain has been checked: the time checking left reads more tokens, then every chain's counts, shared within countUntil.
     for (const chainId of tokenChains) {
-      await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil);
+      await this.readTokens(etherscan, chainId, collections, priorityOn(chainId), checkUntil());
       if (this.outage !== '') throw this.outageError();
     }
     // Each chain an equal share of what is left, worked out again after each, so a chain whose count always runs out cannot
@@ -782,13 +777,13 @@ export class Worker {
     const toCount = [...tokenChains];
     for (const [i, chainId] of toCount.entries()) {
       if (this.lockLost('fund')) break;
-      await this.countTokens(chainId, Date.now() + Math.floor((countUntil - Date.now()) / (toCount.length - i)));
+      await this.countTokens(chainId, Date.now() + Math.floor((countUntil() - Date.now()) / (toCount.length - i)));
     }
-    if (counting !== null && Date.now() < deadline && !this.lockLost('fund')) {
+    if (counting !== null && Date.now() < deadline() && !this.lockLost('fund')) {
       const c = collections.find((c) => c.id === counting);
       await this.beat('fund', `Counting the next wallets out for ${c?.name ?? c?.address ?? `collection ${counting}`}`, counting);
       // A count that fails or runs out of time fails no checking. It was noted as tried, so the next pass counts another.
-      await this.store.countNext(counting, globalHops, Math.min(COUNT_TIMEOUT_MS, deadline - Date.now()))
+      await this.store.countNext(counting, globalHops, Math.min(COUNT_TIMEOUT_MS, deadline() - Date.now()))
         .catch((err) => console.error('[washtrace] collection %d: next hop not counted: %s', counting, this.scrubbed(err)));
     }
     return `${done} wallets read, ${failed} failed${spotted > 0 ? `, ${spotted} transactions checked` : ''}`;
@@ -921,7 +916,7 @@ export class Worker {
       const lost = this.lockLost('analyze');
       if (lost !== null) throw lost;
       await this.store.saveAnalysis(c.id, c.version, analysis, Date.now() - started, through, money);
-      this.analysesFailed.delete(c.id);
+      this.analysesFailed.clear(c.id);
       this.ringsFailed.delete(c.id);
     } catch (err) {
       // Not the analysis's failure: the mark goes, uncounted, and the next pass, here or on any replica, takes it.
@@ -931,8 +926,7 @@ export class Worker {
         throw err;
       }
       // The pass fails as before, and says so; the collection says why until one is saved, and waits, so the others go first.
-      const failures = (this.analysesFailed.get(c.id)?.failures ?? 0) + 1;
-      this.analysesFailed.set(c.id, { failures, retryAt: Date.now() + retryMs(failures) });
+      this.analysesFailed.fail(c.id, Date.now());
       await this.store.analysisFailed(c.id, this.scrubbed(err))
         .catch((e) => console.error('[washtrace] collection %d: failed analysis not noted: %s', c.id, this.scrubbed(e)));
       throw err;
@@ -972,7 +966,7 @@ export class Worker {
       }
     }
     const due = stale
-      .filter((s) => s.startedAt === null && !loading.has(s.id) && (s.retryAt ?? 0) <= now && (this.analysesFailed.get(s.id)?.retryAt ?? 0) <= now);
+      .filter((s) => s.startedAt === null && !loading.has(s.id) && (s.retryAt ?? 0) <= now && !this.analysesFailed.waits(s.id, now));
     return nextAnalysis(due, now);
   }
 
@@ -1024,7 +1018,7 @@ export class Worker {
   }
 
   /** Run the preview `nextPreview` took, in the lens thread, and save what it found; a failure is noted scrubbed, as a run's is. */
-  private async preview(p: NonNullable<Awaited<ReturnType<Store['nextPreview']>>>): Promise<string> {
+  private async preview(p: DuePreview): Promise<string> {
     const where = `a lens on ${p.name}`;
     this.inFlight = { preview: p.id };
     const { progress, written } = this.progressWriter(`Previewing ${where}`, p.collectionId, (share) => this.store.previewProgress(p.id, share));
@@ -1160,8 +1154,8 @@ export class Worker {
 
   /** Say on the collection what went wrong, and log it once. `message` is already scrubbed: it reaches the API. */
   private async fail(id: number, message: string): Promise<void> {
-    if (this.logged.get(id) !== message) console.error('[washtrace] collection %d: %s', id, message);
-    this.logged.set(id, message);
+    if (this.lastError.get(id) !== message) console.error('[washtrace] collection %d: %s', id, message);
+    this.lastError.set(id, message);
     await this.store.setError(id, message);
   }
 }

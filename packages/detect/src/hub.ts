@@ -49,7 +49,7 @@ export function partPath(dest: string, sha256: string): string {
 const PART = /\.csv\.zst\.[0-9a-f]{16}\.part$/;
 
 /** The single file a money trail was before it was two: no manifest names it any more. Its download parts are stale parts already. */
-export const LEGACY_TRAIL = /^\d+-0x[0-9a-f]{40}\.trail\.csv\.zst$/;
+const LEGACY_TRAIL = /^\d+-0x[0-9a-f]{40}\.trail\.csv\.zst$/;
 
 /**
  * Delete the download parts in `dir` that `manifest` names no file for: one

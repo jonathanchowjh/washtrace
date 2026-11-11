@@ -1,5 +1,5 @@
 import { MAX_FOLLOW_HOPS } from '@washtrace/detect/lens-rule';
-import { bad, collectionFrom, handle, json, writeBody } from '@/lib/api';
+import { bad, collectionFrom, handle, json, notWatched, writeBody } from '@/lib/api';
 import { configFromSources, hopsFollowed } from '@/lib/settings';
 
 type Ctx = { params: Promise<{ chain: string; address: string }> };
@@ -24,7 +24,7 @@ export async function POST(req: Request, { params }: Ctx): Promise<Response> {
     const global = hopsFollowed(configFromSources(await s.sources(), await s.settings()));
     if (hops <= global) return bad(`Every collection is already followed ${global} wallets out: ask for more than that.`);
     const set = await s.followFurther(c.id, hops);
-    if (set === 'gone') return bad('This collection is not watched.', 404);
+    if (set === 'gone') return notWatched();
     if (set === 'set') console.info('[washtrace] %s follows %d/%s out to %d hops', written.actor, chainId, address, hops);
     return json({ set: set === 'set' }, set === 'set' ? 202 : 200);
   });

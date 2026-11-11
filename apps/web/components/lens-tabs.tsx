@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 import { DeleteLens, RunHere } from './lens-actions';
 import { LensName, LensPicture, TierWord } from './methods';
 import { RuleTable } from './rule-table';
-import { Time } from './time';
+import { Time } from './zone';
 import { lensTabHref } from '@/lib/links';
 
 type Runs = readonly { lens: Lens; run: LensRun | null }[];

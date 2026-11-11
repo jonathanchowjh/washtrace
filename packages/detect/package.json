@@ -23,6 +23,6 @@
   "devDependencies": {
     "@testcontainers/postgresql": "^12.1.0",
     "@types/pg": "^8.11.10",
-    "testcontainers": "^12.1.0"
+    "yaml": "2.9.1"
   }
 }

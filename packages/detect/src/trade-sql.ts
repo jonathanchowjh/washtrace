@@ -189,6 +189,15 @@ export function judgedThrough(m: LensKey, ctx: TradeContext, params: unknown[]):
   return through === undefined || through === null ? null : `t.block_number <= ${binder(params)(through)}::bigint`;
 }
 
+/**
+ * ` AND` the bound that keeps a lens list's counted trades to those `method`
+ * judged, for its rows' denominators, or '' when it judged them all.
+ */
+export function judgedOnly(method: LensKey, ctx: TradeContext, params: unknown[]): string {
+  const judged = judgedThrough(method, ctx, params);
+  return judged === null ? '' : ` AND ${judged}`;
+}
+
 /** A whole number as Postgres numeric takes it: a wei amount or a token id. */
 const WHOLE = new RegExp(`^\\d{1,${UINT256_DIGITS}}$`);
 

@@ -19,8 +19,6 @@ const fake = {
   startTokens: vi.fn(async (): Promise<'set' | 'already' | 'gone'> => 'set'),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-// handle() opts into dynamic rendering with connection(), which only works inside a Next request.
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { POST: create } = await import('@/app/api/lenses/route');
 const { PATCH: edit, DELETE: remove } = await import('@/app/api/lenses/[id]/route');

@@ -102,3 +102,26 @@ export function walletOpts(q: Record<string, string | string[] | undefined>): Wa
   const psort = PARTNER_SORTS.find((s) => s === one('psort')) ?? 'flows';
   return { trades: pageOf(one('trades')), partners: pageOf(one('partners')), flows: pageOf(one('flows')), filter, dir: dir === 'sent' || dir === 'received' ? dir : 'both', psort };
 }
+
+/**
+ * This page with `o`'s lists, filter and pages, defaults left out. Every link
+ * and pager here builds on the page as shown, so moving one list keeps the
+ * others where they are.
+ */
+export function hrefOf(base: string, o: WalletOpts): string {
+  const sp = new URLSearchParams();
+  const f = o.filter;
+  if (f.collection !== undefined) sp.set('collection', f.collection);
+  if (f.flaggedOnly) sp.set('flagged', '1');
+  if (f.find !== undefined) sp.set('q', f.find);
+  if (o.trades > 1) sp.set('trades', String(o.trades));
+  if (o.psort !== 'flows') sp.set('psort', o.psort);
+  if (o.partners > 1) sp.set('partners', String(o.partners));
+  if (f.with !== undefined) {
+    sp.set('with', f.with);
+    if (o.dir !== 'both') sp.set('dir', o.dir);
+    if (o.flows > 1) sp.set('flows', String(o.flows));
+  }
+  const q = sp.toString();
+  return q === '' ? base : `${base}?${q}`;
+}

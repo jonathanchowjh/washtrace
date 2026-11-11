@@ -1,7 +1,8 @@
 import { isMainThread, parentPort, Worker as Thread, workerData } from 'node:worker_threads';
 import { runLens } from './lens.js';
 import type { LensRule } from './lens-rule.js';
-import { Store, type LensFlag, type LensInput, type LensTotals, type PreviewResult } from './store.js';
+import type { LensFlag, LensInput, LensTotals } from './lens.js';
+import { Store, type PreviewResult } from './store.js';
 import { VENUES, venueOf } from './trades.js';
 
 /** Where each request rides in `workerData`; see analysis-thread.ts for why a bare import must find no such key. */

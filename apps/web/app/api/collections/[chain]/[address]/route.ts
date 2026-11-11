@@ -1,5 +1,5 @@
 import { moneyFor } from '@washtrace/detect';
-import { bad, collectionFrom, handle, json, lensKeyOf, writeBody } from '@/lib/api';
+import { bad, collectionFrom, handle, json, lensKeyOf, notWatched, writeBody } from '@/lib/api';
 import { lensContext, ownLenses } from '@/lib/metrics';
 
 const NOT_PAUSED = 'Pause this collection before deleting its data.';
@@ -43,7 +43,7 @@ export async function DELETE(req: Request, { params }: Ctx): Promise<Response> {
     if (collection.pausedAt === null) return bad(NOT_PAUSED, 409);
     if (!(await s.removeCollection(chainId, address))) {
       // The store deletes only paused rows, so a resume between our read and its delete lands here: say which it was.
-      return (await s.collection(chainId, address)) ? bad(NOT_PAUSED, 409) : bad('This collection is not watched.', 404);
+      return (await s.collection(chainId, address)) ? bad(NOT_PAUSED, 409) : notWatched();
     }
     console.info('[washtrace] %s stopped watching %d/%s', written.actor, chainId, address);
     return json({ removed: true });

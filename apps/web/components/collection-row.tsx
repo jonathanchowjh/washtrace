@@ -4,7 +4,7 @@ import type { CollectionRow as Collection } from '@washtrace/detect';
 import { AnalysisFailed, DownloadNote, ReadingPill, RestoreNote, RestoreProgress, StoredStop } from '@/components/coverage';
 import { Warn } from '@/components/ui';
 import { RangeBar, RangeFigure, VolumeDetail } from '@/components/methods';
-import { Time } from '@/components/time';
+import { Time } from '@/components/zone';
 import { CollectionControls } from '@/components/watch';
 import { chainName } from '@/lib/chains';
 import { LENSES, plural, short } from '@/lib/format';

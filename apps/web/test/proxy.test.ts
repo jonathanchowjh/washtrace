@@ -3,6 +3,9 @@ import { NextRequest } from 'next/server';
 import { proxy } from '@/proxy';
 import { mayWrite } from '@/lib/auth';
 
+// The setup file mocks next/server; this file needs the real NextRequest and NextResponse.
+vi.unmock('next/server');
+
 // NextResponse.next({ request: { headers } }) hands the rewritten request headers
 // to Next as x-middleware-request-<name>, listed in x-middleware-override-headers.
 const forwarded = (res: Response, name: string) =>

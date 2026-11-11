@@ -4,12 +4,17 @@
 # docker-compose.yml builds both.
 
 # ---- build ----------------------------------------------------------------
-# One install of the whole context: copying a workspace's
-# node_modules between stages breaks the day npm hoists a package elsewhere.
+# One install of the whole workspace: copying a workspace's node_modules
+# between stages breaks the day npm hoists a package elsewhere. The install
+# sees only the manifests, so a source change reuses its cached layer.
 FROM node:22-alpine AS build
 WORKDIR /repo
-COPY . .
+COPY package.json package-lock.json ./
+COPY packages/detect/package.json packages/detect/
+COPY apps/worker/package.json apps/worker/
+COPY apps/web/package.json apps/web/
 RUN npm ci
+COPY . .
 # Each builds @washtrace/detect first; both import it from its dist/.
 RUN npm run --workspace @washtrace/web build && npm run --workspace @washtrace/worker build
 

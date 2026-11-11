@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { MIGRATIONS, STORED_REPO, storedFile, trailPaths, trailSha, writeTransfers, writeTrail, StoredDataError, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
+import { MIGRATIONS, STORED_REPO, storedFile, trailPaths, StoredDataError, type Manifest, type StoredEntry, type Store } from '@washtrace/detect';
+import { trailSha, writeTransfers, writeTrail } from '../../../packages/detect/src/stored.js';
 import { Publisher, UPLOAD_TIMEOUT_MS, parsePublishArgs, uploadFetch } from '../src/publish.js';
 
 /** An operation's bytes as text: a Blob's text, or the file a URL names (decompressed, as a reader of the dataset sees it). */

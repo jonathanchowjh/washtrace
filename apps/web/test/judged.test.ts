@@ -24,7 +24,6 @@ const fake = {
   lensFlagsOfTx: vi.fn(async () => []),
 };
 vi.mock('@/lib/store', () => ({ store: () => fake }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 
 const { txView } = await import('@/lib/views');
 const { toneOf, answer } = await import('@/lib/metrics');

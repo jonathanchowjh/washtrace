@@ -179,7 +179,8 @@ prices, so a few washed sales dominate the sum, and a collection with any wash t
   [operating.md](operating.md#reading-traders-again).
 - **Other tokens are a fixed list** in the code, not the settings, and without `tokens.payees` a loop whose middle
   wallet was only paid in tokens can be missed.
-- **Searches have caps.** A trade's money search stops at 5,000 edges and the share reads "at least". Every cap is
+- **Searches have caps.** A trade's money search in a lens of yours stops at 5,000 edges and the share reads "at least"; the built-in
+  searches stop at `visitCap`. Every cap is
   in [operating.md](operating.md#limits).
 - **Sales on Blur, LooksRare v2 and X2Y2 are marked but not priced.** Blur v2 packs the price into bit fields
   washtrace does not decode, and a guess would count as read volume. Their sales count; their volume does not

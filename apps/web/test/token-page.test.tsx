@@ -32,7 +32,6 @@ vi.mock('@/lib/store', () => ({
   }),
 }));
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
-vi.mock('next/server', () => ({ connection: async () => {} }));
 vi.mock('next/navigation', () => ({ notFound: () => { throw new Error('not found'); }, useRouter: () => ({ push: vi.fn() }) }));
 
 afterEach(() => { cleanup(); Object.assign(state, { missing: false, empty: false, behind: false, moneyRan: true, throughBlock: 10, blocks: [5], flagged: [], each: null, latestNull: false, sales: [], runs: [], own: [] }); });

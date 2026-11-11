@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
 import { short } from '@/lib/format';
+import { txHref } from '@/lib/links';
 import { addressOf, chainOf, txOf } from '@/lib/params';
 import { TxView } from '@/app/tx/[chain]/[hash]/view';
 
@@ -12,7 +13,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const p = await params;
   const chainId = chainOf(p.chain);
   const tx = txOf(p.hash);
-  return tx === null || chainId === null ? { title: 'Transaction' } : { title: short(tx), alternates: { canonical: `/tx/${chainId}/${tx}` } };
+  return tx === null || chainId === null ? { title: 'Transaction' } : { title: short(tx), alternates: { canonical: txHref(chainId, tx) } };
 }
 
 /** One transaction, opened from a collection: under its tabs, with Trades lit. */
