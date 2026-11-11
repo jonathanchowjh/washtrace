@@ -60,6 +60,7 @@ your lenses, `L<id>` such as `L7`. Anything else reads as `AC`.
 | `GET /api/collections/{chain}/{address}/rings` | `page` | 200, 404 | `rings`, `total`, `page`, `pages` |
 | `GET /api/collections/{chain}/{address}/rings/{anchor}` | | 200, 404 (not watched, or no ring has that anchor) | `line`, `wallets`, `walletsCut`, `tokens` |
 | `GET /api/collections/{chain}/{address}/card` | exactly one of `wallet`, `token`, `ring` | 200, 400, 404 | `kind`, `judged`, and for a wallet `trades`, `flagged`, `rings`, `ring`; for a token `transfers`, `flagged`; for a ring `ring` |
+| `GET /api/collections/{chain}/{address}/counts` | `method` (a lens key, Linked wallets when left out or unknown) | 200, 404 | `trades`, and that lens's `tokens` and `wallets`: each `null` when the lens has not run |
 
 Notes:
 
@@ -167,6 +168,8 @@ The keys are `rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow
 | `POST /api/settings/check` | `{kind: "rpc", chainId}` or `{kind: "etherscan"}` | 201, 400 | `id` |
 | `GET /api/settings/check/{id}` | | 200, 403, 404 | `finished`, `ok`, `detail` |
 
+- `fields` ends with a read-only `rpc.<chainId>` entry for each other chain the worker reports an RPC for: only
+  `.env` sets those, and the API saves no RPC but Ethereum's (`rpc.1`).
 - Each entry of `fields` has `key`, `label`, `secret`, `set`, `shown`, `source`, `env` (what `.env` holds,
   masked the same way), `locked`, `pinned` and `invalid`. A secret answers as `••••` and at most its last 4
   characters (an RPC URL also keeps its scheme and host); a client can replace or clear a secret and never read

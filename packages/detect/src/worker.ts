@@ -604,8 +604,10 @@ export class Worker {
     // Slices come from what keep-up left, and no turn runs past the pass.
     const rest = ingestTurns(backfill.map((b) => b.c), passEnd - Date.now()).backfill;
     for (const { c, sliceMs } of rest) await serve(c, Math.min(Date.now() + sliceMs, passEnd));
-    const loaded = restored > 0 ? `stored data loaded for ${restored} collections; ` : '';
-    return `${loaded}${total.read} transfers in ${total.spans} spans across ${collections.length} collections`;
+    // Read by a person on the Worker page, so one is said as one.
+    const of = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const loaded = restored > 0 ? `stored data loaded for ${of(restored, 'collection')}; ` : '';
+    return `${loaded}${of(total.read, 'transfer')} in ${of(total.spans, 'span')} across ${of(collections.length, 'collection')}`;
   }
 
   /** Read one collection's spans until it reaches the head or `deadline`, counting into `got` so a throw keeps what was read. `blocks` is how far the cursor moved. */

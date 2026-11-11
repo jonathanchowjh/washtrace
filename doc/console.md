@@ -24,9 +24,9 @@ it uses are in the [glossary](glossary.md). The console runs on port 8080 (see t
 | `/settings` | The settings in [operating.md](operating.md#settings), where each value came from, and a Test for the RPC and Etherscan. | On open |
 | `/worker` | What needs a person, the four jobs, the sources, every collection's stages. | 5 s |
 
-Every page of a collection sits under one line naming it and a tab bar: Overview, Rings, Tokens, Wallets and
-Trades. A ring lights Rings; a token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count Linked wallets' lists, and the count hides
-while another lens is chosen, since it would not match the list; a lens chosen on one tab is kept on the others.
+Every page of a collection sits under one line naming it and a tab bar: Overview, Methods, Rings, Tokens, Wallets
+and Trades. A ring lights Rings; a token lights Tokens, the list it belongs to; a wallet Wallets, a transaction Trades. Tokens and Wallets count the lists of the lens in view
+(Linked wallets unless another is chosen), and say "not run" for a lens that has not run; a lens chosen on one tab is kept on the others.
 
 A token, wallet, trade or ring page under a collection says what it is the same way. Under its title are its
 kind, a verdict chip naming the lens tier behind it (Round trips, the floor; Linked wallets, the ceiling; Money
