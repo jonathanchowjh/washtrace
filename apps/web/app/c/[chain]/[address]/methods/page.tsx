@@ -150,6 +150,8 @@ export default async function MethodsPage({ params, searchParams }: Props) {
           <LensTabs
             base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} totals={a?.totals ?? null} latestId={a?.id ?? null} paused={c.pausedAt !== null} runs={runs} notFinal={cov.notFinal} moneyReasons={moneyReasons} tokens={tokensFloor}
             coverage={{ trail: c.trailImportedSha !== null, funded, funding: config.funding, coming, silent: silent !== null }} writable={writable}
+            // A new lens or a copy lights + New lens; an edit stays under the lens it changes.
+            drafting={Boolean(editing && needs) && editing?.lensId === undefined}
             editor={editing && needs ? <LensEditor key={sp.lens} base={base} chainId={chainId} address={address} selected={comparing ? 'compare' : method} writable notFinal={cov.notFinal} funded={funded} needs={needs} {...editing}
               others={all.filter((o) => o.id !== c.id).map((o) => ({ chainId: o.chainId, address: o.address, name: o.name ?? short(o.address) }))} /> : null}
           >

@@ -44,7 +44,7 @@ const NO_TOKENS: TokensFloor = { reason: null, payees: false };
  * the latest analysis's, null before the first, and `latestId` its id, which
  * a run of yours is behind when it is not from it.
  */
-export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyReasons, tokens, coverage, writable, editor = null, children }: {
+export function LensTabs({ base, chainId, address, selected, totals, latestId, paused, runs, notFinal, moneyReasons, tokens, coverage, writable, editor = null, drafting = false, children }: {
   base: string; chainId: number; address: string; selected: LensKey | 'compare';
   totals: Record<Method, MethodTotals> | null; latestId: number | null;
   /** The collection is paused: the worker runs no lens on it until it is resumed. */
@@ -57,20 +57,24 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   coverage: Funding; writable: boolean;
   /** The lens editor, when `?lens=` asks for one: it takes the panel's place, under the same tab. */
   editor?: ReactNode;
+  /** The editor makes a new lens (+ New lens, or a copy), so + New lens is the tab lit over it, not the lens it started from. */
+  drafting?: boolean;
   /** The chosen lens's stat line and lists; the panel shows them for a built-in, and for a lens of yours once it has figures. On the Compare tab, the comparison. */
   children: ReactNode;
 }) {
   const href = (key: string) => lensTabHref(base, key);
   const own = ownLenses(runs);
   const chosen = runs.find((r) => r.lens.key === selected) ?? null;
-  const tone = chosen || selected === 'compare' ? 'own' : LENSES[selected as Method].tone;
+  const tone = chosen || selected === 'compare' || drafting ? 'own' : LENSES[selected as Method].tone;
+  // While a new lens is drafted, its tab is the lit one: the panel under it is the editor, not the chosen lens.
+  const lit = drafting ? null : selected;
 
   return (
     <div>
       <nav aria-label="Lens" className="flex flex-wrap gap-2">
         {SHOWN.map((m) => {
           const t = totals?.[m];
-          const on = m === selected;
+          const on = m === lit;
           return (
             <Tab key={m} href={href(m)} on={on} tone={LENSES[m].tone} title={`Show what ${LENSES[m].name} flags`}>
               {/* Its standing under the name, as the overview's ladder says it, so a tab never reads as just another lens. */}
@@ -88,20 +92,21 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
           const t = run?.totals ?? null;
           const word = runStateWords(run, behindOf(run, lens, latestId === null ? null : { id: latestId }))?.short;
           return (
-            <Tab key={lens.key} href={href(lens.key)} on={lens.key === selected} tone="own" title={`Show what ${lens.name} flags`}>
+            <Tab key={lens.key} href={href(lens.key)} on={lens.key === lit} tone="own" title={`Show what ${lens.name} flags`}>
               <LensName m={lens.key} own={own} />
               {t ? <>{' '}<Share t={t} qualifier={shareQualifier(shareCauses(lens.rule, t, notFinal, coverage.funded, coverage.funding, moneyReasons[lens.key] ?? null, tokens[lens.key] ?? NO_TOKENS))} /></> : null}
               {word ? <>{' '}<span className="text-xs text-muted-foreground">{word}</span></> : null}
             </Tab>
           );
         })}
+        {/* A tab like the others, on their line and of their height, so it can be the lit one while its editor is open. */}
         {writable
-          ? <Link href={lensTabHref(base, selected, { lens: 'new' })} scroll={false} title="Write a lens of your own" className="btn self-center text-xs">+ New lens</Link>
-          : <button type="button" disabled title={LOCAL_ONLY} className="btn self-center text-xs">+ New lens</button>}
-        <Tab href={href('compare')} on={selected === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
+          ? <Tab href={lensTabHref(base, selected, { lens: 'new' })} on={drafting} tone="own" title="Write a lens of your own">+ New lens</Tab>
+          : <button type="button" disabled title={LOCAL_ONLY} className={cn(TAB, 'border-t-border bg-muted/50 text-muted-foreground disabled:cursor-not-allowed')}>+ New lens</button>}
+        <Tab href={href('compare')} on={lit === 'compare'} tone="own" title="Compare how many sales each pair of lenses both caught">Compare</Tab>
       </nav>
       <section
-        data-lens-panel aria-label={selected === 'compare' ? 'Compare lenses' : `${chosen ? chosen.lens.name : LENSES[selected as Method].name} lens`}
+        data-lens-panel aria-label={drafting ? 'New lens' : selected === 'compare' ? 'Compare lenses' : `${chosen ? chosen.lens.name : LENSES[selected as Method].name} lens`}
         className={cn('rounded-lg rounded-tl-none border border-t-[3px] bg-card p-4', ACCENT[tone])}
       >
         {editor ?? (selected === 'compare' ? children : chosen
@@ -113,12 +118,13 @@ export function LensTabs({ base, chainId, address, selected, totals, latestId, p
   );
 }
 
+// On a phone the tabs wrap; each grows so a row fills the width, rather than leaving Compare a stub on its own.
+const TAB = 'flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors max-sm:grow';
+
 function Tab({ href, on, tone, title, children }: { href: string; on: boolean; tone: keyof typeof ACCENT; title: string; children: ReactNode }) {
   return (
     <Link href={href} prefetch={false} scroll={false} title={title} aria-current={on ? 'page' : undefined}
-      // On a phone the tabs wrap; each grows so a row fills the width, rather than leaving Compare a stub on its own.
-      className={cn('flex items-baseline gap-2 rounded-t-lg border border-t-[3px] px-3 py-2 text-sm transition-colors max-sm:grow',
-        on ? cn('-mb-px border-b-0 bg-card pb-3', ACCENT[tone]) : 'border-t-border bg-muted/50 hover:bg-card')}>
+      className={cn(TAB, on ? cn('-mb-px border-b-0 bg-card pb-3', ACCENT[tone]) : 'border-t-border bg-muted/50 hover:bg-card')}>
       {children}
     </Link>
   );

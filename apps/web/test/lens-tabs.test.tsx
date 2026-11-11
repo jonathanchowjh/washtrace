@@ -477,6 +477,24 @@ describe('without permission to write', () => {
   it('offers + New lens as a link when writing is allowed', async () => {
     expect(anchor(await draw(), '+ New lens')?.getAttribute('href')).toBe(`${BASE}/methods?method=AC&lens=new`);
   });
+
+  it('lights + New lens, and only it, while a new lens or a copy is drafted; an edit stays under its lens', async () => {
+    state.runs = [run('done')];
+    const lit = (c: Element) => [...strip(c).querySelectorAll('[aria-current="page"]')].map((t) => t.textContent!.replace(/\s+/g, ' ').trim());
+    for (const lens of ['new', 'copy-A']) {
+      const c = await draw({ method: 'A', lens });
+      expect(lit(c), lens).toEqual(['+ New lens']);
+      expect(panel(c).getAttribute('aria-label')).toBe('New lens');
+      cleanup();
+    }
+    const edit = await draw({ method: 'L7', lens: 'edit-L7' });
+    expect(lit(edit)).toEqual(['Blur 3-hop 12.6%']);
+    cleanup();
+    // Without the editor + New lens is a tab like the others, on their line, and not lit.
+    const plain = await draw({ method: 'A' });
+    expect(lit(plain)).toEqual(['Round trips 4.1% the floor']);
+    expect(anchor(plain, '+ New lens')!.className).not.toContain('btn');
+  });
 });
 
 describe('the copy rule', () => {
