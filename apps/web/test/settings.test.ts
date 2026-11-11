@@ -442,6 +442,11 @@ describe('POST /api/settings/check', () => {
     expect(fake.requestCheck).toHaveBeenCalledWith('etherscan', null);
   });
 
+  it('tests the RPC of any chain the console knows, not only the one it saves', async () => {
+    expect((await checkRoute.POST(post({ kind: 'rpc', chainId: 31337 }))).status).toBe(201);
+    expect(fake.requestCheck).toHaveBeenCalledWith('rpc', 31337);
+  });
+
   it.each([
     [{ kind: 'dns' }],
     [{ kind: 'rpc' }],

@@ -169,7 +169,8 @@ The keys are `rpc.1`, `etherscan.key`, `etherscan.rps`, `etherscan.url`, `follow
 | `GET /api/settings/check/{id}` | | 200, 403, 404 | `finished`, `ok`, `detail` |
 
 - `fields` ends with a read-only `rpc.<chainId>` entry for each other chain the worker reports an RPC for: only
-  `.env` sets those, and the API saves no RPC but Ethereum's (`rpc.1`).
+  `.env` sets those, and the API saves no RPC but Ethereum's (`rpc.1`). `POST /api/settings/check` tests the RPC of
+  any chain the console knows; the worker tests the URL it reads, and says so when it has none.
 - Each entry of `fields` has `key`, `label`, `secret`, `set`, `shown`, `source`, `env` (what `.env` holds,
   masked the same way), `locked`, `pinned` and `invalid`. A secret answers as `••••` and at most its last 4
   characters (an RPC URL also keeps its scheme and host); a client can replace or clear a secret and never read

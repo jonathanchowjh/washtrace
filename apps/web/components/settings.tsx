@@ -137,9 +137,9 @@ function SettingField({ field, writable, trailFunded }: { field: FieldView; writ
   const [draft, setDraft] = useState('');
   // A switch shows its flip at once, before the refresh brings the saved value; a refused save puts it back.
   const [flipped, setFlipped] = useState<boolean | null>(null);
-  // A chain's RPC that only .env sets is not one the API tests (it tests the RPCs in FIELDS), so it has no Test.
+  // Every chain's RPC has a Test, a read-only one that only .env sets too: the worker tests the URL it reads.
   const check = field.key === 'etherscan.key' ? { kind: 'etherscan' as const }
-    : field.key.startsWith('rpc.') && FIELDS.some((f) => f.key === field.key) ? { kind: 'rpc' as const, chainId: Number(field.key.slice(4)) } : null;
+    : field.key.startsWith('rpc.') ? { kind: 'rpc' as const, chainId: Number(field.key.slice(4)) } : null;
   const test = useTest(check);
   const fallback = FIELDS.find((x) => x.key === field.key)?.fallback;
   const id = `setting-${field.key}`;

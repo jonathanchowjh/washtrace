@@ -104,7 +104,7 @@ describe('Settings, each field', () => {
     expect(box('etherscan.rps').textContent).toContain('None: not saved here or in .env');
   });
 
-  it('shows another chain\'s RPC under the chain\'s heading, read-only, with where it comes from and no Test', () => {
+  it('shows another chain\'s RPC under the chain\'s heading, read-only, with where it comes from and a Test', () => {
     const anvil: FieldView = {
       key: 'rpc.31337', label: 'Local (anvil) RPC URL', secret: true, set: true, shown: 'http://anvil:8545/••••8545', source: 'env', env: 'http://anvil:8545/••••8545',
       locked: true, pinned: "Only .env sets this chain's RPC: the console saves Ethereum's alone.", invalid: null,
@@ -115,7 +115,8 @@ describe('Settings, each field', () => {
     expect(box('rpc.31337').textContent).toContain("Only .env sets this chain's RPC: the console saves Ethereum's alone. From .env (WASHTRACE_RPC_31337).");
     expect(box('rpc.31337').querySelector('[data-hint]')!.textContent).toBe('Where the worker reads the blocks and transfers of collections on Local (anvil). Shown as the worker reported it.');
     expect((screen.getByRole('button', { name: 'Replace Local (anvil) RPC URL' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(box('rpc.31337').querySelector('button[data-test]')).toBeNull();
+    // The worker tests the URL it reads, so a read-only one can be tested too.
+    expect(box('rpc.31337').querySelector('button[data-test]')).not.toBeNull();
   });
 
   it('puts the stored data dataset under a heading of its own, not with who paid whom', () => {
