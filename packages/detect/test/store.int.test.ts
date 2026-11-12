@@ -7937,8 +7937,13 @@ describe('Store.payment', () => {
     const pg = await store.pool.connect();
     try {
       await pg.query('BEGIN');
-      // Whether the key can serve the read, not whether these stats make it cheapest, as for transfers_tx_idx above.
-      await pg.query('SET LOCAL enable_seqscan = off');
+      // A busy chain, as for flowsAmong above, so the plan does not hang on whatever earlier tests left in the table: one
+      // payment a transaction across a few hundred payees, which flows_to_idx (the chain and payee) can only scan; rolled back.
+      await pg.query(
+        `INSERT INTO washtrace.flows (chain_id, tx_hash, kind, from_address, to_address, value_wei, token, block_number, block_time)
+         SELECT 1, '0xpay' || g, 'native', '0x' || lpad(to_hex(g), 40, '0'), '0x' || lpad(to_hex(g % 300), 40, '0'), 1, '', g, now() FROM generate_series(1, 20000) g`,
+      );
+      await pg.query('ANALYZE washtrace.flows');
       const plan = (await pg.query(`EXPLAIN ${PAYMENT_SQL}`, [1, '0xabc'])).rows.map((r) => r['QUERY PLAN']).join('\n');
       expect(plan, plan).toMatch(/flows_pkey/);
       expect(plan, plan).toMatch(/Index Cond: .*chain_id = 1.*kind = ANY.*tx_hash = '0xabc'/s);

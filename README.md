@@ -3,6 +3,13 @@
 **Finds NFT wash trading on any EVM chain by following the money between wallets,
 and says why each trade was flagged.**
 
+[Paper](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf) ·
+[Slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf) ·
+[Dataset](https://huggingface.co/datasets/jonathanmiro97/washtrace-data) ·
+[Demo](#quick-start) ·
+[Methods](doc/methods.md) ·
+[API](doc/api.md)
+
 Wash trading is trading with yourself: the same person on both sides of a sale,
 to fake volume, prop up a price or farm a marketplace's rewards. washtrace reads
 every transfer of the collections you watch and who paid whom among the wallets
@@ -32,6 +39,7 @@ marketplaces and three corrections are new.
 | Ask for verdicts from code | [Asking for a verdict](#asking-for-a-verdict), then [the API](doc/api.md) |
 | Run it on a real chain | [Operating](doc/operating.md): settings, deploying, the worker, what to do when something is wrong, limits; [upgrading](doc/upgrading.md) |
 | Use the data | [The dataset](#the-dataset), then [stored data](doc/stored-data.md) |
+| Read the research behind it | [The paper and the work it builds on](#the-paper-and-the-work-it-builds-on) |
 | Work on the code | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Quick start
@@ -178,11 +186,14 @@ headline. A lens that needs who paid whom and has none says **not run**, never
 0%. The test, the thresholds and what a read cannot see are in
 [doc/methods.md](doc/methods.md).
 
-## The paper
+## The paper and the work it builds on
+
+### The paper
 
 **[*Detecting and quantifying wash trading of non-fungible tokens*](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf)**
 by Jonathan Chow, Singapore Management University, 2023
-([slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf)).
+([PDF](paper/chow-2023-detecting-and-quantifying-nft-wash-trading.pdf),
+[slides](paper/chow-2023-detecting-and-quantifying-nft-wash-trading-slides.pdf)).
 The top NFT collections by market cap show far less wash trading than the rest,
 which points to wash trades the usual detector cannot see: it finds loops in a
 token's own transfers, and a trader beats it by paying through wallets that never
@@ -201,9 +212,28 @@ Three corrections, each with a test and set out in
 does not close a loop, custody is not a change of owner, and an exchange is not
 a common funder.
 
-It builds on Jung (2022), Liu (2023), hildobby's Dune query (2022), Victor &
-Weintraud (2021) and Cao et al. (2016); what each gave it is in
-[doc/methods.md](doc/methods.md#the-work-it-builds-on).
+### The work it builds on
+
+The paper and washtrace stand on this earlier work, each with what it gave:
+
+- **Jung (2022)**, [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf),
+  TUM. Loop detection on each token's transfer graph, flagged by cycle count: the basis of Round trips.
+- **Liu (2023)**, [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543), arXiv.
+  Loop detection over sales as well as transfers.
+- **hildobby (2022)**, [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune.
+  A buyer and seller first funded by the same wallet, which Linked wallets generalises.
+- **Victor & Weintraud (2021)**, [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001),
+  arXiv. Loop detection over the user transaction graph, here applied to money between NFT traders.
+- **Cao et al. (2016)**, [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451),
+  IEEE. Wash trades as cycles in a directed graph; its volume matching does not carry over, as NFTs are not fungible.
+
+### Standards and sources
+
+- [ERC-721](https://eips.ethereum.org/EIPS/eip-721): the transfers washtrace reads.
+- [Seaport](https://github.com/ProjectOpenSea/seaport): the marketplace protocol whose sales it prices.
+- [Etherscan API V2](https://docs.etherscan.io/): who paid whom.
+- [washtrace-data](https://huggingface.co/datasets/jonathanmiro97/washtrace-data) on Hugging Face: the stored
+  collections, described [below](#the-dataset).
 
 ## The dataset
 

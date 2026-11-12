@@ -207,12 +207,6 @@ that paid or was paid by both. It is narrower than a full read, and says so:
 
 ## The work it builds on
 
-- Jung (2022), [*Towards a Web Application to Detect and Analyze Wash Trading in NFT Collections on the Solana Blockchain*](https://wwwmatthes.in.tum.de/file/19apj4nvq7a8m/Sebis-Public-Website/Student-Theses-Guided-Research/Current-Theses-Guided-Researches/TUMKolleg-Sebastian-O.-Jung/Sebastian%20Jung%20Thesis.pdf), TUM: loop detection on each token's transfer graph, flagged by cycle count: the basis of Round trips.
-- Liu (2023), [*NFT Wash Trading Detection*](https://arxiv.org/abs/2305.01543): loop detection over sales as well as transfers.
-- hildobby (2022), [*Ethereum NFTs Wash Trading*](https://dune.com/hildobby/nfts-wash-trading), Dune: a buyer and seller first funded by the same wallet, which Linked wallets generalises.
-- Victor & Weintraud (2021), [*Detecting and Quantifying Wash Trading on Decentralized Cryptocurrency Exchanges*](https://arxiv.org/abs/2102.07001): loop detection over the user transaction graph, here applied to money between NFT traders.
-- Cao et al. (2016), [*Detecting Wash Trade in Financial Market Using Digraphs and Dynamic Programming*](https://ieeexplore.ieee.org/document/7298451): wash trades as cycles in a directed graph; its volume matching does not carry over, as NFTs are not fungible.
-
-The standards and sources washtrace reads: [ERC-721](https://eips.ethereum.org/EIPS/eip-721),
-[Seaport](https://github.com/ProjectOpenSea/seaport) (whose sales it prices) and
-[Etherscan API V2](https://docs.etherscan.io/) (who paid whom).
+The paper, the earlier work it builds on (Jung, Liu, hildobby's Dune query, Victor & Weintraud, Cao et al.) and the
+standards washtrace reads are listed, with links and what each gave, in the
+[README](../README.md#the-paper-and-the-work-it-builds-on).

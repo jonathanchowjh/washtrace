@@ -524,6 +524,17 @@ describe('a ring’s trail', () => {
     expect(lit(c)).toEqual(['t1']);
   });
 
+  it('a press dragged off a focused row, so no click comes, still lets the next keyboard focus light its row', () => {
+    const c = trail();
+    const [first, second] = buttons(c);
+    fireEvent.focus(first!);
+    // The press lands on the row that has focus already, so no focus event follows; the pointer leaves before it lifts.
+    fireEvent.mouseEnter(first!); fireEvent.mouseDown(first!); fireEvent.mouseLeave(first!);
+    fireEvent.blur(first!);
+    fireEvent.focus(second!);
+    expect(lit(c)).toEqual(['t1']);
+  });
+
   it('gives its trailing link a finger’s target, 44 px at least each way', () => {
     const link = trail().querySelector('section[aria-label="In order"] li a')!;
     expect(link.className).toContain('min-w-11');

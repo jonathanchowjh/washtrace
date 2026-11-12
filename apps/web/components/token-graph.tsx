@@ -375,7 +375,7 @@ export function RingTrail({ drawing, chainId, base, rows, rowHrefs, edgeHrefs, l
             <li key={r.key} className="flex items-stretch gap-2">
               <button
                 type="button" aria-pressed={pinned === r.key} onClick={() => { pressing.current = false; setPinned((cur) => (cur === r.key ? null : r.key)); }}
-                onMouseEnter={() => setHover(r.key)} onMouseLeave={() => setHover(null)} onMouseDown={() => { pressing.current = true; }}
+                onMouseEnter={() => setHover(r.key)} onMouseLeave={() => { pressing.current = false; setHover(null); }} onMouseDown={() => { pressing.current = true; }}
                 onFocus={() => { if (!pressing.current) setFocused(r.key); pressing.current = false; }} onBlur={() => setFocused(null)}
                 className={cn('min-h-11 min-w-0 flex-1 rounded px-1 py-1.5 text-left text-sm hover:bg-muted/60', pinned === r.key && 'bg-muted')}
               >
